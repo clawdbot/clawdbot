@@ -130,11 +130,9 @@ command handling is enabled for the surface.
   `commands.allowFrom` and DM pairing access.
 </ParamField>
 
-<ParamField path="channels.<channel>.commands.enforceOwnerForCommands" type="boolean" default="false">
-  Per-channel: requires owner identity for owner-only commands. When `true`,
-  sender must match `commands.ownerAllowFrom` or hold internal `operator.admin`
-  scope. A wildcard `allowFrom` entry is **not** sufficient.
-</ParamField>
+Channel plugins can enforce owner-only command access through their
+`enforceOwnerForCommands` policy. This is plugin behavior, not an
+`openclaw.json` setting. A wildcard command allowlist does not bypass it.
 
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
@@ -146,6 +144,14 @@ When `commands.allowFrom` is not configured, command authorization follows
 the channel's allowlists and pairing state. Access-group entries referenced by
 channel allowlists are resolved automatically; there is no command-level
 access-group toggle.
+
+Session commands `/new` and `/reset` (including `/reset soft`) remain available
+to channel-authorized senders on channels that do not enforce owner-only
+commands, even when those senders are not in `commands.ownerAllowFrom`.
+An applicable `commands.allowFrom` policy remains authoritative: a denied
+sender or an explicitly empty list cannot fall back to channel admission.
+Reset access does not grant other command or owner-only authority. Internal
+Gateway callers with explicit scopes still need `operator.admin` to reset.
 
 ## Command list
 

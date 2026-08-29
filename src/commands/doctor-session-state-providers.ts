@@ -7,7 +7,7 @@ import {
   resolveAgentModelFallbacksOverride,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { resolveAgentHarnessPolicy } from "../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
   modelKey,
   normalizeProviderId,

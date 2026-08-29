@@ -172,12 +172,7 @@ public struct OpenClawChatWindowShell: View {
     }
 
     private var activeSessionEntry: OpenClawChatSessionEntry? {
-        self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey } ??
-            self.viewModel.sessions.first {
-                self.viewModel.matchesCurrentSessionKey(
-                    incoming: $0.key,
-                    current: self.viewModel.sessionKey)
-            }
+        self.viewModel.currentSessionEntry()
     }
 
     private var activeSessionKey: String {
@@ -208,6 +203,24 @@ public struct OpenClawChatWindowShell: View {
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
+        if OpenClawSessionColor(name: self.activeSessionEntry?.color) != nil {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    OpenClawSessionColorDot(color: self.activeSessionEntry?.color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(self.activeSessionTitle)
+                            .font(OpenClawChatTypography.body.weight(.semibold))
+                            .lineLimit(1)
+                        if !self.subtitle.isEmpty {
+                            Text(self.subtitle)
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             if let usage = self.viewModel.contextUsage {
                 ChatContextUsageMenu(usage: usage) {
@@ -316,6 +329,11 @@ public struct OpenClawChatWindowShell: View {
                             ? "tray.and.arrow.up"
                             : "archivebox")
                 }
+            }
+
+            OpenClawSessionColorMenu(color: self.activeSessionEntry?.color) { color in
+                let key = self.activeSessionKey
+                Task { await self.viewModel.setSessionColor(key: key, color: color) }
             }
 
             Divider()

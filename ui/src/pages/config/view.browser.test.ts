@@ -96,6 +96,8 @@ describe("config view", () => {
     setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
+    chatCollapseTaskProgress: false,
+    setChatCollapseTaskProgress: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
@@ -2045,12 +2047,35 @@ describe("config view", () => {
     );
     for (const title of [
       "Message width",
+      "Collapse task progress by default",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
       expect(row(title)?.textContent).toContain("Stored in this browser only");
       expect(row(title)?.textContent).not.toContain("Synced across your devices");
     }
+  });
+
+  it("renders task progress auto-collapse off by default and enables it from Chat settings", () => {
+    const setChatCollapseTaskProgress = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      chatCollapseTaskProgress: false,
+      setChatCollapseTaskProgress,
+    });
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
+        "Collapse task progress by default",
+    );
+    const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+
+    expect(toggle?.checked).toBe(false);
+    row?.click();
+    expect(setChatCollapseTaskProgress).toHaveBeenCalledWith(true);
+    expect(row?.textContent).toContain("Using default: Disabled");
+    expect(row?.textContent).toContain("Stored in this browser only");
   });
 
   it("shows the tweakcn importer once the custom slot is opened", () => {

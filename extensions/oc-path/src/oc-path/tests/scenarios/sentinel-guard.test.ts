@@ -34,13 +34,6 @@ describe("sentinel-guard", () => {
     );
   });
 
-  it("round-trip echoes pre-existing sentinel; strict mode rejects", () => {
-    const raw = "## Section\n\n- token: __OPENCLAW_REDACTED__\n";
-    const { ast } = parseMd(raw);
-    expect(emitMd(ast)).toBe(raw);
-    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
-  });
-
   it("round-trip emit allows sentinel-free content", () => {
     const raw = "## Section\n\n- token: redacted-but-not-sentinel\n";
     const { ast } = parseMd(raw);

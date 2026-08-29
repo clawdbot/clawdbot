@@ -6,6 +6,7 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
@@ -53,6 +54,44 @@ function launchDescriptor(): WorkerLaunchDescriptor {
 }
 
 describe("worker launch descriptor", () => {
+  it("admits bounded image-only input and replay without raising the text budget", () => {
+    const descriptor = launchDescriptor();
+    const image = {
+      type: "image" as const,
+      data: createNoisyPngBuffer(256, 256).toString("base64"),
+      mimeType: "image/png",
+    };
+    expect(image.data.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
+    descriptor.assignment.prompt = [image];
+    descriptor.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
+    for (const suppressPromptTranscript of [false, true]) {
+      descriptor.assignment.suppressPromptTranscript = suppressPromptTranscript;
+      expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    }
+    for (const invalidImage of [
+      { ...image, data: "" },
+      { ...image, type: "text" },
+      { ...image, extra: true },
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, prompt: [invalidImage] },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+    descriptor.assignment.prompt = [
+      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+      image,
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.prompt = [{ ...image, data: "x".repeat(25 * 1024 * 1024) }];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+  });
   it("accepts the exact admitted single-session launch shape", () => {
     const descriptor = launchDescriptor();
 

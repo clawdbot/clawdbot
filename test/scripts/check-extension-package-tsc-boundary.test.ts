@@ -1,5 +1,5 @@
 // Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,7 +7,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  acquireBoundaryCheckLock,
   appendBoundedStepOutput,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
@@ -15,9 +14,7 @@ import {
   formatSkippedCompileProgress,
   formatStepFailure,
   installCanaryArtifactCleanup,
-  isBoundaryCompileFresh,
   resolveCompileConcurrency,
-  resolveBoundaryCheckLockPath,
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
   runNodeStepsWithConcurrency,
@@ -29,6 +26,7 @@ import {
   waitForFile,
   waitForPidFile,
 } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 
 const tempRoots = new Set<string>();
 
@@ -47,14 +45,6 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   return { canaryPath, tsconfigPath };
 }
 
-function createMockPipe() {
-  const pipe = new EventEmitter() as EventEmitter & {
-    setEncoding: (encoding: string) => void;
-  };
-  pipe.setEncoding = () => {};
-  return pipe;
-}
-
 afterEach(() => {
   for (const rootDir of tempRoots) {
     fs.rmSync(rootDir, { force: true, recursive: true });
@@ -63,6 +53,94 @@ afterEach(() => {
 });
 
 describe("check-extension-package-tsc-boundary", () => {
+  it("reruns the real compiler after an inherited paths change in the CLI", () => {
+    const root = fs.realpathSync(createTempExtensionRoot().rootDir);
+    const write = (file: string, contents: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, contents);
+      fs.utimesSync(target, new Date(1000), new Date(1000));
+    };
+    write("package.json", '{"type":"module"}');
+    write("pnpm-workspace.yaml", "packages: []\n");
+    write("tsconfig.json", '{"compilerOptions":{"module":"NodeNext","strict":true,"types":[]}}');
+    const pathsConfig = "extensions/tsconfig.package-boundary.paths.json";
+    const config = {
+      extends: "../tsconfig.json",
+      compilerOptions: {
+        paths: { "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"] },
+      },
+    };
+    write(pathsConfig, JSON.stringify(config));
+    write(
+      "extensions/tsconfig.package-boundary.base.json",
+      '{"extends":"./tsconfig.package-boundary.paths.json","compilerOptions":{"rootDir":"${configDir}"}}',
+    );
+    write(
+      "extensions/demo/tsconfig.json",
+      '{"extends":"../tsconfig.package-boundary.base.json","include":["index.ts"]}',
+    );
+    write(
+      "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
+      "export type DemoContract = { ok: boolean };\n",
+    );
+    write(
+      "extensions/demo/index.ts",
+      'import type { DemoContract } from "openclaw/plugin-sdk/core";\nexport const demo: DemoContract = { ok: true };\n',
+    );
+    // Hold preparation fixed; scheduling, config parsing, and compilation remain real.
+    write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
+    for (const file of [
+      "check-extension-package-tsc-boundary.mts",
+      "tsx.mjs",
+      "windows-cmd-helpers.mjs",
+    ]) {
+      write(`scripts/${file}`, fs.readFileSync(path.resolve("scripts", file), "utf8"));
+    }
+    for (const file of [
+      "scripts/lib",
+      "packages/normalization-core",
+      ...["tsx", "typescript", "@typescript", "@openclaw/fs-safe", "p-map", ".bin/tsgo"].map(
+        (name) => `node_modules/${name}`,
+      ),
+    ]) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.symlinkSync(path.resolve(file), path.join(root, file));
+    }
+    const run = () =>
+      spawnSync(
+        process.execPath,
+        ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile"],
+        { cwd: root, encoding: "utf8", timeout: 20_000 },
+      );
+    const cold = run();
+    expect(cold.error, cold.stderr).toBeUndefined();
+    expect(cold.status, cold.stdout + cold.stderr).toBe(0);
+    expect(cold.stdout).toContain("compiled plugins: 1");
+    const warm = run();
+    expect(warm.status, warm.stdout + warm.stderr).toBe(0);
+    expect(warm.stdout).toContain("compiled plugins: 0");
+    expect(warm.stdout).toContain("skipped plugins: 1");
+    config.compilerOptions.paths["openclaw/plugin-sdk/*"] = ["../missing-sdk/*.d.ts"];
+    write(pathsConfig, JSON.stringify(config));
+    const changed = run();
+    expect(changed.error, changed.stderr).toBeUndefined();
+    expect(changed.status, changed.stdout + changed.stderr).toBe(1);
+    expect(changed.stderr).toContain("TS2307");
+    expect(
+      fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/compile/demo.json")),
+    ).toBe(false);
+  }, 30_000);
+  it("keeps matching canary diagnostics classified as a timeout when the compiler never exits", async () => {
+    const diagnostic = "TS6059 src/plugins/contracts/rootdir-boundary-canary.ts";
+    await expect(
+      runNodeStepAsync(
+        "canary fixture",
+        ["-e", `console.log(${JSON.stringify(diagnostic)});setInterval(()=>{},1000);`],
+        2000,
+      ),
+    ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
+  });
   it("keeps a bounded tail of captured step output", () => {
     const first = appendBoundedStepOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
     const second = appendBoundedStepOutput(first, "ghij", 5);
@@ -125,37 +203,6 @@ describe("check-extension-package-tsc-boundary", () => {
         resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
       ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
     }
-  });
-
-  it("blocks concurrent boundary checks in the same checkout", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const processObject = new EventEmitter();
-    const release = acquireBoundaryCheckLock({ processObject, rootDir });
-
-    let thrownError = null;
-    try {
-      acquireBoundaryCheckLock({ rootDir });
-    } catch (error) {
-      thrownError = error;
-    }
-
-    expect(thrownError).toBeInstanceOf(Error);
-    if (!(thrownError instanceof Error)) {
-      throw new Error("expected boundary lock contention to throw an Error");
-    }
-    expect(thrownError.message).toContain("kind: lock-contention");
-    expect(thrownError.message).toContain(
-      "another extension package boundary check is already running",
-    );
-    expect((thrownError as { fullOutput?: unknown }).fullOutput).toContain(
-      "another extension package boundary check is already running",
-    );
-    expect((thrownError as { kind?: unknown }).kind).toBe("lock-contention");
-
-    release();
-
-    const lockPath = resolveBoundaryCheckLockPath(rootDir);
-    expect(fs.existsSync(lockPath)).toBe(false);
   });
 
   it("summarizes long failure output with the useful tail", () => {
@@ -264,85 +311,6 @@ describe("check-extension-package-tsc-boundary", () => {
     ).toBe(["slowest plugin compiles:", "- slow: 900ms", "- medium: 250ms", ""].join("\n"));
   });
 
-  it("treats a plugin compile as fresh only when its outputs are newer than plugin and shared sdk inputs", () => {
-    const { rootDir, extensionRoot } = createTempExtensionRoot();
-    const extensionSourcePath = path.join(extensionRoot, "index.ts");
-    const extensionTsconfigPath = path.join(extensionRoot, "tsconfig.json");
-    const stampPath = path.join(extensionRoot, "dist", ".boundary-tsc.stamp");
-    const rootSdkTypePath = path.join(rootDir, "dist", "plugin-sdk", "core.d.ts");
-    const packageSdkTypePath = path.join(
-      rootDir,
-      "packages",
-      "plugin-sdk",
-      "dist",
-      "src",
-      "plugin-sdk",
-      "core.d.ts",
-    );
-
-    fs.mkdirSync(path.dirname(extensionSourcePath), { recursive: true });
-    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.mkdirSync(path.dirname(rootSdkTypePath), { recursive: true });
-    fs.mkdirSync(path.dirname(packageSdkTypePath), { recursive: true });
-
-    fs.writeFileSync(extensionSourcePath, "export const demo = 1;\n", "utf8");
-    fs.writeFileSync(
-      extensionTsconfigPath,
-      '{ "extends": "../tsconfig.package-boundary.base.json" }\n',
-      "utf8",
-    );
-    fs.writeFileSync(stampPath, "ok\n", "utf8");
-    fs.writeFileSync(rootSdkTypePath, "export {};\n", "utf8");
-    fs.writeFileSync(packageSdkTypePath, "export {};\n", "utf8");
-
-    fs.utimesSync(extensionSourcePath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(extensionTsconfigPath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(rootSdkTypePath, new Date(500), new Date(500));
-    fs.utimesSync(packageSdkTypePath, new Date(2_000), new Date(2_000));
-    fs.utimesSync(stampPath, new Date(3_000), new Date(3_000));
-
-    expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(true);
-
-    fs.utimesSync(rootSdkTypePath, new Date(500), new Date(500));
-    fs.utimesSync(packageSdkTypePath, new Date(500), new Date(500));
-
-    expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(true);
-
-    fs.utimesSync(rootSdkTypePath, new Date(4_000), new Date(4_000));
-
-    expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(false);
-  });
-
-  it("accepts cached input mtimes for freshness checks", () => {
-    const { rootDir, extensionRoot } = createTempExtensionRoot();
-    const extensionSourcePath = path.join(extensionRoot, "index.ts");
-    const stampPath = path.join(extensionRoot, "dist", ".boundary-tsc.stamp");
-
-    fs.mkdirSync(path.dirname(extensionSourcePath), { recursive: true });
-    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.writeFileSync(extensionSourcePath, "export const demo = 1;\n", "utf8");
-    fs.writeFileSync(stampPath, "ok\n", "utf8");
-
-    fs.utimesSync(extensionSourcePath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(stampPath, new Date(3_000), new Date(3_000));
-
-    expect(
-      isBoundaryCompileFresh("demo", {
-        rootDir,
-        extensionNewestInputMtimeMs: 1_000,
-        sharedNewestInputMtimeMs: 2_000,
-      }),
-    ).toBe(true);
-
-    expect(
-      isBoundaryCompileFresh("demo", {
-        rootDir,
-        extensionNewestInputMtimeMs: 1_000,
-        sharedNewestInputMtimeMs: 4_000,
-      }),
-    ).toBe(false);
-  });
-
   it("keeps full failure output on the thrown error for canary detection", async () => {
     const failure = await runNodeStepAsync(
       "demo-plugin",
@@ -401,25 +369,18 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("keeps async node step failure output bounded", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      kill: (signal?: NodeJS.Signals | number) => boolean;
-      stderr: ReturnType<typeof createMockPipe>;
-      stdout: ReturnType<typeof createMockPipe>;
-    };
-    child.stdout = createMockPipe();
-    child.stderr = createMockPipe();
-    child.kill = () => true;
-
-    const failure = await runNodeStepAsync("noisy-plugin", ["--eval", "process.exit(2)"], 20_000, {
-      spawnImpl() {
-        setImmediate(() => {
-          child.stdout.emit("data", `stdout-begin-${"x".repeat(300_000)}-stdout-end`);
-          child.stderr.emit("data", `stderr-begin-${"y".repeat(300_000)}-stderr-end`);
-          child.emit("close", 2);
-        });
-        return child;
-      },
-    }).then(
+    const failure = await runNodeStepAsync(
+      "noisy-plugin",
+      [
+        "--eval",
+        [
+          "process.stdout.write('stdout-begin-' + 'x'.repeat(300000) + '-stdout-end');",
+          "process.stderr.write('stderr-begin-' + 'y'.repeat(300000) + '-stderr-end');",
+          "process.exitCode = 2;",
+        ].join("\n"),
+      ],
+      20_000,
+    ).then(
       () => {
         throw new Error("expected noisy-plugin step to fail");
       },
@@ -443,62 +404,6 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fullOutput.length).toBeLessThan(600_000);
   }, 30_000);
 
-  it("hard-kills timed out async node steps", async () => {
-    const processSignals: Array<[number, NodeJS.Signals | number | undefined]> = [];
-    let processGroupAlive = true;
-    const child = new EventEmitter() as EventEmitter & {
-      kill: (signal?: NodeJS.Signals | number) => boolean;
-      pid: number;
-      stderr: ReturnType<typeof createMockPipe>;
-      stdout: ReturnType<typeof createMockPipe>;
-    };
-    child.pid = 1234;
-    child.stdout = createMockPipe();
-    child.stderr = createMockPipe();
-    child.kill = () => true;
-
-    const failure = await runNodeStepAsync(
-      "hung-plugin",
-      ["--eval", "setTimeout(() => {}, 60_000)"],
-      5,
-      {
-        spawnImpl(command: string, args: string[]) {
-          expect(command).toBe(process.execPath);
-          expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
-          return child;
-        },
-        killProcess(pid: number, signal?: NodeJS.Signals | number) {
-          if (signal === "SIGKILL") {
-            processGroupAlive = false;
-          }
-          if (signal === 0 && !processGroupAlive) {
-            processSignals.push([pid, signal]);
-            throw Object.assign(new Error("gone"), { code: "ESRCH" });
-          }
-          processSignals.push([pid, signal]);
-          return true;
-        },
-        platform: "darwin",
-      },
-    ).then(
-      () => {
-        throw new Error("expected hung-plugin step to time out");
-      },
-      (error: unknown) => error,
-    );
-
-    expect(processSignals).toEqual([
-      [-1234, "SIGKILL"],
-      [-1234, 0],
-    ]);
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected timeout failure to reject with an Error");
-    }
-    expect(failure.message).toContain("hung-plugin timed out after 5ms");
-    expect((failure as { kind?: unknown }).kind).toBe("timeout");
-  });
-
   it.skipIf(process.platform === "win32")(
     "waits for timed-out async node step process groups",
     async () => {
@@ -517,25 +422,17 @@ describe("check-extension-package-tsc-boundary", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
 
+      const releaseAndWait = startProcessWatchdogFixture(() =>
+        runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100),
+      );
       try {
-        const failurePromise = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100, {
-          spawnImpl(command: string, args: string[], options: unknown) {
-            return spawn(command, args, options as Parameters<typeof spawn>[2]);
-          },
-        }).then(
-          () => {
-            throw new Error("expected hung-step-group to time out");
-          },
-          (error: unknown) => error,
-        );
-
         childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
-        const failure = await failurePromise;
-        expect(failure).toBeInstanceOf(Error);
+        await expect(releaseAndWait()).rejects.toThrow("hung-step-group timed out after 100ms");
         await waitForDead(childPid, 2_000);
       } finally {
+        await releaseAndWait().catch(() => undefined);
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
@@ -667,9 +564,9 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
       const runnerScript = [
         `import { runNodeStepAsync } from ${JSON.stringify(scriptUrl)};`,
-        `await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
+        `try { await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
           parentScript,
-        )}], 60_000);`,
+        )}], 60_000); } catch { if (process.exitCode !== 143) process.exitCode = 1; }`,
       ].join("\n");
 
       try {
@@ -685,8 +582,8 @@ describe("check-extension-package-tsc-boundary", () => {
         runner.kill("SIGTERM");
 
         await expect(waitForChildClose(runner)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
+          code: 143,
+          signal: null,
         });
         await waitForDead(childPid, 2_000);
       } finally {

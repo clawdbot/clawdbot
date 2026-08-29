@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "../../agents/agent-run-terminal-reply.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
@@ -14,6 +18,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   openSessionManager,
   placements,
   seedActivePlacement,
@@ -42,6 +47,7 @@ describe("worker turn launcher terminal results", () => {
         resume: vi.fn(async () => {}),
       })),
       runWorkspaceCommand: vi.fn(),
+      measureLaunchTurn,
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
         const completed = openSessionManager();
@@ -121,142 +127,209 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("reports canonical multi-call usage and the terminal provider model", async () => {
-    seedActivePlacement();
-    const environments: WorkerTurnEnvironmentService = {
-      get: vi.fn(() => attachedEnvironment()),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-          request.onDispatchReady?.();
-          const completed = openSessionManager();
-          completed.appendMessage(
-            makeAgentAssistantMessage({
-              content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
-              provider: "openai",
-              model: "gpt-first-call",
-              stopReason: "toolUse",
-              timestamp: 21,
-              usage: {
-                input: 100,
-                output: 10,
-                cacheRead: 20,
-                cacheWrite: 5,
-                totalTokens: 135,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-            }),
-          );
-          completed.appendMessage({
-            role: "toolResult",
-            toolCallId: "call-usage",
-            toolName: "read",
-            content: [{ type: "text", text: "usage result" }],
-            isError: false,
-            timestamp: 22,
-          });
-          const leafId = completed.appendMessage(
-            makeAgentAssistantMessage({
-              content: [{ type: "text", text: "Usage reply" }],
-              provider: "anthropic",
-              model: "claude-reported",
-              timestamp: 23,
-              usage: {
-                input: 200,
-                output: 30,
-                cacheRead: 40,
-                cacheWrite: 0,
-                contextUsage: {
-                  state: "available",
-                  promptTokens: 240,
-                  totalTokens: 270,
-                },
-                totalTokens: 270,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-            }),
-          );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
-            claim: request.turnClaim,
-            transcriptSeq: 2,
-            liveSeq: 1,
-          });
-          return {
-            stdout: JSON.stringify({
-              status: "completed",
-              transcriptLeafId: leafId,
-              transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-            }),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        }),
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
-        }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          request.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
-      stopTunnel: vi.fn(async () => {}),
-      destroy: vi.fn(async () => attachedEnvironment()),
-    };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-
-    const result = await provider.executeTurn(
-      {
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        runId: "run-worker-usage",
-      },
-      turn("run-worker-usage"),
-      async () => ({ meta: { durationMs: 1 } }),
-    );
-
-    expect(result.meta.agentMeta).toEqual({
-      sessionId: SESSION_ID,
-      sessionFile,
-      provider: "anthropic",
-      model: "claude-reported",
-      usage: {
-        input: 300,
-        output: 40,
-        cacheRead: 60,
-        cacheWrite: 5,
-        total: 405,
-      },
-      lastCallUsage: {
-        input: 200,
-        output: 30,
-        cacheRead: 40,
-        cacheWrite: 0,
-        contextUsage: {
-          state: "available",
-          promptTokens: 240,
-          totalTokens: 270,
+  it.each<{
+    name: string;
+    content: Parameters<typeof makeAgentAssistantMessage>[0]["content"];
+    visibleText?: string;
+    rawText?: string;
+    terminalReply: AgentRunTerminalReplySnapshot;
+  }>([
+    {
+      name: "visible final answer",
+      content: [
+        { type: "thinking", thinking: "Private reasoning" },
+        {
+          type: "text",
+          text: "Working...",
+          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
         },
-        total: 270,
-      },
-      promptTokens: 240,
-    });
-  });
+        {
+          type: "text",
+          text: "Usage reply",
+          textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+        },
+      ],
+      visibleText: "Usage reply",
+      rawText: "Usage reply",
+      terminalReply: { disposition: "visible", text: "Usage reply" },
+    },
+    {
+      name: "sanitized final answer",
+      content: [{ type: "text", text: "<think>Private reasoning</think>Usage reply" }],
+      visibleText: "Usage reply",
+      rawText: "<think>Private reasoning</think>Usage reply",
+      terminalReply: { disposition: "visible", text: "Usage reply" },
+    },
+    {
+      name: "explicit silence",
+      content: [{ type: "text", text: "NO_REPLY" }],
+      visibleText: "NO_REPLY",
+      rawText: "NO_REPLY",
+      terminalReply: { disposition: "silent" },
+    },
+    {
+      name: "reasoning-only completion",
+      content: [{ type: "thinking", thinking: "Private reasoning" }],
+      terminalReply: { disposition: "empty" },
+    },
+    {
+      name: "tool-only completion",
+      content: [{ type: "toolCall", id: "call-final", name: "read", arguments: {} }],
+      terminalReply: { disposition: "empty" },
+    },
+    {
+      name: "empty final answer",
+      content: [],
+      terminalReply: { disposition: "empty" },
+    },
+  ])(
+    "reports canonical usage and $name",
+    async ({ content, visibleText, rawText, terminalReply }) => {
+      seedActivePlacement();
+      const environments: WorkerTurnEnvironmentService = {
+        get: vi.fn(() => attachedEnvironment()),
+        acquireTurnCredential: vi.fn(async () => credential()),
+        acknowledgeCredentialDelivery: vi.fn(() => true),
+        startTunnel: vi.fn(async () => ({
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: OWNER_EPOCH,
+          quiesceWorkspace: vi.fn(async () => ({
+            assertActive: vi.fn(async () => {}),
+            resume: vi.fn(async () => {}),
+          })),
+          runWorkspaceCommand: vi.fn(),
+          measureLaunchTurn,
+          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+            request.onDispatchReady?.();
+            const completed = openSessionManager();
+            completed.appendMessage(
+              makeAgentAssistantMessage({
+                content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
+                provider: "openai",
+                model: "gpt-first-call",
+                stopReason: "toolUse",
+                timestamp: 21,
+                usage: {
+                  input: 100,
+                  output: 10,
+                  cacheRead: 20,
+                  cacheWrite: 5,
+                  totalTokens: 135,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+              }),
+            );
+            completed.appendMessage({
+              role: "toolResult",
+              toolCallId: "call-usage",
+              toolName: "read",
+              content: [{ type: "text", text: "usage result" }],
+              isError: false,
+              timestamp: 22,
+            });
+            const leafId = completed.appendMessage(
+              makeAgentAssistantMessage({
+                content,
+                provider: "anthropic",
+                model: "claude-reported",
+                timestamp: 23,
+                usage: {
+                  input: 200,
+                  output: 30,
+                  cacheRead: 40,
+                  cacheWrite: 0,
+                  contextUsage: {
+                    state: "available",
+                    promptTokens: 240,
+                    totalTokens: 270,
+                  },
+                  totalTokens: 270,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+              }),
+            );
+            createWorkerSessionPlacementGate(placements).updateAckCursors({
+              claim: request.turnClaim,
+              transcriptSeq: 2,
+              liveSeq: 1,
+            });
+            return {
+              stdout: JSON.stringify({
+                status: "completed",
+                transcriptLeafId: leafId,
+                transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+              }),
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            };
+          }),
+          syncWorkspace: vi.fn(async () => {
+            throw new Error("unexpected workspace sync");
+          }),
+          reconcileWorkspace: vi.fn(async (request) => {
+            request.journal.commit(MANIFEST_REF);
+            return {
+              manifestRef: MANIFEST_REF,
+              changed: false,
+              verifyStable: async () => {},
+              verifyLocalStable: async () => {},
+            };
+          }),
+          stop: vi.fn(async () => {}),
+        })),
+        stopTunnel: vi.fn(async () => {}),
+        destroy: vi.fn(async () => attachedEnvironment()),
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+
+      const result = await provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-worker-usage",
+        },
+        turn("run-worker-usage"),
+        async () => ({ meta: { durationMs: 1 } }),
+      );
+
+      expect(result.meta.finalAssistantVisibleText).toBe(visibleText);
+      expect(result.meta.finalAssistantRawText).toBe(rawText);
+      expect(
+        buildAgentRunTerminalReplySnapshot({
+          visibleText: result.meta.finalAssistantVisibleText,
+          rawText: result.meta.finalAssistantRawText,
+        }),
+      ).toEqual(terminalReply);
+      expect(result.meta.agentMeta).toEqual({
+        sessionId: SESSION_ID,
+        sessionFile,
+        provider: "anthropic",
+        model: "claude-reported",
+        usage: {
+          input: 300,
+          output: 40,
+          cacheRead: 60,
+          cacheWrite: 5,
+          total: 405,
+        },
+        lastCallUsage: {
+          input: 200,
+          output: 30,
+          cacheRead: 40,
+          cacheWrite: 0,
+          contextUsage: {
+            state: "available",
+            promptTokens: 240,
+            totalTokens: 270,
+          },
+          total: 270,
+        },
+        promptTokens: 240,
+      });
+    },
+  );
 });

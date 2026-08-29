@@ -8,7 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { boundCodeModeResult } from "./code-mode-json.js";
+import type { CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   buildCodeModeScriptParseSource,
@@ -96,7 +96,7 @@ export type CodeModeWorkerResult =
       code: CodeModeFailureCode;
       failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: boolean;
-      output: unknown[];
+      output: CodeModeOutputSource;
     };
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
@@ -290,12 +290,6 @@ export function codeModeFailureMessage(error: unknown): string {
   return isRuntimeInterruptedError(error)
     ? "code mode timeout exceeded"
     : formatErrorMessage(error);
-}
-
-export function boundOutputToLimit(output: unknown[], config: CodeModeConfig): boolean {
-  const bounded = boundCodeModeResult({ output, maxOutputBytes: config.maxOutputBytes });
-  output.splice(0, output.length, ...bounded.output);
-  return bounded.truncated;
 }
 
 export function readCode(args: unknown): {

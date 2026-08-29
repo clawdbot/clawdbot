@@ -249,7 +249,7 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
         harness.debuggerAttach.mockRejectedValueOnce(failure);
       }
       if (stage === "target lookup") {
-        harness.debuggerGetTargets.mockRejectedValueOnce(failure);
+        harness.debuggerGetTargetInfo.mockRejectedValueOnce(failure);
       }
       if (stage === "focus") {
         harness.windowsUpdate.mockRejectedValueOnce(failure);
@@ -344,14 +344,14 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     async (stage) => {
       const harness = await createHarness(mode);
       const attaching = deferred(undefined);
-      harness.debuggerGetTargets.mockClear();
+      harness.debuggerGetTargetInfo.mockClear();
       if (stage === "attach") {
         harness.debuggerAttach.mockImplementationOnce(async () => await attaching.promise);
       }
       if (stage === "target lookup") {
-        harness.debuggerGetTargets.mockImplementationOnce(async () => {
+        harness.debuggerGetTargetInfo.mockImplementationOnce(async () => {
           await attaching.promise;
-          return [];
+          return { targetInfo: { targetId: "tab-101" } };
         });
       }
       if (stage === "focus") {
@@ -363,7 +363,7 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
           stage === "focus"
             ? harness.windowsUpdate
             : stage === "target lookup"
-              ? harness.debuggerGetTargets
+              ? harness.debuggerGetTargetInfo
               : harness.debuggerAttach,
         ).toHaveBeenCalled(),
       );
@@ -484,7 +484,12 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       expect(await creating).toMatchObject({ type: "error" });
       await mutation;
       expect(harness.tabsRemove).not.toHaveBeenCalled();
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 101 });
+      if (revocation === "cancel") {
+        // Chrome's onDetach already destroyed this exact native client.
+        expect(harness.debuggerDetach).not.toHaveBeenCalled();
+      } else {
+        expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-101" });
+      }
       if (revocation === "replacement") {
         expect(await harness.command({ type: "attach", tabId: 102 })).toMatchObject({
           type: "error",

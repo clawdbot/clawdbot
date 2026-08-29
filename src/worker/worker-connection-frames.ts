@@ -39,6 +39,7 @@ import {
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
   createPendingRequestRegistry,
@@ -267,7 +268,9 @@ export class WorkerConnectionFrameDispatcher {
     const payloadLimit =
       value.kind === "inference-start"
         ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
-        : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
+        : value.kind === "transcript"
+          ? WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES
+          : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (Buffer.byteLength(encoded, "utf8") > payloadLimit) {
       return Promise.reject(new Error("worker request exceeds the protocol payload limit"));
     }

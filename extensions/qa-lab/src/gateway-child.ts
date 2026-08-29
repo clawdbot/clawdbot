@@ -253,6 +253,7 @@ async function startOwnedGatewayChild(
     runCli(args: readonly string[]) {
       throwActiveChildFailure();
       return runQaGatewayCliCommand({
+        lifetime,
         executablePath: nodeExecPath,
         argsPrefix: cliArgsPrefix,
         args,

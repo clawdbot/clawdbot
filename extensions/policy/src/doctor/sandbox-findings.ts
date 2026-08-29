@@ -233,7 +233,7 @@ function sandboxModeFindings(
         message: `${sandboxPostureLabel(entry)} uses unapproved sandbox mode '${entry.value ?? ""}'.`,
         requirement: `oc://${policyDocName}/${requirementBase}/requireMode`,
         fixHint:
-          "Set agents.defaults.sandbox.mode or agents.list[].sandbox.mode to an approved value.",
+          "Set agents.defaults.sandbox.mode or agents.entries.<id>.sandbox.mode to an approved value.",
       }),
     );
 }

@@ -325,6 +325,13 @@ describe("prepared harness source delivery", () => {
         outerModeCallback?.(mode);
       };
       const followupRun = createFollowupRun();
+      // These candidate facts precede the hook-selected route inside embedded execution.
+      followupRun.run.thinkingCatalog = [
+        { provider: "custom", id: "plugin-fallback", api: "messages", input: ["text"] },
+        { provider: "custom", id: "api-primary", api: "messages", input: ["text"] },
+        { provider: "anthropic", id: "cli-primary", api: "messages", input: ["text"] },
+        { provider: "anthropic", id: "cli-fallback", api: "messages", input: ["text"] },
+      ];
       followupRun.run.sessionKey = undefined;
       followupRun.run.sessionFile = followupRun.run.sessionId;
       followupRun.run.sourceReplyDeliveryMode = runtimeOpts.sourceReplyDeliveryMode;

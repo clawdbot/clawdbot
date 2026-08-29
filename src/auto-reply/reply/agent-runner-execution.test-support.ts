@@ -59,12 +59,12 @@ const state = vi.hoisted(() => ({
   runEmbeddedAgentEntryMock: vi.fn(),
   runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
-  isCliProviderMock: vi.fn((_: unknown) => false),
-  isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  isCliProviderMock: vi.fn((_provider: unknown) => false),
+  isInternalMessageChannelMock: vi.fn((_channel: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
-  isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
-  isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
-  isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  isCompactionFailureErrorMock: vi.fn((_message: string | undefined) => false),
+  isContextOverflowErrorMock: vi.fn((_message: string | undefined) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_message: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
@@ -345,12 +345,18 @@ export async function getExecuteAgentTurnForTest() {
         directlySentBlockKeys: outcome.directlySentBlockKeys,
         directlySentBlockPayloads: outcome.directlySentBlockPayloads,
         terminalFailurePayload: outcome.terminalFailurePayload,
+        postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
     }
     if (outcome.kind === "rejected") {
-      return { kind: "final" as const, payload: outcome.payload };
+      return {
+        kind: "final" as const,
+        payload: outcome.payload,
+        postCompactionModelFailure: outcome.postCompactionModelFailure,
+      };
     }
-    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+    const payload: ReplyPayload = { text: "NO_REPLY" };
+    return { kind: "final" as const, payload };
   };
 }
 
@@ -422,6 +428,7 @@ export type EmbeddedAgentParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onAutoCompactionSucceeded?: (count: number) => void;
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -482,6 +489,13 @@ export function createFollowupRun(): FollowupRun {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "claude-cli", id: "claude-sonnet-4-6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-5", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-8", input: ["text", "image"] },
+        { provider: "codex-cli", id: "gpt-5.4", input: ["text", "image"] },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {

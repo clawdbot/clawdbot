@@ -49,6 +49,21 @@ function progressCard(): ProgressCard {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each(["purple", undefined, "default"])(
+    "reflects the session color %s without unset chrome",
+    (color) => {
+      const container = document.createElement("div");
+      render(renderSessionHovercard({ row: row({ color }) }), container);
+      const dot = container.querySelector(".session-color-dot");
+      if (color === "purple") {
+        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
+        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+      } else {
+        expect(dot).toBeNull();
+      }
+    },
+  );
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-17T12:00:00Z"));
@@ -84,6 +99,40 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-progress-card")).toBeNull();
     expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
   });
+
+  it.each([
+    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Opens as dashboard"] },
+    { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
+    {
+      name: "both",
+      facts: { boardFace: "dashboard", hasAutomation: true },
+      labels: ["Opens as dashboard", "Automation attached"],
+    },
+    { name: "absent", facts: {}, labels: [] },
+    { name: "disabled", facts: { boardFace: "chat", hasAutomation: false }, labels: [] },
+  ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
+    "renders $name session facts without other metadata",
+    ({ facts, labels }) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionHovercard({
+          row: row({ createdActor: undefined, workContext: undefined, ...facts }),
+        }),
+        container,
+      );
+
+      const metadata = container.querySelector(".session-hovercard__section--metadata");
+      expect(Boolean(metadata)).toBe(labels.length > 0);
+      const contextRows = [...container.querySelectorAll(".session-hovercard__context-row")];
+      expect(contextRows.map((context) => context.textContent?.trim())).toEqual(labels);
+      expect(contextRows.map((context) => context.getAttribute("aria-label"))).toEqual(labels);
+      for (const context of contextRows) {
+        expect(
+          context.querySelector('.session-hovercard__context-icon[aria-hidden="true"] svg'),
+        ).not.toBeNull();
+      }
+    },
+  );
 
   it("renders the channel avatar with gateway auth instead of an initials span", () => {
     const container = document.createElement("div");

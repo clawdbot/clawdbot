@@ -5,6 +5,20 @@ import type { installChromeExtensionBootstrap } from "../browser/extension-insta
 import { relayKeyIdFromHex } from "../browser/extension-relay/auth-v2-crypto.js";
 import * as cliCoreApiModule from "./core-api.js";
 
+// Metadata output must remain usable without loading browser or agent execution runtimes.
+vi.mock("../control-service.js", () => {
+  throw new Error("Browser extension CLI must not load browser control services");
+});
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("Browser extension CLI must not load agent runtime");
+});
+vi.mock("openclaw/plugin-sdk/media-runtime", () => {
+  throw new Error("Browser extension CLI must not load media runtime");
+});
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => {
+  throw new Error("Browser extension CLI must not load media understanding runtime");
+});
+
 const relayMocks = vi.hoisted(() => {
   let relayKey = "";
   for (let byteIndex = 0; byteIndex < 32; byteIndex += 1) {
@@ -240,28 +254,38 @@ describe("browser extension pairing Gateway URL", () => {
     });
   });
 
-  it("prints only safe v2 relay metadata via cdp --json", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
+  it.each([
+    { label: "default", config: {}, port: 18799 },
+    {
+      label: "configured",
+      config: {
+        browser: {
+          profiles: { custom: { driver: "extension" as const, cdpPort: 21117, color: "#00AA00" } },
+        },
+      },
+      port: 21117,
+    },
+  ])("prints safe $label v2 metadata through the lazy root CLI", async ({ config, port }) => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue(config);
     const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
     const writeJsonSpy = vi
       .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
-    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const { registerBrowserCli } = await import("./browser-cli.js");
     const program = new Command();
-    const browser = program.command("browser");
-    registerBrowserExtensionCommands(browser, () => ({}));
+    registerBrowserCli(program, ["node", "openclaw", "browser", "extension", "cdp", "--json"]);
 
     await program.parseAsync(["browser", "extension", "cdp", "--json"], { from: "user" });
 
     expect(writeJsonSpy).toHaveBeenCalledWith({
-      browserUrl: "http://127.0.0.1:18799",
-      wsEndpoint: "ws://127.0.0.1:18799/cdp",
+      browserUrl: `http://127.0.0.1:${port}`,
+      wsEndpoint: `ws://127.0.0.1:${port}/cdp`,
       auth: {
         label: "openclaw.browser-relay.auth",
         version: 2,
         keyId: relayKeyIdFromHex(relayMocks.relayKey),
-        challengeUrl: "http://127.0.0.1:18799/_openclaw/relay/auth/v2/challenge",
-        completeUrl: "http://127.0.0.1:18799/_openclaw/relay/auth/v2/complete",
+        challengeUrl: `http://127.0.0.1:${port}/_openclaw/relay/auth/v2/challenge`,
+        completeUrl: `http://127.0.0.1:${port}/_openclaw/relay/auth/v2/complete`,
         role: "cdp",
         transport: "connection",
         method: "SEQUENCE",

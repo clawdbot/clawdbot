@@ -4,6 +4,7 @@ import path from "node:path";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   abortEmbeddedAgentRun,
@@ -305,6 +306,18 @@ function createBaseRun(options: BaseRunOptions = {}) {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "claude-cli", id: "opus-4.5", input: ["text", "image"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
+        { provider: "google", id: "gemini-2.5-pro", input: ["text", "image"] },
+        { provider: "google-gemini-cli", id: "gemini-3", input: ["text", "image"] },
+        {
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-sonnet-4-6",
+          input: ["text", "image"],
+        },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
@@ -381,11 +394,11 @@ function setupAgentRunnerMocks(): void {
   resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
-  runEmbeddedAgentMock.mockClear();
+  runEmbeddedAgentMock.mockReset();
   warnPrivateFinalSpy.mockClear();
-  runCliAgentMock.mockClear();
-  runWithModelFallbackMock.mockClear();
-  runtimeErrorMock.mockClear();
+  runCliAgentMock.mockReset();
+  runWithModelFallbackMock.mockReset();
+  runtimeErrorMock.mockReset();
   abortEmbeddedAgentRunMock.mockClear();
   compactState.compactEmbeddedAgentSessionMock.mockReset();
   compactState.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -398,7 +411,7 @@ function setupAgentRunnerMocks(): void {
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
-  loadCronStoreMock.mockClear();
+  loadCronStoreMock.mockReset();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
 
@@ -1211,6 +1224,7 @@ describe("runReplyAgent block streaming", () => {
   it("returns the final payload when onBlockReply times out", async () => {
     vi.useFakeTimers();
     let sawAbort = false;
+    const blockReplyStarted = createDeferred();
 
     const onBlockReply = vi.fn((_payload, context) => {
       return new Promise<void>((resolve) => {
@@ -1222,6 +1236,7 @@ describe("runReplyAgent block streaming", () => {
           },
           { once: true },
         );
+        blockReplyStarted.resolve();
       });
     });
 
@@ -1270,6 +1285,7 @@ describe("runReplyAgent block streaming", () => {
       },
     }).run();
 
+    await blockReplyStarted.promise;
     await vi.advanceTimersByTimeAsync(5);
     const result = await resultPromise;
 
@@ -2481,6 +2497,8 @@ describe("runReplyAgent response usage footer", () => {
 describe("runReplyAgent transient HTTP retry", () => {
   it("retries once after transient 521 HTML failure and then succeeds", async () => {
     vi.useFakeTimers();
+    const retryStarted = createDeferred();
+    runtimeErrorMock.mockImplementationOnce(() => retryStarted.resolve());
     runEmbeddedAgentMock
       .mockRejectedValueOnce(
         new Error(
@@ -2501,6 +2519,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       },
     }).run();
 
+    await retryStarted.promise;
     await vi.advanceTimersByTimeAsync(2_500);
     const result = await runPromise;
 
@@ -2698,6 +2717,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         thinkLevel: "low",
         reasoningLevel: "on",
         verboseLevel: "off",

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import {
@@ -125,23 +126,24 @@ export async function directoryContainsOnlyJournalPaths(
   directory: string,
   paths: ReadonlySet<string>,
   directories: ReadonlySet<string>,
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
 ): Promise<boolean> {
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
-    if (isDerivedWorkspacePath(child)) {
+    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       continue;
     }
     const stats = await fs.lstat(localPath(root, child));
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
       if (
         !directories.has(child) &&
-        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
       ) {
         return false;
       }
       if (
         directories.has(child) &&
-        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories))
+        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories, isRetainedInput))
       ) {
         return false;
       }
@@ -155,12 +157,13 @@ export async function directoryContainsOnlyJournalPaths(
 export async function directoryContainsOnlyDerivedWorkspaceEntries(
   root: string,
   directory: string,
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
 ): Promise<boolean> {
   const names = await fs.readdir(localPath(root, directory));
   let foundDerivedEntry = false;
   for (const name of names) {
     const child = `${directory}/${name}`;
-    if (isDerivedWorkspacePath(child)) {
+    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       foundDerivedEntry = true;
       continue;
     }
@@ -168,7 +171,7 @@ export async function directoryContainsOnlyDerivedWorkspaceEntries(
     if (
       !stats.isDirectory() ||
       stats.isSymbolicLink() ||
-      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
     ) {
       return false;
     }

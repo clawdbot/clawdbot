@@ -8,6 +8,7 @@ import {
   preserveQaGatewayDebugArtifacts,
 } from "./gateway-child-artifacts.js";
 import { closeQaGatewayLogStream, stopQaGatewayChildProcessTree } from "./gateway-child-process.js";
+import { createQaGatewayCliError } from "./gateway-log-redaction.js";
 import type { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import type {
   createQaGatewayProcessBoundaryController,
@@ -24,10 +25,13 @@ export type QaGatewayStopResult = {
 export type QaGatewayStopOptions = { keepTemp?: boolean; preserveToDir?: string };
 
 type OwnedProcess = {
+  kind: "gateway" | "cli";
   child: ChildProcess;
   prepared: PreparedSpawn | null;
   identity: QaGatewayVerifiedProcessIdentity | null;
   settlement?: Promise<QaGatewayStopResult>;
+  stopResult?: QaGatewayStopResult;
+  completion?: Promise<void>;
   ready: boolean;
   checkFailure: () => void;
 };
@@ -41,7 +45,9 @@ export class QaGatewayChildLifecycle {
   controller: BoundaryController | null = null;
   rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
   readonly logStreams: Array<["stdout" | "stderr", WriteStream]> = [];
-  private closed = false;
+  private readonly cancellation = new AbortController();
+  private readonly processes = new Set<OwnedProcess>();
+  private spawned = false;
   private current: OwnedProcess | null = null;
   private operation: Promise<unknown> | null = null;
   private stopping: Promise<QaGatewayStopResult> | null = null;
@@ -49,15 +55,51 @@ export class QaGatewayChildLifecycle {
 
   repoRoot?: string;
 
+  get signal() {
+    return this.cancellation.signal;
+  }
+
   assertOpen() {
-    if (this.closed) {
+    if (this.signal.aborted) {
       throw new Error("qa gateway child lifecycle is closed");
     }
   }
 
-  register(child: ChildProcess, prepared: PreparedSpawn | null) {
-    this.current = { child, prepared, identity: null, ready: false, checkFailure: () => {} };
-    return this.current;
+  register(
+    child: ChildProcess,
+    prepared: PreparedSpawn | null,
+    kind: OwnedProcess["kind"] = "gateway",
+  ) {
+    const owned: OwnedProcess = {
+      child,
+      prepared,
+      kind,
+      identity: null,
+      ready: false,
+      checkFailure: () => {},
+    };
+    if (kind === "gateway") {
+      if (this.current?.stopResult?.process === "confirmed-stopped") {
+        this.processes.delete(this.current);
+      }
+      this.current = owned;
+    }
+    this.spawned ||= child.pid !== undefined;
+    this.processes.add(owned);
+    return owned;
+  }
+
+  completeCli(owned: OwnedProcess, operation: Promise<string>) {
+    owned.completion = operation
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        if (owned.stopResult?.process === "confirmed-stopped") {
+          this.processes.delete(owned);
+        }
+      });
   }
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
@@ -73,18 +115,16 @@ export class QaGatewayChildLifecycle {
     try {
       return await pending;
     } catch (error) {
-      this.closed = true;
+      this.cancellation.abort();
       // Settle the failed operation's process, but leave logs and staging owned
       // until explicit stop supplies the caller's artifact preservation policy.
-      const result = await this.stopProcess();
+      const result = await this.stopAllProcesses();
       const message = `${formatErrorMessage(error)}${this.tempRoot ? `\nQA gateway temp root preserved at ${this.tempRoot}` : ""}`;
       const primary =
         error instanceof QaSuiteInfraError
           ? new QaSuiteInfraError(error.code, message, { cause: error })
           : new Error(message, { cause: error });
       if (result.errors.length) {
-        // Oxlint 1.78 checks cause at argument 2; AggregateError takes it at 3.
-        // oxlint-disable-next-line preserve-caught-error
         throw new AggregateError(
           [primary, ...result.errors],
           "qa gateway startup and cleanup failed",
@@ -97,8 +137,7 @@ export class QaGatewayChildLifecycle {
     }
   }
 
-  stopProcess() {
-    const current = this.current;
+  stopProcess(current = this.current) {
     if (!current) {
       return Promise.resolve<QaGatewayStopResult>({ process: "never-spawned", errors: [] });
     }
@@ -106,7 +145,7 @@ export class QaGatewayChildLifecycle {
     // record only after confirmed termination, never after a leader-only exit.
     current.settlement ??= (async (): Promise<QaGatewayStopResult> => {
       const errors: unknown[] = [];
-      if (this.controller) {
+      if (current.kind === "gateway" && this.controller) {
         try {
           if (current.identity) {
             await this.controller.markExited(current.identity);
@@ -129,16 +168,20 @@ export class QaGatewayChildLifecycle {
         );
         return { process: "confirmed-stopped", errors };
       } catch (error) {
-        return { process: "unconfirmed", errors: [...errors, error] };
+        const failure = current.kind === "cli" ? createQaGatewayCliError(error) : error;
+        return { process: "unconfirmed", errors: [...errors, failure] };
       }
-    })();
+    })().then((result) => {
+      current.stopResult = result;
+      return result;
+    });
     return current.settlement;
   }
 
   stop(opts?: QaGatewayStopOptions): Promise<QaGatewayStopResult> {
     // Close admission before any await: staging/acceptance/replacement cannot
     // spawn or resume a child after a caller has requested stop.
-    this.closed = true;
+    this.cancellation.abort();
     this.stopping ??= this.stopOnce(opts).then((result) => {
       if (result.errors.length) {
         this.stopping = null;
@@ -149,17 +192,37 @@ export class QaGatewayChildLifecycle {
   }
 
   private async stopOnce(opts?: QaGatewayStopOptions): Promise<QaGatewayStopResult> {
-    const settlement = await this.current?.settlement;
-    if (settlement?.process === "unconfirmed" && this.current) {
-      this.current.settlement = undefined;
+    for (const owned of this.processes) {
+      if (owned.stopResult?.process === "unconfirmed") {
+        owned.settlement = undefined;
+        owned.stopResult = undefined;
+      }
     }
-    await this.stopProcess();
+    await this.stopAllProcesses();
     await this.operation?.catch(() => {});
     return this.finish(opts);
   }
 
+  private async stopAllProcesses(): Promise<QaGatewayStopResult> {
+    const results = await Promise.all(
+      [...this.processes].map(async (owned) => {
+        const result = await this.stopProcess(owned);
+        await owned.completion;
+        return result;
+      }),
+    );
+    return {
+      process: results.some((result) => result.process === "unconfirmed")
+        ? "unconfirmed"
+        : this.spawned
+          ? "confirmed-stopped"
+          : "never-spawned",
+      errors: results.flatMap((result) => result.errors),
+    };
+  }
+
   private async finish(opts?: QaGatewayStopOptions): Promise<QaGatewayStopResult> {
-    const stopped = await this.stopProcess();
+    const stopped = await this.stopAllProcesses();
     const errors = [...stopped.errors];
     const attempt = async (cleanup: () => Promise<unknown>) => {
       try {

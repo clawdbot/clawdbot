@@ -90,6 +90,36 @@ describe("markdown-core code spans", () => {
       text: "    literal",
       expectedSlices: ["    literal"],
     },
+    {
+      name: "finds tilde fences without backticks",
+      text: "~~~\nliteral\n~~~",
+      expectedSlices: ["~~~\nliteral\n~~~"],
+    },
+    {
+      name: "finds tab-indented code blocks",
+      text: "\tliteral",
+      expectedSlices: ["\tliteral"],
+    },
+    {
+      name: "finds indented code inside blockquotes",
+      text: ">     literal",
+      expectedSlices: ["    literal"],
+    },
+    {
+      name: "finds indented code inside list items",
+      text: "- item\n\n      literal",
+      expectedSlices: ["    literal"],
+    },
+    {
+      name: "does not interpret short or Unicode indentation as code",
+      text: "   literal\n\n\u00a0\u00a0\u00a0\u00a0literal\n\n\u2003\u2003\u2003\u2003literal",
+      expectedSlices: [],
+    },
+    {
+      name: "does not turn HTML code tags or decoded entities into Markdown code",
+      text: "<code>literal</code>\n<pre>literal</pre>\n&#96;literal&#96;\n&Tab;literal",
+      expectedSlices: [],
+    },
   ] as const)("follows CommonMark block ownership: $name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
   });
@@ -115,8 +145,8 @@ describe("markdown-core code spans", () => {
   });
 
   it("walks deeply nested Markdown without exhausting the JavaScript stack", () => {
-    const input = `${"> ".repeat(10_000)}<think>x</think>`;
+    const input = `${"> ".repeat(10_000)}\`<think>x</think>\``;
 
-    expect(findMarkdownCodeSpans(input)).toEqual([]);
+    expectCodeRegionSlices(input, ["`<think>x</think>`"]);
   });
 });

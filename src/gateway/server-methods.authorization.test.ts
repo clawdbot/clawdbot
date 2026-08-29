@@ -355,7 +355,8 @@ describe("gateway method authorization", () => {
           sessionId: "session-draft-replacement",
           updatedAt: 2,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
@@ -388,7 +389,8 @@ describe("gateway method authorization", () => {
           sessionId: "session-lifecycle-authorization-target",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
 

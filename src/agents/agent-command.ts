@@ -1,4 +1,3 @@
-/** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -10,7 +9,6 @@ import {
 } from "../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -66,6 +64,7 @@ import {
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery/main-session-recovery-clear.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
@@ -286,7 +285,7 @@ async function agentCommandInternal(
       }
 
       let currentRunDeliveryPrepared = false;
-      const prepareDeliveryForRun = async (candidateSessionEntry?: InternalSessionEntry) => {
+      const prepareDeliveryForRun = async (candidateSessionEntry?: typeof sessionEntry) => {
         if (currentRunDeliveryPrepared || opts.deliver !== true) {
           return;
         }
@@ -344,7 +343,7 @@ async function agentCommandInternal(
             ? runId
             : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const next: InternalSessionEntry = {
+        const next = {
           ...entry,
           sessionId,
           updatedAt: now,
@@ -570,22 +569,22 @@ async function agentCommandInternal(
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryRunId === runId) {
-          const next: InternalSessionEntry = {
-            ...entry,
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry,
-              recordTerminalSource: true,
-              terminalRunId: runId,
-              terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
-            }),
-            updatedAt: Date.now(),
-          };
           const persisted = await persistAgentSession({
             sessionStore,
             sessionKey,
             storePath,
             initialEntry: entry,
-            entry: next,
+            entry: {
+              ...entry,
+              ...buildRestartRecoveryClaimCleanupPatch({
+                entry,
+                recordTerminalSource: true,
+                terminalRunId: runId,
+                terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
+              }),
+              ...buildMainSessionRecoveryClearPatch(entry),
+              updatedAt: Date.now(),
+            },
             shouldPersist: (current) =>
               shouldPersistRestartRecoveryCleanup(current, runOwnedSessionId, runId),
           });
@@ -710,8 +709,7 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
-  // boundary at runtime so extra or inherited properties cannot author audit identity.
+  // Enforce the private recovery boundary for JavaScript Plugin SDK callers.
   return await agentCommandFromIngressInternal(
     sanitizePublicAgentCommandIngressOpts(opts),
     runtime,

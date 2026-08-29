@@ -1928,6 +1928,23 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(coreFile, "utf8")).resolves.toBe("keep\n");
   });
 
+  it.each(["OpenClaw.app", "candidates/OpenClaw.app"])(
+    "keeps the packaged Mac app intact at %s while rebuilding its replacement runtime",
+    async (appPath) => {
+      const rootDir = createTempDir("openclaw-tsdown-app-pairing-");
+      const appFile = path.join(rootDir, "dist", appPath, "Contents", "Resources", "worker.js");
+      const staleFile = path.join(rootDir, "dist", "stale.js");
+      await fsPromises.mkdir(path.dirname(appFile), { recursive: true });
+      await fsPromises.writeFile(appFile, "previous signed worker\n");
+      await fsPromises.writeFile(staleFile, "stale\n");
+
+      cleanTsdownOutputRoots({ cwd: rootDir, roots: ["dist"] });
+
+      await expect(fsPromises.readFile(appFile, "utf8")).resolves.toBe("previous signed worker\n");
+      await expectPathMissing(staleFile);
+    },
+  );
+
   it("cleans an absolute explicit output directory without rebasing it under cwd", async () => {
     const rootDir = createTempDir("openclaw-tsdown-absolute-clean-");
     const outputDir = path.join(rootDir, "custom-dist");
@@ -1939,6 +1956,23 @@ describe("resolveTsdownBuildInvocation", () => {
 
     await expectPathMissing(outputDir);
   });
+
+  it.each([".", "src"])(
+    "refuses an output root containing checkout artifact ownership from %s",
+    async (directory) => {
+      const rootDir = createTempDir("openclaw-tsdown-owner-clean-");
+      const cwd = path.join(rootDir, directory);
+      const owner = path.join(rootDir, ".artifacts/dist-artifacts.lock/owner.json");
+      await fsPromises.mkdir(path.dirname(owner), { recursive: true });
+      await fsPromises.mkdir(cwd, { recursive: true });
+      await fsPromises.mkdir(path.join(rootDir, ".git"));
+      await fsPromises.writeFile(owner, "owned");
+      expect(() =>
+        cleanTsdownOutputRoots({ cwd, roots: [path.join(rootDir, ".artifacts")] }),
+      ).toThrow("Cannot clean the checkout's dist artifact ownership location");
+      expect(await fsPromises.readFile(owner, "utf8")).toBe("owned");
+    },
+  );
 
   it("refuses to clean the working directory and leaves it intact", async () => {
     const rootDir = createTempDir("openclaw-tsdown-cwd-clean-");
@@ -2398,9 +2432,11 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
       const termPath = path.join(rootDir, "child.term");
+      // Allocate the marker before readiness; filesystem setup must not consume termination grace.
       const childScript = [
         "const fs = require('node:fs');",
-        `process.on('SIGTERM', () => fs.writeFileSync(${JSON.stringify(termPath)}, 'SIGTERM'));`,
+        `const termFd = fs.openSync(${JSON.stringify(termPath)}, 'wx');`,
+        "process.on('SIGTERM', () => fs.writeSync(termFd, 'SIGTERM', 0));",
         `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
@@ -2440,11 +2476,13 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-clean-");
       const cleanupPath = path.join(rootDir, "child.cleanup");
       const childPidPath = path.join(rootDir, "child.pid");
+      // Keep marker allocation outside the grace period, but require the real delayed cleanup write.
       const childScript = [
         "const fs = require('node:fs');",
+        `const cleanupFd = fs.openSync(${JSON.stringify(cleanupPath)}, 'wx');`,
         "process.on('SIGTERM', () => {",
         "  setTimeout(() => {",
-        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
+        "    fs.writeSync(cleanupFd, 'clean', 0);",
         "    process.exit(0);",
         "  }, 50);",
         "});",
@@ -2508,10 +2546,10 @@ describe("runTsdownBuildInvocation", () => {
         ].join("");
         const runnerScript = [
           `import { runTsdownBuildInvocation } from ${JSON.stringify(scriptUrl)};`,
-          "await runTsdownBuildInvocation(",
+          "const result = await runTsdownBuildInvocation(",
           `  { command: process.execPath, args: ['-e', ${JSON.stringify(parentScript)}], options: { stdio: ['ignore', 'pipe', 'pipe'], shell: false, env: process.env } },`,
           "  { env: { ...process.env, OPENCLAW_TSDOWN_HEARTBEAT_MS: '0' } },",
-          ");",
+          "); process.exitCode = result.status ?? 1;",
         ].join("\n");
 
         runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
@@ -2526,8 +2564,8 @@ describe("runTsdownBuildInvocation", () => {
         runner.kill("SIGTERM");
 
         await expect(waitForChildClose(runner)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
+          code: 143,
+          signal: null,
         });
         await waitForDead(childPid, 2_000);
       } finally {

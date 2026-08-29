@@ -10,7 +10,6 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -102,10 +101,6 @@ function bindingRowsToRecords(rows: Array<{ record_json: string }>): SessionBind
   });
 }
 
-function targetAgentIdForSessionKey(targetSessionKey: string): string {
-  return resolveAgentIdFromSessionKey(targetSessionKey);
-}
-
 function readCurrentConversationBindingRow(
   db: DatabaseSync,
   conversation: ConversationRef,
@@ -148,8 +143,6 @@ function currentConversationBindingRow(
   return {
     binding_key: bindingKey,
     binding_id: record.bindingId,
-    target_agent_id: targetAgentIdForSessionKey(record.targetSessionKey),
-    target_session_id: null,
     target_session_key: record.targetSessionKey,
     channel: conversation.channel,
     account_id: conversation.accountId,
@@ -245,14 +238,10 @@ function listCurrentConversationBindingRowsBySession(
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
 ): CurrentConversationBindingRow[] {
-  if (!parseAgentSessionKey(targetSessionKey)) {
-    return [];
-  }
   const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
   let query = bindingDb
     .selectFrom("current_conversation_bindings")
     .select(["binding_key", "binding_id", "target_session_key", "record_json"])
-    .where("target_agent_id", "=", targetAgentIdForSessionKey(targetSessionKey))
     .where("target_session_key", "=", targetSessionKey);
   if (scope) {
     const normalized = normalizeConversationRef({
@@ -269,7 +258,7 @@ function listCurrentConversationBindingRowsBySession(
   return executeSqliteQuerySync(db, query.orderBy("binding_id", "asc")).rows;
 }
 
-/** Lists latest durable bindings using the indexed session owner and optional account scope. */
+/** Lists latest durable bindings using the exact target key and optional account scope. */
 export function listCurrentConversationBindingRecordsBySession(
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,

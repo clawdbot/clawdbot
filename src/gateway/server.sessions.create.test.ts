@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -163,13 +163,14 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
 });
 
+let gitWorkspaceTemplate: string;
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
-  setupGatewaySessionsTestHarness();
+  setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
+  });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
-let gitWorkspaceTemplateRoot: string;
-let gitWorkspaceTemplate: string;
 
 async function waitForCreatedSessionRun(
   context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
@@ -194,17 +195,6 @@ async function waitForCreatedSessionRun(
   }
   return removed;
 }
-
-beforeAll(async () => {
-  gitWorkspaceTemplateRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-session-git-template-")),
-  );
-  gitWorkspaceTemplate = await createGitWorkspace(gitWorkspaceTemplateRoot);
-});
-
-afterAll(async () => {
-  await fs.rm(gitWorkspaceTemplateRoot, { recursive: true, force: true });
-});
 
 // Read the real implementations back here rather than capturing them inside the
 // mock factories: Vitest runs a factory on first import of the mocked module, and
@@ -359,7 +349,7 @@ test.each([
       expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
     }
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      createdActor: { type: "human", id: profile.id },
+      createdActor: { type: "human", source: "profile", id: profile.id },
       sandbox: "required",
     });
 
@@ -444,7 +434,7 @@ test("operator role agent allowlists protect creation without blocking existing 
   await writeSessionStore({
     entries: {
       [existingKey]: sessionStoreEntry("role-existing-session", {
-        createdActor: { type: "human", id: profile.id },
+        createdActor: { type: "human", source: "profile", id: profile.id },
       }),
     },
   });
@@ -503,7 +493,7 @@ test("sessions.create revalidates parent participation before committing a fork 
     entries: {
       [parentSessionKey]: sessionStoreEntry(parentSessionId, {
         visibility: "read-only",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       }),
     },
   });
@@ -1804,6 +1794,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       ownerId: key,
     });
 
+    const retainedDraft = path.join(worktree!.path, "session-draft.txt");
+    await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
+    const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
+      .stdout;
+
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
@@ -1815,7 +1810,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
     expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(createSpy).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
+      "uncommitted work survives reuse\n",
+    );
+    expect((await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"])).stdout).toBe(
+      originalHead,
+    );
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>
@@ -4759,7 +4759,7 @@ test("sessions.create stamps trusted operator provenance and records created", a
   expect(created.ok).toBe(true);
   expect(created.payload?.entry).toMatchObject({
     createdVia: "operator",
-    createdActor: { type: "human", id: profileId },
+    createdActor: { type: "human", source: "profile", id: profileId },
     createdAt: expect.any(Number),
   });
   expect(created.payload?.entry).not.toHaveProperty("createdActor.label");
@@ -4794,7 +4794,10 @@ test("sessions.create stamps trusted operator provenance and records created", a
 
   for (const { actor, sandbox } of [
     { actor: { type: "agent", id: "main" }, sandbox: undefined },
-    { actor: { type: "human", id: "profile-delegated-creator" }, sandbox: "required" },
+    {
+      actor: { type: "human", source: "profile", id: "profile-delegated-creator" },
+      sandbox: "required",
+    },
   ] as const) {
     // The required parent's creation policy survives removal of gateway.roles.
     const hinted = await directSessionReq<{
@@ -4835,7 +4838,7 @@ test("sessions.create reset-in-place preserves the node creation stamp", async (
     entries: {
       main: sessionStoreEntry("existing-main", {
         createdVia: "channel",
-        createdActor: { type: "human", id: "telegram:42" },
+        createdActor: { type: "human", source: "channel", id: "telegram:42" },
         createdAt: 1234,
       }),
     },
@@ -4860,12 +4863,12 @@ test("sessions.create reset-in-place preserves the node creation stamp", async (
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry).toMatchObject({
     createdVia: "channel",
-    createdActor: { type: "human", id: "telegram:42" },
+    createdActor: { type: "human", source: "channel", id: "telegram:42" },
     createdAt: 1234,
   });
   expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
     createdVia: "channel",
-    createdActor: { type: "human", id: "telegram:42" },
+    createdActor: { type: "human", source: "channel", id: "telegram:42" },
     createdAt: 1234,
   });
 });

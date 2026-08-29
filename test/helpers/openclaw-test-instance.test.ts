@@ -9,6 +9,7 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mts";
+import { hasErrnoCode } from "../../src/infra/errno.js";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 import { isProcessAlive, waitForDead } from "./process-wait.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
@@ -674,7 +675,14 @@ describe("openclaw test instance", () => {
         const reapGroup = async () => {
           terminateManagedChild(leader, "SIGKILL");
           if (resistantPid && isProcessAlive(resistantPid)) {
-            process.kill(resistantPid, "SIGKILL");
+            try {
+              process.kill(resistantPid, "SIGKILL");
+            } catch (error) {
+              // Group termination can reap the descendant after the liveness probe.
+              if (!hasErrnoCode(error, "ESRCH")) {
+                throw error;
+              }
+            }
           }
           await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
           if (resistantPid) {

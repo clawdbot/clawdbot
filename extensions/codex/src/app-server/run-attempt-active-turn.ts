@@ -1,10 +1,14 @@
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
+  resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   retireCodexAppServerClientAfterTimedOutTurn,
   terminateCodexBackgroundTerminals,
@@ -31,6 +35,7 @@ import {
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+import { buildCodexUserInput } from "./user-input.js";
 
 export async function activateCodexAttemptTurn(
   resources: CodexAttemptResources,
@@ -242,12 +247,50 @@ export async function activateCodexAttemptTurn(
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },
     );
   }
+  const assertSteeringActive = () => {
+    params.hostCapabilities.assertActive();
+    runAbortController.signal.throwIfAborted();
+    if (state.completed || state.terminalTurnNotificationQueued || state.timedOut) {
+      throw new Error("codex app-server turn is no longer accepting steering");
+    }
+  };
+  const workspaceOnly = resolveAttemptFsWorkspaceOnly({ config: params.config, sessionAgentId });
+  const imageContext = {
+    workspaceDir: connection.effectiveWorkspace,
+    model: params.model,
+    config: params.config,
+    workspaceOnly,
+    localRoots: workspaceOnly
+      ? undefined
+      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId),
+    sandbox:
+      connection.sandbox?.enabled && connection.sandbox.fsBridge
+        ? { root: connection.sandbox.workspaceDir, bridge: connection.sandbox.fsBridge }
+        : undefined,
+  };
   const activeSteeringQueue = createCodexSteeringQueue({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
+    assertActive: assertSteeringActive,
+    prepareMessage: async (text, options) => {
+      const result = await detectAndLoadAgentHarnessPromptImages({
+        ...imageContext,
+        prompt: text,
+        existingImages: options.images,
+        imageOrder: options.imageOrder,
+        media: options.media,
+        userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
+      });
+      if (result.failedMediaCount) {
+        throw new Error(
+          `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for Codex steering`,
+        );
+      }
+      return buildCodexUserInput(text, result.images);
+    },
     beforeConfirmConsumed: async (items) => {
       const inboundItems = items.filter((item) => item.isInboundUserMessage === true);
       if (inboundItems.length === 0) {
@@ -287,10 +330,11 @@ export async function activateCodexAttemptTurn(
     text: string,
     optionsLocal?: CodexSteeringQueueOptions,
   ) => {
-    if (optionsLocal?.isInboundUserMessage !== true || optionsLocal.images?.length) {
+    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
       return false;
     }
-    const claimed = await claimPendingAgentQuestionAnswer({
+    assertSteeringActive();
+    return await claimPendingAgentQuestionAnswer({
       sessionKey: params.sessionKey ?? params.sessionId,
       text,
       persist: optionsLocal.userTurnTranscriptRecorder
@@ -299,7 +343,6 @@ export async function activateCodexAttemptTurn(
           }
         : undefined,
     });
-    return claimed;
   };
   const cancelPendingUserInput = (resolvedBy: string) =>
     cancelPendingAgentQuestionForSession({
@@ -307,11 +350,14 @@ export async function activateCodexAttemptTurn(
       resolvedBy,
     });
   const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
-    const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
     if (await claimPendingUserInputAnswer(text, optionsLocal)) {
+      // A question claim is already consumption. Closing the run during its
+      // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
       return undefined;
-    } else if (isInboundUserMessage && optionsLocal?.images?.length) {
+    }
+    if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
+      assertSteeringActive();
       try {
         await cancelPendingUserInput("image-reply");
       } catch (error) {
@@ -359,7 +405,7 @@ export async function activateCodexAttemptTurn(
     // queueMessage resolves only after Codex echoes the steered userMessage completion.
     // Gateway-owned turns rely on that boundary before finalizing adoption.
     supportsTranscriptCommitWait: true,
-    supportsQueueMessageImages: true,
+    supportsQueueMessageImages: params.model.input.includes("image"),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),

@@ -50,6 +50,7 @@ has_native_swift_changes() {
     scripts/ios-write-swift-filelist.mjs
     scripts/ios-write-swift-filelist.mts
     scripts/lint-swift.sh
+    scripts/test-macos-native.mts
   )
 
   if git rev-parse --verify --quiet origin/main >/dev/null; then
@@ -100,7 +101,9 @@ run_macos_ci_mirror() {
   run_step pnpm lint:swift
   run_step pnpm format:swift
   run_step swift build --package-path apps/macos --configuration release
-  run_step swift test --package-path apps/macos --parallel
+  echo "Native tests were NOT run: use the disposable macos-swift GitHub CI job for this exact commit." >&2
+  echo "Local lint/build passed; prepush cannot certify the native suite on an operator desktop." >&2
+  return 1
 }
 
 main() {

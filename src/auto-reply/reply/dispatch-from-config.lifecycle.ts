@@ -4,16 +4,20 @@ import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-r
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  prepareSessionWorkerPlacementMutationCheck,
   resolveWorkerPlacementArchiveRestoreError,
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  runExclusiveSessionLifecycleMutation,
+  type SessionWorkAdmissionLease,
+} from "../../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import {
   isNativeCommandTurn,
@@ -86,36 +90,58 @@ async function restoreArchivedDispatchSession(params: {
   const snapshotSessionId = entry.sessionId;
   const snapshotArchivedAt = entry.archivedAt;
   // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
-  return (
-    (await updateSessionEntry({ sessionKey, storePath }, (currentEntry) => {
-      if (
-        currentEntry.sessionId !== snapshotSessionId ||
-        currentEntry.archivedAt !== snapshotArchivedAt ||
-        isRestartRecoveryTombstone(currentEntry)
-      ) {
-        return null;
-      }
-      try {
-        const placement = currentEntry.sessionId
-          ? placementContext.workerSessionPlacementService
-              ?.getMany([currentEntry.sessionId])
-              .get(currentEntry.sessionId)
-          : undefined;
-        if (
-          resolveWorkerPlacementArchiveRestoreError({
-            context: placementContext,
-            key: sessionKey,
-            placement,
-          })
-        ) {
-          return null;
-        }
-      } catch {
-        return null;
-      }
-      return { archivedAt: undefined, archivedBy: undefined };
-    })) ?? undefined
-  );
+  let assertCommitAllowed: (() => void) | undefined;
+  return await runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: [sessionKey, snapshotSessionId],
+    run: async () =>
+      (await patchSessionEntryCore(
+        { sessionKey, storePath },
+        async (currentEntry) => {
+          if (
+            currentEntry.sessionId !== snapshotSessionId ||
+            currentEntry.archivedAt !== snapshotArchivedAt ||
+            isRestartRecoveryTombstone(currentEntry)
+          ) {
+            return null;
+          }
+          try {
+            const placement = currentEntry.sessionId
+              ? placementContext.workerSessionPlacementService
+                  ?.getMany([currentEntry.sessionId])
+                  .get(currentEntry.sessionId)
+              : undefined;
+            if (
+              resolveWorkerPlacementArchiveRestoreError({
+                context: placementContext,
+                key: sessionKey,
+                placement,
+              })
+            ) {
+              return null;
+            }
+          } catch {
+            return null;
+          }
+          if (currentEntry.worktree) {
+            const { synchronizeSessionWorktreeArchive } =
+              await import("../../sessions/session-worktree-lifecycle.js");
+            assertCommitAllowed = prepareSessionWorkerPlacementMutationCheck({
+              context: placementContext,
+              sessionId: currentEntry.sessionId,
+            });
+            await synchronizeSessionWorktreeArchive({
+              archived: false,
+              entry: currentEntry,
+              scope: { sessionKey, storePath },
+              commitGuard: assertCommitAllowed,
+            });
+          }
+          return { archivedAt: undefined, archivedBy: undefined };
+        },
+        { assertCommitAllowed: () => assertCommitAllowed?.() },
+      )) ?? undefined,
+  });
 }
 
 function resolveDispatchResetAdmission(params: {
@@ -208,6 +234,7 @@ function resolveDispatchResetAdmission(params: {
 }
 
 export function createDispatchReplyOperationCoordinator(params: {
+  allowActiveQueueResolution?: boolean;
   agentId: string;
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -303,7 +330,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
 
   const ensureDispatchReplyOperation = async (
-    phase: "pre_dispatch" | "dispatch",
+    phase: "pre_dispatch" | "command_resolution" | "dispatch",
     hasPluginOwnedBinding = false,
   ): Promise<DispatchReplyOperationAcquisition> => {
     // Archive restoration belongs to pre-dispatch ownership resolution. Later calls only upgrade admission.
@@ -330,7 +357,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         storePath: params.operationSessionStoreEntry.storePath,
       }));
     }
-    if (phase === "dispatch") {
+    if (phase !== "pre_dispatch") {
       // The next full reply operation revalidates the persisted session. Drop
       // the hook-only lease after its queued delivery settles so a waiting
       // lifecycle mutation cannot commit while that delivery is still active.
@@ -348,10 +375,13 @@ export function createDispatchReplyOperationCoordinator(params: {
       return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
     }
     if (
-      phase === "dispatch" &&
+      phase !== "pre_dispatch" &&
       preDispatchAbortOperation?.result &&
       preDispatchAbortOperation.result.kind !== "completed" &&
-      !dispatchReplyOperation
+      !dispatchReplyOperation &&
+      // Low-level queue resolution can abort the old owner before final delivery acquires its
+      // successor operation. The old result belongs to that owner, not to this inbound turn.
+      params.allowActiveQueueResolution !== true
     ) {
       dispatchAbortOperation = preDispatchAbortOperation;
       return { status: "busy" };
@@ -370,7 +400,8 @@ export function createDispatchReplyOperationCoordinator(params: {
     );
     const allowGatewayEmbeddedQueueResolution =
       replyTurnKind === "visible" &&
-      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      (params.replyOptions?.turnAdoptionLifecycle !== undefined ||
+        params.allowActiveQueueResolution === true) &&
       activeReplyOperation === undefined &&
       activeEmbeddedSessionId === operationSessionId;
     if (allowGatewayEmbeddedQueueResolution) {
@@ -379,27 +410,29 @@ export function createDispatchReplyOperationCoordinator(params: {
       // gets a chance to steer the active backend.
       return { status: "ready" };
     }
-    const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
+    const allowActiveResolution =
+      replyTurnKind === "visible" && (phase === "pre_dispatch" || phase === "command_resolution");
     const allowGatewayQueueResolution =
-      phase === "dispatch" &&
+      phase !== "pre_dispatch" &&
       replyTurnKind === "visible" &&
-      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      (params.replyOptions?.turnAdoptionLifecycle !== undefined ||
+        params.allowActiveQueueResolution === true) &&
       activeReplyOperation !== undefined &&
       activeReplyOperation.turnKind !== "heartbeat";
     if (allowGatewayQueueResolution) {
-      // Gateway turns need to reach getReplyFromConfig while the owner is active;
-      // that layer applies the session's steer/followup/collect/drop policy.
+      // Gateway and low-level plugin turns must reach getReplyFromConfig while the owner is active;
+      // that layer applies the session's steer/followup/collect/drop policy without concurrent runs.
       return { status: "ready" };
     }
     const allowSlackRoutedThreadBypass =
-      phase === "dispatch" &&
+      phase !== "pre_dispatch" &&
       shouldLetSlackRoutedThreadBypassBusyReplyOperation({
         activeOperation: replyRunRegistry.get(params.dispatchOperationSessionKey),
         ctx: params.ctx,
         routeThreadId: params.routeThreadId,
       });
     const lifecycleOnlyAbortController =
-      allowActivePreDispatch || allowSlackRoutedThreadBypass ? new AbortController() : undefined;
+      allowActiveResolution || allowSlackRoutedThreadBypass ? new AbortController() : undefined;
     const onLifecycleInterrupt = () => {
       preDispatchLifecycleInterrupted = true;
       lifecycleOnlyAbortController?.abort();
@@ -417,8 +450,8 @@ export function createDispatchReplyOperationCoordinator(params: {
       routeThreadId: params.routeThreadId,
       originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
-      waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
-      retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
+      waitForActive: !allowActiveResolution && !allowSlackRoutedThreadBypass,
+      retainLifecycleAdmissionOnActive: allowActiveResolution || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
     });
     if (
@@ -467,17 +500,21 @@ export function createDispatchReplyOperationCoordinator(params: {
           originatingLeafEntryId:
             params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
           upstreamAbortSignal: params.replyOptions?.abortSignal,
-          waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
-          retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
+          waitForActive: !allowActiveResolution && !allowSlackRoutedThreadBypass,
+          retainLifecycleAdmissionOnActive: allowActiveResolution || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
         });
       }
     }
     if (admission.status === "skipped") {
-      if (allowActivePreDispatch && admission.reason === "active-run") {
+      if (allowActiveResolution && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;
-        preDispatchLifecycleAbortController = lifecycleOnlyAbortController;
+        if (phase === "pre_dispatch") {
+          preDispatchLifecycleAbortController = lifecycleOnlyAbortController;
+        } else {
+          dispatchLifecycleAbortController = lifecycleOnlyAbortController;
+        }
         return { status: "ready" };
       }
       if (

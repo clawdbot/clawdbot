@@ -56,17 +56,19 @@ import { readRestartSentinel } from "./restart-sentinel.js";
 import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
-  autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
-} from "./state-migrations.js";
+} from "./state-migrations.doctor.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
+import {
+  resetAutoMigrateLegacyStateDirForTest,
+  resetAutoMigrateLegacyTaskStateSidecarsForTest,
+} from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -107,6 +109,40 @@ function autoMigrateLegacyState(
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
+}
+
+// Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.
+const migrationDatabaseClosers = new Set([
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+]);
+
+function closeMigrationDatabases() {
+  for (const close of migrationDatabaseClosers) {
+    close();
+  }
+}
+
+async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
+  closeMigrationDatabases();
+  vi.resetModules();
+  const [agentDb, stateDb] = await Promise.all([
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+  ]);
+  migrationDatabaseClosers.add(agentDb.closeOpenClawAgentDatabasesForTest);
+  migrationDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
+  try {
+    const migrationOwner = await import("./state-migrations.doctor.js");
+    return await migrationOwner.autoMigrateLegacyState({
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      ...params,
+    });
+  } finally {
+    closeMigrationDatabases();
+    expect(agentDb.listOpenClawAgentDatabasesForTest()).toEqual([]);
+    expect(stateDb.isOpenClawStateDatabaseOpen()).toBe(false);
+  }
 }
 
 const pluginDoctorStateMigrationEntries = vi.hoisted(
@@ -409,8 +445,6 @@ function insertCurrentConversationBindingRow(
     stateDb.insertInto("current_conversation_bindings").values({
       binding_key: params.bindingKey,
       binding_id: params.bindingId,
-      target_agent_id: "codex",
-      target_session_id: null,
       target_session_key: params.targetSessionKey,
       channel: params.channel,
       account_id: params.accountId,
@@ -743,10 +777,9 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 afterEach(() => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyStateForTest();
+  resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  closeMigrationDatabases();
   resetPluginRuntimeStateForTest();
 });
 
@@ -1093,6 +1126,7 @@ describe("state migrations", () => {
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
+      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
       );
@@ -1102,13 +1136,13 @@ describe("state migrations", () => {
       expect(fsSync.existsSync(databasePath)).toBe(true);
       expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
 
-      resetAutoMigrateLegacyStateForTest();
       const doctor = await autoMigrateLegacyState({
         cfg,
         env,
         homedir: () => root,
         doctorOnlyStateMigrations: true,
       });
+      expect(doctor.skipped).toBe(false);
       expect(doctor.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
       );
@@ -1140,19 +1174,20 @@ describe("state migrations", () => {
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
+      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toEqual([]);
       expect(automatic.notices).toContain(
         "Deferred legacy agent/session migration: select an agent owner",
       );
       expect(fsSync.readFileSync(legacyAgentPath, "utf8")).toBe('{"legacy":true}\n');
 
-      resetAutoMigrateLegacyStateForTest();
       const doctor = await autoMigrateLegacyState({
         cfg,
         env,
         homedir: () => root,
         doctorOnlyStateMigrations: true,
       });
+      expect(doctor.skipped).toBe(false);
       expect(doctor.warnings).toContain(
         "Deferred legacy agent/session migration: select an agent owner",
       );
@@ -2987,14 +3022,14 @@ describe("state migrations", () => {
     ).toBe("existing-runtime");
 
     const firstBytes = await fs.readFile(storePath, "utf8");
-    closeOpenClawStateDatabaseForTest();
-    resetAutoMigrateLegacyStateForTest();
-    const rerun = await autoMigrateLegacyState({
+    const rerun = await rerunAutomaticMigrationAfterRestart({
       cfg,
       env,
       homedir: () => root,
       doctorOnlyStateMigrations: true,
     });
+    expect(rerun.skipped).toBe(false);
+    expect(rerun.warnings).toEqual([]);
     await expect(fs.readFile(storePath, "utf8")).resolves.toBe(firstBytes);
     expect(rerun.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
@@ -4961,95 +4996,98 @@ describe("state migrations", () => {
     expect(readPluginBindingApprovalRows(env)).toEqual([]);
   });
 
-  it("imports non-conflicting legacy current-conversation bindings when SQLite has a conflict", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-    const bindingsDir = path.join(stateDir, "bindings");
-    const sourcePath = path.join(bindingsDir, "current-conversations.json");
-    const conflictingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
-    const missingKey = "workspace\u241fdefault\u241f\u241fuser:U456";
-    await fs.mkdir(bindingsDir, { recursive: true });
-    insertCurrentConversationBindingRow(env, {
-      bindingKey: conflictingKey,
-      bindingId: `generic:${conflictingKey}`,
-      targetSessionKey: "agent:codex:acp:existing",
-      channel: "workspace",
-      accountId: "default",
-      conversationId: "user:U123",
-      recordJson: JSON.stringify({
+  it.each(["agent:codex:acp:legacy-missing", "plugin-binding:fixture:legacy-missing"])(
+    "imports non-conflicting legacy target %s when SQLite has a conflict",
+    async (targetSessionKey) => {
+      const root = await createTempDir();
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const cfg = createConfig();
+      const bindingsDir = path.join(stateDir, "bindings");
+      const sourcePath = path.join(bindingsDir, "current-conversations.json");
+      const conflictingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
+      const missingKey = "workspace\u241fdefault\u241f\u241fuser:U456";
+      await fs.mkdir(bindingsDir, { recursive: true });
+      insertCurrentConversationBindingRow(env, {
+        bindingKey: conflictingKey,
         bindingId: `generic:${conflictingKey}`,
         targetSessionKey: "agent:codex:acp:existing",
-        targetKind: "session",
-        conversation: {
-          channel: "workspace",
-          accountId: "default",
-          conversationId: "user:U123",
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:U123",
+        recordJson: JSON.stringify({
+          bindingId: `generic:${conflictingKey}`,
+          targetSessionKey: "agent:codex:acp:existing",
+          targetKind: "session",
+          conversation: {
+            channel: "workspace",
+            accountId: "default",
+            conversationId: "user:U123",
+          },
+          status: "active",
+          boundAt: 1,
+        }),
+      });
+      await fs.writeFile(
+        sourcePath,
+        JSON.stringify({
+          version: 1,
+          bindings: [
+            {
+              bindingId: `generic:${conflictingKey}`,
+              targetSessionKey: "agent:codex:acp:legacy-conflict",
+              targetKind: "session",
+              conversation: {
+                channel: "workspace",
+                accountId: "default",
+                conversationId: "user:U123",
+              },
+              status: "active",
+              boundAt: 2,
+            },
+            {
+              bindingId: `generic:${missingKey}`,
+              targetSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "workspace",
+                accountId: "default",
+                conversationId: "user:U456",
+              },
+              status: "active",
+              boundAt: 3,
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+      const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+      expect(result.changes).toContain(
+        "Migrated 1 current-conversation binding → shared SQLite state",
+      );
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.notices).toEqual([
+        `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
+      ]);
+      expect(readCurrentConversationBindingRows(env)).toMatchObject([
+        {
+          binding_key: conflictingKey,
+          target_session_key: "agent:codex:acp:existing",
         },
-        status: "active",
-        boundAt: 1,
-      }),
-    });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        bindings: [
-          {
-            bindingId: `generic:${conflictingKey}`,
-            targetSessionKey: "agent:codex:acp:legacy-conflict",
-            targetKind: "session",
-            conversation: {
-              channel: "workspace",
-              accountId: "default",
-              conversationId: "user:U123",
-            },
-            status: "active",
-            boundAt: 2,
-          },
-          {
-            bindingId: `generic:${missingKey}`,
-            targetSessionKey: "agent:codex:acp:legacy-missing",
-            targetKind: "session",
-            conversation: {
-              channel: "workspace",
-              accountId: "default",
-              conversationId: "user:U456",
-            },
-            status: "active",
-            boundAt: 3,
-          },
-        ],
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.changes).toContain(
-      "Migrated 1 current-conversation binding → shared SQLite state",
-    );
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toEqual([
-      `Kept shared SQLite current-conversation bindings because 1 legacy binding conflicts: ${sourcePath}`,
-    ]);
-    expect(readCurrentConversationBindingRows(env)).toMatchObject([
-      {
-        binding_key: conflictingKey,
-        target_session_key: "agent:codex:acp:existing",
-      },
-      {
-        binding_key: missingKey,
-        target_session_key: "agent:codex:acp:legacy-missing",
-      },
-    ]);
-    await expectMissingPath(sourcePath);
-    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
-      "legacy-conflict",
-    );
-  });
+        {
+          binding_key: missingKey,
+          target_session_key: targetSessionKey,
+        },
+      ]);
+      await expectMissingPath(sourcePath);
+      await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
+        "legacy-conflict",
+      );
+    },
+  );
 
   it.each([
     {
@@ -5688,15 +5726,15 @@ describe("state migrations", () => {
       expect(afterStore[ordinaryKey]?.sessionId).toBe("ordinary-session");
 
       const firstBytes = await fs.readFile(targetStorePath, "utf8");
-      closeOpenClawStateDatabaseForTest();
-      resetAutoMigrateLegacyStateForTest();
-      const rerun = await autoMigrateLegacyState({
+      const rerun = await rerunAutomaticMigrationAfterRestart({
         cfg,
         env,
         homedir: () => root,
         now: () => 1234,
         doctorOnlyStateMigrations: true,
       });
+      expect(rerun.skipped).toBe(false);
+      expect(rerun.warnings).toEqual([]);
       await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
       expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(
         false,

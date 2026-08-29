@@ -4894,6 +4894,33 @@ describe("agent event handler", () => {
     expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(persisted);
   });
 
+  it("preserves an owner claim in the terminal persistence handoff", () => {
+    const runId = "claimed-terminal-handoff";
+    const claimId = claimAgentRunContext(
+      runId,
+      { sessionKey: "session-claimed-terminal" },
+      { exclusive: true, trackOwner: true },
+    )!;
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-claimed-terminal",
+    });
+    let event: Parameters<typeof handler>[0] | undefined;
+    const stop = onAgentRuntimeEvent((received) => {
+      event = received;
+    });
+    emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, claimId);
+    stop();
+
+    handler(expectDefined(event, "claimed terminal event"));
+
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({ contextClaimId: claimId }),
+      }),
+    );
+    releaseAgentRunContext(runId, claimId);
+  });
+
   it("mirrors commentary-phase assistant events only to exact session message subscribers", () => {
     const {
       broadcast,

@@ -328,9 +328,17 @@ is_repo_pr_worktree_dir() {
   return 1
 }
 
+has_worktree_merge_output() {
+  local path="$1" capture
+  for capture in "$path/.local/merge-output.log" "$path"/.local/merge-output.*.log; do
+    if [ -e "$capture" ] || [ -L "$capture" ]; then return 0; fi
+  done
+  return 1
+}
+
 require_worktree_cleanup_evidence() (
   local path="$1" pr
-  [ -e "$path/.local/merge-output.log" ] || [ -L "$path/.local/merge-output.log" ] || return 0
+  has_worktree_merge_output "$path" || return 0
   # Keep loader state separate from an uninterrupted merge's live outcome owner.
   # Even an empty capture can be the only evidence of an earlier dispatch.
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
@@ -338,7 +346,7 @@ require_worktree_cleanup_evidence() (
     merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
     return 0
   fi
-  echo "Preserving $path: .local/merge-output.log has no valid retained merge outcome. Keep the worktree, metadata, and local branches; reconcile the earlier request manually before cleanup." >&2
+  echo "Preserving $path: merge output has no valid retained merge outcome. Keep the worktree, metadata, and local branches; reconcile the earlier request manually before cleanup." >&2
   return 1
 )
 

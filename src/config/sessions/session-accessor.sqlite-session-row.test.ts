@@ -28,9 +28,14 @@ afterEach(() => {
 });
 
 describe("SQLite session row persistence", () => {
-  it.each(["async", "sync"] as const)(
-    "protects required provenance during %s replacement",
-    async (mode) => {
+  it.each([
+    { mode: "async", sandbox: "required", source: "profile" },
+    { mode: "sync", sandbox: "required", source: "unknown" },
+    { mode: "async", sandbox: undefined, source: "profile" },
+    { mode: "sync", sandbox: undefined, source: "channel" },
+  ] as const)(
+    "protects $source provenance during $mode replacement (sandbox=$sandbox)",
+    async ({ mode, sandbox, source }) => {
       const env = {
         ...process.env,
         OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-stamp-")),
@@ -38,9 +43,9 @@ describe("SQLite session row persistence", () => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:stamp" };
       const stamp = {
         createdVia: "operator" as const,
-        createdActor: { type: "human" as const, id: "profile-creator" },
+        createdActor: { type: "human" as const, source, id: "profile-creator" },
         createdAt: 10,
-        sandbox: "required" as const,
+        ...(sandbox ? { sandbox } : {}),
       };
       await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
       const replacement: InternalSessionEntry = {
@@ -89,7 +94,7 @@ describe("SQLite session row persistence", () => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:fallback" };
       const stamp = {
         createdVia: "operator" as const,
-        createdActor: { type: "human" as const, id: "profile-creator" },
+        createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
         createdAt: 20,
         sandbox: "required" as const,
       };
@@ -102,7 +107,7 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it("keeps unstamped replacement semantics unchanged", async () => {
+  it("does not mint creator authority when replacing an unstamped node", async () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-unstamped-")),
@@ -116,11 +121,17 @@ describe("SQLite session row persistence", () => {
     });
     await patchSessionEntryCore(
       scope,
-      () => ({ sessionId: "replacement", updatedAt: 20, createdVia: "plugin" }),
+      () => ({
+        sessionId: "replacement",
+        updatedAt: 20,
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "new-profile" },
+      }),
       { replaceEntry: true },
     );
     const persisted = loadSessionEntry(scope);
-    expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "plugin" });
+    expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
+    expect(persisted?.createdActor).toBeUndefined();
     expect(persisted).not.toHaveProperty("sandbox");
     expect(persisted).not.toHaveProperty("label");
   });

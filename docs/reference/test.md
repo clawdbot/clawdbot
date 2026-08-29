@@ -108,6 +108,40 @@ do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend
 
 ## Shared test state and process helpers
 
+`build-all`, standalone tsdown builds, tsgo, SDK declaration preparation,
+package-boundary checks, and dependent lint use checkout-local ownership at
+`.artifacts/dist-artifacts.lock`. Ownership spans
+cleanup, generation, cache restoration, and the checks consuming those outputs;
+independent checkouts remain independent. Competing commands print a waiting
+message and wait for a live owner without an acquisition deadline. Compiler and
+build execution timeouts are unchanged. Standalone tsgo runs serialize, including
+source-only checks; the core test shard runner retains its explicit concurrency
+inside one owner. Do not delete `dist` manually while these commands are running.
+An abrupt owner or nested wrapper exit, or unverified child cleanup, retains the
+lock. A missing or unverifiable owner PID, or a recorded child-cleanup failure,
+fails acquisition promptly without reclaiming anything. PID death does not prove
+detached descendants stopped. Before manually removing an abandoned lock directory,
+inspect its `owner.json` and verify all associated build, compiler, and lint
+processes, including detached descendants, have stopped; then retry the command.
+
+Local plugin lint and package-boundary compilation consume native declarations in
+`packages/plugin-sdk/dist` and seven separate plugin API trees in
+`.artifacts/extension-package-boundary/plugins`. Each declaration and compile
+owner validates its consumed source content, inherited config, selected compiler,
+and complete output inventory. Unrelated existing source or test edits retain
+cache hits. Resolution-topology changes invalidate conservatively, including new
+module candidates outside declared roots. Stale declarations get a full native
+emit after clearing only their build-info file; the successful emitted inventory
+then drives obsolete declaration pruning. Missing or tampered outputs invalidate
+the owner. The content records live under
+`.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
+
+Packaged declarations belong to the public/private tsdown SDK groups. Full and
+package builds emit them in the canonical build; `ciArtifacts` stages only those
+two groups and publishes after both succeed and their relative declaration closure
+is complete. Local preparation never overwrites packaged declarations or writes
+workspace forwarding bridges.
+
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
 process group: leftover children are terminated and the command fails instead of
@@ -154,6 +188,7 @@ not sweep old directories or infer ownership from names, ages, or PIDs.
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
 - `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
+  Broad runs prepare the shared runtime once, then use four sequential Vitest shards in fresh processes to bound worker memory. The worker limit applies within each process; ordinary test failures are retained while remaining shards finish. Explicit filters, watch mode, caller-supplied shards, coverage, and report-output options keep one direct invocation.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 
 ## Full Docker suite (`pnpm test:docker:all`)
@@ -235,10 +270,18 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
-- `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread (`.artifacts/vitest-main-profile`); `pnpm test:perf:profile:runner` writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
+- `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci#measured-shard-weights) for the daily refresh and sampling rules.
+
+Runner profiling preserves the selected `forks` or `threads` pool, isolation, environment, and custom runners extending Vitest's `TestRunner`. Capture starts in a Node preload before Vitest worker imports, spans all files assigned to that worker, and finishes both profile files in awaited worker cleanup before teardown is acknowledged. It does not depend on exit-time profile flushing. Root global setup configures every selected project without replacing its reporters or setup. Main capture spans Vitest/Vite startup through run completion and close. Process termination before cleanup, bootstrap failures before runner construction, and teardown timeouts can still prevent output. Browser/VM pools, custom runners without `onCleanupWorkerContext`, and additional native `--cpu-prof`/`--heap-prof` flags are rejected for runner profiling.
+
+Forward Vitest options after the profiler separator, for example:
+
+```bash
+pnpm test:perf:profile:runner -- --output-dir .artifacts/profiles -- --config test/vitest/vitest.unit.config.ts --pool threads
+```
 
 `pnpm test:extensions:memory` profiles built plugin index entries from `dist/extensions` (including nested `dist` output) and package-local `extensions/<id>/dist` output; TypeScript source entries are excluded. Root artifacts take precedence when both builds exist. Selecting an already-built plugin with `--extension <id>` reuses its output without requiring unrelated plugin builds; build the plugin package first if its output is not supplied by `pnpm build`.
 

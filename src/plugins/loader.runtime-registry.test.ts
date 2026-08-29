@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -197,7 +198,7 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
   expect(getActivePluginRegistry()).toBe(root);
 });
 
-it("keeps injected instance runtime surfaces independent of the broad runtime module", () => {
+it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
   const gateway = {} as PluginRuntime["gateway"];
   const nodes = {} as PluginRuntime["nodes"];
   const subagent = {} as PluginRuntime["subagent"];
@@ -209,6 +210,8 @@ it("keeps injected instance runtime surfaces independent of the broad runtime mo
     runtimeOptions: { gateway, nodes, subagent },
   });
 
+  expect(runtime.version).toBe(VERSION);
+  expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
   expect(runtime.gateway).toBe(gateway);
   expect(runtime.nodes).toBe(nodes);
   expect(runtime.subagent).toBe(subagent);

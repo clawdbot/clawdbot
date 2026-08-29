@@ -57,7 +57,6 @@ function runValidation(
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
-        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         options.guardFailure
           ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
           : `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
@@ -84,7 +83,6 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
-        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         "mark_pr_operation_side_effects_started() { :; }",
         invocation,
       ].join("\n"),
@@ -116,21 +114,25 @@ function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}
   return { result, localDir };
 }
 
-function runMergeVerification(checks: "api-error" | "invalid-json" | "no-required" | "pending") {
+function runMergeVerification(
+  checks: "api-error" | "invalid-json" | "invalid-row" | "no-required" | "pending" | "cancelled",
+) {
   const fixtureRoot = tempDirs.make("openclaw-pr-merge-verification-");
   const localDir = join(fixtureRoot, ".local");
   const head = "a".repeat(40);
   mkdirSync(localDir);
   writeFileSync(join(localDir, "prep.env"), `PREP_HEAD_SHA=${head}\n`);
+  writeFileSync(join(localDir, "gates.env"), "GATES_MODE=full\n");
 
-  const checksResponse =
-    checks === "api-error"
-      ? "echo 'GitHub API unavailable' >&2; return 1"
-      : checks === "no-required"
-        ? "echo \"no required checks reported on the 'review-branch' branch\" >&2; return 1"
-        : checks === "pending"
-          ? `printf '%s\\n' '[{"name":"CI","bucket":"pending","state":"IN_PROGRESS"}]'; return 8`
-          : "printf '%s\\n' 'not valid JSON'";
+  const checksResponse = {
+    "api-error": "echo 'GitHub API unavailable' >&2; return 1",
+    "no-required":
+      "echo \"no required checks reported on the 'review-branch' branch\" >&2; return 1",
+    pending: `printf '%s\\n' '[{"name":"CI","bucket":"pending","state":"IN_PROGRESS"}]'; return 8`,
+    cancelled: `printf '%s\\n' '[{"name":"CI","bucket":"cancel","state":"CANCELLED"}]'`,
+    "invalid-json": "printf '%s\\n' 'not valid JSON'",
+    "invalid-row": `printf '%s\\n' '["malformed required row"]'`,
+  }[checks];
 
   return spawnSync(
     "bash",
@@ -149,7 +151,7 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
         "git() { :; }",
         "node() { :; }",
         `gh_plain() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
-        "merge_verify 42",
+        "merge_verify 42 || exit 1",
       ].join("\n"),
       "pr-merge-verification",
       mergeScript,
@@ -163,14 +165,20 @@ describePosix("scripts/pr review artifact validation", () => {
   it("supplies direct review.sh consumers with the ripgrep command surface", () => {
     const fixtureRoot = tempDirs.make("openclaw-pr-review-rg-surface-");
     const target = join(fixtureRoot, "target.txt");
-    writeFileSync(target, `prefix ${REVIEWED_HEAD} suffix\n`);
+    writeFileSync(target, `prefix ${REVIEWED_HEAD} suffix\nliteral [x.y]\n`);
 
     const result = runReviewShellFunction(
       fixtureRoot,
       [
         'test "$(type -t rg)" = "function"',
         `printf '%s\\n' '${REVIEWED_HEAD}' | rg -q '^[0-9a-f]{40}$'`,
+        "! printf '%s\\n' 'not-a-sha' | rg -q '^[0-9a-f]{40}$'",
+        "printf '%s\\n' 'Thanks @fixture' | rg -qi 'thanks @'",
+        "! printf '%s\\n' 'test: reviewed change' | rg -qi 'thanks @'",
         `rg -F -q '${REVIEWED_HEAD}' '${target}'`,
+        `rg -F -q 'literal [x.y]' '${target}'`,
+        `! rg -F -q 'literal xay' '${target}'`,
+        `test "$(printf '%s\\n' clean ERROR | rg -n -i 'error|fatal')" = '2:ERROR'`,
       ].join("\n"),
     );
 
@@ -441,11 +449,22 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(result.stdout).not.toContain("merge-verify passed");
   });
 
-  it("rejects merge verification when GitHub returns malformed check evidence", () => {
-    const result = runMergeVerification("invalid-json");
+  it.each(["invalid-json", "invalid-row"] as const)(
+    "rejects malformed required-check evidence in an OR-list caller: %s",
+    (checks) => {
+      const result = runMergeVerification(checks);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("GitHub returned invalid required-check evidence");
+      expect(result.stdout).not.toContain("merge-verify passed");
+    },
+  );
+
+  it("rejects cancelled required checks in an OR-list caller", () => {
+    const result = runMergeVerification("cancelled");
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("GitHub returned invalid required-check evidence");
+    expect(result.stdout).toContain("Required checks are failing");
     expect(result.stdout).not.toContain("merge-verify passed");
   });
 

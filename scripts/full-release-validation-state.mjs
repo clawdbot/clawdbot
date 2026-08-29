@@ -42,8 +42,9 @@ const API_ERROR_PATTERN =
   /HTTP [45][0-9][0-9]|API|Bad credentials|rate limit|network|connection|timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5 * 60_000;
-const DEFAULT_TRANSIENT_READ_GRACE_POLLS = 2;
 const GH_TIMEOUT_MS = 60_000;
+const TRANSPORT_UNCERTAINTY_MS = 15 * 60_000;
+let ghRetryDeadline;
 
 function stringValue(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
@@ -89,6 +90,13 @@ async function abortableSleep(milliseconds, signal) {
   }
 }
 
+const deadlineDelayMs = (delay, deadline, now) =>
+  Number.isFinite(deadline) ? Math.max(0, Math.min(delay, deadline - now)) : delay;
+
+export function releaseGhRetryDelayMs(attempt, deadlineMonotonicMs, nowMonotonicMs) {
+  return deadlineDelayMs(Math.min(attempt * 10_000, 60_000), deadlineMonotonicMs, nowMonotonicMs);
+}
+
 async function runGh(args, options = {}) {
   const attempts = options.attempts ?? 6;
   let lastError;
@@ -111,7 +119,11 @@ async function runGh(args, options = {}) {
       if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
         throw error;
       }
-      await abortableSleep(Math.min(attempt * 10_000, 60_000), options.signal);
+      const delay = releaseGhRetryDelayMs(attempt, ghRetryDeadline, performance.now());
+      if (delay === 0) {
+        throw error;
+      }
+      await abortableSleep(delay, options.signal);
     }
   }
   throw lastError;
@@ -191,12 +203,8 @@ export async function readChild(child, previous, signal, options = {}) {
     return { ...child, errors: [], jobs: [], status: "skipped" };
   }
   if (!child.runId || !child.runAttempt) {
-    return {
-      ...child,
-      errors: [issue("dispatch_missing", child, `${child.key} omitted its exact run identity`)],
-      jobs: [],
-      status: "missing",
-    };
+    const error = issue("dispatch_missing", child, `${child.key} omitted its exact run identity`);
+    return { ...child, errors: [error], jobs: [], status: "missing" };
   }
   try {
     const run = options.readRun
@@ -226,11 +234,19 @@ export async function readChild(child, previous, signal, options = {}) {
       if (attempts.slice(0, -1).some((attempt) => attempt.jobs.length === 0)) {
         throw new Error(`${child.key} child attempt evidence is gapped`);
       }
-      return validateChildBinding(child, run, {
+      const partial = validateChildBinding(child, run, {
         jobs: [],
         observedRunAttempts: [],
         sha256: "",
       });
+      return (previous?.compositeJobsSha256 || previous?.transportFailure) &&
+        partial.errors.length === 0
+        ? {
+            ...previous,
+            conclusion: stringValue(run.conclusion),
+            status: stringValue(run.status),
+          }
+        : partial;
     }
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
@@ -247,14 +263,7 @@ export async function readChild(child, previous, signal, options = {}) {
       sha256: evidence.compositeJobsSha256,
     });
   } catch (error) {
-    const transientReadFailures = Number(previous?.transientReadFailures ?? 0) + 1;
-    const transientGracePolls =
-      Number.isSafeInteger(options.transientGracePolls) && options.transientGracePolls >= 0
-        ? options.transientGracePolls
-        : DEFAULT_TRANSIENT_READ_GRACE_POLLS;
-    const degraded =
-      classifyReleaseGhTransportError(error) === "transient" &&
-      transientReadFailures <= transientGracePolls;
+    const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
       error instanceof Error && error.message.startsWith("release child provenance changed:");
     const readError = issue(
@@ -262,33 +271,61 @@ export async function readChild(child, previous, signal, options = {}) {
       child,
       `${child.key} GitHub read failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    if (degraded) {
-      console.warn(
-        `${child.key} GitHub read degraded (${transientReadFailures}/${transientGracePolls}); preserving the last snapshot`,
-      );
-    }
+    ghRetryDeadline ??= degraded ? performance.now() + TRANSPORT_UNCERTAINTY_MS : undefined;
     return {
       ...child,
-      conclusion: stringValue(previous?.conclusion),
-      createdAt: stringValue(previous?.createdAt),
+      ...previous,
       errors: degraded
         ? (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch")
         : [
             ...(previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch"),
             readError,
           ],
-      jobs: previous?.jobs ?? [],
-      compositeJobsSha256: stringValue(previous?.compositeJobsSha256),
-      observedRunAttempts: previous?.observedRunAttempts ?? [],
-      plannedRunAttempt: positiveInteger(
-        previous?.plannedRunAttempt ?? child.runAttempt,
-        "planned run attempt",
-      ),
-      status: degraded ? "read_degraded" : stringValue(previous?.status, "unknown"),
-      transientReadFailures,
-      updatedAt: stringValue(previous?.updatedAt),
+      status: degraded ? "transport_uncertain" : stringValue(previous?.status, "unknown"),
+      transportFailure: degraded ? { errorClass: "transient" } : undefined,
     };
   }
+}
+
+export function updateReleaseTransportEpisode(previous, children, options = {}) {
+  const monotonicNow = options.monotonicNow ?? performance.now();
+  const wallNow = options.wallNow ?? Date.now();
+  const uncertain = children.filter((child) => child.transportFailure?.errorClass === "transient");
+  const affected = uncertain
+    .map((child) => ({
+      child: child.key,
+      compositeJobsSha256: stringValue(child.compositeJobsSha256),
+      errorClass: "transient",
+      lastValidAt: stringValue(child.updatedAt),
+      runAttempt: child.runAttempt,
+      runId: String(child.runId),
+    }))
+    .toSorted((left, right) => left.child.localeCompare(right.child, "en"));
+  if (affected.length === 0) {
+    return { status: "certain" };
+  }
+  const deadline = options.deadline ?? ghRetryDeadline ?? monotonicNow + TRANSPORT_UNCERTAINTY_MS;
+  const wallStart = wallNow + deadline - monotonicNow - TRANSPORT_UNCERTAINTY_MS;
+  const episode = previous?.deadlineMonotonicMs
+    ? previous
+    : {
+        deadlineAt: new Date(wallStart + TRANSPORT_UNCERTAINTY_MS).toISOString(),
+        deadlineMonotonicMs: deadline,
+        startedAt: new Date(wallStart).toISOString(),
+      };
+  return {
+    ...episode,
+    affected,
+    error:
+      monotonicNow >= episode.deadlineMonotonicMs
+        ? issue(
+            "transport_deadline_exceeded",
+            { key: "<collector>" },
+            `GitHub transport remained uncertain; affected ${affected.map((child) => `${child.child}:${child.runId}:${child.runAttempt}`).join(",")}`,
+          )
+        : undefined,
+    status: monotonicNow >= episode.deadlineMonotonicMs ? "expired" : "uncertain",
+  };
 }
 
 export function parsePlanInputs(value) {
@@ -751,6 +788,7 @@ async function collectMode(mode) {
   let finished = false;
   const abortController = new AbortController();
   let decisionReuse = { blockers: [], children: plan, errors: [] };
+  let transport = { status: "certain" };
 
   const writePayload = (decision, cancellation = {}) => {
     const payload = buildReleaseStateArtifact({
@@ -762,6 +800,7 @@ async function collectMode(mode) {
       mode,
       releaseProfile,
       rerunGroup,
+      transport,
     });
     writeResult(outputPath, payload);
     appendSummary(mode, payload);
@@ -778,6 +817,7 @@ async function collectMode(mode) {
       extraBlockers: executionPlan.blockers,
       extraErrors: [
         ...executionPlan.errors,
+        ...(transport.error ? [transport.error] : []),
         {
           child: "<collector>",
           kind: "collector_cancelled",
@@ -854,13 +894,16 @@ async function collectMode(mode) {
 
   let nextHeartbeat = 0;
   while (!finished) {
+    ghRetryDeadline = transport.deadlineMonotonicMs;
     snapshots = await Promise.all(
       plan.map((child, index) => readChild(child, snapshots[index], abortController.signal)),
     );
+    transport = updateReleaseTransportEpisode(transport, snapshots);
+    const transportReadErrors = transport.error ? [transport.error] : [];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [...executionPlan.errors, ...decisionReuse.errors],
+      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
       releaseProfile,
       workflowRef: expected.workflowRef,
@@ -884,7 +927,12 @@ async function collectMode(mode) {
             ...decisionReuse.blockers,
             ...decision.blockers,
           ],
-          extraErrors: [...executionPlan.errors, ...decisionReuse.errors, ...cancellationErrors],
+          extraErrors: [
+            ...transportReadErrors,
+            ...executionPlan.errors,
+            ...decisionReuse.errors,
+            ...cancellationErrors,
+          ],
           localFailures: gateFailures,
           releaseProfile,
           workflowRef: expected.workflowRef,
@@ -893,9 +941,11 @@ async function collectMode(mode) {
     }
     const done =
       mode === "decision"
-        ? decision.state !== "qualifying"
-        : decision.state === "orchestration_error" ||
-          (decision.state !== "qualifying" && decision.activeRunIds.length === 0);
+        ? decision.state !== "qualifying" &&
+          !(decision.state === "passed" && transport.status === "uncertain")
+        : transport.status !== "uncertain" &&
+          (decision.state === "orchestration_error" ||
+            (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
       finished = true;
@@ -903,7 +953,10 @@ async function collectMode(mode) {
         payload.state === "passed" ? 0 : payload.state === "orchestration_error" ? 2 : 1;
       return;
     }
-    await abortableSleep(pollIntervalMs, abortController.signal);
+    await abortableSleep(
+      deadlineDelayMs(pollIntervalMs, transport.deadlineMonotonicMs, performance.now()),
+      abortController.signal,
+    );
   }
 }
 

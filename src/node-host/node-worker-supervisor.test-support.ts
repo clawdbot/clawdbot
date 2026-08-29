@@ -157,7 +157,6 @@ if (mode === "admission-rearm") {
 } else if (mode === "quiet-fail") {
   exitWorker(7);
 } else if (mode === "secret-fail") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
   const escaped = JSON.stringify(credential).slice(1, -1);
   process.stderr.write(
@@ -176,7 +175,6 @@ if (mode === "admission-rearm") {
   process.stderr.write("x".repeat(5000) + representation + "y".repeat(suffixBytes));
   exitWorker(7);
 } else if (mode === "secret-success") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
   finish(descriptor, {
     ...completedResult,

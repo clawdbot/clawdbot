@@ -197,7 +197,8 @@ describe("doctor invalid config process exit", () => {
   }, 75_000);
 });
 
-describe.concurrent("gateway startup-migration refusal", () => {
+// Synchronous CLI probes must not consume neighboring cases' timeout budgets.
+describe("gateway startup-migration refusal", () => {
   it("repairs the stable upgrade config and additive state schema before readiness", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-stable-upgrade-ready-"));
     const stateDir = path.join(root, "state");

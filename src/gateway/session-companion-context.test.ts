@@ -133,16 +133,24 @@ describe("session companion context", () => {
   it("keeps complete recent context when older tool rows exhaust the scan byte budget", async () => {
     const scope = createScope("companion-context-byte-budget");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const messages = Array.from({ length: 384 }, (_, index) => {
+    const recentMessages = Array.from({ length: 128 }, (_, index) => {
       const isContextMessage = index % 9 === 0;
       return {
-        eventId: `message-${index}`,
-        parentId: index === 0 ? null : `message-${index - 1}`,
+        eventId: `recent-${index}`,
+        parentId: index === 0 ? "older-tool" : `recent-${index - 1}`,
         message: isContextMessage
           ? { role: "user" as const, content: `useful ${index}`, timestamp: index }
-          : { role: "toolResult" as const, content: "x".repeat(4000), timestamp: index },
+          : { role: "toolResult" as const, content: "x".repeat(7800), timestamp: index },
       };
     });
+    const messages = [
+      {
+        eventId: "older-tool",
+        parentId: null,
+        message: { role: "toolResult" as const, content: "x".repeat(200_000), timestamp: -1 },
+      },
+      ...recentMessages,
+    ];
     await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: true });
 
     const result = await defaultSessionCompanionContextReader.read(scope);
@@ -152,7 +160,7 @@ describe("session companion context", () => {
       return;
     }
     expect(result.context.messages.length).toBeGreaterThan(0);
-    expect(result.context.messages.at(-1)?.text).toBe("useful 378");
+    expect(result.context.messages.at(-1)?.text).toBe("useful 126");
     expect(result.context.messages.every((message) => message.text.startsWith("useful"))).toBe(
       true,
     );
@@ -224,6 +232,52 @@ describe("session companion context", () => {
     });
   });
 
+  it("uses the contiguous newest suffix when an older message exceeds the read budget", async () => {
+    const scope = createScope("companion-context-oversized-older");
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "stale",
+          parentId: null,
+          message: { role: "user" as const, content: "stale older question", timestamp: 1 },
+        },
+        {
+          eventId: "oversized",
+          parentId: "stale",
+          message: {
+            role: "assistant" as const,
+            content: "x".repeat(1024 * 1024),
+            timestamp: 2,
+          },
+        },
+        {
+          eventId: "recent-question",
+          parentId: "oversized",
+          message: { role: "user" as const, content: "recent question", timestamp: 3 },
+        },
+        {
+          eventId: "recent-answer",
+          parentId: "recent-question",
+          message: { role: "assistant" as const, content: "recent answer", timestamp: 4 },
+        },
+      ],
+      touchSessionEntry: true,
+    });
+
+    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
+      kind: "ready",
+      context: {
+        empty: false,
+        messages: [
+          { role: "user", text: "recent question", ts: 3 },
+          { role: "assistant", text: "recent answer", ts: 4 },
+        ],
+        sessionId: scope.sessionId,
+      },
+    });
+  });
+
   it("rejects context assembled across different transcript snapshots", async () => {
     const scope = createScope("companion-context-snapshot-fence");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -239,9 +293,11 @@ describe("session companion context", () => {
               parentId: null,
               message: { role: "user", content: "stable context", timestamp: 1 },
             },
+            eventSeq: 1,
             seq: 1,
           },
         ],
+        newestContiguousEventCount: 1,
         scannedMessages: 1,
         serializedBytes: 128,
         snapshot: { generation: "generation-1", indexedSeq: 1 },
@@ -250,6 +306,7 @@ describe("session companion context", () => {
       .mockReturnValueOnce({
         activeLeafEntryId: "leaf-1",
         events: [],
+        newestContiguousEventCount: 0,
         scannedMessages: 0,
         serializedBytes: 0,
         snapshot: { generation: "generation-2", indexedSeq: 1 },

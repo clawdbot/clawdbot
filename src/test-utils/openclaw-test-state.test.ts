@@ -11,12 +11,17 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import {
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcile,
+} from "../config/sessions/session-transcript-reconcile.js";
+import {
   GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   snapshotGatewayStartupEnv,
 } from "../gateway/test-helpers.env.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
@@ -418,6 +423,74 @@ describe("openclaw test state", () => {
         maxRetries: 20,
         retryDelay: 25,
       });
+    }
+  });
+
+  it("does not recreate fixture databases from a deferred transcript reconcile", async () => {
+    const state = await createOpenClawTestState({ label: "deferred-reconcile" });
+    const options = { agentId: "main", env: state.env };
+    const agent = openOpenClawAgentDatabase(options);
+    const shared = openOpenClawStateDatabase({ env: state.env });
+    const realSetImmediate = globalThis.setImmediate;
+    let resumeReconcile: (() => void) | undefined;
+    const immediateSpy = vi.spyOn(globalThis, "setImmediate").mockImplementationOnce((callback) => {
+      resumeReconcile = () => callback();
+      return realSetImmediate(() => undefined);
+    });
+    const originalRm = fs.rm;
+    let removalStarted = false;
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation((...args) => {
+      if (args[0] === state.root) {
+        removalStarted = true;
+      }
+      return originalRm(...args);
+    });
+    const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    let cleanup: Promise<void> | undefined;
+    let reconcile: Promise<void> | undefined;
+    try {
+      startSessionTranscriptIndexReconcile(options);
+      reconcile = waitForSessionTranscriptIndexReconcile(options);
+      expect(resumeReconcile).toBeDefined();
+      cleanup = state.cleanup();
+
+      // Empty drains settle before this real event-loop checkpoint. Old cleanup
+      // reaches rm; repaired cleanup must keep the fixture alive for the owner.
+      await new Promise<void>((resolve) => {
+        realSetImmediate(resolve);
+      });
+      if (removalStarted) {
+        await cleanup;
+        expect(agent.db.isOpen).toBe(false);
+        await expectPathMissing(state.root);
+      } else {
+        expect(agent.db.isOpen).toBe(true);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+      }
+      resumeReconcile?.();
+      await reconcile;
+      await cleanup;
+
+      await expectPathMissing(state.root);
+      await expectPathMissing(agent.path);
+      await expectPathMissing(shared.path);
+      expect(isOpenClawAgentDatabaseOpen(agent.path)).toBe(false);
+      expect(agent.db.isOpen).toBe(false);
+      expect(shared.db.isOpen).toBe(false);
+      expect(openSpy.mock.calls.filter(([pathname]) => pathname === agent.path)).toEqual([]);
+    } finally {
+      immediateSpy.mockRestore();
+      resumeReconcile?.();
+      await reconcile;
+      await cleanup;
+      await state.cleanup();
+      openSpy.mockRestore();
+      rmSpy.mockRestore();
+      // cleanup is idempotent, so explicitly dispose anything the pre-fix
+      // reconcile recreated after it returned.
+      closeOpenClawAgentDatabaseByPath(agent.path);
+      closeOpenClawStateDatabaseByPath(shared.path);
+      await fs.rm(state.root, { recursive: true, force: true });
     }
   });
 

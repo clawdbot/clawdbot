@@ -202,7 +202,7 @@ describe("QA-channel vision offload", () => {
     expect(activeModelRequest.model, requestDiagnostics).toBe(ACTIVE_MODEL_ID);
     expect(activeModelRequest.imageInputCount, requestDiagnostics).toBe(0);
     expect(readInputRoles(activeModelRequest), requestDiagnostics).toEqual([
-      "system",
+      "developer",
       "user",
       "user",
     ]);

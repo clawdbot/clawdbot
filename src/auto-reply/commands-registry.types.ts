@@ -81,6 +81,8 @@ export type ChatCommandDefinition = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: CommandTier;
+  /** Handler is safe to resolve while another run owns the session execution slot. */
+  activeRunSafe?: true;
 };
 
 /** Provider-facing native command registration shape. */

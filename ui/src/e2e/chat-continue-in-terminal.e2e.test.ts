@@ -60,9 +60,10 @@ const sharedManagementActions = [
   "Archive session",
   "Delete…",
 ] as const;
-const compactManagementActions = sharedManagementActions.filter(
-  (label) => label !== "Assign to me",
-);
+const compactManagementActions = sharedManagementActions
+  .filter((label) => label !== "Assign to me")
+  // Compact mode folds icon and color into one drill-down row.
+  .map((label) => (label === "Set icon" ? "Icon & color" : label));
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {

@@ -55,6 +55,10 @@ const LINE_MARKDOWN_OPTIONS = {
 } as const;
 const TRANSCRIPT_ROLE_PREFIX = "[assistant-authored transcript] ";
 const LINE_FLEX_BUBBLE_MAX_BYTES = 30_000;
+// How much code one Flex card shows. Nothing in LINE caps a Flex text this low —
+// it is the card's own readable budget — so a longer block is delivered as text
+// rather than cut down to it.
+const LINE_FLEX_CODE_CARD_MAX_CHARS = 2000;
 
 function parseLineMarkdown(text: string, tableMode: "block" | "bullets" | "off" = "block") {
   return markdownToIRWithMeta(text, { ...LINE_MARKDOWN_OPTIONS, tableMode });
@@ -390,7 +394,9 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
 export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
   const displayCode =
-    block.code.length > 2000 ? truncateUtf16Safe(block.code, 2000) + "\n..." : block.code;
+    block.code.length > LINE_FLEX_CODE_CARD_MAX_CHARS
+      ? `${truncateUtf16Safe(block.code, LINE_FLEX_CODE_CARD_MAX_CHARS)}\n...`
+      : block.code;
 
   return {
     type: "bubble",
@@ -461,6 +467,13 @@ export function processLineMessage(text: string): ProcessedLineMessage {
     // An empty fence has no code to show, and LINE rejects the whole push when a
     // Flex text is blank, so it drops out instead of costing the reply.
     if (!block.code.trim()) {
+      continue;
+    }
+    // A block the card would have to cut is delivered as the text it was written
+    // as, the same way an oversized table is: the reader gets all of it, chunked
+    // by the ordinary text limit, instead of a card ending in an ellipsis.
+    if (block.code.length > LINE_FLEX_CODE_CARD_MAX_CHARS) {
+      plainTextInsertions.push({ position: span.start, text: `\n\n${block.code}\n\n` });
       continue;
     }
     plainTextInsertions.push({

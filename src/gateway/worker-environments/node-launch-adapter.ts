@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -23,6 +24,8 @@ import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,
 } from "../../worker/worker-connection-contract.js";
+import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -110,6 +113,47 @@ function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInpu
     throw new Error("node worker launch input is not serializable");
   }
   return parseNodeWorkerLaunchInput(encoded);
+}
+
+function rearmNodeWorkerLaunchInput(
+  input: NodeWorkerLaunchInput,
+  attempt: number,
+): NodeWorkerLaunchInput {
+  const launchId = createHash("sha256")
+    .update(`${input.launchId}:admission-rearm:${attempt}`)
+    .digest("hex");
+  return {
+    ...input,
+    launchId,
+    descriptor: {
+      ...input.descriptor,
+      assignment: { ...input.descriptor.assignment, turnId: launchId },
+    },
+  };
+}
+
+export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLaunchInput): number {
+  // Re-arms replace a UUID with a SHA-256 hex turn ID. Measure both without changing
+  // the original plan; the registry bounds timeouts and always generates UUID request IDs.
+  return Math.max(
+    ...[input, rearmNodeWorkerLaunchInput(input, 1)].flatMap((attempt) => [
+      Buffer.byteLength(
+        serializeNodeEvent(
+          "node.invoke.request",
+          buildNodeInvokeRequest({
+            id: randomUUID(),
+            nodeId,
+            command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+            params: attempt,
+            timeoutMs: MAX_TIMER_TIMEOUT_MS,
+            idempotencyKey: attempt.launchId,
+          }),
+        ),
+        "utf8",
+      ),
+      measureWorkerProcessTurnBytes(attempt.descriptor),
+    ]),
+  );
 }
 
 function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIdentity {
@@ -404,7 +448,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
-    const originalLaunchId = input.launchId;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);
     let admissionAttempts = 1;
@@ -488,19 +531,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                   delayMs: rearmDelayMs,
                   deadline,
                 });
-                const launchId = createHash("sha256")
-                  .update(`${originalLaunchId}:admission-rearm:${admissionAttempts++}`)
-                  .digest("hex");
                 // Deterministic IDs make a replay of this adapter find the same journal
                 // rows, never another child for an already completed retry.
-                input = {
-                  ...originalInput,
-                  launchId,
-                  descriptor: {
-                    ...originalInput.descriptor,
-                    assignment: { ...originalInput.descriptor.assignment, turnId: launchId },
-                  },
-                };
+                input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
                 expected = expectedIdentity(input);
                 pollStatus = false;
                 delayMs = pollIntervalMs;

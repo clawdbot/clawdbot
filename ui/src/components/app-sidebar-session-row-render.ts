@@ -4,13 +4,13 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
-import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import {
   restartHoverMarqueeIfHovered,
@@ -169,7 +169,7 @@ export function renderRecentSession(params: {
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
   });
-  const label = display?.label ?? session.label;
+  const label = session.label;
   const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
@@ -252,9 +252,11 @@ export function renderRecentSession(params: {
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =
     host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
+  const color = normalizeSessionColorValue(session.color ?? "");
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
+    color ? "sidebar-recent-session--colored" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
     !subtitle ? "sidebar-recent-session--single-line" : "",
     session.archived ? "sidebar-session--archived" : "",
@@ -320,6 +322,7 @@ export function renderRecentSession(params: {
     <div
       ${display?.rowRef ? ref(display.rowRef) : nothing}
       class=${rowClass}
+      style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${session.key}
       data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}
@@ -363,15 +366,6 @@ export function renderRecentSession(params: {
           <span class="sidebar-recent-session__details">
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
             <span class="sidebar-recent-session__details-endcap">
-              ${!session.isChild && sessionHasBoard(session.key)
-                ? html`<span
-                    class="session-row-badge"
-                    role="img"
-                    aria-label=${t("sessionsView.dashboardAvailable")}
-                    title=${t("sessionsView.dashboardAvailable")}
-                    >${icons.layoutDashboard}</span
-                  >`
-                : nothing}
               <openclaw-viewer-facepile
                 .presencePayload=${host.sessionData.presencePayload}
                 .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
@@ -382,7 +376,14 @@ export function renderRecentSession(params: {
                 variant="session"
               ></openclaw-viewer-facepile>
               ${renderSessionRowBadges({
-                ...session,
+                isChild: session.isChild,
+                incognito: session.incognito,
+                placementState: session.placementState,
+                placementProviderId: session.placementProviderId,
+                placementProfileId: session.placementProfileId,
+                diskSpaceStatus: session.diskSpaceStatus,
+                workspaceConflictCount: session.workspaceConflictCount,
+                outboxAttentionCount: session.outboxAttentionCount,
                 hasComposerDraft: session.hasComposerDraft === true,
                 pullRequest,
                 hasApproval: sessionHasPendingApproval(

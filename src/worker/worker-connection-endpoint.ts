@@ -13,6 +13,29 @@ import {
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 
+const ENDPOINT_FIELD_MAX_LENGTH = 4_096;
+// JSON needs at most six bytes per UTF-16 code unit (control/lone-surrogate escapes).
+// These closed shapes cover both endpoints; parsed TLS pins are 64 ASCII hex digits.
+export const WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES = Math.max(
+  Buffer.byteLength(
+    JSON.stringify({
+      kind: "unix",
+      socketPath: "\0".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH),
+    }),
+  ),
+  Buffer.byteLength(
+    JSON.stringify({
+      kind: "websocket",
+      url: "\0".repeat(ENDPOINT_FIELD_MAX_LENGTH),
+      tlsFingerprint: "0".repeat(64),
+      cloudflareAccess: {
+        clientId: "\0".repeat(ENDPOINT_FIELD_MAX_LENGTH),
+        clientSecret: "\0".repeat(ENDPOINT_FIELD_MAX_LENGTH),
+      },
+    }),
+  ),
+);
+
 export class WorkerConnectionEndpointError extends Error {
   constructor(message: string) {
     super(message);
@@ -61,7 +84,7 @@ function parseWebSocketEndpoint(
     !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
     value.kind !== "websocket" ||
     typeof value.url !== "string" ||
-    value.url.length > 4_096 ||
+    value.url.length > ENDPOINT_FIELD_MAX_LENGTH ||
     (value.tlsFingerprint !== undefined && !tlsFingerprint)
   ) {
     return undefined;
@@ -105,10 +128,10 @@ function parseCloudflareAccessCredentials(value: unknown): CloudflareAccessCrede
     !hasExactKeys(value, ["clientId", "clientSecret"]) ||
     typeof value.clientId !== "string" ||
     value.clientId.trim().length === 0 ||
-    value.clientId.length > 4_096 ||
+    value.clientId.length > ENDPOINT_FIELD_MAX_LENGTH ||
     typeof value.clientSecret !== "string" ||
     value.clientSecret.trim().length === 0 ||
-    value.clientSecret.length > 4_096
+    value.clientSecret.length > ENDPOINT_FIELD_MAX_LENGTH
   ) {
     return undefined;
   }

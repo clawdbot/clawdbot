@@ -45,7 +45,10 @@ export async function runEmbeddedFallbackCandidate(
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     githubPublicationAvailable: boolean;
-    onCompactionCount: (count: number) => void;
+    onCompactionFacts: (facts: {
+      totalCount: number;
+      postCompactionModelAttempted: boolean;
+    }) => void;
   },
 ): Promise<{
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -58,7 +61,7 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
-  const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
+  const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
@@ -131,6 +134,7 @@ export async function runEmbeddedFallbackCandidate(
         })
       : undefined;
   let attemptCompactionCount = 0;
+  let postCompactionModelAttempted = false;
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
@@ -202,6 +206,10 @@ export async function runEmbeddedFallbackCandidate(
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
         onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
+        onAutoCompactionSucceeded: (count) => {
+          attemptCompactionCount = Math.max(attemptCompactionCount, count);
+        },
         toolResultFormat: (() => {
           const channel = resolveMessageChannel(turn.sessionCtx.Surface, turn.sessionCtx.Provider);
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
@@ -230,7 +238,12 @@ export async function runEmbeddedFallbackCandidate(
             params.onLifecycleGeneration(info.lifecycleGeneration);
           }
         },
-        onExecutionPhase: params.signalExecutionPhaseForTyping,
+        onExecutionPhase: (info) => {
+          if (info.phase === "model_call_started" && attemptCompactionCount > 0) {
+            postCompactionModelAttempted = true;
+          }
+          params.signalExecutionPhaseForTyping(info);
+        },
         onLaneWait: ({ waiting }) => {
           const replyOperation = turn.replyOperation;
           if (waiting && replyOperation) {
@@ -400,7 +413,10 @@ export async function runEmbeddedFallbackCandidate(
       ),
     };
   } finally {
-    params.onCompactionCount(attemptCompactionCount);
+    params.onCompactionFacts({
+      totalCount: attemptCompactionCount,
+      postCompactionModelAttempted,
+    });
     revokeMessageActionTurnCapability(messageActionTurnCapability);
   }
 }

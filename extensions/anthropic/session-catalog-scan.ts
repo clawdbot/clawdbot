@@ -1,11 +1,73 @@
 import type { Dirent, Stats } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
+const CLAUDE_METADATA_WINDOW_BYTES = 1024 * 1024;
+const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 export const CLAUDE_CATALOG_IO_CONCURRENCY = 32;
+
+export async function readClaudeCatalogMetadata(
+  handle: FileHandle,
+  fileSize: number,
+  maxBytes: number,
+  inspectLine: (line: Buffer, metadataOnly: boolean) => boolean,
+): Promise<{ scannedBytes: number; complete: boolean }> {
+  let pending = Buffer.alloc(0);
+  let fileOffset = 0;
+  let scannedBytes = 0;
+  let stopDiscovery = false;
+  let skipPartial = false;
+  const readWindow = async (end: number, metadataOnly: boolean) => {
+    while (fileOffset < end && scannedBytes < maxBytes) {
+      const size = Math.min(
+        CLAUDE_METADATA_READ_CHUNK_BYTES,
+        end - fileOffset,
+        maxBytes - scannedBytes,
+      );
+      const chunk = Buffer.allocUnsafe(size);
+      const { bytesRead } = await handle.read(chunk, 0, size, fileOffset);
+      if (bytesRead === 0) {
+        return;
+      }
+      fileOffset += bytesRead;
+      scannedBytes += bytesRead;
+      pending = pending.length
+        ? Buffer.concat([pending, chunk.subarray(0, bytesRead)])
+        : chunk.subarray(0, bytesRead);
+      let newline: number;
+      while ((newline = pending.indexOf(0x0a)) >= 0) {
+        if (!skipPartial) {
+          stopDiscovery =
+            inspectLine(pending.subarray(0, newline), metadataOnly || stopDiscovery) ||
+            stopDiscovery;
+        }
+        skipPartial = false;
+        pending = pending.subarray(newline + 1);
+      }
+      if (stopDiscovery && !metadataOnly) {
+        return;
+      }
+    }
+  };
+  await readWindow(Math.min(fileSize, CLAUDE_METADATA_WINDOW_BYTES), false);
+  const prefixReadToEnd = fileOffset >= fileSize;
+  // Commands append metadata after conversation rows. Read at most the last MiB too,
+  // charging the same budget; never interpret a clipped JSONL line as a record.
+  const tailOffset = Math.max(fileOffset, fileSize - CLAUDE_METADATA_WINDOW_BYTES);
+  skipPartial = tailOffset > fileOffset;
+  if (skipPartial) {
+    fileOffset = tailOffset - 1;
+    pending = Buffer.alloc(0);
+  }
+  await readWindow(fileSize, true);
+  if (fileOffset >= fileSize && !skipPartial && pending.length > 0) {
+    inspectLine(pending, stopDiscovery || !prefixReadToEnd);
+  }
+  return { scannedBytes, complete: fileOffset >= fileSize };
+}
 
 type CatalogJsonCacheEntry = {
   mtimeMs: number;

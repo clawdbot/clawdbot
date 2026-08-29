@@ -1797,6 +1797,17 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+.sidebar-recent-session--colored::before {
+  content: "";
+  position: absolute;
+  inset-block: 5px;
+  inset-inline-start: 2px;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--session-color);
+  pointer-events: none;
+}
+
 .sidebar-recent-session:hover {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);

@@ -28,6 +28,7 @@ final class CronJobsStore {
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var runsGeneration: UInt64 = 0
+    private var jobsGeneration: UInt64 = 0
 
     private let gateway: GatewayConnection
     private let interval: TimeInterval = 30
@@ -52,6 +53,8 @@ final class CronJobsStore {
     }
 
     func stop() {
+        self.jobsGeneration &+= 1
+        self.isLoadingJobs = false
         SimpleTaskSupport.stop(task: &self.refreshTask)
         self.invalidateRuns()
         SimpleTaskSupport.stop(task: &self.eventTask)
@@ -59,19 +62,29 @@ final class CronJobsStore {
     }
 
     func refreshJobs() async {
-        guard !self.isLoadingJobs else { return }
+        guard !self.isLoadingJobs, !Task.isCancelled else { return }
+        // Manual and scheduled refreshes share the pane's lifetime; stop also
+        // invalidates callers whose task is not owned by this store.
+        self.jobsGeneration &+= 1
+        let generation = self.jobsGeneration
         self.isLoadingJobs = true
         self.lastError = nil
         self.statusMessage = nil
-        defer { self.isLoadingJobs = false }
+        defer {
+            if self.jobsGeneration == generation { self.isLoadingJobs = false }
+        }
 
         do {
-            if let status = try? await self.gateway.cronStatus() {
+            let status = try? await self.gateway.cronStatus()
+            guard self.jobsGeneration == generation, !Task.isCancelled else { return }
+            let jobs = try await self.gateway.cronList(includeDisabled: true)
+            guard self.jobsGeneration == generation, !Task.isCancelled else { return }
+            if let status {
                 self.schedulerEnabled = status.enabled
                 self.schedulerStorePath = status.sqlitePath ?? status.storePath
                 self.schedulerNextWakeAtMs = status.nextWakeAtMs
             }
-            self.jobs = try await self.gateway.cronList(includeDisabled: true)
+            self.jobs = jobs
             if let selectedJobId = self.selectedJobId,
                !self.jobs.contains(where: { $0.id == selectedJobId })
             {
@@ -81,6 +94,7 @@ final class CronJobsStore {
                 self.statusMessage = "No cron jobs yet."
             }
         } catch {
+            guard self.jobsGeneration == generation, !Task.isCancelled else { return }
             self.logger.error("cron.list failed \(error.localizedDescription, privacy: .public)")
             self.lastError = error.localizedDescription
         }

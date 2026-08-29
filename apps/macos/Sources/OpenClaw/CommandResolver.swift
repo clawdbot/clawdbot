@@ -271,14 +271,22 @@ enum CommandResolver {
         #endif
     }
 
-    static func projectNodeHostWorkerLaunch(
+    static func nodeHostWorkerLaunch(
+        bundle: Bundle = .main,
         projectRoot: URL? = nil,
-        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch?
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch
     {
+        // Packaging and optimization are independent: even DEBUG apps must use
+        // their signed payload, including after relocation or checkout removal.
+        if bundle.bundleURL.pathExtension == "app" {
+            return try BundledNodeWorker.launch(bundle: bundle)
+        }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
-        guard FileManager().isReadableFile(atPath: sourceRunner.path) else { return nil }
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else {
+            throw MacNodeHostWorker.WorkerError.unavailable(reason: "Development worker source runner is missing")
+        }
         switch await self.runtimeResolution(searchPaths: searchPaths) {
         case let .success(runtime):
             return MacNodeHostWorkerLaunch(
@@ -289,7 +297,7 @@ enum CommandResolver {
             throw error
         }
         #else
-        return nil
+        throw MacNodeHostWorker.WorkerError.unavailable(reason: "The node worker requires a packaged OpenClaw.app")
         #endif
     }
 

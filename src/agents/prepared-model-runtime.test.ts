@@ -394,7 +394,7 @@ describe("prepared model runtime snapshots", () => {
         workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
       }),
     );
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "nvidia",
         id: "nemotron-static",
@@ -470,7 +470,7 @@ describe("prepared model runtime snapshots", () => {
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
     ]);
     expect(snapshot.modelCatalog.entries).toEqual([]);
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "openai",
         id: "gpt-5.4",
@@ -519,7 +519,7 @@ describe("prepared model runtime snapshots", () => {
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "nvidia", modelId: "nemotron-static", model: runtimeModel },
     ]);
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "nvidia",
         id: "nemotron-static",
@@ -590,7 +590,7 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/prepared-model-runtime-unsupported-api",
     });
 
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "custom",
         id: "custom-static",

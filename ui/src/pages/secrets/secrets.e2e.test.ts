@@ -84,6 +84,27 @@ async function tableBodyContrast(page: Page): Promise<number> {
     });
 }
 
+async function activeGatewayIdentity(page: Page) {
+  return await page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: {
+        context: {
+          gateway: {
+            connection: { gatewayUrl: string };
+            snapshot: { client: { instanceId: string } | null; phase: string };
+          };
+        };
+      };
+    };
+    const gateway = app.runtime?.context.gateway;
+    return {
+      clientInstanceId: gateway?.snapshot.client?.instanceId,
+      gatewayUrl: gateway?.connection.gatewayUrl,
+      phase: gateway?.snapshot.phase,
+    };
+  });
+}
+
 suite.define(() => {
   it("blocks empty protected values without rejecting empty environment entries", async () => {
     await suite.withPage({}, async ({ page }) => {
@@ -303,6 +324,129 @@ suite.define(() => {
         await capture(page, "01-populated-dark.png");
       },
     );
+  });
+
+  it("rejects a confirmed deletion after same-URL credentials replace the Gateway client", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.delete"],
+        methodResponses: {
+          "secrets.store.list": {
+            sequence: [{ entries: [envEntry] }, { entries: [envEntry] }, { entries: [] }],
+          },
+          "secrets.store.delete": { ok: true, reloaded: false },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
+      await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
+      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
+      await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
+
+      const socketCount = await gateway.getSocketCount();
+      const listCount = (await gateway.getRequests("secrets.store.list")).length;
+      const originalGateway = await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              gateway: {
+                connection: { gatewayUrl: string };
+                connect: (options: { token: string }) => void;
+                snapshot: { client: { instanceId: string } | null };
+              };
+            };
+          };
+        };
+        const activeGateway = app.runtime?.context.gateway;
+        const client = activeGateway?.snapshot.client;
+        if (!activeGateway || !client) {
+          throw new Error("Expected a connected Gateway client before confirmation");
+        }
+        const identity = {
+          clientInstanceId: client.instanceId,
+          gatewayUrl: activeGateway.connection.gatewayUrl,
+        };
+        activeGateway.connect({ token: "replacement-secret-delete-proof" });
+        return identity;
+      });
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await expect
+        .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
+        .toBeGreaterThan(listCount);
+      await expect
+        .poll(() => activeGatewayIdentity(page))
+        .toMatchObject({
+          gatewayUrl: originalGateway.gatewayUrl,
+          phase: "connected",
+        });
+      const replacementGateway = await activeGatewayIdentity(page);
+      expect(replacementGateway.clientInstanceId).not.toBe(originalGateway.clientInstanceId);
+      await expect
+        .poll(() => entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).isEnabled())
+        .toBe(true);
+
+      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+
+      await expect
+        .poll(async () => ({
+          alerts: await page.getByRole("alert").count(),
+          deletes: (await gateway.getRequests("secrets.store.delete")).length,
+        }))
+        .not.toEqual({ alerts: 0, deletes: 0 });
+      expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(0);
+      await page
+        .getByRole("alert")
+        .getByText("The secret was not deleted. Reload the list and try again.", { exact: true })
+        .waitFor();
+      await capture(page, "06-client-replacement-delete-rejected.png");
+      await entryRow.waitFor();
+    });
+  });
+
+  it("deletes a confirmed entry after the same Gateway client reconnects", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.delete"],
+        methodResponses: {
+          "secrets.store.list": {
+            sequence: [{ entries: [envEntry] }, { entries: [envEntry] }, { entries: [] }],
+          },
+          "secrets.store.delete": { ok: true, reloaded: false },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
+      await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
+      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
+      await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
+
+      const originalGateway = await activeGatewayIdentity(page);
+      const socketCount = await gateway.getSocketCount();
+      const listCount = (await gateway.getRequests("secrets.store.list")).length;
+      await gateway.closeLatest(1012, "secret delete confirmation reconnect proof");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await expect
+        .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
+        .toBeGreaterThan(listCount);
+      await expect
+        .poll(() => activeGatewayIdentity(page))
+        .toMatchObject({
+          clientInstanceId: originalGateway.clientInstanceId,
+          gatewayUrl: originalGateway.gatewayUrl,
+          phase: "connected",
+        });
+
+      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+
+      await expect
+        .poll(async () => (await gateway.getRequests("secrets.store.delete")).length)
+        .toBe(1);
+      await expect.poll(() => entryRow.count()).toBe(0);
+    });
   });
 
   it("keeps optional store actions hidden when the Gateway omits method discovery", async () => {

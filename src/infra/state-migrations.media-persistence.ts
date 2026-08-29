@@ -293,23 +293,14 @@ function scanTrajectoryRows(params: {
   return changedRows;
 }
 
-type MediaSourceVersion = {
-  dataVersion: number;
-  trajectoryBytes: number;
-  trajectoryRows: number;
-  transcriptBytes: number;
-  transcriptCreatedAt: number;
-  transcriptRows: number;
-};
-
-function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
+function readMediaSourceVersion(database: DatabaseSync) {
   const dataVersionRow = database.prepare("PRAGMA data_version").get();
   const counts = database
     .prepare(
       `SELECT
         (SELECT COUNT(*) FROM transcript_events) AS transcript_rows,
         (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM transcript_events) AS transcript_bytes,
-        (SELECT COALESCE(SUM(created_at), 0) FROM transcript_events) AS transcript_created_at,
+        (SELECT CAST(COALESCE(SUM(created_at), 0) AS TEXT) FROM transcript_events) AS transcript_created_at,
         (SELECT COUNT(*) FROM trajectory_runtime_events) AS trajectory_rows,
         (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM trajectory_runtime_events) AS trajectory_bytes`,
     )
@@ -322,10 +313,14 @@ function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
     trajectoryBytes: count("trajectory_bytes"),
     trajectoryRows: count("trajectory_rows"),
     transcriptBytes: count("transcript_bytes"),
-    transcriptCreatedAt: count("transcript_created_at"),
+    transcriptCreatedAt: String(
+      (isRecord(counts) ? counts.transcript_created_at : undefined) ?? "0",
+    ),
     transcriptRows: count("transcript_rows"),
   };
 }
+
+type MediaSourceVersion = ReturnType<typeof readMediaSourceVersion>;
 
 function mediaSourceDriftMessage(
   pathname: string,
@@ -386,23 +381,14 @@ function migrateAgentDatabase(params: {
       });
       userVersion = readSqliteUserVersion(database);
     }
-    if (
-      userVersion !== PREVIOUS_MEDIA_SCHEMA_VERSION &&
-      userVersion !== AGENT_MEDIA_SCHEMA_VERSION &&
-      userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION
-    ) {
-      throw new Error(
-        `${params.pathname} uses schema version ${userVersion}; expected ${PREVIOUS_MEDIA_SCHEMA_VERSION} or ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
-      );
-    }
     if (metadata.schemaVersion !== userVersion) {
       throw new Error(
         `${params.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}`,
       );
     }
     if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
-      // Doctor can encounter a current-version database before newly additive schema exists.
-      // Converge it through the canonical agent-schema owner before media validation.
+      // The canonical owner admits supported versions and converges additive schema;
+      // media must not enumerate later schema revisions independently.
       ensureOpenClawAgentDatabaseSchema(database, {
         agentId: params.agentId,
         path: params.pathname,

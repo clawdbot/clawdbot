@@ -48,8 +48,8 @@ import {
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
-const loadDoctorStateMigrations = createLazyRuntimeModule(
-  () => import("./doctor-state-migrations.js"),
+const loadStateDirMigrations = createLazyRuntimeModule(
+  () => import("../infra/state-migrations.state-dir.js"),
 );
 
 const loadLegacyCronRepair = createLazyRuntimeModule(
@@ -141,7 +141,6 @@ export async function runDoctorConfigPreflight(
         () => import("../infra/startup-migration-checkpoint.js"),
       )
     : undefined;
-  let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
   let startupMigrationEnv = process.env;
   let shouldRecordStateCheckpoint = false;
   let shouldRecordStartupCheckpoint = false;
@@ -301,14 +300,14 @@ export async function runDoctorConfigPreflight(
     }
     // A current state checkpoint proves this root already completed every automatic migration.
     // Keep repeated short-lived commands out of the legacy migration import graph.
-    stateMigrations =
+    const stateDirMigrations =
       stateMigrationsRequested &&
       (!migrationCheckpoint || shouldRecordStateCheckpoint) &&
       !skipPristineStartupStateMigrations
-        ? await measurePreflightStep("state-migrations-import", loadDoctorStateMigrations)
+        ? await measurePreflightStep("state-migrations-import", loadStateDirMigrations)
         : undefined;
-    if (stateMigrations && stateMigrationsAllowed) {
-      const { autoMigrateLegacyStateDir } = stateMigrations;
+    if (stateDirMigrations && stateMigrationsAllowed) {
+      const { autoMigrateLegacyStateDir } = stateDirMigrations;
       const stateDirResult = await measurePreflightStep("state-dir-migrations", () =>
         autoMigrateLegacyStateDir({ env: process.env }),
       );
@@ -316,10 +315,10 @@ export async function runDoctorConfigPreflight(
     }
 
     await migrateLegacyConfigIfNeeded();
-    if (!configSnapshotRead || stateMigrations) {
+    if (!configSnapshotRead || stateDirMigrations) {
       // Legacy state migration can move the persisted plugin index into the canonical state root.
       // Re-read before config-dependent migrations so their checkpoint names that final inventory.
-      configSnapshotRead = await readConfigSnapshotForPreflight(!stateMigrations);
+      configSnapshotRead = await readConfigSnapshotForPreflight(!stateDirMigrations);
     }
 
     let snapshot = configSnapshotRead.snapshot;
@@ -396,7 +395,7 @@ export async function runDoctorConfigPreflight(
       await ensureStartupMigrationLease();
     }
     const freshConfigGuardRequired =
-      stateMigrations !== undefined ||
+      stateDirMigrations !== undefined ||
       shouldRecordStateCheckpoint ||
       shouldRecordStartupCheckpoint ||
       shouldPersistRefreshedPluginIndex;
@@ -410,7 +409,7 @@ export async function runDoctorConfigPreflight(
     if (gatewayStartupCheckpointRequired && !freshConfigGuardAllowed) {
       throwStartupMigrationGuardRejected();
     }
-    if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
+    if (stateDirMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
       if (gatewayStartupCheckpointRequired && (snapshot.valid || automaticStartupRepair)) {
         if (!startupMigrationLease) {
           throw new Error("Startup plugin host-link repair requires the startup migration lease.");
@@ -423,12 +422,7 @@ export async function runDoctorConfigPreflight(
           }),
         );
       }
-      const {
-        autoMigrateLegacyState,
-        autoMigrateLegacyPluginDoctorState,
-        autoMigrateLegacyTaskStateSidecars,
-        migrateLegacyConfigMachineState,
-      } = stateMigrations;
+      const { autoMigrateLegacyTaskStateSidecars } = stateDirMigrations;
       if (stateMigrationInput) {
         const pluginDoctorOnlyConfig =
           stateMigrationInput.pluginDoctorConfig ?? stateMigrationInput.cfg;
@@ -441,6 +435,8 @@ export async function runDoctorConfigPreflight(
         ) {
           // Core state is absent, but plugin paths may own external migration state.
           // Keep their doctor owner active without loading channel/session detectors.
+          const { autoMigrateLegacyPluginDoctorState } =
+            await import("../infra/state-migrations.plugin-doctor.js");
           noteStartupStateMigrationResult(
             await measurePreflightStep("plugin-doctor-migrations", () =>
               runWithPluginMetadataSnapshot({ config: pluginDoctorOnlyConfig }, () =>
@@ -455,6 +451,7 @@ export async function runDoctorConfigPreflight(
             ),
           );
         } else if (stateMigrationInput.cfg) {
+          const { autoMigrateLegacyState } = await import("../infra/state-migrations.doctor.js");
           const migrationConfig = stateMigrationInput.cfg;
           const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
           const {
@@ -511,10 +508,14 @@ export async function runDoctorConfigPreflight(
                 }),
               ),
             );
+            const { migrateLegacyConfigMachineState } =
+              await import("../infra/state-migrations.config-machine-state.js");
             noteStartupStateMigrationResult(
               migrateLegacyConfigMachineState({ config: pluginDoctorConfig, env: process.env }),
             );
           }
+          const { autoMigrateLegacyPluginDoctorState } =
+            await import("../infra/state-migrations.plugin-doctor.js");
           noteStartupStateMigrationResult(
             await measurePreflightStep("plugin-doctor-migrations", () =>
               runWithPluginMetadataSnapshot({ config: pluginDoctorConfig }, () =>
@@ -547,16 +548,17 @@ export async function runDoctorConfigPreflight(
       }
     }
     if (
-      stateMigrations &&
+      stateDirMigrations &&
       stateMigrationsAllowed &&
       freshConfigGuardAllowed &&
       options.doctorOnlyStateMigrations === true &&
       !doctorMediaPersistenceAttempted
     ) {
-      const activeStateMigrations = stateMigrations;
+      const { migrateLegacyMediaPersistence } =
+        await import("../infra/state-migrations.media-persistence.js");
       noteStartupStateMigrationResult(
         await measurePreflightStep("media-persistence-migration", () =>
-          activeStateMigrations.migrateLegacyMediaPersistence({ env: process.env }),
+          migrateLegacyMediaPersistence({ env: process.env }),
         ),
       );
     }

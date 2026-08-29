@@ -29,8 +29,28 @@ pnpm install
 ```
 
 Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
-default; ad-hoc signing is an explicit opt-in and does not preserve TCC grants.
-See [macOS signing](/platforms/mac/signing).
+default and fails if none is available. Ad-hoc signing is an explicit opt-in;
+it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
+
+Packaging builds the JavaScript runtime and Control UI, then provisions a
+private Node worker from the canonical package artifact for every requested
+`BUILD_ARCHS` architecture. The root worker tarball uses the repository-pinned
+pnpm packer; Corepack-only setups are supported. Packaging verifies native
+capabilities and worker readiness in temporary state before and after signing,
+then replaces the previous app. `scripts/restart-mac.sh` uses
+the same path; `SKIP_TSC=1` no longer bypasses the runtime build. Existing
+content-checked build caches still avoid unnecessary declaration work.
+
+Universal builds require both arm64 and x86_64 runtimes to execute during
+validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
+architecture or nonportable native dependency fails packaging. Node downloads
+and package installation need network access. The larger app includes its
+complete private runtime; it does not update an independently managed Gateway.
+
+The private worker uses read-only core config bootstrap rather than Gateway-wide
+Doctor preflight. Node plugin validation, MCP lifecycle, and node-owned identity
+and exec-approval startup migrations remain enabled. See
+[Gateway ownership](/platforms/mac/bundled-gateway) for the boundary.
 
 Set `OPENCLAW_SKIP_MLX_TTS=1` to package a dev/proof build without the local
 MLX voice helper. This skips the `openclaw-mlx-tts` binary and its large
@@ -76,6 +96,47 @@ windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
 named app profile alone is not a sandbox: fixed preferences domains and
 Keychain access can still reach macOS services outside those directories.
 
+The `macos-swift` GitHub CI job builds the tests with the runner's normal
+SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
+Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
+`OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
+bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;
+Foundation uses Darwin's per-user temp directory, owned and discarded by the
+disposable OS worker. The full suite explicitly selects the default profile, preserving
+its local Gateway lifecycle contracts. AppState isolation tests run separately
+with a unique named profile; no test is run twice. The child environment excludes
+inherited app settings and credentials while retaining toolchain and runtime
+loader paths. Before Swift starts, the launcher creates an empty-password test
+Keychain under its private `HOME/Library/Keychains`, unlocks it, disables automatic
+locking for that resource, and sets the user-domain default and search list to
+that file. This lets real catalog migration save without an interactive
+login-Keychain creation prompt. Its Security preferences live in the private
+`HOME/Library/Preferences`; common and dynamic Keychain domains remain unchanged.
+Resources remain available for process-lifetime singletons and retained windows;
+the launcher deletes its Keychain and files after the managed process group and
+output pipes close. The disposable runner owns default preferences and system-service
+state; named-profile preferences use a fresh domain and are also discarded with
+the runner.
+If process cleanup cannot be verified or Keychain deletion fails, the launcher
+fails and retains its files for inspection.
+CI environment markers only catch accidental invocation; they do not enforce
+isolation or make an operator desktop safe.
+
+For a focused rerun **inside that disposable macOS CI runner**, after the normal
+test build:
+
+```bash
+node scripts/test-macos-native.mts named \
+  --package-path apps/macos --build-system native --enable-code-coverage \
+  --skip-build --filter AppStateIsolationTests
+```
+
+The ordinary CI invocation preserves its existing serial/parallel selection and
+coverage. Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
+build, but does not run native tests. For native changes it exits nonzero with a
+requirement to obtain the exact commit's `macos-swift` CI result; local build
+success is not native test success.
+
 On an operator desktop, run only an audited subset inside an OS sandbox that
 blocks operator files, preferences and Keychain services, unwanted network
 access, and desktop/helper processes. A Swift test filter is not itself an
@@ -85,12 +146,29 @@ macOS environment instead.
 Tests should own their resources: unique defaults suites with cleanup,
 nonpersistent WebKit data stores, ephemeral loopback fixture endpoints, and
 temporary files rooted in `FileManager.temporaryDirectory`. Unix-domain socket
-fixtures require a short test-owned `TMPDIR`; an overlong path fails rather than
-silently writing outside that directory. The cooperative `TestIsolation` helper
-serializes and restores participating tests' environment
-and defaults mutations; it does not isolate the process from the host.
+fixtures require a short test-owned path there; an overlong path fails rather
+than silently writing outside that directory. The cooperative `TestIsolation` helper
+serializes and restores participating tests' environment and selected defaults
+mutations. Config-only scopes also own a temporary state directory for config
+health/audit writes and remove it when the async body finishes, including errors.
+Callers still own their config fixture files and must join any async work before
+leaving the scope. These unique fixture directories are cleaned by their owners;
+remaining Foundation temporary files are discarded with the worker, not the
+launcher's root. Never change `OPENCLAW_PROFILE` inside a test: `AppProfile`
+and `AppDefaults` freeze their identity for the process. Tests needing another
+singleton identity require a fresh process. The cooperative helper does not
+isolate unrelated tests or the process from the host.
 
 ## Troubleshooting
+
+### Build fails while freezing Peekaboo sources
+
+If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
+check the `hdiutil` error on stderr. Routine image creation and attachment output stays
+quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
+Check the temporary location selected by `TMPDIR` and its filesystem or mount permissions
+before retrying. This step runs before signing; source verification and the read-only
+snapshot remain required.
 
 ### Build fails: toolchain or SDK mismatch
 

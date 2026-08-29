@@ -79,7 +79,7 @@ function readSqliteTitleProbeRange(
 }
 
 function findFirstTitleUserMessage(
-  entries: readonly SessionTranscriptMessageEvent[],
+  entries: readonly Parameters<typeof sqliteMessageEventWithSeq>[0][],
   includeInterSession: boolean,
 ): unknown {
   return entries.map(sqliteMessageEventWithSeq).find((message) => {
@@ -93,7 +93,9 @@ function findFirstTitleUserMessage(
   });
 }
 
-function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
+function findLastMessageText(
+  entries: readonly Parameters<typeof sqliteMessageEventWithSeq>[0][],
+): string | null {
   let text: string | null = null;
   entries.findLast((entry) => {
     const message = sqliteMessageEventWithSeq(entry);

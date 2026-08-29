@@ -7,6 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -110,6 +111,11 @@ const SessionsToolSchema = Type.Object(
     icon: Type.Optional(
       Type.String({
         description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
+      }),
+    ),
+    color: Type.Optional(
+      Type.String({
+        description: `Persistent sidebar color tint, one of: ${SESSION_COLOR_IDS.join(", ")}. Empty string clears it.`,
       }),
     ),
     category: Type.Optional(
@@ -504,6 +510,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
         ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
+        ...(params.color !== undefined ? { color: readClearableString(params, "color") } : {}),
         ...(params.category !== undefined
           ? { category: readClearableString(params, "category") }
           : {}),

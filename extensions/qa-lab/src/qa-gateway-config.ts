@@ -24,7 +24,8 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://localhost:43124",
 ]);
 
-export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+// External runtimes such as ACPX must be selected by the fixture that needs them.
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["memory-core"]);
 export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
@@ -130,17 +131,22 @@ export function buildQaGatewayConfig(params: {
   const pluginEntries = Object.fromEntries(
     selectedPluginIds.map((pluginId) => [
       pluginId,
-      params.forcedRuntime === "codex" && pluginId === "codex"
+      pluginId === "acpx"
         ? {
             enabled: true,
-            config: {
-              appServer: {
-                sandbox: "workspace-write",
-                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
-              },
-            },
+            config: { pluginToolsMcpBridge: true, openClawToolsMcpBridge: true },
           }
-        : { enabled: true },
+        : params.forcedRuntime === "codex" && pluginId === "codex"
+          ? {
+              enabled: true,
+              config: {
+                appServer: {
+                  sandbox: "workspace-write",
+                  ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+                },
+              },
+            }
+          : { enabled: true },
     ]),
   );
   const transportPluginEntries = Object.fromEntries(
@@ -220,13 +226,6 @@ export function buildQaGatewayConfig(params: {
         memory: "memory-core",
       },
       entries: {
-        acpx: {
-          enabled: true,
-          config: {
-            pluginToolsMcpBridge: true,
-            openClawToolsMcpBridge: true,
-          },
-        },
         "memory-core": {
           enabled: true,
         },
@@ -253,6 +252,7 @@ export function buildQaGatewayConfig(params: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
         },
+        modelPolicy: { allow: uniqueStrings([primaryModel, alternateModel]) },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,

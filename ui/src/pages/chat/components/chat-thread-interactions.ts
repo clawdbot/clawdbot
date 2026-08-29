@@ -29,6 +29,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -67,8 +68,8 @@ export type ChatThreadProps = {
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  /** Older-history pagination is active; render its auto-load sentinel. */
-  historySentinel?: boolean;
+  /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+  historyPagination?: ChatHistoryBoundaryProps;
   messages: unknown[];
   toolMessages: unknown[];
   browserTabPreviewsActive?: boolean;

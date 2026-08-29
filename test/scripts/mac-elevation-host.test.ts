@@ -17,6 +17,7 @@ import {
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { registerMacElevationArtifactTests } from "./mac-elevation-artifact.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/mac-elevation-host.sh";
@@ -34,6 +35,22 @@ function commandFixturesPath(binDir: string): string {
 function writeCommandFixture(binDir: string, command: string, contents: string): void {
   writeExecutable(path.join(binDir, command), contents);
   appendFileSync(commandFixturesPath(binDir), [`${command}() (`, contents, ")", ""].join("\n"));
+}
+
+function writeLipoFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "lipo",
+    [
+      "#!/bin/sh",
+      'if [ "$1" = -info ]; then',
+      '  printf "Architectures in the fat file: %s are: x86_64 arm64\\n" "$2"',
+      "else",
+      "  printf '%s\\n' 'x86_64 arm64'",
+      "fi",
+      "",
+    ].join("\n"),
+  );
 }
 
 function writeDiskutilFixture(binDir: string): void {
@@ -96,7 +113,7 @@ function writeShasumFixture(binDir: string): void {
       "shift 2",
       "[ \"$#\" -le 1 ] || { printf '%s\\n' 'unexpected shasum target' >&2; exit 64; }",
       "[ \"$#\" -eq 0 ] || [ -f \"$1\" ] || { printf '%s\\n' 'missing shasum target' >&2; exit 64; }",
-      'exec /sbin/sha256sum "$@"',
+      'exec /usr/bin/openssl dgst -sha256 -r "$@"',
       "",
     ].join("\n"),
   );
@@ -259,6 +276,13 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(launchAgentsDir, { recursive: true });
   writeFileSync(path.join(appPath, "Contents", "Info.plist"), "fixture", "utf8");
+  writeMockWorkerPair(path.join(appPath, "Contents", "Resources", "node-worker"), "0".repeat(40));
+  writeArtifactFileFixture(binDir);
+  writeCommandFixture(
+    binDir,
+    "stat",
+    '#!/bin/sh\n[ "$1" = -f ] && [ "$2" = "%R/" ] && [ "$3" = -- ] || exit 64\nprintf "%s/\\n" "$4"\n',
+  );
   writeFileSync(configPath, "{}\n", "utf8");
   writeFileSync(
     path.join(launchAgentsDir, "ai.openclaw.mac.elevation-host.plist"),
@@ -315,6 +339,9 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "  cdhash=TESTCDHASH",
       '  if [[ "$*" == *"--arch arm64"* ]]; then cdhash=TESTCDHASHARM64; fi',
       '  if [[ "$*" == *"--arch x86_64"* ]]; then cdhash=TESTCDHASHX8664; fi',
+      "  format='Mach-O universal (x86_64 arm64)'",
+      '  [[ ! -d "$target" ]] || format="app bundle with Mach-O universal (x86_64 arm64)"',
+      "  printf 'Format=%s\\nCodeDirectory v=20400\\n' \"$format\" >&2",
       "  printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
       "  printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
       "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
@@ -347,6 +374,8 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "  OpenClawGitCommit) printf '%040d\\n' 0 ;;",
       "  PeekabooSourceCommit) printf '%040d\\n' 1 ;;",
       "  CFBundleShortVersionString) printf '%s\\n' '4.2.0' ;;",
+      "  OpenClawBuildTimestamp) printf '%s\\n' '2026-08-28T00:00:00Z' ;;",
+      "  OpenClawWorkerBuildID) printf '%s\\n' 'fixture-build' ;;",
       '  ProgramArguments) printf \'["%s/Contents/MacOS/OpenClaw","--elevation-host"]\\n\' "$TEST_APP_PATH" ;;',
       "  EnvironmentVariables.OPENCLAW_STATE_DIR) printf '%s\\n' \"$TEST_STATE_DIR\" ;;",
       "  EnvironmentVariables.OPENCLAW_CONFIG_PATH) printf '%s\\n' \"$TEST_CONFIG_PATH\" ;;",
@@ -356,7 +385,7 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "",
     ].join("\n"),
   );
-  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeLipoFixture(binDir);
   writeCommandFixture(binDir, "pgrep", "#!/bin/sh\nexit 1\n");
   writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
   writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
@@ -668,6 +697,54 @@ function addRunningAppFixture(harness: ReturnType<typeof createMigrationPlanHarn
   );
 }
 
+function writeMockWorkerPair(root: string, sourceCommit: string): void {
+  for (const arch of ["arm64", "x86_64"]) {
+    const worker = path.join(root, arch);
+    const dist = path.join(worker, "lib", "node_modules", "openclaw", "dist");
+    mkdirSync(path.join(worker, "bin"), { recursive: true });
+    mkdirSync(dist, { recursive: true });
+    writeExecutable(path.join(worker, "bin", "node"), "fixture-node");
+    writeFileSync(path.join(dist, "entry.js"), "fixture-entry");
+    writeFileSync(
+      path.join(dist, "build-info.json"),
+      JSON.stringify({
+        version: "4.2.0",
+        commit: sourceCommit,
+        builtAt: "2026-08-28T00:00:00Z",
+        buildId: "fixture-build",
+      }),
+    );
+  }
+}
+
+function writeArtifactFileFixture(binDir: string): void {
+  writeCommandFixture(
+    binDir,
+    "file",
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'if [ "${1:-} ${2:-} ${3:-} ${4:-} ${5:-} ${6:-}" = "-E -N -r -0 -0 --" ]; then',
+      "  framed=1; shift 6",
+      'elif [ "$#" -eq 3 ] && [ "$1 $2" = "-b -E" ]; then',
+      "  framed=0; shift 2",
+      "else exit 64; fi",
+      '[ "$#" -gt 0 ] || exit 64',
+      'for target in "$@"; do',
+      'case "$target" in',
+      "  */Contents/MacOS/OpenClaw|*/Contents/MacOS/openclaw-mlx-tts|*/node-worker/arm64/bin/node|*/node-worker/x86_64/bin/node)",
+      "    description='Mach-O universal binary' ;;",
+      "  *) description=data ;;",
+      "esac",
+      'if [ "$framed" -eq 1 ]; then',
+      '  printf \'%s\\0%s\\0\' "$target" "$description"',
+      "else printf '%s\\n' \"$description\"; fi",
+      "done",
+      "",
+    ].join("\n"),
+  );
+}
+
 function createArtifactVerificationHarness() {
   const tempRoot = tempDirs.make("openclaw-elevation-artifact-");
   const binDir = path.join(tempRoot, "bin");
@@ -679,6 +756,8 @@ function createArtifactVerificationHarness() {
   const peekabooCommit = "b".repeat(40);
   const entitlements = "<plist><dict/></plist>\n";
   mkdirSync(binDir, { recursive: true });
+  const workers = path.join(tempRoot, "worker-pair");
+  writeMockWorkerPair(workers, sourceCommit);
   writeShasumFixture(binDir);
   writeFileSync(archivePath, "not-a-real-zip-but-deterministic", "utf8");
   writeExecutable(installerPath, readFileSync(scriptPath, "utf8"));
@@ -696,11 +775,15 @@ function createArtifactVerificationHarness() {
       'destination="${4}"',
       'app="$destination/OpenClaw.app"',
       'mkdir -p "$app/Contents/MacOS"',
+      'mkdir -p "$app/Contents/Resources"',
+      'cp -R "$TEST_ARTIFACT_WORKERS" "$app/Contents/Resources/node-worker"',
       'printf \'%s\\n\' \'<?xml version="1.0" encoding="UTF-8"?>\' \'<plist version="1.0"><dict>\' >"$app/Contents/Info.plist"',
       "printf '%s\\n' '<key>CFBundleIdentifier</key><string>ai.openclaw.mac</string>' >>\"$app/Contents/Info.plist\"",
       `printf '%s\\n' '<key>OpenClawGitCommit</key><string>${sourceCommit}</string>' >>"$app/Contents/Info.plist"`,
       `printf '%s\\n' '<key>PeekabooSourceCommit</key><string>${peekabooCommit}</string>' >>"$app/Contents/Info.plist"`,
       "printf '%s\\n' '<key>CFBundleShortVersionString</key><string>4.2.0</string>' '<key>CFBundleVersion</key><string>420</string>' '</dict></plist>' >>\"$app/Contents/Info.plist\"",
+      'plutil -insert OpenClawBuildTimestamp -string 2026-08-28T00:00:00Z "$app/Contents/Info.plist"',
+      'plutil -insert OpenClawWorkerBuildID -string fixture-build "$app/Contents/Info.plist"',
       "cat >\"$app/Contents/MacOS/OpenClaw\" <<'APP_HELPER'",
       "#!/bin/sh",
       'if [ "${1:-}" = "--elevation-sync-file" ] && [ "${TEST_KILL_AFTER_PENDING_RECEIPT:-0}" = "1" ] && [ ! -e "$TEST_PENDING_KILL_MARKER" ] && echo "${2:-}" | grep -q \'elevation-host-install[.]pending[.]json$\'; then',
@@ -830,6 +913,9 @@ function createArtifactVerificationHarness() {
       '  if [[ "${TEST_FINAL_CDHASH_MISMATCH:-0}" == "1" && "$target" == "${TEST_INSTALLED_APP_PATH:-}" && "$*" == *"--arch x86_64"* && -f "${TEST_LAUNCH_STATE_FILE:-}" && "$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")" == "elevation-loaded" ]]; then',
       "    cdhash=FINALMISMATCHX8664",
       "  fi",
+      "  format='Mach-O universal (x86_64 arm64)'",
+      '  [[ ! -d "$target" ]] || format="app bundle with Mach-O universal (x86_64 arm64)"',
+      "  printf 'Format=%s\\nCodeDirectory v=20400\\n' \"$format\" >&2",
       "  printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
       "  printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
       "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
@@ -838,22 +924,8 @@ function createArtifactVerificationHarness() {
       "",
     ].join("\n"),
   );
-  writeCommandFixture(
-    binDir,
-    "file",
-    [
-      "#!/bin/sh",
-      "set -eu",
-      '[ "$#" -eq 1 ] || exit 64',
-      'case "$1" in',
-      "  */Contents/MacOS/OpenClaw|*/Contents/MacOS/openclaw-mlx-tts)",
-      "    printf '%s\\n' \"$1: Mach-O universal binary\" ;;",
-      "  *) printf '%s\\n' \"$1: data\" ;;",
-      "esac",
-      "",
-    ].join("\n"),
-  );
-  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeArtifactFileFixture(binDir);
+  writeLipoFixture(binDir);
   writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
   writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
   const receipt = {
@@ -891,6 +963,7 @@ function createArtifactVerificationHarness() {
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_DITTO_MARKER: dittoMarker,
+      TEST_ARTIFACT_WORKERS: workers,
       TEST_FIXTURE_ROOT: tempRoot,
       TMPDIR: tempRoot,
     },
@@ -1393,7 +1466,118 @@ function createInstallRollbackHarness(
   };
 }
 
+registerMacElevationArtifactTests();
+
+function createCodesignMetadataProbe() {
+  const root = tempDirs.make("openclaw-elevation-metadata-probe-");
+  const source = readFileSync(scriptPath, "utf8");
+  const helpers = source.slice(
+    source.indexOf("codesign_metadata_value() {"),
+    source.indexOf("entitlements_for() {"),
+  );
+  const probe = path.join(root, "probe.bash");
+  const metadata = path.join(root, "metadata");
+  writeFileSync(
+    probe,
+    `set -euo pipefail\n${helpers}\nif [[ -f "$HOME/metadata" ]]; then codesign() { cat "$HOME/metadata"; }; fi\ncodesign_value_for_arch "$1" "$2" "$3"\n`,
+  );
+  return {
+    root,
+    metadata,
+    run(target: string, key: string, arch: string) {
+      return spawnSync("/bin/bash", [probe, target, key, arch], {
+        encoding: "utf8",
+        env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" },
+        timeout: 20_000,
+      });
+    },
+  };
+}
+
 describe("mac elevation host command contract", () => {
+  it.skipIf(process.platform !== "darwin")(
+    "reads genuine codesign metadata despite filename newlines using real Apple-signed bytes",
+    () => {
+      const probe = createCodesignMetadataProbe();
+      const bytes = readFileSync("/usr/bin/true");
+      const control = path.join(probe.root, "control");
+      const injected = path.join(
+        probe.root,
+        "injected\nFormat=Mach-O thin (fake)\nCodeDirectory v=20400\nAuthority=Fake\nTeamIdentifier=Fake\nCDHash=Fake\n",
+      );
+      writeFileSync(control, bytes);
+      writeFileSync(injected, bytes);
+      const architectures = spawnSync("/usr/bin/lipo", ["-archs", control], {
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+      expect(architectures.status, architectures.stderr).toBe(0);
+      for (const arch of architectures.stdout.trim().split(/\s+/)) {
+        for (const key of ["Format", "Authority", "TeamIdentifier", "CDHash"]) {
+          const normal = probe.run(control, key, arch);
+          const renamed = probe.run(injected, key, arch);
+          expect(normal.status, normal.stderr).toBe(0);
+          expect(normal.stdout.trim(), `${arch} ${key}`).not.toBe("");
+          expect(renamed.status, renamed.stderr).toBe(0);
+          expect(renamed.stdout, `${arch} ${key}`).toBe(normal.stdout);
+        }
+      }
+      expect(readFileSync(control)).toEqual(bytes);
+      expect(readFileSync(injected)).toEqual(bytes);
+    },
+  );
+
+  it.each(
+    ["arm64", "x86_64"].flatMap((arch) =>
+      (["Authority", "TeamIdentifier", "CDHash", "Format"] as const).flatMap((key) =>
+        ["present", "bundle", "missing", "generic", "missing-directory"].map((kind) => ({
+          arch,
+          key,
+          kind,
+        })),
+      ),
+    ),
+  )("reads scoped codesign metadata $arch $key ($kind)", ({ arch, key, kind }) => {
+    const probe = createCodesignMetadataProbe();
+    const fields = {
+      Format: `${kind === "bundle" ? "app bundle with " : ""}Mach-O thin (${arch})`,
+      Authority: "Real=Leaf",
+      TeamIdentifier: "REALTEAM",
+      CDHash: `REAL-${arch}`,
+    };
+    const genuine = [
+      "Identifier=real",
+      ...(kind === "missing" && key === "Format"
+        ? []
+        : [`Format=${kind === "generic" ? "generic" : fields.Format}`]),
+      ...(kind === "missing-directory"
+        ? []
+        : ["CodeDirectory v=20400 size=231 flags=0x0(none) hashes=2+2 location=embedded"]),
+      ...(["Authority", "TeamIdentifier", "CDHash"] as const).flatMap((name) =>
+        kind === "missing" && key === name ? [] : [`${name}=${fields[name]}`],
+      ),
+      ...(key === "Authority" && kind === "missing" ? [] : ["Authority=Issuer"]),
+    ];
+    writeFileSync(
+      probe.metadata,
+      [
+        "Executable=filename\nFormat=Mach-O thin (fake)\nCodeDirectory v=20400",
+        "Authority=Injected\nTeamIdentifier=Injected\nCDHash=Injected",
+        ...genuine,
+        "",
+      ].join("\n"),
+    );
+    const result = probe.run("unused", key, arch);
+    expect(result.error).toBeUndefined();
+    if (kind === "present" || kind === "bundle") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(fields[key]);
+    } else {
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+    }
+  });
+
   it("reads complete codesign metadata without SIGPIPE and preserves codesign failure", () => {
     const root = tempDirs.make("openclaw-elevation-codesign-metadata-");
     const binDir = path.join(root, "bin");
@@ -1406,6 +1590,7 @@ describe("mac elevation host command contract", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
+        "printf '%s\\n' 'Format=app bundle with Mach-O universal (x86_64 arm64)' 'CodeDirectory v=20400' >&2",
         "printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
         "printf '%s\\n' 'Authority=Developer ID Certification Authority' >&2",
         "printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
@@ -1452,9 +1637,10 @@ describe("mac elevation host command contract", () => {
   });
 
   it("documents package and transactional lifecycle commands without probing macOS", () => {
-    const result = spawnSync("bash", [scriptPath, "--help"], {
+    const result = spawnSync("/bin/bash", [scriptPath, "--help"], {
       cwd: process.cwd(),
       encoding: "utf8",
+      env: { HOME: tempDirs.make("openclaw-elevation-help-"), PATH: "/usr/bin:/bin" },
     });
 
     expect(result.status).toBe(0);
@@ -2490,57 +2676,50 @@ describe("mac elevation host command contract", () => {
     },
   );
 
-  it.skipIf(process.platform !== "darwin")(
-    "recovers a persisted install killed after migration custody",
-    () => {
-      const harness = createInstallRollbackHarness({ killAfterInitialMigrationCustody: true });
+  it
+    .skipIf(process.platform !== "darwin")
+    .each(
+      (["killAfterInitialMigrationCustody", "killAfterPendingReceipt"] as const).flatMap(
+        (killPoint) =>
+          (["valid", "arm64", "x86_64"] as const).map((identity) => ({ killPoint, identity })),
+      ),
+    )(
+    "binds $killPoint recovery to the recorded prior app ($identity)",
+    ({ killPoint, identity }) => {
+      const harness = createInstallRollbackHarness({ [killPoint]: true });
       const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
-      const installArgs = [
-        "install",
-        "--archive",
-        harness.archivePath,
-        "--receipt",
-        harness.receiptPath,
-        ...receiptDigestArgs(harness.receiptPath),
-        "--app",
-        harness.appPath,
-        "--migrate-launch-agent",
-        harness.sourcePlist,
-      ];
-      const interrupted = runInstaller(harness.installerPath, installArgs, harness.env);
-      expect(interrupted.signal).toBe("SIGKILL");
-      expect(existsSync(harness.sourcePlist)).toBe(false);
-      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.pending.json"))).toBe(
-        true,
-      );
-
-      const recovered = runAuthenticatedElevationRecovery(harness);
-      expect(recovered.status, recovered.stderr).toBe(0);
-      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
-        oldBinary,
-      );
-      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.pending.json"))).toBe(
-        false,
-      );
-    },
-  );
-
-  it.skipIf(process.platform !== "darwin")(
-    "recovers on the first attempt when killed immediately after publishing the prepared receipt",
-    () => {
-      const harness = createInstallRollbackHarness({ killAfterPendingReceipt: true });
-      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const pendingPath = path.join(harness.stateDir, "elevation-host-install.pending.json");
       const interrupted = runAuthenticatedMigrationInstall(harness);
       expect(interrupted.signal).toBe("SIGKILL");
-      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(existsSync(harness.sourcePlist)).toBe(killPoint === "killAfterPendingReceipt");
+      expect(existsSync(pendingPath)).toBe(true);
+      expect(existsSync(path.join(harness.appPath, "Contents", "Resources", "node-worker"))).toBe(
+        false,
+      );
+      if (identity !== "valid") {
+        const pending = JSON.parse(readFileSync(pendingPath, "utf8")) as {
+          backupCDHashes: Record<"arm64" | "x86_64", string>;
+        };
+        pending.backupCDHashes[identity] = "0".repeat(40);
+        writeFileSync(pendingPath, JSON.stringify(pending));
+      }
 
       const recovered = runAuthenticatedElevationRecovery(harness);
-      expect(recovered.status, recovered.stderr).toBe(0);
+      expect(recovered.status, recovered.stderr).toBe(identity === "valid" ? 0 : 1);
+      if (identity !== "valid") {
+        expect(recovered.stderr).toContain(
+          "receipt app backup is missing, symlinked, or not a bundle directory",
+        );
+      }
       expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
         oldBinary,
       );
-      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      const sourceRestored = identity === "valid" || killPoint === "killAfterPendingReceipt";
+      expect(existsSync(harness.sourcePlist)).toBe(sourceRestored);
+      if (sourceRestored) {
+        expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      }
+      expect(existsSync(pendingPath)).toBe(identity !== "valid");
     },
   );
 
@@ -4203,7 +4382,6 @@ describe("mac elevation host command contract", () => {
     expect(script).not.toContain("--elevation-installer");
     expect(script).toContain("notarizationId");
     expect(script).toContain("entitlementsSha256");
-    expect(script).toContain("elevation archive root must contain exactly OpenClaw.app");
     expect(script).toContain("codesign --verify --strict --test-requirement='=notarized'");
     expect(script).toContain('spctl --assess --type execute "$app"');
   });
