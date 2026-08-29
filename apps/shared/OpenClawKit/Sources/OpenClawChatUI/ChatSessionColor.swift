@@ -79,7 +79,7 @@ public struct OpenClawSessionColorDot: View {
             Circle()
                 .fill(color.tint(in: self.colorScheme))
                 .frame(width: 7, height: 7)
-                .accessibilityLabel(String(localized: "Session color: \(color.label)"))
+                .accessibilityLabel(String(localized: "Session color") + ": " + color.label)
         }
     }
 }
