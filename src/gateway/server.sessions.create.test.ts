@@ -167,6 +167,7 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 let gitWorkspaceTemplateRoot: string;
 let gitWorkspaceTemplate: string;
 
@@ -2901,29 +2902,39 @@ test("sessions.create rejects a regular-file Gateway cwd before creating session
   }
 });
 
-test("sessions.create allows a write-scoped cwd inside the configured workspace", async () => {
-  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
-  const cwd = path.join(workspace, "packages", "app");
-  await fs.mkdir(cwd, { recursive: true });
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  const { ws } = await openClient({
-    scopes: ["operator.write"],
-    deviceIdentityPath: path.join(workspace, "write-cwd-device.json"),
-  });
-  try {
-    const created = await rpcReq<{
-      entry?: { sessionRoot?: string; spawnedCwd?: string };
-    }>(ws, "sessions.create", { cwd });
+test.each(["operator.admin", "operator.write"])(
+  "sessions.create canonicalizes sandbox workspace aliases for %s",
+  async (scope) => {
+    const root = tempDirs.make("openclaw-session-cwd-workspace-");
+    const workspace = path.join(root, "workspace");
+    const alias = path.join(root, "alias");
+    const cwd = path.join(workspace, "packages", "app");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.symlink(workspace, alias, directoryLinkType);
+    testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient({
+      scopes: [scope],
+      deviceIdentityPath: path.join(root, "cwd-device.json"),
+    });
+    try {
+      const key = "agent:main:dashboard:canonical-cwd";
+      const created = await rpcReq<{
+        entry?: { sessionRoot?: string; spawnedCwd?: string };
+      }>(ws, "sessions.create", { key, cwd });
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.entry?.spawnedCwd).toBe(cwd);
-    expect(created.payload?.entry?.sessionRoot).toBe(cwd);
-  } finally {
-    ws.close();
-    testState.agentConfig = undefined;
-  }
-});
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.entry).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+        sessionRoot: cwd,
+        spawnedCwd: cwd,
+      });
+    } finally {
+      ws.close();
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test("sessions.create records the selected agent workspace when cwd is omitted", async () => {
   const workspace = tempDirs.make("openclaw-session-default-root-");
@@ -3034,43 +3045,42 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
   });
 });
 
-test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
-  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
-  try {
-    const created = await directSessionReq(
-      "sessions.create",
-      { cwd: "/tmp/outside" },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "sessions.create cwd is outside the sandboxed agent workspace",
+test.each(["direct path", "symlink escape"])(
+  "sessions.create rejects sandboxed admin cwd via %s without creating a session",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-session-sandbox-workspace-");
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await fs.mkdir(workspace);
+    await fs.mkdir(outside);
+    const link = path.join(workspace, "escape");
+    await fs.symlink(outside, link, directoryLinkType);
+    testState.agentConfig = { workspace, sandbox: { mode: "all" } };
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient({
+      scopes: ["operator.admin"],
+      deviceIdentityPath: path.join(root, "admin-device.json"),
     });
-  } finally {
-    testState.agentConfig = undefined;
-  }
-});
-
-test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
-  const workspace = tempDirs.make("openclaw-session-sandbox-workspace-");
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  try {
-    const cwd = path.join(workspace, "packages", "app");
-    await fs.mkdir(cwd, { recursive: true });
-    const created = await directSessionReq(
-      "sessions.create",
-      { cwd },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(true);
-    expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
-  } finally {
-    testState.agentConfig = undefined;
-  }
-});
+    try {
+      const key = "agent:main:dashboard:denied-cwd";
+      const created = await rpcReq(ws, "sessions.create", {
+        key,
+        cwd: kind === "direct path" ? outside : link,
+      });
+      expect(created).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "sessions.create cwd is outside the sandboxed agent workspace",
+        },
+      });
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+    } finally {
+      ws.close();
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
   const openClawState = await createOpenClawTestState({

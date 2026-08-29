@@ -93,14 +93,13 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
       const parentSelector = key.slice(0, scopedSeparator).trim();
       const dependencyName = key.slice(scopedSeparator + 1).trim();
       if (parentSelector && dependencyName) {
-        const current = normalized[parentSelector];
-        const nested = isRecord(current) ? current : {};
-        nested[dependencyName] = normalizeOverrideValue(value);
-        normalized[parentSelector] = nested;
+        mergeOverrideEntry(normalized, parentSelector, {
+          [dependencyName]: normalizeOverrideValue(value),
+        });
         continue;
       }
     }
-    normalized[key] = normalizeOverrideValue(value);
+    mergeOverrideEntry(normalized, key, normalizeOverrideValue(value));
   }
   return normalized;
 }
@@ -428,35 +427,26 @@ function mergeOverrideEntry(merged: OverrideMap, name: string, spec: unknown): v
     merged[name] = spec;
     return;
   }
-  if (isRecord(current) && isRecord(spec)) {
-    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
-      mergeOverrideEntry(current, nestedName, nestedSpec);
-    }
-    return;
-  }
-  if (
-    typeof current === "string" &&
-    isRecord(spec) &&
-    typeof spec["."] === "string" &&
-    exactOverrideVersionsMatch(current, spec["."])
-  ) {
-    const mergedEntry = { ".": preferredExactOverrideRootSpec(current, spec["."]) };
-    merged[name] = mergedEntry;
-    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
-      if (nestedName === ".") {
-        continue;
+  if (isRecord(current) || isRecord(spec)) {
+    // npm's scalar shorthand constrains the package itself, not its children.
+    // Promote it to "." so either input order retains both policies.
+    const currentObject = typeof current === "string" ? { ".": current } : current;
+    const incomingObject = typeof spec === "string" ? { ".": spec } : spec;
+    if (isRecord(currentObject) && isRecord(incomingObject)) {
+      merged[name] = currentObject;
+      for (const [nestedName, nestedSpec] of Object.entries(incomingObject)) {
+        mergeOverrideEntry(currentObject, nestedName, nestedSpec);
       }
-      mergeOverrideEntry(mergedEntry, nestedName, nestedSpec);
+      return;
     }
-    return;
   }
   if (
-    isRecord(current) &&
+    name === "." &&
+    typeof current === "string" &&
     typeof spec === "string" &&
-    typeof current["."] === "string" &&
-    exactOverrideVersionsMatch(current["."], spec)
+    exactOverrideVersionsMatch(current, spec)
   ) {
-    current["."] = preferredExactOverrideRootSpec(current["."], spec);
+    merged[name] = preferredExactOverrideRootSpec(current, spec);
     return;
   }
   if (JSON.stringify(current) !== JSON.stringify(spec)) {
