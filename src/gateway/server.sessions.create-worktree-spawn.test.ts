@@ -7,11 +7,19 @@ import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/inde
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { onAgentEvent } from "../infra/agent-events.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import {
+  getSessionWorkAdmissionRelease,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { chatHandlers } from "./server-methods/chat.js";
-import { testState } from "./test-helpers.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -125,19 +133,6 @@ test("trusted same-agent worktree spawns inherit the parent's selected project",
   await expect(fs.stat(path.join(childPath, "setup-marker.txt"))).rejects.toThrow();
 });
 
-test("trusted visible spawns retain the inherited repository for deferred first-turn preparation", async () => {
-  vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "initial turn unavailable"));
-  });
-  const key = "agent:main:dashboard:pending-project-child";
-  const created = await createChild({ key, task: "Read README.md" });
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-  expect(child?.pendingWorktree?.workspace).toBe(repository);
-  expect(child?.parentSessionId).toBe(parent.sessionId);
-  expect(child?.worktree).toBeUndefined();
-});
-
 test.each(["cwd", "project", "cross-agent"] as const)(
   "trusted worktree spawns preserve %s source selection",
   async (selection) => {
@@ -206,3 +201,144 @@ test("trusted worktree spawns roll back when the parent changes during preparati
   expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });
+
+test.each(["archive", "replace", "rebind", "stale-child"] as const)(
+  "deferred worktree preparation follows its child owner after %s",
+  async (change) => {
+    const { chatHandlers } = await import("./server-methods/chat.js");
+    const initialSend = vi
+      .spyOn(chatHandlers, "chat.send")
+      .mockImplementation(async ({ respond }) => {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "initial turn unavailable"));
+      });
+    const key = `agent:main:dashboard:deferred-${change}`;
+    const created = await createChild({ key, task: "Read README.md" });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const acceptedChild = loadSessionEntry({ agentId: "main", sessionKey: key, storePath })!;
+    expect(acceptedChild.pendingWorktree?.workspace).toBe(repository);
+    initialSend.mockRestore();
+    const context = {
+      broadcast: vi.fn(),
+      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+      dedupe: new Map(),
+    };
+    const operator = {
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "dev",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        },
+      } as never,
+      context,
+    };
+    if (change === "archive") {
+      const archived = await directSessionReq(
+        "sessions.patch",
+        {
+          key: parentKey,
+          archived: true,
+          expectedSessionId: parent.sessionId,
+        },
+        operator,
+      );
+      expect(archived.ok, JSON.stringify(archived.error)).toBe(true);
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath })?.archivedAt,
+      ).toBeDefined();
+    } else if (change === "replace" || change === "rebind") {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parentKey, storePath },
+        {
+          ...parent,
+          ...(change === "replace"
+            ? { sessionId: "replacement-parent" }
+            : {
+                worktree: { ...parent.worktree!, id: "replacement-parent-worktree" },
+              }),
+        },
+      );
+    }
+    dispatchInboundMessageMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    const resolveRepository = vi.spyOn(managedWorktrees, "resolveRepositoryPaths");
+    const createWorktree = vi.spyOn(managedWorktrees, "create");
+    let replaced = false;
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        change === "stale-child" &&
+        !replaced &&
+        event.sessionKey === key &&
+        event.data.phase === "preparing_workspace"
+      ) {
+        replaced = true;
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: key, storePath },
+          {
+            ...acceptedChild,
+            sessionId: "replacement-child",
+          },
+        );
+      }
+    });
+    try {
+      const retried = await directSessionReq(
+        "chat.send",
+        {
+          agentId: "main",
+          sessionKey: key,
+          message: "Continue the accepted task",
+          idempotencyKey: `retry-deferred-${change}`,
+        },
+        operator,
+      );
+      expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
+      const targets = [...context.chatAbortControllers].map(([runId, entry]) => ({ runId, entry }));
+      const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+      expect(
+        await waitForChatAbortControllerRemoval({
+          entries: context.chatAbortControllers,
+          targets,
+          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        }),
+      ).toBe(true);
+      if (released) {
+        await withTimeout(
+          released,
+          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          "deferred workspace proof",
+        );
+      }
+      const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath })!;
+      if (change === "stale-child") {
+        expect(replaced).toBe(true);
+        expect(resolveRepository).not.toHaveBeenCalled();
+        expect(createWorktree).not.toHaveBeenCalled();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(child.sessionId).toBe("replacement-child");
+        expect(child.worktree).toBeUndefined();
+      } else {
+        expect(child.sessionId).toBe(acceptedChild.sessionId);
+        expect(child.parentSessionId).toBe(parent.sessionId);
+        expect(child.pendingWorktree).toBeUndefined();
+        expect(child.worktree?.repoRoot).toBe(repository);
+        const owned = managedWorktrees.findLiveByOwner("session", key)!;
+        expect(owned.id).toBe(child.worktree?.id);
+        expect(await fs.readFile(path.join(owned.path, "README.md"), "utf8")).toBe(
+          "selected-project\n",
+        );
+        await expect(fs.stat(path.join(owned.path, "setup-marker.txt"))).rejects.toThrow();
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      }
+    } finally {
+      unsubscribe();
+      dispatchInboundMessageMock.mockReset();
+    }
+  },
+);

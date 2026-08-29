@@ -80,8 +80,8 @@ function resolveSpawnParentWorktreeSource(
     throw new Error("Spawn parent managed worktree changed; retry from its current session");
   }
   const parentSessionId = parent.entry.sessionId;
-  // A copied parent key cannot lend a repository after its exact session or
-  // registered worktree changes, including during awaited preparation.
+  // Validate the inherited source through the child creation commit. After that,
+  // persisted workspace intent belongs to the child and uses its admitted run.
   const assertCurrent = () => {
     assertCallerCurrent?.();
     const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
