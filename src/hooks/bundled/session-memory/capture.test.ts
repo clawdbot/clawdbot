@@ -36,28 +36,48 @@ describe("session memory capture", () => {
     return captureSessionMemoryTranscript(scope, undefined);
   }
 
-  it.each([false, true])("respects an earlier reset (preserve tail: %s)", async (preserve) => {
-    await accessor.replaceTranscriptEvents(scope, [
-      message("closed", null, "user"),
-      message("kept", "closed", "user"),
-      message("answer", "kept", "assistant"),
-      message("tool", "answer", "toolResult"),
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "tool",
-        ...(preserve ? { firstKeptEntryId: "kept" } : {}),
-      },
-      message("current", "reset", "user"),
-    ]);
-    const expected = {
-      status: "available",
-      originClass: "untrusted",
-      content: preserve ? 'user: "kept"\nassistant: "answer"\nuser: "current"' : 'user: "current"',
-    };
-    expect(await captureReady()).toEqual(expected);
-    expect(captureDuringRepair()).toEqual(expected);
-  });
+  it.each(
+    [false, true].flatMap((preserve) =>
+      [false, true].map((compacted) => ({ preserve, compacted })),
+    ),
+  )(
+    "respects an earlier reset (preserve: $preserve, compacted: $compacted)",
+    async ({ preserve, compacted }) => {
+      await accessor.replaceTranscriptEvents(scope, [
+        message("closed", null, "user"),
+        message("kept", "closed", "user"),
+        message("answer", "kept", "assistant"),
+        message("tool", "answer", "toolResult"),
+        {
+          type: "reset",
+          id: "reset",
+          parentId: "tool",
+          ...(preserve ? { firstKeptEntryId: "kept" } : {}),
+        },
+        ...(compacted
+          ? [
+              {
+                type: "compaction",
+                id: "compact",
+                parentId: "reset",
+                firstKeptEntryId: "kept",
+                summary: "earlier summary",
+              },
+            ]
+          : []),
+        message("current", compacted ? "compact" : "reset", "user"),
+      ]);
+      const expected = {
+        status: "available",
+        originClass: "untrusted",
+        content: preserve
+          ? 'user: "kept"\nassistant: "answer"\nuser: "current"'
+          : 'user: "current"',
+      };
+      expect(await captureReady()).toEqual(expected);
+      expect(captureDuringRepair()).toEqual(expected);
+    },
+  );
 
   it("spans compaction and selects the explicit branch without changing provenance", async () => {
     await accessor.replaceTranscriptEvents(scope, [
