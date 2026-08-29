@@ -396,6 +396,19 @@ async function repairMissingPluginInstallsWithLease(
       const versionBoundRuntimePluginIds = new Set(Object.keys(versionBoundToCoreSpecOverrides));
       for (const outcome of updateResult.outcomes) {
         if (outcome.status === "updated" || outcome.status === "unchanged") {
+          const retainedInstallPath = retainedDependencyRepairInstallPaths.get(outcome.pluginId);
+          const acceptedInstallPath = acceptedUpdateRecords[outcome.pluginId]?.installPath?.trim();
+          if (
+            retainedInstallPath &&
+            (!acceptedInstallPath ||
+              installPathsEqual(
+                resolveUserPath(acceptedInstallPath, env),
+                resolveUserPath(retainedInstallPath, env),
+              ))
+          ) {
+            recordFailure(outcome.pluginId, [freshGenerationFailure(outcome.pluginId)]);
+            continue;
+          }
           if (versionBoundRuntimePluginIds.has(outcome.pluginId)) {
             const accepted = await acceptVersionBoundRuntimeRecord({
               pluginId: outcome.pluginId,
