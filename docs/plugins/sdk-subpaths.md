@@ -25,9 +25,12 @@ inventory of every internal runtime helper. Four files define the boundary:
 
 After changing the entrypoint inventories, run `pnpm plugin-sdk:sync-exports`,
 then `pnpm plugin-sdk:check-exports`. The same registration command maintains
-package exports and private workspace declaration aliases in
+package exports, private artifact exclusions in `package.json`'s `files`, and
+private workspace declaration aliases in
 `extensions/tsconfig.package-boundary.paths.json` and `extensions/xai/tsconfig.json`.
-It preserves unrelated mappings and XAI's intentional private-alias omissions.
+It owns only exact flat `!dist/plugin-sdk/<name>.js` and `.d.ts` exclusions with
+lowercase alphanumeric or hyphenated names, preserving other file rules and their
+order, unrelated mappings, and XAI's intentional private-alias omissions.
 These local declaration aliases do not add types to JavaScript-only published
 SDK exports; test-only entries remain unexported.
 

@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -17,6 +19,17 @@ const outputFiles = [
 ];
 const entryList = "scripts/lib/plugin-sdk-entrypoints.json";
 const privateList = "scripts/lib/plugin-sdk-private-local-only-subpaths.json";
+const fixtureFiles = [
+  "dist/",
+  "assets/",
+  "!assets/internal.txt",
+  "!dist/plugin-sdk/nested/internal.d.ts",
+  "!dist/plugin-sdk/owner-*.js",
+  "!dist/**/*.map",
+  "!dist/plugin-sdk/.tsbuildinfo",
+  "!dist/plugin-sdk/qa-lab.*",
+  "!dist/plugin-sdk/owner_entry.d.ts",
+];
 
 function writeJson(root: string, file: string, value: unknown) {
   fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -36,8 +49,8 @@ function readOutputs(root: string) {
   return outputFiles.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
 }
 
-function readPackageExports(root: string): Record<string, unknown> {
-  return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).exports;
+function readPackage(root: string): { exports: Record<string, unknown>; files: string[] } {
+  return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 }
 
 function createFixture(inventory?: { entries: string[]; privateEntries: string[] }) {
@@ -58,7 +71,13 @@ function createFixture(inventory?: { entries: string[]; privateEntries: string[]
   if (inventory) {
     writeJson(root, entryList, inventory.entries);
     writeJson(root, privateList, inventory.privateEntries);
-    writeJson(root, "package.json", { type: "module", exports: { ".": "./index.js" } });
+    writeJson(root, "package.json", {
+      name: "sdk-registration-fixture",
+      version: "1.0.0",
+      type: "module",
+      exports: { ".": "./index.js" },
+      files: fixtureFiles,
+    });
     writeJson(root, "packages/plugin-sdk/package.json", { exports: {} });
     for (const { file, prefix } of declarationConfigs) {
       writeJson(root, file, {
@@ -101,6 +120,36 @@ function runSync(root: string, ...args: string[]) {
 }
 
 describe("plugin SDK registration CLI", () => {
+  it("detects files-only drift without writing, repairs it and stays byte-idempotent", () => {
+    const root = createFixture();
+    const original = readOutputs(root);
+    expect(runSync(root).status).toBe(0);
+    expect(readOutputs(root)).toEqual(original);
+    const manifest = readPackage(root);
+    const exclusion = "!dist/plugin-sdk/gateway-config-runtime.d.ts";
+    manifest.files = manifest.files.filter((file) => file !== exclusion);
+    writeJson(root, "package.json", manifest);
+    const before = readOutputs(root);
+
+    const result = runSync(root, "--check");
+
+    expect(readOutputs(root)).toEqual(before);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("package.json out of sync");
+    expect(result.stderr).toContain("pnpm plugin-sdk:sync-exports");
+    expect(result.stdout).not.toContain("synced");
+    for (const file of outputFiles.slice(1)) {
+      expect(result.stderr).not.toContain(file);
+    }
+    expect(runSync(root).status).toBe(0);
+    expect(readPackage(root)).toEqual({ ...manifest, files: [...manifest.files, exclusion] });
+    expect(readOutputs(root).slice(1)).toEqual(before.slice(1));
+    const synced = readOutputs(root);
+    expect(runSync(root).status).toBe(0);
+    expect(runSync(root, "--check").status).toBe(0);
+    expect(readOutputs(root)).toEqual(synced);
+  });
+
   it.each(declarationConfigs)("checks $file independently without writing", ({ file }) => {
     const root = createFixture();
     const config = readConfig(root, file);
@@ -157,10 +206,50 @@ describe("plugin SDK registration CLI", () => {
       entries: ["public-entry", "private-entry", "test-fixtures"],
       privateEntries: ["private-entry", "test-fixtures", "qa-lab"],
     });
+    const included = [
+      "assets/public.txt",
+      "dist/plugin-sdk/nested/public.d.ts",
+      "dist/plugin-sdk/owner-extra.d.ts",
+      "dist/plugin-sdk/public-entry.js",
+      "dist/plugin-sdk/public-entry.d.ts",
+      "dist/plugin-sdk/private-entry.js",
+    ];
+    const excluded = [
+      "assets/internal.txt",
+      "dist/plugin-sdk/nested/internal.d.ts",
+      "dist/plugin-sdk/owner-extra.js",
+      "dist/plugin-sdk/public-entry.js.map",
+      "dist/plugin-sdk/.tsbuildinfo",
+      "dist/plugin-sdk/qa-lab.js",
+      "dist/plugin-sdk/owner_entry.d.ts",
+      "dist/plugin-sdk/private-entry.d.ts",
+      "dist/plugin-sdk/test-fixtures.js",
+      "dist/plugin-sdk/test-fixtures.d.ts",
+    ];
+    for (const file of [...included, ...excluded]) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), "fixture\n");
+    }
     const result = runSync(root);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(readPackageExports(root)).toEqual({
+    const npm = resolveNpmRunner({ npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"] });
+    const packed = spawnSync(npm.command, npm.args, { ...npm, cwd: root, encoding: "utf8" });
+    expect(packed.status, packed.stderr).toBe(0);
+    const packs = resolveNpmJsonEntries(JSON.parse(packed.stdout)) as {
+      files: { path: string }[];
+    }[];
+    expect(packs).toHaveLength(1);
+    expect(packs.flatMap((pack) => pack.files.map((file) => file.path)).toSorted()).toEqual(
+      ["package.json", ...included].toSorted(),
+    );
+    expect(readPackage(root).files).toEqual([
+      ...fixtureFiles,
+      "!dist/plugin-sdk/private-entry.d.ts",
+      "!dist/plugin-sdk/test-fixtures.d.ts",
+      "!dist/plugin-sdk/test-fixtures.js",
+    ]);
+    expect(readPackage(root).exports).toEqual({
       ".": "./index.js",
       "./plugin-sdk/public-entry": {
         types: "./dist/plugin-sdk/public-entry.d.ts",
@@ -186,12 +275,31 @@ describe("plugin SDK registration CLI", () => {
   });
 
   it.each(["removed", "public"])(
-    "prunes generated aliases when a private entry becomes %s",
+    "prunes generated aliases and exclusions when a private entry becomes %s",
     (kind) => {
       const root = createFixture({
-        entries: kind === "public" ? ["former-private"] : [],
-        privateEntries: [],
+        entries: [
+          "private-entry",
+          "test-fixtures",
+          ...(kind === "public" ? ["former-private"] : []),
+        ],
+        privateEntries: ["private-entry", "test-fixtures"],
       });
+      const manifest = readPackage(root);
+      const retained = [
+        "!dist/plugin-sdk/test-fixtures.js",
+        ...fixtureFiles,
+        "!dist/plugin-sdk/private-entry.d.ts",
+        "!dist/plugin-sdk/test-fixtures.d.ts",
+      ];
+      manifest.files = [
+        ...retained,
+        "!dist/plugin-sdk/private-entry.js",
+        "!dist/plugin-sdk/private-entry.d.ts",
+        "!dist/plugin-sdk/former-private.js",
+        "!dist/plugin-sdk/former-private.d.ts",
+      ];
+      writeJson(root, "package.json", manifest);
       for (const { file, prefix } of declarationConfigs) {
         const config = readConfig(root, file);
         config.compilerOptions.paths["openclaw/plugin-sdk/former-private"] = [
@@ -203,6 +311,7 @@ describe("plugin SDK registration CLI", () => {
       const result = runSync(root);
 
       expect(result.status, result.stderr).toBe(0);
+      expect(readPackage(root).files).toEqual(retained);
       for (const { file, prefix } of declarationConfigs) {
         expect(readConfig(root, file).compilerOptions.paths).toEqual({
           "openclaw/plugin-sdk/*": [`${prefix}dist/plugin-sdk/*.d.ts`],
@@ -210,9 +319,15 @@ describe("plugin SDK registration CLI", () => {
             `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/custom.d.ts`,
             "./override.d.ts",
           ],
+          "openclaw/plugin-sdk/private-entry": [
+            `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/private-entry.d.ts`,
+          ],
+          "openclaw/plugin-sdk/test-fixtures": [
+            `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/test-fixtures.d.ts`,
+          ],
         });
       }
-      const exports = readPackageExports(root);
+      const exports = readPackage(root).exports;
       expect(exports["./plugin-sdk/former-private"]).toEqual(
         kind === "public"
           ? {
@@ -221,15 +336,19 @@ describe("plugin SDK registration CLI", () => {
             }
           : undefined,
       );
-      writeJson(root, entryList, ["former-private"]);
-      writeJson(root, privateList, ["former-private"]);
+      writeJson(root, entryList, ["private-entry", "test-fixtures", "former-private"]);
+      writeJson(root, privateList, ["private-entry", "test-fixtures", "former-private"]);
       expect(runSync(root).status).toBe(0);
+      expect(readPackage(root).files).toEqual([
+        ...retained,
+        "!dist/plugin-sdk/former-private.d.ts",
+      ]);
       for (const { file, prefix } of declarationConfigs) {
         expect(
           readConfig(root, file).compilerOptions.paths["openclaw/plugin-sdk/former-private"],
         ).toEqual([`${prefix}packages/plugin-sdk/dist/src/plugin-sdk/former-private.d.ts`]);
       }
-      expect(readPackageExports(root)["./plugin-sdk/former-private"]).toEqual({
+      expect(readPackage(root).exports["./plugin-sdk/former-private"]).toEqual({
         default: "./dist/plugin-sdk/former-private.js",
       });
     },
