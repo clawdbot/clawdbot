@@ -33,6 +33,7 @@ export type {
   ControlModelConversationTool,
   ControlModelConversationStatus,
   ControlModelGatewayEventFrame,
+  ControlModelMaterializedView,
   ControlModelMaterializeViewInput,
   ControlModelSendInput,
   ControlModelSendResult,

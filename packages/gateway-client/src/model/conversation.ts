@@ -104,6 +104,7 @@ export class ControlModelConversation {
       assertCommandReady: (command) => this.#assertCommandReady(command),
       captureEpoch: (command) => this.#captureEpoch(command),
       assertEpoch: (epoch, command) => this.#assertEpoch(epoch, command),
+      matchesSessionKey: (key) => this.#matchesSessionKey(key),
       getCurrentArtifacts: () => this.#snapshot.artifacts,
       normalizeCommandError: (error, command, epoch) => {
         if (epoch !== null) {
@@ -359,6 +360,8 @@ export class ControlModelConversation {
         ) {
           break;
         }
+        this.#artifacts.reset();
+        this.#history.invalidatePending();
         this.#applyProjection({ type: "sessionReset", scope: { sessionKey: this.#sessionKey } });
         this.#partialReasons.add("session-reset-awaiting-history");
         this.#status = "partial";

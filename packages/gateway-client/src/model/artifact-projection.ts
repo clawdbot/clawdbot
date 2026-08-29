@@ -10,6 +10,7 @@ export type ControlModelArtifactProjectionBounds = UiArtifactValidationBounds &
 
 export type ControlModelArtifactSourceContext = Readonly<{
   sessionKey: string;
+  matchesSessionKey?: (sessionKey: string) => boolean;
   messageId?: string;
   messageSequence?: number;
   toolCallId?: string;
@@ -40,26 +41,31 @@ function artifactsIn(value: unknown, maxArtifacts: number): unknown[] {
 function failedArtifact(
   context: ControlModelArtifactSourceContext,
   error: Readonly<{ code: string; message: string; artifactId?: string; revision?: number }>,
+  bounds: ControlModelArtifactProjectionBounds,
 ): UiArtifact | null {
   if (!error.artifactId || error.revision === undefined) {
     return null;
   }
-  return {
-    version: 1,
-    id: error.artifactId,
-    revision: error.revision,
-    views: [],
-    state: "failed",
-    source: {
-      sessionKey: context.sessionKey,
-      ...(context.messageId ? { messageId: context.messageId } : {}),
-      ...(context.toolCallId && context.toolCallId !== "unknown"
-        ? { toolCallId: context.toolCallId }
-        : {}),
-      ...(context.toolName ? { toolName: context.toolName } : {}),
+  const normalized = normalizeUiArtifact(
+    {
+      version: 1,
+      id: error.artifactId,
+      revision: error.revision,
+      views: [],
+      state: "failed",
+      source: {
+        sessionKey: context.sessionKey,
+        ...(context.messageId ? { messageId: context.messageId } : {}),
+        ...(context.toolCallId && context.toolCallId !== "unknown"
+          ? { toolCallId: context.toolCallId }
+          : {}),
+        ...(context.toolName ? { toolName: context.toolName } : {}),
+      },
+      error: { code: error.code, message: error.message },
     },
-    error: { code: error.code, message: error.message },
-  };
+    bounds,
+  );
+  return normalized.ok ? normalized.value : null;
 }
 
 function normalizeCandidate(
@@ -69,27 +75,51 @@ function normalizeCandidate(
 ): UiArtifact | null {
   const normalized = normalizeUiArtifact(value, bounds);
   if (!normalized.ok) {
-    return failedArtifact(context, normalized.error);
+    return failedArtifact(context, normalized.error, bounds);
   }
-  if (normalized.value.source.sessionKey !== context.sessionKey) {
-    return failedArtifact(context, {
-      code: "ARTIFACT_SOURCE_MISMATCH",
-      message: "UI artifact source does not match the selected conversation",
-      artifactId: normalized.value.id,
-      revision: normalized.value.revision,
-    });
+  const sourceSessionKey = normalized.value.source.sessionKey;
+  if (
+    context.matchesSessionKey
+      ? !context.matchesSessionKey(sourceSessionKey)
+      : sourceSessionKey !== context.sessionKey
+  ) {
+    return failedArtifact(
+      context,
+      {
+        code: "ARTIFACT_SOURCE_MISMATCH",
+        message: "UI artifact source does not match the selected conversation",
+        artifactId: normalized.value.id,
+        revision: normalized.value.revision,
+      },
+      bounds,
+    );
   }
-  return {
-    ...normalized.value,
-    source: {
-      sessionKey: context.sessionKey,
-      ...(context.messageId ? { messageId: context.messageId } : {}),
-      ...(context.toolCallId && context.toolCallId !== "unknown"
-        ? { toolCallId: context.toolCallId }
-        : {}),
-      ...(context.toolName ? { toolName: context.toolName } : {}),
+  const trusted = normalizeUiArtifact(
+    {
+      ...normalized.value,
+      source: {
+        sessionKey: context.sessionKey,
+        ...(context.messageId ? { messageId: context.messageId } : {}),
+        ...(context.toolCallId && context.toolCallId !== "unknown"
+          ? { toolCallId: context.toolCallId }
+          : {}),
+        ...(context.toolName ? { toolName: context.toolName } : {}),
+      },
     },
-  };
+    bounds,
+  );
+  return trusted.ok
+    ? trusted.value
+    : failedArtifact(
+        context,
+        {
+          code: trusted.error.code,
+          message: trusted.error.message,
+          artifactId: normalized.value.id,
+          revision: normalized.value.revision,
+        },
+        bounds,
+      );
 }
 
 function mcpAppArtifact(
@@ -368,11 +398,15 @@ export function reconcileUiArtifacts(
 ): UiArtifact[] {
   const artifacts = new Map<string, UiArtifact>();
   for (const artifact of candidates) {
-    artifacts.set(artifact.id, reconcileOne(artifacts.get(artifact.id), artifact));
+    const current = artifacts.get(artifact.id);
+    if (current && artifact.revision < current.revision) {
+      continue;
+    }
+    const reconciled = reconcileOne(current, artifact);
+    artifacts.delete(artifact.id);
+    artifacts.set(artifact.id, reconciled);
   }
-  const retained = [...artifacts.values()].toSorted(
-    (left, right) => left.revision - right.revision || left.id.localeCompare(right.id),
-  );
+  const retained = [...artifacts.values()];
   return retained.length > bounds.maxArtifacts ? retained.slice(-bounds.maxArtifacts) : retained;
 }
 

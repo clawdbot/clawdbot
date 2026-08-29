@@ -172,7 +172,12 @@ function normalizeJson(
     if (normalized === undefined) {
       return undefined;
     }
-    result[key] = normalized;
+    Object.defineProperty(result, key, {
+      value: normalized,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   seen.delete(value);
   return result;

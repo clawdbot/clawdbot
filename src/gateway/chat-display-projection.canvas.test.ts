@@ -70,4 +70,24 @@ describe("projectToolResultDetails UI artifacts", () => {
       },
     });
   });
+
+  it("bounds the aggregate artifact payload and reports truncation", () => {
+    const uiArtifacts = Array.from({ length: 100 }, (_, index) => ({
+      version: 1,
+      id: `artifact-${index}`,
+      revision: 1,
+      structuredContent: { value: "x".repeat(400) },
+      views: [],
+      state: "ready",
+      source: { sessionKey: "agent:main:one" },
+    }));
+
+    const result = projectToolResultDetails({ uiArtifacts }, 1_000);
+    const projected = result.details?.uiArtifacts as unknown[];
+    expect(result.truncated).toBe(true);
+    expect(projected.length).toBeLessThan(uiArtifacts.length);
+    expect(new TextEncoder().encode(JSON.stringify(projected)).byteLength).toBeLessThanOrEqual(
+      1_000,
+    );
+  });
 });

@@ -35,6 +35,7 @@ type ConversationArtifactStoreOptions = {
   assertCommandReady(command: string): void;
   captureEpoch(command: string): number;
   assertEpoch(epoch: number, command: string): void;
+  matchesSessionKey(sessionKey: string): boolean;
   getCurrentArtifacts(): ControlModelConversationSnapshot["artifacts"];
   normalizeCommandError(error: unknown, command: string, epoch: number | null): Error;
   publish(): void;
@@ -47,6 +48,7 @@ export class ConversationArtifactStore {
   readonly #retiredMessages = new WeakSet<object>();
   #truncated = false;
   #activeOperations = 0;
+  #generation = 0;
 
   constructor(options: ConversationArtifactStoreOptions) {
     this.#options = options;
@@ -71,7 +73,14 @@ export class ConversationArtifactStore {
   }
 
   retireMaterializedViews(): void {
+    this.#generation += 1;
     this.#materialized.clear();
+  }
+
+  reset(): void {
+    this.#live.clear();
+    this.retireMaterializedViews();
+    this.#truncated = false;
   }
 
   ingestToolEvent(payload: Record<string, unknown>): void {
@@ -84,6 +93,7 @@ export class ConversationArtifactStore {
         data,
         {
           sessionKey: this.#options.sessionKey,
+          matchesSessionKey: (key) => this.#options.matchesSessionKey(key),
           toolCallId,
           ...(toolName ? { toolName } : {}),
           live: true,
@@ -95,14 +105,9 @@ export class ConversationArtifactStore {
 
   snapshot(entries: SessionProjectionState["entries"]): UiArtifact[] {
     const bounds = this.#bounds();
-    const historyCandidates: UiArtifact[] = [];
-    const candidateLimit = bounds.maxArtifacts + 1;
-    for (
-      let index = entries.length - 1;
-      index >= 0 && historyCandidates.length < candidateLimit;
-      index -= 1
-    ) {
-      const entry = entries[index];
+    const candidateBounds = { ...bounds, maxArtifacts: bounds.maxArtifacts + 1 };
+    let historyCandidates: UiArtifact[] = [];
+    for (const entry of entries) {
       if (!entry) {
         continue;
       }
@@ -113,23 +118,46 @@ export class ConversationArtifactStore {
       ) {
         continue;
       }
-      historyCandidates.push(
-        ...collectMessageUiArtifacts(
-          entry.message,
-          {
-            sessionKey: this.#options.sessionKey,
-            ...(entry.identity?.id ? { messageId: entry.identity.id } : {}),
-            ...(entry.identity?.sequence !== null && entry.identity?.sequence !== undefined
-              ? { messageSequence: entry.identity.sequence }
-              : {}),
-            live: entry.live,
-          },
-          bounds,
-          candidateLimit - historyCandidates.length,
-        ),
+      const incoming = collectMessageUiArtifacts(
+        entry.message,
+        {
+          sessionKey: this.#options.sessionKey,
+          matchesSessionKey: (key) => this.#options.matchesSessionKey(key),
+          ...(entry.identity?.id ? { messageId: entry.identity.id } : {}),
+          ...(entry.identity?.sequence !== null && entry.identity?.sequence !== undefined
+            ? { messageSequence: entry.identity.sequence }
+            : {}),
+          live: entry.live,
+        },
+        bounds,
+        bounds.maxArtifacts + 1,
+      );
+      historyCandidates = reconcileUiArtifacts(
+        [...historyCandidates, ...incoming],
+        candidateBounds,
       );
     }
-    const candidates = [...this.#live.values(), ...historyCandidates];
+    const candidates = [...historyCandidates];
+    for (const live of this.#live.values()) {
+      const historyIndex = candidates.findIndex((artifact) => artifact.id === live.id);
+      if (historyIndex < 0) {
+        candidates.push(live);
+        continue;
+      }
+      const history = candidates[historyIndex];
+      if (!history) {
+        continue;
+      }
+      const [merged] = reconcileUiArtifacts([history, live], { ...bounds, maxArtifacts: 2 });
+      if (!merged) {
+        continue;
+      }
+      candidates[historyIndex] = merged;
+      if (live.revision > history.revision) {
+        candidates.splice(historyIndex, 1);
+        candidates.push(merged);
+      }
+    }
     if (
       historyCandidates.length > bounds.maxArtifacts ||
       new Set(candidates.map((artifact) => artifact.id)).size > bounds.maxArtifacts
@@ -220,6 +248,7 @@ export class ConversationArtifactStore {
 
     this.#activeOperations += 1;
     let epoch: number | null = null;
+    const generation = this.#generation;
     try {
       epoch = this.#options.captureEpoch("artifact.materialize");
       const result = record(
@@ -235,6 +264,14 @@ export class ConversationArtifactStore {
         ),
       );
       this.#options.assertEpoch(epoch, "artifact.materialize");
+      if (generation !== this.#generation) {
+        throw localError(
+          "stale",
+          "artifact.materialize",
+          "UI artifact lifecycle changed while materializing",
+          "STALE_ARTIFACT_VIEW",
+        );
+      }
       const current = this.#options
         .getCurrentArtifacts()
         .find((candidate) => candidate.id === artifactId);
@@ -296,12 +333,29 @@ export class ConversationArtifactStore {
         ...(view.recommended === true ? { recommended: true } : {}),
         ...(view.fallback && !normalizedView.fallback ? { fallback: view.fallback } : {}),
       };
-      this.#materialized.set(
-        materializedViewKey(artifactId, artifactRevision, viewId),
-        materializedView,
-      );
+      const key = materializedViewKey(artifactId, artifactRevision, viewId);
+      const candidateMaterialized = new Map(this.#materialized).set(key, materializedView);
+      const normalizedCurrent = normalizeUiArtifact(current, this.#bounds());
+      const combined = normalizedCurrent.ok
+        ? applyMaterializedUiArtifactViews([normalizedCurrent.value], candidateMaterialized)[0]
+        : undefined;
+      const normalizedCombined = combined
+        ? normalizeUiArtifact(combined, this.#bounds())
+        : undefined;
+      const retainedView = normalizedCombined?.ok
+        ? normalizedCombined.value.views.find((candidate) => candidate.id === viewId)
+        : undefined;
+      if (!retainedView || retainedView.availability !== "inline") {
+        throw localError(
+          "malformed",
+          "artifact.materialize",
+          "Materialized UI artifact exceeds the configured bounds",
+          "ARTIFACT_MATERIALIZATION_EXCEEDS_BOUNDS",
+        );
+      }
+      this.#materialized.set(key, retainedView);
       this.#options.publish();
-      return cloneAndFreeze(materializedView);
+      return cloneAndFreeze(retainedView);
     } catch (error) {
       if (error instanceof ControlModelCommandError) {
         throw error;

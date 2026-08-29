@@ -52,6 +52,7 @@ export class ConversationHistoryController {
   #requested = false;
   #offsetRequested = 0;
   #requestOptions: ControlModelRequestOptions | undefined;
+  #generation = 0;
 
   constructor(options: ConversationHistoryControllerOptions) {
     this.#options = options;
@@ -159,6 +160,10 @@ export class ConversationHistoryController {
     return true;
   }
 
+  invalidatePending(): void {
+    this.#generation += 1;
+  }
+
   async #drain(): Promise<void> {
     let firstError: unknown;
     let hasError = false;
@@ -187,6 +192,7 @@ export class ConversationHistoryController {
       return;
     }
     const epoch = this.#options.captureEpoch("chat.history");
+    const generation = this.#generation;
     this.#status = "loading";
     this.#error = null;
     this.#options.setStatus("loading");
@@ -203,6 +209,9 @@ export class ConversationHistoryController {
         options,
       );
       this.#options.assertEpoch(epoch, "chat.history");
+      if (generation !== this.#generation) {
+        return;
+      }
       const page = Array.isArray(response?.messages) ? response.messages : [];
       const mergedHistory = mergeHistory(offset > 0 ? [...page, ...this.#messages] : page);
       const maxMessages = this.#options.host.bounds.maxMessages;

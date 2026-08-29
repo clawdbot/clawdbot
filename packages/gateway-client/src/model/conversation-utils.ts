@@ -106,7 +106,12 @@ export function cloneAndFreeze<T>(value: T, seen = new WeakMap<object, unknown>(
   const clone: Record<string, unknown> = {};
   seen.set(value, clone);
   for (const [key, item] of Object.entries(value)) {
-    clone[key] = cloneAndFreeze(item, seen);
+    Object.defineProperty(clone, key, {
+      value: cloneAndFreeze(item, seen),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   // SAFETY: the clone preserves the recursively frozen object shape of T.
   return Object.freeze(clone) as T;
