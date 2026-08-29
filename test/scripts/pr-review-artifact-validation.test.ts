@@ -10,7 +10,6 @@ import {
   writeReviewArtifacts,
   type ReviewArtifactFixtureOptions,
 } from "./pr-review-artifact-fixture.js";
-import { PR_RIPGREP_COMMAND } from "./pr-ripgrep.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reviewScript = join(process.cwd(), "scripts/pr-lib/review.sh");
@@ -19,7 +18,16 @@ const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
-const REVIEW_SHELL_COMMAND_SURFACE = `rg() {\n${PR_RIPGREP_COMMAND}\n}`;
+const REVIEW_SHELL_COMMAND_SURFACE = [
+  "rg() {",
+  '  if [ "${1-}" = "-F" ]; then',
+  "    shift",
+  '    command grep -F "$@"',
+  "  else",
+  '    command grep -E "$@"',
+  "  fi",
+  "}",
+].join("\n");
 
 function validReadyReview() {
   const review = validReview();
