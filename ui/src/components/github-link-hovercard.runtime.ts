@@ -153,7 +153,8 @@ function coAuthorAvatarElement(dataUrl: string): HTMLImageElement {
 
 /**
  * Overlapping faces after the author, plus "+N" for anyone past the fetched
- * three. Names live in the title so the row never competes with the metrics.
+ * three. The group is one labelled image: names reach assistive tech through
+ * its accessible name instead of competing with the metrics for row width.
  */
 function appendCoAuthors(author: HTMLElement, preview: GitHubPreview): void {
   const coAuthors = preview.coAuthors ?? [];
@@ -182,9 +183,14 @@ function appendCoAuthors(author: HTMLElement, preview: GitHubPreview): void {
   if (stack.childElementCount === 0) {
     return;
   }
-  stack.title = t("githubPreview.coAuthors", {
+  // The faces are decorative images, so the group carries the only accessible
+  // name; a title alone is never announced.
+  const label = t("githubPreview.coAuthors", {
     logins: coAuthors.map((coAuthor) => coAuthor.login).join(", "),
   });
+  stack.title = label;
+  stack.role = "img";
+  stack.ariaLabel = label;
   author.after(stack);
 }
 

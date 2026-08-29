@@ -135,6 +135,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
     // Two co-authors beyond the three fetched faces.
     expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+2");
     expect(stack?.getAttribute("title")).toBe("Co-authored by steipete, ada, mira");
+    // Faces are decorative; the group is the only thing assistive tech can read.
+    expect(stack?.getAttribute("role")).toBe("img");
+    expect(stack?.getAttribute("aria-label")).toBe("Co-authored by steipete, ada, mira");
+    expect([...(stack?.querySelectorAll("img") ?? [])].every((img) => img.alt === "")).toBe(true);
     // The stack sits after the author, never inside the metrics.
     expect(stack?.previousElementSibling?.classList.contains("github-link-hovercard__author")).toBe(
       true,
