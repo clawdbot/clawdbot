@@ -1580,7 +1580,7 @@ describe("runGatewayUpdate", () => {
       const artifacts = redirected
         ? path.join(tempDir, "external-artifacts")
         : path.join(checkout, ".artifacts");
-      await writePreflightPackageManagerFixture(checkout, "pnpm@10.0.0");
+      await writePreflightPackageManagerFixture(checkout);
       await fs.copyFile(path.join(tempDir, "openclaw.mjs"), path.join(checkout, "openclaw.mjs"));
       await runRealGit(checkout, "init", "--initial-branch=main");
       await runRealGit(checkout, "config", "user.name", "OpenClaw Test");
