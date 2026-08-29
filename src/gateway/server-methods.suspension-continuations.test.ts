@@ -29,11 +29,11 @@ const completionDrainModes = ["suspension", "restart signal", "restart drain"] a
 function closeAdmission(mode: (typeof completionDrainModes)[number]) {
   if (mode === "restart signal") {
     expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
-    return;
+    return undefined;
   }
   if (mode === "restart drain") {
     markGatewayRestartDraining();
-    return;
+    return undefined;
   }
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.drain()).toBe(true);
