@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
   isWebPushQuietHours,
+  normalizeWebPushDisplayLabel,
   resolveEffectiveWebPushPreferences,
   webPushAgentAllowed,
   webPushCategoryEnabled,
@@ -34,7 +35,6 @@ import {
   isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-record-lookup.js";
 import { listCurrentWebPushTargets, webPushTargetClient } from "./web-push-authority.js";
-import { webPushDisplayLabel } from "./web-push-display-label.js";
 
 const WEB_PUSH_APPROVAL_TIMEOUT_MS = 10_000;
 const WEB_PUSH_TERMINAL_TTL_SECONDS = 5 * 60;
@@ -177,7 +177,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
   const source = isRecord(params.record.request) ? params.record.request : undefined;
   const agentId = normalizeOptionalString(source?.agentId);
-  const agentLabel = webPushDisplayLabel(agentId);
+  const agentLabel = normalizeWebPushDisplayLabel(agentId);
   const requestGroups = new Map<
     string,
     { copy: ReturnType<typeof approvalNotificationCopy>; subscriptions: BoundWebPushSubscription[] }

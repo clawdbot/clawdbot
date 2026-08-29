@@ -94,24 +94,7 @@ describe("event Web Push classification", () => {
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
-  it("sanitizes and bounds agent labels in identified event payloads", async () => {
-    const rawAgentId = `agent\u202e\n${"x".repeat(100)}`;
-    const displayAgentId = `agent ${"x".repeat(74)}`;
-    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
-    delivery.handleEvent("chat", { state: "final", runId: "run-1", agentId: rawAgentId });
-
-    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
-    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          body: `${displayAgentId}: An agent completed its response.`,
-        }),
-      }),
-    );
-    expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("\u202e");
-  });
-
-  it("sends questions with control characters removed from durable tags", async () => {
+  it("sends questions with control characters escaped in durable tags", async () => {
     listDevicePairingMock.mockReturnValue({
       pending: [],
       paired: [pairedOperator("browser-device", ["operator.read", "operator.questions"])],
@@ -122,21 +105,76 @@ describe("event Web Push classification", () => {
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        payload: expect.objectContaining({ tag: "openclaw-question-question 1" }),
+        payload: expect.objectContaining({ tag: "openclaw-question-question\\u{A}1" }),
       }),
     );
   });
+
+  it("honors implied question scopes without notifying read-only devices", async () => {
+    const admin = boundSubscription("admin");
+    const reviewer = boundSubscription("reviewer");
+    listBoundWebPushSubscriptionsMock.mockReturnValue([
+      admin,
+      reviewer,
+      boundSubscription("reader"),
+    ]);
+    listDevicePairingMock.mockReturnValue({
+      paired: [
+        pairedOperator("admin", ["operator.admin"]),
+        pairedOperator("reviewer", ["operator.read", "operator.questions"]),
+        pairedOperator("reader", ["operator.read"]),
+      ],
+    });
+
+    createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent("question.requested", {
+      id: "question-1",
+    });
+
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriptions: [admin, reviewer] }),
+    );
+  });
+
+  it.each([
+    { agentId: "agent\n\u202E", label: "agent\\u{A}\\u{202E}" },
+    { agentId: "🦞".repeat(50), label: "🦞".repeat(40) },
+  ])(
+    "bounds event display labels while preserving the raw agent filter: $agentId",
+    async ({ agentId, label }) => {
+      const subscription = boundSubscription("browser-device");
+      listBoundWebPushSubscriptionsMock.mockReturnValue([
+        {
+          ...subscription,
+          devicePreferences: { ...subscription.devicePreferences, agentIds: [agentId] },
+        },
+      ]);
+
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent("chat", {
+        state: "final",
+        runId: "run-1",
+        agentId,
+      });
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({ body: `${label}: An agent completed its response.` }),
+        }),
+      );
+    },
+  );
 
   it("sends only failed task and cron terminal events", async () => {
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
     delivery.handleEvent("task", {
       action: "upserted",
-      task: { id: "task-1", title: "Build", status: "failed" },
+      task: { id: "task-1", title: "Build\u202E", status: "failed" },
     });
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        payload: expect.objectContaining({ body: "Build needs attention." }),
+        payload: expect.objectContaining({ body: "Build\\u{202E} needs attention." }),
       }),
     );
 
@@ -148,12 +186,12 @@ describe("event Web Push classification", () => {
       action: "finished",
       jobId: "cron-1",
       status: "error",
-      job: { name: "Nightly" },
+      job: { name: "Nightly\u2028run" },
     });
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        payload: expect.objectContaining({ body: "Nightly needs attention." }),
+        payload: expect.objectContaining({ body: "Nightly\\u{2028}run needs attention." }),
       }),
     );
   });

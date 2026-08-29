@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
   isWebPushQuietHours,
+  normalizeWebPushDisplayLabel,
   resolveEffectiveWebPushPreferences,
   webPushAgentAllowed,
   webPushCategoryEnabled,
@@ -22,7 +23,6 @@ import { READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { listCurrentWebPushTargets, webPushTargetClient } from "./web-push-authority.js";
-import { webPushDisplayLabel } from "./web-push-display-label.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
 
@@ -43,7 +43,7 @@ function resolveEventWebPushNotification(
     return null;
   }
   if (event === "question.requested") {
-    const id = webPushDisplayLabel(value.id) ?? "pending";
+    const id = normalizeWebPushDisplayLabel(value.id) ?? "pending";
     return {
       category: "agent-question",
       title: "OpenClaw needs an answer",
@@ -52,7 +52,7 @@ function resolveEventWebPushNotification(
     };
   }
   if (event === "chat" && value.state === "final") {
-    const runId = webPushDisplayLabel(value.runId) ?? "finished";
+    const runId = normalizeWebPushDisplayLabel(value.runId) ?? "finished";
     return {
       category: "agent-finished",
       title: "OpenClaw agent finished",
@@ -65,8 +65,8 @@ function resolveEventWebPushNotification(
     if (task?.status !== "failed" && task?.status !== "timed_out") {
       return null;
     }
-    const taskId = webPushDisplayLabel(task.id) ?? "failed";
-    const taskTitle = webPushDisplayLabel(task.title);
+    const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
+    const taskTitle = normalizeWebPushDisplayLabel(task.title);
     return {
       category: "background-task-failed",
       title: "OpenClaw background task failed",
@@ -77,8 +77,8 @@ function resolveEventWebPushNotification(
   }
   if (event === "cron" && value.action === "finished" && value.status === "error") {
     const job = isRecord(value.job) ? value.job : null;
-    const jobId = webPushDisplayLabel(value.jobId) ?? "failed";
-    const jobName = webPushDisplayLabel(job?.name);
+    const jobId = normalizeWebPushDisplayLabel(value.jobId) ?? "failed";
+    const jobName = normalizeWebPushDisplayLabel(job?.name);
     return {
       category: "scheduled-task-failed",
       title: "OpenClaw scheduled task failed",
@@ -124,25 +124,22 @@ export function createEventWebPushDelivery(params: {
         const cfg = params.getRuntimeConfig();
         const targets = listCurrentWebPushTargets({
           cfg,
-          requiredScopes: [READ_SCOPE],
+          requiredScopes:
+            notification.category === "agent-question"
+              ? [READ_SCOPE, QUESTIONS_SCOPE]
+              : [READ_SCOPE],
           stateDir: params.stateDir,
         });
         const agentId = normalizeOptionalString(
           opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
         );
-        const agentLabel = webPushDisplayLabel(agentId);
+        const agentLabel = normalizeWebPushDisplayLabel(agentId);
         const groups = new Map<
           string,
           { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
         >();
         for (const target of targets) {
           const subscription = target.subscription;
-          if (
-            notification.category === "agent-question" &&
-            !target.scopes.includes(QUESTIONS_SCOPE)
-          ) {
-            continue;
-          }
           const preferences = preferenceFor(subscription, params.stateDir);
           if (
             !webPushCategoryEnabled(preferences, notification.category) ||

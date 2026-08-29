@@ -221,42 +221,44 @@ describe("approval Web Push delivery", () => {
     expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("sensitive command");
   });
 
-  it("sanitizes and bounds agent labels in identified approval payloads", async () => {
-    const rawAgentId = `agent\u202e\n${"x".repeat(100)}`;
-    const displayAgentId = `agent ${"x".repeat(74)}`;
-    const manager = new ExecApprovalManager();
-    const record = manager.create(
-      { command: "sensitive command", agentId: rawAgentId },
-      60_000,
-      "exec:safe-agent-label",
-    );
-    const subscription = {
-      ...boundSubscription("label-device", null),
-      devicePreferences: { enabled: true, label: "", detailLevel: "identified" as const },
-    };
-    listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
-    listDevicePairingMock.mockReturnValue({
-      pending: [],
-      paired: [pairedOperator("label-device", ["operator.approvals", "operator.read"])],
-    });
-    preparedWebPushSendMock.mockResolvedValue([
-      { ok: true, subscriptionId: subscription.subscriptionId, statusCode: 201 },
-    ]);
+  it.each([
+    { detailLevel: "identified" as const, agentId: "agent\n\u202E", label: "agent\\u{A}\\u{202E}" },
+    { detailLevel: "detailed" as const, agentId: "🦞".repeat(50), label: "🦞".repeat(40) },
+  ])(
+    "bounds and sanitizes $detailLevel approval labels without changing agent filters",
+    async ({ detailLevel, agentId, label }) => {
+      const record = new ExecApprovalManager().create({ command: "echo ok", agentId }, 60_000);
+      const subscription = boundSubscription("browser-device", null);
+      subscription.devicePreferences = {
+        enabled: true,
+        label: "Phone\u202E",
+        detailLevel,
+        agentIds: [agentId],
+      };
+      listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+      listDevicePairingMock.mockReturnValue({
+        paired: [pairedOperator("browser-device", ["operator.admin"])],
+      });
+      preparedWebPushSendMock.mockResolvedValue([
+        { ok: true, subscriptionId: subscription.subscriptionId },
+      ]);
+      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
 
-    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
-    await expect(
-      createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleRequested(record),
-    ).resolves.toBe(true);
+      await expect(
+        createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleRequested(record),
+      ).resolves.toBe(true);
 
-    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          body: `Open OpenClaw to review an approval for ${displayAgentId}.`,
+      expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            title: "Phone\\u{202E} · OpenClaw approval requested",
+            body: `Open OpenClaw to review an approval for ${label}.`,
+          }),
         }),
-      }),
-    );
-    expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("\u202e");
-  });
+      );
+      expect(record.request.agentId).toBe(agentId);
+    },
+  );
 
   it("rechecks the profile role and excludes unbound role-based subscriptions", async () => {
     const manager = new ExecApprovalManager();
