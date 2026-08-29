@@ -6,9 +6,22 @@ import type {
 
 export type TabAccessMode = "all" | "selected";
 
+export type CreatedTabOperation = {
+  isCurrent(): boolean;
+  attachDebugger(
+    tabId: number,
+    assertCurrent: () => void,
+    creationEpoch?: TabAccessEpoch,
+  ): Promise<{ targetId: string }>;
+  handoff(result: { tabId: number; targetId: string }): void;
+};
+
+type TabGroupSnapshot = { id: number; title?: string };
+
 export type TabAccessEpoch = Readonly<{
   revision: number;
   tabRevision: number;
+  documentRevision?: number;
 }>;
 
 export type TabAccessReason = TabEligibilityReason | "revoked" | "paused" | "not-selected" | null;
@@ -47,15 +60,32 @@ export type TabAccessPolicy = {
   endTransition(): void;
   beginRevocation(tabId: number): symbol;
   endRevocation(token: symbol): void;
-  capture(tabId: number): TabAccessEpoch;
+  capture(tabId: number, method?: string): TabAccessEpoch;
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
-  invalidateAll(): void;
+  retireTab(tabId: number): void;
+  renewTabAccess(
+    tabId: number,
+    attachedEpoch: TabAccessEpoch | undefined,
+    tab: BrowserTabSnapshot | undefined,
+  ): TabAccessEpoch | undefined;
+  invalidateAll(group?: TabGroupSnapshot): void;
+  observeTabUpdate(
+    tabId: number,
+    change: { url?: string; groupId?: number; status?: string },
+    tab?: BrowserTabSnapshot,
+  ): boolean;
+  addTabToGroup(tabId: number): Promise<void>;
+  createTab(
+    message: { url: string; background?: boolean; focus?: boolean },
+    operation: CreatedTabOperation,
+  ): Promise<void>;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
   requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;
   }): Promise<AccessibleBrowserTabSnapshot[]>;
+  canPublishTab(tabId: number): boolean;
   pause(tabId: number): Promise<void>;
   allow(tabId: number): Promise<void>;
   forgetTab(tabId: number): Promise<void>;
@@ -67,4 +97,5 @@ export type TabAccessPolicy = {
 export function createTabAccessPolicy(options: {
   chromeApi?: TabAccessChromeApi;
   isSelectedTab(tab: BrowserTabSnapshot): boolean | Promise<boolean>;
+  getGroupColor?(): Promise<string>;
 }): TabAccessPolicy;

@@ -1,5 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetChatHistoryProjection } from "./chat-history.ts";
+import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
@@ -15,6 +17,10 @@ export function subscribeChatPaneStartup(
     const state = getState();
     if (state) {
       admitInitialUserMessageHandoff(state, state.sessionKey);
+      // Project the accepted initial turn before waking followers parked behind recovery.
+      if (!parseCatalogSessionKey(state.sessionKey)) {
+        void retryReconnectableQueuedChatSends(state);
+      }
       state.requestUpdate?.();
     }
   });

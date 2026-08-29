@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTabAccessEvents } from "./tab-access-events.js";
+import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
 function deferred<T>() {
   let resolve = (_value: T) => {};
@@ -18,7 +19,11 @@ function createHarness(
     | undefined;
   let debuggerDetachListener: ((source: { tabId?: number }, reason: string) => void) | undefined;
   let tabsUpdatedListener:
-    | ((tabId: number, changeInfo: { groupId?: number; url?: string }) => void)
+    | ((
+        tabId: number,
+        changeInfo: { groupId?: number; url?: string },
+        tab: BrowserTabSnapshot,
+      ) => void)
     | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
   let groupUpdatedListener: (() => void) | undefined;
@@ -30,6 +35,14 @@ function createHarness(
   const send = vi.fn();
   const policy = {
     mode,
+    observeTabUpdate: vi.fn(
+      (_tabId: number, change: { url?: string; groupId?: number }) =>
+        typeof change.url === "string" ||
+        (mode === "selected" && typeof change.groupId === "number"),
+    ),
+    retireTab: vi.fn(() => {
+      revision += 1;
+    }),
     beginRevocation: vi.fn(() => Symbol("revocation")),
     endRevocation: vi.fn(),
     capture: vi.fn(() => ({ revision, tabRevision: 0 })),
@@ -38,6 +51,10 @@ function createHarness(
     ),
     invalidateTab: vi.fn(() => {
       revision += 1;
+    }),
+    renewTabAccess: vi.fn(() => {
+      revision += 1;
+      return undefined;
     }),
     invalidateAll: vi.fn(() => {
       revision += 1;
@@ -128,7 +145,8 @@ function createHarness(
     setAccessible: (next: boolean) => {
       accessible = next;
     },
-    tabsUpdatedListener,
+    tabsUpdatedListener: (tabId: number, changeInfo: { groupId?: number; url?: string }) =>
+      tabsUpdatedListener?.(tabId, changeInfo, { id: tabId, ...changeInfo }),
     tabsReplacedListener,
   };
 }

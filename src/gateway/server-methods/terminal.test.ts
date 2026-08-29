@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -30,7 +31,12 @@ const policyMocks = vi.hoisted(() => ({
 }));
 const sessionMocks = vi.hoisted(() => ({
   loadGatewaySessionEntryReadOnly: vi.fn(
-    (_sessionKey: string, _opts?: unknown): { entry?: { sessionId?: string } } => ({
+    (
+      _sessionKey: string,
+      _opts?: unknown,
+    ): {
+      entry?: Pick<InternalSessionEntry, "sessionId" | "pendingProjectGitUrl" | "pendingWorktree">;
+    } => ({
       entry: { sessionId: "ui-session-id" },
     }),
   ),
@@ -185,23 +191,48 @@ describe("terminal gateway policy", () => {
     });
   });
 
-  it("rejects UI ownership when the durable session identity is unavailable", async () => {
-    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry: undefined });
+  it.each([
+    { state: "is missing", entry: undefined, error: { code: ErrorCodes.UNAVAILABLE } },
+    {
+      state: "awaits project preparation",
+      entry: {
+        sessionId: "ui-session-id",
+        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+      },
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
+      },
+    },
+    {
+      state: "awaits worktree preparation",
+      entry: {
+        sessionId: "ui-session-id",
+        pendingWorktree: {
+          workspace: "/tmp/project",
+          titleSource: "Prepare workspace",
+        },
+      },
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
+      },
+    },
+  ])("rejects UI ownership when the session $state", async ({ entry, error }) => {
+    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry });
     const { opts, sessions, respond } = makeOpts({}, { enabled: true });
 
     await openTerminalSession(opts, {
       agentId: "main",
-      sessionKey: "agent:main:missing",
+      sessionKey: "agent:main:pending",
       cols: 80,
       rows: 24,
     });
 
     expect(sessions.open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
-    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
   });
 
   it("lists agent-owned sessions with their owner marker", async () => {

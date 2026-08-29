@@ -88,7 +88,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   readonly sessionProjection = new SidebarSessionProjection();
   readonly sessionData = new SessionDataController(this);
-  private readonly sessionPullRequestIndicators = new SessionPullRequestIndicatorsController(this, {
+  readonly sessionPullRequests = new SessionPullRequestIndicatorsController(this, {
     getConnected: () => this.connected,
     getRows: () =>
       mergeAdoptedSessionPullRequestRows({
@@ -211,10 +211,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     if (this.sessionProjection.promoteCreatedSession(sessionKey)) {
       this.requestUpdate();
     }
-  }
-
-  sessionPullRequestIndicatorState(sessionKey: string, worktreeId: string) {
-    return this.sessionPullRequestIndicators.state(sessionKey, worktreeId);
   }
 
   override updated(changedProperties: PropertyValues<this>) {

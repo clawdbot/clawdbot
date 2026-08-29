@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { resolveGatewayTokenForUrlEdit } from "../app/settings.ts";
+import { resolveGatewayCredentialsForUrlEdit } from "../app/settings.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   resolveAuthHintKind,
@@ -13,18 +13,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("resolveGatewayTokenForUrlEdit", () => {
-  it("preserves the current token for same normalized gateway endpoint edits", () => {
+describe("resolveGatewayCredentialsForUrlEdit", () => {
+  it("preserves credentials for same normalized gateway endpoint edits", () => {
     expect(
-      resolveGatewayTokenForUrlEdit(
+      resolveGatewayCredentialsForUrlEdit(
         "wss://gateway.example/openclaw",
         " wss://gateway.example/openclaw/ ",
-        "abc123",
+        { token: "abc123", password: "secret" },
       ),
-    ).toBe("abc123");
+    ).toEqual({ token: "abc123", password: "secret" });
   });
 
-  it("loads a scoped token when the normalized gateway endpoint changes", () => {
+  it("loads a scoped token and clears the password when the gateway endpoint changes", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     sessionStorage.setItem(
       "openclaw.control.token.v1:wss://other-gateway.example/openclaw",
@@ -32,24 +32,34 @@ describe("resolveGatewayTokenForUrlEdit", () => {
     );
 
     expect(
-      resolveGatewayTokenForUrlEdit(
+      resolveGatewayCredentialsForUrlEdit(
         "wss://gateway.example/openclaw",
         "wss://other-gateway.example/openclaw/",
-        "abc123",
+        { token: "abc123", password: "secret" },
       ),
-    ).toBe("other-token");
+    ).toEqual({ token: "other-token", password: "" });
   });
 
-  it("clears the token when the changed gateway endpoint has no scoped token", () => {
+  it("clears credentials when the changed gateway endpoint has no scoped token", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
 
     expect(
-      resolveGatewayTokenForUrlEdit(
+      resolveGatewayCredentialsForUrlEdit(
         "wss://gateway.example/openclaw",
         "wss://other-gateway.example/openclaw",
-        "abc123",
+        { token: "abc123", password: "secret" },
       ),
-    ).toBe("");
+    ).toEqual({ token: "", password: "" });
+  });
+
+  it("preserves the token but clears the password when only the query scope changes", () => {
+    expect(
+      resolveGatewayCredentialsForUrlEdit(
+        "wss://gateway.example/openclaw?tenant=first",
+        "wss://gateway.example/openclaw?tenant=second",
+        { token: "abc123", password: "secret" },
+      ),
+    ).toEqual({ token: "abc123", password: "" });
   });
 
   it("does not restore legacy durable tokens when the gateway endpoint changes", () => {
@@ -64,12 +74,12 @@ describe("resolveGatewayTokenForUrlEdit", () => {
     );
 
     expect(
-      resolveGatewayTokenForUrlEdit(
+      resolveGatewayCredentialsForUrlEdit(
         "wss://gateway.example/openclaw",
         "wss://other-gateway.example/openclaw",
-        "abc123",
+        { token: "abc123", password: "secret" },
       ),
-    ).toBe("");
+    ).toEqual({ token: "", password: "" });
   });
 });
 

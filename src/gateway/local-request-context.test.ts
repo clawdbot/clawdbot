@@ -7,7 +7,6 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
-import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -68,6 +67,7 @@ describe("local gateway request context", () => {
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockResolvedValue(
         asPublishedOwner({
+          catalogOwner: { agentId: "worker", workspaceDir: "/tmp/local-model-catalog-workspace" },
           agentId: "worker",
           agentDir: "/tmp/local-model-catalog-agent",
           workspaceDir: "/tmp/local-model-catalog-workspace",
@@ -121,6 +121,7 @@ describe("local gateway request context", () => {
       api: "openai-completions" as const,
     };
     const candidate = {
+      catalogOwner: { agentId: "main", workspaceDir: "/tmp/local-model-auth-workspace" },
       agentId: "main",
       agentDir: "/tmp/local-model-auth-agent",
       workspaceDir: "/tmp/local-model-auth-workspace",
@@ -146,10 +147,16 @@ describe("local gateway request context", () => {
         },
       })
       .mockResolvedValueOnce({ authModes: {}, authStore: { version: 1, profiles: {} } });
-    setPreparedModelRuntimeAuthLoader(candidate, refreshAuth);
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockResolvedValue(asPublishedOwner(candidate));
+      .mockImplementation(async () => {
+        const auth = await refreshAuth({ providerIds: ["local-auth-provider"] });
+        return asPublishedOwner({
+          ...candidate,
+          authModes: auth.authModes,
+          authStore: auth.authStore,
+        });
+      });
 
     const list = () =>
       withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
@@ -172,6 +179,14 @@ describe("local gateway request context", () => {
     expect(refreshAuth).toHaveBeenNthCalledWith(2, {
       providerIds: ["local-auth-provider"],
     });
+    expect(loadOwner).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
+    );
+    expect(loadOwner).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
+    );
     loadOwner.mockRestore();
   });
 
@@ -189,6 +204,7 @@ describe("local gateway request context", () => {
       },
     } as OpenClawConfig;
     const candidate = {
+      catalogOwner: { agentId: "main", workspaceDir: "/tmp/local-model-timeout-workspace" },
       agentId: "main",
       agentDir: "/tmp/local-model-timeout-agent",
       workspaceDir: "/tmp/local-model-timeout-workspace",

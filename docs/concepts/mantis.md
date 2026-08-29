@@ -420,6 +420,12 @@ noVNC, Node 22.22.3+, 24.15+, or 25.9+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
 
+The Telegram Desktop proof workflow runs on Ubuntu. Its lease fence requires
+Bash, util-linux `setsid`, and coreutils; the agent wrapper also uses GNU
+`timeout` and configured `sudo`. Setup uses Linux account tools, and cleanup
+inspects `/proc`. See the [focused Linux fence tests](/reference/test#linux-shell-integrations)
+for prerequisites and the local proof command.
+
 Credential and environment names used across Mantis commands and workflows:
 
 - `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN`

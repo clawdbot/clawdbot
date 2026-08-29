@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { WebSocket, type RawData } from "ws";
+import { GatewayWebSocketTlsPinError } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   type WorkerAdmissionResponseFrame,
   WorkerAdmissionResponseFrameSchema,
@@ -117,21 +118,17 @@ export function connectWorkerConnectionAttempt(
       if (!admitted) {
         const kind = opened ? "admission interrupted" : "connect failed";
         rejectAttempt(
-          new WorkerConnectionInterruptedError(
-            `${kind}: ${toWorkerConnectionError(error).message}`,
-          ),
+          error instanceof GatewayWebSocketTlsPinError
+            ? new WorkerConnectionEndpointError(error.message)
+            : new WorkerConnectionInterruptedError(
+                `${kind}: ${toWorkerConnectionError(error).message}`,
+              ),
         );
       }
     });
     socket.on("open", () => {
       if (!options.isCurrentGeneration() || options.isTerminal()) {
         socket.close();
-        return;
-      }
-      const tlsError = target.validateSocket(socket);
-      if (tlsError) {
-        rejectAttempt(new WorkerConnectionEndpointError(tlsError.message));
-        socket.close(1008, tlsError.message);
         return;
       }
       options.onAdmitting();

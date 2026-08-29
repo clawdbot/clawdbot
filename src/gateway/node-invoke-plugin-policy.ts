@@ -14,12 +14,14 @@ import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js"
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
+import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeSession } from "./node-registry.js";
 import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
@@ -361,8 +363,19 @@ export async function applyPluginNodeInvokePolicy(params: {
 
   let nodeCommandDispatched = false;
   let nodeGateDecisionRecorded = false;
-  const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
-    override = {},
+  const pluginRecord = registry?.plugins.find((record) => record.id === entry.pluginId);
+  const policy = entry.policy;
+  const isPluginCurrent = () =>
+    getActivePluginGatewayNodePolicyRegistry() === registry &&
+    entry.policy === policy &&
+    registry?.nodeInvokePolicies.includes(entry) === true &&
+    (!pluginRecord ||
+      (registry.plugins.includes(pluginRecord) &&
+        pluginRecord.enabled &&
+        pluginRecord.status === "loaded"));
+  const dispatchNode = async (
+    override: Parameters<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>[0] = {},
+    sessionAuthority?: { assertCurrent: () => void; signal: AbortSignal },
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
     const deny = (
       reasonCode: string,
@@ -378,6 +391,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       });
       return result;
     };
+    sessionAuthority?.assertCurrent();
     if (
       callerIdentity &&
       params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
@@ -452,6 +466,14 @@ export async function applyPluginNodeInvokePolicy(params: {
         : requestedTimeoutMs;
     // Pairing and policy checks above may await. Revalidate the exact runtime
     // capability at the final transport handoff so closure wins that race.
+    sessionAuthority?.assertCurrent();
+    if (!isPluginCurrent()) {
+      return deny("node_plugin_replaced", {
+        ok: false,
+        code: "PLUGIN_POLICY_CHANGED",
+        message: "node plugin policy changed before dispatch",
+      });
+    }
     if (
       callerIdentity &&
       params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
@@ -478,7 +500,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         "Gateway node pairing, capability, and plugin policy gates allowed transport dispatch.",
     });
     nodeGateDecisionRecorded = true;
-    const res = await params.context.nodeRegistry.invoke({
+    const res = await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
       ...(params.nodeSession.pairingGeneration
@@ -487,19 +509,36 @@ export async function applyPluginNodeInvokePolicy(params: {
       command: params.command,
       params: override.params ?? params.params,
       timeoutMs,
-      ...(params.signal ? { signal: params.signal } : {}),
+      ...(sessionAuthority
+        ? {
+            signal: params.signal
+              ? AbortSignal.any([params.signal, sessionAuthority.signal])
+              : sessionAuthority.signal,
+          }
+        : params.signal
+          ? { signal: params.signal }
+          : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
       ...(params.nodeInvokeStream && {
         onProgress: params.nodeInvokeStream.onProgress,
         idleTimeoutMs: params.nodeInvokeStream.idleTimeoutMs,
       }),
-      isDispatchAuthorized: () =>
-        (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-        (!callerIdentity ||
-          params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
-        params.isApprovalAuthorityActive?.() !== false &&
-        resolveCommandAuthorization().ok,
+      isDispatchAuthorized: () => {
+        try {
+          sessionAuthority?.assertCurrent();
+        } catch {
+          return false;
+        }
+        return (
+          isPluginCurrent() &&
+          (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
+          (!callerIdentity ||
+            params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
+          params.isApprovalAuthorityActive?.() !== false &&
+          resolveCommandAuthorization().ok
+        );
+      },
       onDispatchReady: (invokeId) => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.
@@ -547,6 +586,46 @@ export async function applyPluginNodeInvokePolicy(params: {
       payloadJSON: res.payloadJSON ?? null,
     };
   };
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const ownedInvocation =
+    params.nodeInvokeStream && params.client?.internal?.pluginRuntimeOwnerId === entry.pluginId
+      ? scope?.invokeWithSessionNodeAuthority
+      : undefined;
+  const invokeOwned = (
+    source: "human-approved" | "session-full",
+    override: NonNullable<Parameters<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>[0]>,
+    createParams?: () => unknown,
+  ) =>
+    ownedInvocation && override.workspace
+      ? ownedInvocation(
+          {
+            pluginId: entry.pluginId,
+            command: params.command,
+            nodeId: params.nodeSession.nodeId,
+            workspace: override.workspace,
+            source,
+          },
+          async (assertCurrent, signal) => {
+            if (params.sessionKey !== override.workspace?.sessionKey) {
+              throw new Error("Node launch requires its authenticated outer session");
+            }
+            return await dispatchNode(
+              createParams ? { ...override, params: createParams() } : override,
+              { assertCurrent, signal },
+            );
+          },
+        )
+      : undefined;
+  const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (override = {}) => {
+    if (!ownedInvocation || !override.workspace) {
+      return await dispatchNode(override);
+    }
+    const result = await invokeOwned("human-approved", override);
+    if (!result) {
+      throw new Error("Node launch lost its admitted owner");
+    }
+    return result;
+  };
 
   let result: OpenClawPluginNodeInvokePolicyResult;
   try {
@@ -579,6 +658,12 @@ export async function applyPluginNodeInvokePolicy(params: {
         turnSource: trustedTurnSource,
       }),
       invokeNode,
+      ...(ownedInvocation
+        ? {
+            invokeNodeWithSessionFull: async ({ workspace, createParams }) =>
+              await invokeOwned("session-full", { workspace }, createParams),
+          }
+        : {}),
     });
   } catch (error) {
     // Plugin policy handlers may settle after their exact caller authority

@@ -3,14 +3,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import {
   inspectPlugin,
   readPluginCapabilityConsentError,
 } from "../../lib/plugins/capability-consent-error.ts";
 import {
   installPlugin,
-  pluginInstallNeedsRiskAcknowledgement,
-  readPluginInstallTrustError,
   runPluginConfigMutation,
   setPluginEnabled,
   type PluginInstallRequest,
@@ -21,6 +20,7 @@ import {
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
+import { confirmPluginInstall } from "./plugin-lifecycle-confirmation.ts";
 import { pluginRowKey, type PluginRowMessage } from "./view.ts";
 
 type PluginMutationSuccess<Result> = (
@@ -30,6 +30,11 @@ type PluginMutationSuccess<Result> = (
   isCurrent: () => boolean,
   isLatest: () => boolean,
 ) => Promise<void>;
+
+type PluginMutationOptions = {
+  confirm?: () => Promise<boolean>;
+  preserveMessageWhilePending?: boolean;
+};
 
 type PluginsConsentControllerHost = {
   gateway: GatewayPageController;
@@ -75,27 +80,41 @@ export class PluginsConsentController {
 
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
+  // Server reviews continue one confirmed install only while its Gateway epoch survives.
+  // Reconnect reset drops the scope before a surviving row warning can be acknowledged.
+  private readonly confirmedInstallScopes = new Map<string, GatewayConnectionScope>();
 
   constructor(private readonly host: PluginsConsentControllerHost) {}
 
   reset(): void {
     this.close();
     this.mutationTokens.clear();
+    this.confirmedInstallScopes.clear();
   }
 
   async runMutation<Result>(
     rowKey: string,
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
     onSuccess: PluginMutationSuccess<Result>,
-    onError: (error: unknown) => void = (error) => {
+    options: PluginMutationOptions = {},
+    onError: (error: unknown, scope: GatewayConnectionScope) => void = (error) => {
       this.host.setMessage(rowKey, { kind: "error", text: formatUiError(error) });
     },
-    options: { preserveMessageWhilePending?: boolean } = {},
   ): Promise<void> {
     const scope = this.host.gateway.capture();
     if (!scope || !this.host.canMutate() || this.host.isBusy(rowKey)) {
       return;
     }
+    if (
+      options.confirm &&
+      (!(await options.confirm()) ||
+        !this.host.gateway.isCurrent(scope) ||
+        !this.host.canMutate() ||
+        this.host.isBusy(rowKey))
+    ) {
+      return;
+    }
+    // Confirmation, config queue, and request share the captured Gateway epoch and client.
     this.host.clearPageNotice();
     const mutationToken = ++this.mutationToken;
     this.mutationTokens.set(rowKey, mutationToken);
@@ -111,13 +130,14 @@ export class PluginsConsentController {
         this.host.getContext().runtimeConfig,
         scope.client,
         mutate,
+        { canDispatch: () => isCurrent() && this.host.canMutate() },
       );
       if (isCurrent()) {
         await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent, isLatest);
       }
     } catch (error) {
       if (isCurrent()) {
-        onError(error);
+        onError(error, scope);
       }
     } finally {
       if (this.mutationTokens.get(rowKey) === mutationToken) {
@@ -211,6 +231,13 @@ export class PluginsConsentController {
   }
 
   async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
+    const confirmedScope = this.confirmedInstallScopes.get(installIdentity);
+    this.confirmedInstallScopes.delete(installIdentity);
+    const isConfirmedContinuation =
+      (request.acknowledgeInstallPolicyWarning === true ||
+        request.acknowledgeCapabilities !== undefined) &&
+      confirmedScope &&
+      this.host.gateway.isCurrent(confirmedScope);
     // The server stages and inspects the requested artifact before asking for consent.
     // Catalog/search metadata cannot authorize that artifact's capabilities.
     await this.runMutation(
@@ -228,9 +255,14 @@ export class PluginsConsentController {
         );
         await this.host.refreshCatalogAfterMutation(client);
       },
-      (error) => {
+      {
+        confirm: isConfirmedContinuation ? undefined : () => confirmPluginInstall(request),
+        preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
+      },
+      (error, scope) => {
         const consentDetails = readPluginCapabilityConsentError(error);
         if (consentDetails) {
+          this.confirmedInstallScopes.set(installIdentity, scope);
           this.open(
             { kind: "install", request, installIdentity },
             consentDetails.pluginId,
@@ -240,6 +272,7 @@ export class PluginsConsentController {
         }
         const policyWarning = readPluginInstallPolicyWarning(error);
         if (policyWarning) {
+          this.confirmedInstallScopes.set(installIdentity, scope);
           this.host.setMessage(installIdentity, {
             kind: "warning",
             text: policyWarning.reason,
@@ -247,22 +280,8 @@ export class PluginsConsentController {
           });
           return;
         }
-        const trust = readPluginInstallTrustError(error);
-        const packageName = request.source === "clawhub" ? request.packageName : null;
-        if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.host.setMessage(installIdentity, {
-            kind: "error",
-            text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
-            acknowledge: {
-              packageName,
-              ...(trust?.version ? { version: trust.version } : {}),
-            },
-          });
-          return;
-        }
         this.host.setMessage(installIdentity, { kind: "error", text: formatUiError(error) });
       },
-      { preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true },
     );
   }
 
@@ -288,6 +307,7 @@ export class PluginsConsentController {
           this.host.getContext().gateway.connect();
         }
       },
+      {},
       (error) => {
         const details = readPluginCapabilityConsentError(error);
         if (enabled && details) {

@@ -576,6 +576,23 @@ describe("sendMessageMattermost", () => {
     expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to the original image URL after a capped optimized upload fails", async () => {
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.alloc(512),
+      fileName: "optimized.jpg",
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    mockState.uploadMattermostFile.mockRejectedValueOnce(new Error("upload unavailable"));
+    await expect(
+      sendMessageMattermost("channel:town-square", "caption", {
+        cfg: { agents: { defaults: { mediaMaxMb: 1 / 1024 } } },
+        mediaUrl: "https://example.com/original-large.png",
+      }),
+    ).rejects.toThrow("upload unavailable");
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
+  });
+
   it("builds interactive button props when buttons are provided", async () => {
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",

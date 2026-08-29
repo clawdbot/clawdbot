@@ -10,6 +10,7 @@ import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 
@@ -21,6 +22,7 @@ type ManagerCreateInFlight = {
 };
 
 type AdvertisedScopedCatalogEntry = {
+  configFingerprint: string;
   servers: Map<string, McpServerCatalog>;
   toolsByServer: Map<string, McpCatalogTool[]>;
   signaturesByServer: Map<string, string>;
@@ -117,8 +119,16 @@ export type SessionMcpRuntimeManagerLifecycle = {
     sessionId: string,
     opts?: { preserveRequiredRetirement?: boolean },
   ) => Promise<void>;
-  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  rememberAdvertisedScopedCatalog: (
+    handle: RequesterScopedMcpRuntimeHandle,
+    catalog: McpToolCatalog,
+  ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
+  reconcileAdvertisedScopedCatalogConfig: (
+    sessionId: string,
+    fingerprint: string,
+    preparePublication: boolean,
+  ) => void;
 };
 
 function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
@@ -325,15 +335,16 @@ export function createSessionMcpRuntimeManagerLifecycle(
     forgetSessionKeysForSessionId(sessionId);
   };
 
-  const rememberAdvertisedScopedCatalog = (sessionId: string, catalog: McpToolCatalog): void => {
-    let entry = store.advertisedScopedCatalogBySessionId.get(sessionId);
-    if (!entry) {
-      entry = {
-        servers: new Map(),
-        toolsByServer: new Map(),
-        signaturesByServer: new Map(),
-      };
-      store.advertisedScopedCatalogBySessionId.set(sessionId, entry);
+  const rememberAdvertisedScopedCatalog = (
+    handle: RequesterScopedMcpRuntimeHandle,
+    catalog: McpToolCatalog,
+  ): void => {
+    const { runtime, advertisedCatalogConfigFingerprint } = handle;
+    // An older requester may finish after reconciliation; reject its catalog
+    // instead of allowing stale tools to repopulate the session cache.
+    const entry = store.advertisedScopedCatalogBySessionId.get(runtime.sessionId);
+    if (entry?.configFingerprint !== advertisedCatalogConfigFingerprint) {
+      return;
     }
     const toolsByServerName = new Map<string, McpCatalogTool[]>();
     for (const tool of catalog.tools) {
@@ -382,6 +393,23 @@ export function createSessionMcpRuntimeManagerLifecycle(
     };
   };
 
+  const reconcileAdvertisedScopedCatalogConfig = (
+    sessionId: string,
+    fingerprint: string,
+    preparePublication: boolean,
+  ): void => {
+    const current = store.advertisedScopedCatalogBySessionId.get(sessionId);
+    if (current?.configFingerprint === fingerprint || (!current && !preparePublication)) {
+      return;
+    }
+    store.advertisedScopedCatalogBySessionId.set(sessionId, {
+      configFingerprint: fingerprint,
+      servers: new Map(),
+      toolsByServer: new Map(),
+      signaturesByServer: new Map(),
+    });
+  };
+
   return {
     store,
     forgetSessionKeysForSessionId,
@@ -396,5 +424,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
     disposeManagedSession,
     rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog,
+    reconcileAdvertisedScopedCatalogConfig,
   };
 }

@@ -362,12 +362,14 @@ describe("session list replacement options", () => {
       archived: false,
     });
     expect(sessions.state.result?.sessions[0]?.sessionId).toBeUndefined();
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
 
     await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({
       sessionId: "replacement-session",
       archived: false,
     });
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
 
     await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.state.result?.sessions[0]?.archived).toBe(false);

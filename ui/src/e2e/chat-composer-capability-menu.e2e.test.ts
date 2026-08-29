@@ -2,7 +2,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI composer capability menu",
@@ -528,7 +528,8 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
-        deferredMethods: ["sessions.list", "tools.effective"],
+        deferredMethods: ["tools.effective"],
+        heldMethods: ["sessions.list"],
         methodResponses: {
           "config.get": configResponse({
             github: { url: "https://mcp.example.test", enabled: true },
@@ -550,7 +551,7 @@ suite.define(() => {
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
       const listIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
       await expect.poll(() => listIssues.isDisabled()).toBe(true);
-      await expect.poll(() => listIssues.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => tooltipTitleText(listIssues)).toBe("Loading…");
       await listIssues.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -591,12 +592,12 @@ suite.define(() => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');
       await expect.poll(() => clear.isDisabled()).toBe(true);
-      await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
+      await expect.poll(() => tooltipTitleText(clear)).toContain("operator.admin access");
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const docs = menu.getByRole("menuitem", { name: /^Docs/ });
       await expect.poll(() => docs.isDisabled()).toBe(true);
-      await expect.poll(() => docs.getAttribute("title")).toContain("operator.admin access");
+      await expect.poll(() => tooltipTitleText(docs)).toContain("operator.admin access");
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
@@ -604,10 +605,11 @@ suite.define(() => {
         .toBe(true);
       const browse = menu.getByRole("menuitem", { name: "Browse connectors" });
       await expect.poll(() => browse.isDisabled()).toBe(true);
-      await expect.poll(() => browse.getAttribute("title")).toContain("Admin access");
+      await browse.hover();
+      await expect.poll(() => tooltipTitleText(browse)).toContain("Admin access");
       const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
       await expect.poll(() => addServer.isDisabled()).toBe(true);
-      await expect.poll(() => addServer.getAttribute("title")).toContain("Admin access");
+      await expect.poll(() => tooltipTitleText(addServer)).toContain("Admin access");
     });
   });
 
@@ -633,7 +635,7 @@ suite.define(() => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const webSearch = webSearchItem(menu);
       await expect.poll(() => webSearch.isDisabled()).toBe(true);
-      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => tooltipTitleText(webSearch)).toBe("Loading…");
       await webSearch.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -649,7 +651,7 @@ suite.define(() => {
         }),
       );
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
-      await expect.poll(() => webSearchItem(menu).getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toBe("Loading…");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await gateway.resolveDeferred("config.get", configResponse({}, false));

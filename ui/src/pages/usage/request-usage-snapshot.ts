@@ -5,7 +5,7 @@ import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
+import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/usage.ts";
 
 type UsageSnapshotValue = {
   result: Awaited<ReturnType<typeof requestSessionUsage>>;

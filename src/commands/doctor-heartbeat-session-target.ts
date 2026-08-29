@@ -90,7 +90,9 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
         sessionKey: canonicalSession,
         storePath,
       }) ??
-      (fs.existsSync(storePath) ? loadLegacySessionStore(storePath)[canonicalSession] : undefined);
+      (!storePath.endsWith(".sqlite") && fs.existsSync(storePath)
+        ? loadLegacySessionStore(storePath)[canonicalSession]
+        : undefined);
     if (entry) {
       continue;
     }

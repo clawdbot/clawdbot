@@ -31,7 +31,8 @@ EOF
 
 ensure_full_pr_worktree_checkout() {
   local sparse_checkout
-  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null || true)
+  # An unset key (exit 1) is normal; other Git failures must not skip materialization.
+  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null) || [ "$?" -eq 1 ] || return 1
   if [ "$sparse_checkout" = "true" ]; then
     # Prepare gates build the whole repository. Inherited sparse settings can
     # omit tracked transitive inputs and turn healthy PRs into false failures.
@@ -215,20 +216,23 @@ checkout_pr_worktree_target() {
 }
 
 enter_worktree() {
+  # OR-list callers disable errexit throughout this function; guard required steps explicitly.
   local pr="$1"
   local reset_to_main="${2:-false}"
   local invoke_cwd
   invoke_cwd="$PWD"
   local root
-  root=$(repo_root)
+  root=$(repo_root) || return 1
 
   if [ "$invoke_cwd" != "$root" ]; then
     echo "Detected non-root invocation cwd=$invoke_cwd, using canonical root $root"
   fi
 
-  cd "$root"
-  ensure_gh_api_auth
-  git -C "$root" fetch origin main
+  cd "$root" || return 1
+  ensure_gh_api_auth || return 1
+  # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
+  mark_pr_operation_side_effects_started || return 1
+  git -C "$root" fetch origin main || return 1
 
   # Resolve through the parent, never through the leaf: a missing directory has
   # no real path of its own, and resolving a leaf symlink would silently adopt
@@ -241,7 +245,7 @@ enter_worktree() {
   if [ ! -d "$dir" ] || [ -z "$resolved_dir" ] || ! worktree_is_registered "$resolved_dir"; then
     if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
       echo "Pruning stale worktree registration for .worktrees/pr-$pr"
-      git -C "$root" worktree prune
+      git -C "$root" worktree prune || return 1
       remove_worktree_if_present "$dir"
       [ ! -e "$dir" ] || {
         echo "Refusing scripts/pr operation for PR #$pr: $dir is not a registered worktree and could not be cleared; scripts/pr refuses to mutate the shared canonical checkout." >&2
@@ -249,11 +253,11 @@ enter_worktree() {
       }
     fi
     # Per-PR locking makes resetting this script-owned branch namespace safe.
-    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main
-    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr"
+    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main || return 1
+    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr" || return 1
   fi
 
-  cd "$resolved_dir"
+  cd "$resolved_dir" || return 1
 
   # Containment, not repair: every mutation below runs against ambient cwd, so
   # prove Git resolves it to this worktree before any branch moves. A directory
@@ -266,9 +270,10 @@ enter_worktree() {
     return 1
   fi
 
+  # Fetch before replaying a journal or changing the tracked tree.
+  git fetch origin main || return 1
   recover_review_transition "$pr" || return 1
-  ensure_full_pr_worktree_checkout
-  git fetch origin main
+  ensure_full_pr_worktree_checkout || return 1
   if [ "$reset_to_main" = "true" ]; then
     checkout_pr_worktree_target "$pr" origin/main "temp/pr-$pr" || return 1
   fi

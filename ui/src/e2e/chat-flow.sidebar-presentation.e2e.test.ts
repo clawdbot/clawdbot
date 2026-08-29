@@ -47,6 +47,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const proofVideo = page.video();
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
@@ -139,6 +142,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
     const running = chatSessionListResponse([
@@ -403,6 +409,22 @@ suite.define(() => {
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
+      expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
+      if (captureUiProofEnabled) {
+        await page.locator(".shell-nav").screenshot({
+          path: path.join(sessionSecondRowProofDir, "00-default-hidden-preview.png"),
+        });
+      }
+      await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
+      expect(
+        await previewToggle.evaluate(
+          (item) => (item as HTMLElement & { checked: boolean }).checked,
+        ),
+      ).toBe(false);
+      await previewToggle.click();
+      await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
       const homeBoard = sidebar
         .locator(".nav-item--home")

@@ -2780,6 +2780,17 @@ describe("createTelegramBot", () => {
           providers: ["anthropic", "openai"],
           resolvedDefault: { provider: defaultProvider, model: defaultModel },
           modelNames: new Map(),
+          modelCatalog: [
+            { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },
+            { provider: "openai", id: "gpt-4.1", name: "GPT-4.1", reasoning: false },
+            { provider: "openai", id: "gpt-5", name: "GPT-5", reasoning: true },
+            {
+              provider: "anthropic",
+              id: "claude-sonnet-4-5",
+              name: "Claude Sonnet",
+              reasoning: true,
+            },
+          ],
         });
 
         loadConfig.mockReturnValue(config);
@@ -2816,6 +2827,7 @@ describe("createTelegramBot", () => {
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],
       resolvedDefault: { provider: "openai", model: "gpt-5" },
+      modelCatalog: [],
       modelNames: new Map<string, string>([
         ["openai/gpt-4.1", "GPT 4.1 Bridge"],
         ["openai/gpt-5", "GPT Five Bridge"],

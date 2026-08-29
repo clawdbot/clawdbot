@@ -241,7 +241,8 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   deleteTestEnvValue("OPENCLAW_HOME");
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-  // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
+  // Derive all state, including SQLite, from this unique HOME so cleanup owns it.
+  // Leave the override unset so nested HOME scopes also isolate their state.
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
   deleteTestEnvValue("OPENCLAW_AGENT_DIR");
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).

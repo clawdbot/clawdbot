@@ -303,6 +303,30 @@ suite.define(() => {
   });
 
   it.each([
+    { name: "tablet", width: 1024 },
+    { name: "phone", width: 390 },
+  ])("spans the $name settings viewport while reconnecting", async ({ width }) => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
+      await page.locator("openclaw-app-shell").waitFor();
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1012, "test reconnect");
+
+      const notice = page.locator('.connection-action-block[role="status"]');
+      await notice.waitFor();
+      const bounds = await notice.boundingBox();
+      expect(bounds?.x).toBe(0);
+      expect(bounds?.width).toBe(width);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it.each([
     {
       name: "missing token",
       error: {

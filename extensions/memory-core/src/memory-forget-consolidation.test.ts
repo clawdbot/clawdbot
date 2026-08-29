@@ -85,6 +85,8 @@ describe("memory forget", () => {
       const snippet =
         action === "merged" ? "The launch code is violet." : "The launch code is cobalt.";
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const diaryPath = path.join(workspaceDir, "DREAMS.md");
+      await fs.writeFile(diaryPath, "# Dream Diary\nKeep this unrelated diary entry.\n");
       const previousMemory = [
         "# Long-Term Memory",
         ...(action === "superseded" ? ["<!-- openclaw-memory-lineage:launch-code -->"] : []),
@@ -208,6 +210,10 @@ describe("memory forget", () => {
           .get(),
       ).toBeUndefined();
 
+      expect(await fs.readFile(diaryPath, "utf8")).toContain(snippet);
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      resetPluginStateStoreForTests();
       const report = await forgetMemoryEntries({
         cfg,
         agentId: "gamma",
@@ -215,15 +221,113 @@ describe("memory forget", () => {
       });
       expect(report).toMatchObject({
         entryKeys: expect.arrayContaining([promoted!.key]),
-        artifacts: { memoryEntries: 1, backups: 1 },
+        artifacts: { memoryEntries: 3, backups: 1 },
       });
       expect(await fs.readFile(memoryPath, "utf8")).not.toContain(snippet);
       expect((await readBackups()).every(({ value }) => !value.content.includes(priorEntry))).toBe(
         true,
       );
       expect(listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
+      const diary = await fs.readFile(diaryPath, "utf8");
+      expect.soft(diary).not.toContain(priorEntry);
+      expect.soft(diary).not.toContain(snippet);
+      expect(diary).toContain("Keep this unrelated diary entry.");
+      expect(report.refusals).toEqual([]);
+      const repeated = await forgetMemoryEntries({
+        cfg,
+        agentId: "gamma",
+        sessionIds: ["private-session"],
+      });
+      expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
     },
   );
+
+  it.each(["DREAMS.md", "dreams.md"])(
+    "warns and preserves historical untraceable highlights in %s",
+    async (diaryName) => {
+      await seedSession("target");
+      recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: [
+          {
+            entryKey: "historical",
+            agentId: "main",
+            sessionId: "target",
+            sessionKey: "agent:main:target",
+            originClass: "owner",
+            observedAt: 1_000,
+          },
+        ],
+      });
+      const diaryPath = path.join(workspaceDir, diaryName);
+      const historical =
+        "# Dream Diary\n## Memory Consolidation History\n- Highlights:\n  - `+ <!-- openclaw-memory-promotion:historical -->`\n  - `+ Untraceable historical fact.`\n";
+      await fs.writeFile(diaryPath, historical);
+      const preview = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        sessionIds: ["target"],
+        dryRun: true,
+      });
+      expect(preview.refusals).toEqual([expect.stringContaining("review them manually")]);
+      expect(preview.artifacts.memoryFiles).toBe(0);
+      const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+      expect(report.refusals).toEqual(preview.refusals);
+      expect(await fs.readFile(diaryPath, "utf8")).toBe(historical);
+      const repeated = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        sessionIds: ["target"],
+        dryRun: true,
+      });
+      expect(repeated.refusals).toEqual(preview.refusals);
+    },
+  );
+
+  it("removes only the selected historical session highlight, not its following sibling", async () => {
+    await seedSession("target");
+    const diaryPath = path.join(workspaceDir, "DREAMS.md");
+    const selected =
+      "  - `+ Session ID: target; Selected private fact.`\n    Selected continuation.";
+    const survivor =
+      "  - `+ Keep this unrelated historical fact.`\n<!-- openclaw-memory-promotion:unrelated -->\n- Unrelated adjacent marked entry.";
+    const heading = "## Memory Consolidation History\n";
+    await fs.writeFile(diaryPath, `${heading}${selected}\n${survivor}\n`);
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+    expect(await fs.readFile(diaryPath, "utf8")).toBe(`${heading}${survivor}\n`);
+    expect(report.refusals).toEqual([expect.stringContaining("review them manually")]);
+  });
+
+  it.each(["## Session ID: target", "Session: saved; Session ID: target;"])(
+    "preserves section cleanup for the multiline header %s",
+    async (header) => {
+      await seedSession("target");
+      const diaryPath = path.join(workspaceDir, "DREAMS.md");
+      const survivor = "## Other session\n- Keep this separate section.\n";
+      await fs.writeFile(
+        diaryPath,
+        `${header}\n- Selected first line.\n  Selected continuation.\n- Selected second line.\n${survivor}`,
+      );
+      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+      expect(await fs.readFile(diaryPath, "utf8")).toBe(survivor);
+    },
+  );
+
+  it("does not warn after removing every traceable historical highlight", async () => {
+    await seedSession("target");
+    const quote = "User: This exact historical quotation is attributable.";
+    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(corpusDir, { recursive: true });
+    await fs.writeFile(
+      path.join(corpusDir, "day.txt"),
+      `[main/sessions/main/target#L1] ${quote}\n`,
+    );
+    const diaryPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(diaryPath, `## Memory Consolidation History\n  - \`+ ${quote}\`\n`);
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+    expect(report.refusals).toEqual([]);
+    expect(await fs.readFile(diaryPath, "utf8")).not.toContain(quote);
+  });
 
   it("removes a marker-addressable plain-append promotion after budget compaction", async () => {
     await seedSession("target");

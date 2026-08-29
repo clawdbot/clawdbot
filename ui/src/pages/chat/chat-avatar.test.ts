@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
@@ -415,7 +415,11 @@ describe("attributed sender avatars", () => {
       { name: "Viewer", avatar: null },
       "",
       null,
-      { id: "c3e32452-0467-47e5-aafa-233cd5dae29f", name: "steipete" },
+      {
+        id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+        identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
+        name: "steipete",
+      },
     ]);
     expect(avatar?.tagName).toBe("IMG");
     expect(avatar?.getAttribute("src")).toBe(
@@ -424,19 +428,22 @@ describe("attributed sender avatars", () => {
     expect(avatar?.getAttribute("alt")).toBe("steipete");
   });
 
-  it("renders identity-colored initials when the sender has no profile route", () => {
-    const avatar = renderAvatar([
-      "user",
-      undefined,
-      { name: "Viewer", avatar: null },
-      "",
-      null,
-      { id: "alice@example.com", name: "Alice Lovelace" },
-    ]);
-    expect(avatar?.tagName).toBe("DIV");
-    expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
-    expect(avatar?.textContent?.trim()).toBe("AL");
-  });
+  it.each(["alice@example.com", "c3e32452-0467-47e5-aafa-233cd5dae29f"])(
+    "renders identity-colored initials for unqualified sender %s",
+    (id) => {
+      const avatar = renderAvatar([
+        "user",
+        undefined,
+        { name: "Viewer", avatar: null },
+        "",
+        null,
+        { id, name: "Alice Lovelace" },
+      ]);
+      expect(avatar?.tagName).toBe("DIV");
+      expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
+      expect(avatar?.textContent?.trim()).toBe("AL");
+    },
+  );
 
   it("keeps the local viewer identity when no sender is attributed", () => {
     const avatar = renderAvatar(["user", undefined, { name: "Viewer", avatar: null }, "", null]);
@@ -448,6 +455,7 @@ describe("attributed sender avatars", () => {
     render(
       renderChatAvatar("user", undefined, undefined, "", null, {
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+        identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
         name: "steipete",
       }),
       container,
@@ -475,6 +483,7 @@ describe("attributed sender avatars", () => {
     const container = document.createElement("div");
     const sender = {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
+      identity: { type: "profile" as const, id: "dd7c98e2-f51d-4590-b588-fa0682e165b7" },
       name: "hrudolph",
     };
     const renderSender = () =>

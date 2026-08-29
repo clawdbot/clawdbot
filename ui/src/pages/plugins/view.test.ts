@@ -48,7 +48,6 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     searchError: null,
     busy: {},
     messages: {},
-    pendingRemoval: {},
     detailPluginId: null,
     detailInspection: null,
     detailInspectionError: null,
@@ -76,8 +75,6 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onConfirmConsent: () => undefined,
     onRetryConsentInspection: () => undefined,
     onDismissMessage: () => undefined,
-    onRequestUninstall: () => undefined,
-    onCancelUninstall: () => undefined,
     onUninstall: () => undefined,
     onAddConnector: () => undefined,
     onSearchClawHub: () => undefined,
@@ -286,7 +283,7 @@ describe("renderPlugins", () => {
 
   it("offers enable and remove through direct row actions", () => {
     const onSetEnabled = vi.fn();
-    const onRequestUninstall = vi.fn();
+    const onUninstall = vi.fn();
     const removableKey = pluginRowKey("community-thing");
     const plugins = [
       createPlugin(),
@@ -299,48 +296,18 @@ describe("renderPlugins", () => {
       }),
     ];
     const container = mount(
-      createProps({ result: createResult(plugins), onSetEnabled, onRequestUninstall }),
+      createProps({ result: createResult(plugins), onSetEnabled, onUninstall }),
     );
     const row = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]')!;
     actionButton(row, "Enable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("community-thing", true, removableKey);
     actionButton(row, "Remove Community Thing")?.click();
-    expect(onRequestUninstall).toHaveBeenCalledWith(removableKey);
+    expect(onUninstall).toHaveBeenCalledWith("community-thing", removableKey);
 
     // Bundled plugins cannot be removed; the row still offers enable/disable.
     const bundledRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
     expect(actionButton(bundledRow, "Remove")).toBeNull();
     expect(actionButton(bundledRow, "Enable")).not.toBeNull();
-  });
-
-  it("confirms removal before uninstalling", () => {
-    const onUninstall = vi.fn();
-    const onCancelUninstall = vi.fn();
-    const rowKey = pluginRowKey("community-thing");
-    const plugins = [
-      createPlugin({
-        id: "community-thing",
-        name: "Community Thing",
-        origin: "global",
-        removable: true,
-        featured: false,
-      }),
-    ];
-    const container = mount(
-      createProps({
-        result: createResult(plugins),
-        pendingRemoval: { [rowKey]: true },
-        onUninstall,
-        onCancelUninstall,
-      }),
-    );
-
-    const confirm = container.querySelector<HTMLElement>(".plugins-remove-confirm");
-    expect(normalizedText(confirm)).toContain("Remove this plugin package and all of its entries?");
-    confirm?.querySelector<HTMLButtonElement>(".btn.danger")?.click();
-    expect(onUninstall).toHaveBeenCalledWith("community-thing", rowKey);
-    confirm?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
-    expect(onCancelUninstall).toHaveBeenCalledWith(rowKey);
   });
 
   it("opens the detail overlay from a row and renders actions and metadata", () => {
@@ -676,7 +643,7 @@ describe("renderPlugins", () => {
     expect(onSetEnabled).not.toHaveBeenCalled();
   });
 
-  it("renders row-local risk acknowledgement and busy state", () => {
+  it("renders a row-local ClawHub install error without a risk retry action", () => {
     const packageName = "@openclaw/calendar-plus";
     const key = clawHubKey(packageName);
     const onInstall = vi.fn();
@@ -701,7 +668,6 @@ describe("renderPlugins", () => {
           [key]: {
             kind: "error",
             text: "Review required.",
-            acknowledge: { packageName, version: "2.0.0" },
           },
         },
         onInstall,
@@ -711,16 +677,8 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`);
     expect(row?.getAttribute("aria-busy")).toBe("false");
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
-    row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
-    expect(onInstall).toHaveBeenCalledWith(
-      {
-        source: "clawhub",
-        packageName,
-        version: "2.0.0",
-        acknowledgeClawHubRisk: true,
-      },
-      key,
-    );
+    expect(row?.querySelector(".plugins-row-message button")).toBeNull();
+    expect(onInstall).not.toHaveBeenCalled();
   });
 
   it("renders install policy findings with cancel and acknowledged retry actions", () => {

@@ -1,3 +1,6 @@
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -5,18 +8,25 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
+import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
+  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
+  resultDetails,
+  testing,
 } from "./code-mode.test-support.js";
 import { installCodeModeOutcomeHook } from "./embedded-agent-runner/run/code-mode-outcome.js";
 import { Agent } from "./runtime/index.js";
-import { isToolResultError } from "./tool-result-error.js";
+import { createReadTool } from "./sessions/tools/read.js";
+import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 const model: Model = {
@@ -53,19 +63,26 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
 }
 
 async function runCodeModeAgent(params: {
-  programs: string[];
+  programs: Array<string | { wait: true }>;
   hiddenTools: AnyAgentTool[];
   codeModeSkills?: CodeModeSkill[];
+  harness?:
+    | ReturnType<typeof createCodeModeHarness>
+    | ReturnType<typeof createSubscribedCodeModeHarness>;
+  configureAgent?: (agent: Agent) => void;
 }) {
-  const { config, catalogRef, tools } = createCodeModeHarness({
-    codeModeSkills: params.codeModeSkills,
-  });
+  const harness =
+    params.harness ?? createCodeModeHarness({ codeModeSkills: params.codeModeSkills });
+  const { config, catalogRef, tools } = harness;
+  const sessionId = "sessionId" in harness ? harness.sessionId : "session-code-mode";
+  const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
+  const runId = "runId" in harness ? harness.runId : "run-code-mode";
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
-    sessionId: "session-code-mode",
-    sessionKey: "agent:main:main",
-    runId: "run-code-mode",
+    sessionId,
+    sessionKey,
+    runId,
     catalogRef,
     codeModeSkills: params.codeModeSkills,
   });
@@ -80,10 +97,20 @@ async function runCodeModeAgent(params: {
       providerContexts.push(context);
       const index = providerContexts.length - 1;
       const code = params.programs[index];
+      const waiting = code !== undefined && typeof code !== "string";
       const message = createAssistant(
         code === undefined
           ? [{ type: "text", text: "recovered" }]
-          : [{ type: "toolCall", id: `code-call-${index}`, name: "exec", arguments: { code } }],
+          : [
+              {
+                type: "toolCall",
+                id: `code-call-${index}`,
+                name: waiting ? "wait" : "exec",
+                arguments: waiting
+                  ? { runId: readToolResultDetails(context.messages.at(-1))?.runId }
+                  : { code },
+              },
+            ],
       );
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
@@ -97,19 +124,186 @@ async function runCodeModeAgent(params: {
       return stream;
     },
   });
+  params.configureAgent?.(agent);
   installCodeModeOutcomeHook({
     agent,
     onReconciliationCandidate: () => {
       reconciliationCandidates += 1;
     },
   });
-  await agent.prompt("finish the task despite tool errors");
+  try {
+    await agent.prompt("finish the task despite tool errors");
+  } finally {
+    if ("dispose" in harness) {
+      harness.dispose();
+    }
+  }
 
   return { agent, providerContexts, reconciliationCandidates };
 }
 
+type ParkedFailure =
+  | "read-only"
+  | "earlier mutation"
+  | "terminal read"
+  | "copied details"
+  | "cancel wait"
+  | "abort outcome";
+
+async function runParkedReadFailure(scenario: ParkedFailure) {
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), "code-mode-wait-")));
+  const input = join(workspace, "input.txt");
+  await writeFile(input, "audited input\n");
+  const readStarted = createDeferred();
+  const readRelease = createDeferred();
+  const readFinished = createDeferred();
+  const parked = createDeferred<Record<string, unknown>>();
+  const beginWait = createDeferred();
+  const outcomeEntered = createDeferred();
+  const outcomeRelease = createDeferred();
+  const effects: string[] = [];
+  const read = createReadTool(workspace, {
+    operations: {
+      access,
+      readFile: async (file) => {
+        readStarted.resolve();
+        await readRelease.promise;
+        try {
+          return await readFile(file);
+        } finally {
+          readFinished.resolve();
+        }
+      },
+    },
+  });
+  const executeRead = read.execute.bind(read);
+  read.execute = vi.fn(async (...args: Parameters<typeof executeRead>) => ({
+    ...(await executeRead(...args)),
+    ...(scenario === "terminal read" ? { terminate: true } : {}),
+  }));
+  const complete = pluginToolWithExecute("complete_task", "Complete the task", async () => {
+    effects.push("completed");
+    return jsonResult({ completed: true });
+  });
+  let activeAgent: Agent | undefined;
+  let waitDetails: Record<string, unknown> | undefined;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const running = runCodeModeAgent({
+    hiddenTools: [read, complete],
+    programs: [
+      `${scenario === "earlier mutation" ? "await complete_task({});" : ""}
+       json(await read({ path: ${JSON.stringify(input)} })); return missingAfterWait();`,
+      { wait: true },
+      "return await complete_task({});",
+    ],
+    configureAgent: (agent) => {
+      activeAgent = agent;
+      agent.afterToolCall = async ({ toolCall, result, isError }) => {
+        if (toolCall.name === "wait") {
+          waitDetails = resultDetails(result);
+          if (scenario === "copied details") {
+            return { details: structuredClone(waitDetails), isError: true };
+          }
+        }
+        return { isError: isError || isToolResultError(result) };
+      };
+      agent.afterToolOutcome = async ({ toolCall, result }) => {
+        if (toolCall.name === "exec" && readToolResultDetails(result)?.status === "waiting") {
+          vi.useRealTimers();
+          parked.resolve(resultDetails(result));
+          await beginWait.promise;
+        }
+        if (toolCall.name === "wait" && scenario === "abort outcome") {
+          outcomeEntered.resolve();
+          await outcomeRelease.promise;
+        }
+      };
+    },
+  });
+  try {
+    await readStarted.promise;
+    // Only the host deadline moves; the real worker has already dispatched the audited read.
+    await vi.advanceTimersByTimeAsync(10_000);
+    const suspended = await parked.promise;
+    expect(suspended).toMatchObject({
+      status: "waiting",
+      reason: "pending_tools",
+      replaySafe: false,
+    });
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(effects).toEqual(scenario === "earlier mutation" ? ["completed"] : []);
+    beginWait.resolve();
+    if (scenario === "cancel wait") {
+      await vi.waitFor(() => expect(testing.resumingRunIds.size).toBe(1));
+      activeAgent?.abort();
+    } else {
+      readRelease.resolve();
+    }
+    if (scenario === "abort outcome") {
+      await outcomeEntered.promise;
+      activeAgent?.abort();
+      outcomeRelease.resolve();
+    }
+    const result = await running;
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+    expect(testing.resumingRunIds.size).toBe(0);
+    expect(result.reconciliationCandidates).toBe(0);
+    expect(waitDetails).toMatchObject(
+      scenario === "cancel wait"
+        ? { status: "failed", code: "aborted" }
+        : {
+            status: "failed",
+            bridgeDispatchStarted: true,
+            error: expect.stringContaining("ReferenceError: missingAfterWait is not defined"),
+            output: [expect.objectContaining({ type: "json" })],
+          },
+    );
+    return { ...result, complete, effects, waitDetails };
+  } finally {
+    vi.useRealTimers();
+    activeAgent?.abort();
+    beginWait.resolve();
+    readRelease.resolve();
+    outcomeRelease.resolve();
+    await running;
+    await readFinished.promise;
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 describe("Code Mode agent-loop error recovery", () => {
-  afterEach(() => resetCodeModeTestState());
+  afterEach(() => {
+    resetCodeModeTestState();
+    vi.useRealTimers();
+  });
+
+  it("recovers from a real parked read failure and completes the requested mutation once", async () => {
+    const { agent, providerContexts, complete, effects } = await runParkedReadFailure("read-only");
+    expect(providerContexts).toHaveLength(4);
+    expect(complete.execute).toHaveBeenCalledOnce();
+    expect(effects).toEqual(["completed"]);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+    });
+  });
+
+  it.each([
+    "earlier mutation",
+    "terminal read",
+    "copied details",
+    "cancel wait",
+    "abort outcome",
+  ] as const)("prevents another provider turn after a parked failure with %s", async (scenario) => {
+    const { providerContexts, complete, effects, waitDetails } =
+      await runParkedReadFailure(scenario);
+    expect(providerContexts).toHaveLength(2);
+    expect(complete.execute).toHaveBeenCalledTimes(scenario === "earlier mutation" ? 1 : 0);
+    expect(effects).toEqual(scenario === "earlier mutation" ? ["completed"] : []);
+    // Replacing details before the outcome boundary must leave the original proof unused.
+    expect(consumeRepairableCodeModeFailure(waitDetails)).toBe(scenario === "copied details");
+  });
 
   it.each([
     {
@@ -259,6 +453,79 @@ describe("Code Mode agent-loop error recovery", () => {
     const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
       hiddenTools: [readOnly, recover],
       programs: ["return await sessions_history({});", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(readOnly.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses the terminal owner's input-aware read receipt for ordinary recovery", async () => {
+    const mixedAction = fakeTool("message", "Read or mutate messages");
+    mixedAction.parameters = {
+      type: "object",
+      properties: { action: { type: "string" } },
+      required: ["action"],
+    };
+    mixedAction.execute = vi.fn(async () => {
+      throw new Error("read-only operation failed after dispatch");
+    }) as AnyAgentTool["execute"];
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [mixedAction, recover],
+      harness: createSubscribedCodeModeHarness({ name: "input-aware-read-receipt" }),
+      programs: ['return await message({ action: "read" });', "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(mixedAction.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses the namespace owner's local read receipt for ordinary recovery", async () => {
+    const listResources = mcpTool({
+      name: "mcp_files_resources_list",
+      serverName: "files",
+      toolName: "resources/list",
+      operation: "resources_list",
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [listResources, recover],
+      programs: ["json(await MCP.$api()); return missingFn();", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(listResources.execute).not.toHaveBeenCalled();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses an exact plugin instance's replay-safe receipt for ordinary recovery", async () => {
+    const readOnly = pluginToolWithExecute("plugin_read", "Read plugin state", async () => {
+      throw new Error("plugin read failed after dispatch");
+    });
+    setPluginToolMeta(readOnly, {
+      pluginId: "replay-safe-read-test",
+      optional: false,
+      replaySafe: true,
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [readOnly, recover],
+      harness: createSubscribedCodeModeHarness({ name: "plugin-read-receipt" }),
+      programs: ["return await plugin_read({});", "return await recover_task({});"],
     });
 
     expect(providerContexts).toHaveLength(3);

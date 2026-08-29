@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -13,13 +14,80 @@ import {
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { MessageEndEvent } from "./extensions/types.js";
+import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("AgentSession runtime and transcript projections", () => {
+  it("preserves execution correlation IDs through redacted transcript persistence", async () => {
+    const dir = tempDirs.make("openclaw-correlation-projection-");
+    const scope = {
+      agentId: "main",
+      sessionId: "correlation-projection",
+      sessionKey: "agent:main:correlation-projection",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sessionManager = SessionManager.open(scope, dir);
+    guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
+    const ids = ["call_lookup|fc-jztpgrWaMLTnokJk", "call_lookup|fc-jztDifferentokJk"];
+    streamMocks.streamSimple
+      .mockImplementationOnce((model: Model) =>
+        createAssistantResultStream(
+          createAssistant(
+            model,
+            ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: { value: id } })),
+            "toolUse",
+          ),
+        ),
+      )
+      .mockImplementation((model: Model) =>
+        createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
+      );
+    const parameters = Type.Object({ value: Type.String() });
+    const lookupTool: ToolDefinition<typeof parameters> = {
+      name: "lookup",
+      label: "Lookup",
+      description: "Look up a record.",
+      parameters,
+      async execute(_toolCallId, args) {
+        return { content: [{ type: "text", text: args.value }], details: args };
+      },
+    };
+    const { session } = await createTestSession({ sessionManager, customTools: [lookupTool] });
+    const started: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "tool_execution_start") {
+        started.push(event.toolCallId);
+      }
+    });
+
+    await session.prompt("Look up both records.");
+
+    expect(started).toEqual(ids);
+    expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+    const stored = SessionManager.open(scope, dir)
+      .getBranch()
+      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+    expect(stored.find((message) => message.role === "assistant")).toMatchObject({
+      content: ids.map((id) => ({
+        type: "toolCall",
+        id,
+        arguments: { value: expect.not.stringContaining(id) },
+      })),
+    });
+    expect(stored.filter((message) => message.role === "toolResult")).toMatchObject(
+      ids.map((toolCallId) => ({
+        toolCallId,
+        content: [{ type: "text", text: expect.not.stringContaining(toolCallId) }],
+        details: { value: expect.not.stringContaining(toolCallId) },
+        isError: false,
+      })),
+    );
+  });
+
   it.each(["key", "apiKey", "account"])(
     "executes original %s arguments while preserving redacted storage and delivery facts",
     async (field) => {

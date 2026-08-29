@@ -16,6 +16,7 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { transferToolEffectReceipt } from "./tool-effect-receipt.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isTrustedToolExecutionPreflightError,
@@ -24,6 +25,7 @@ import {
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
+  readToolSearchCatalogTelemetry,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -37,7 +39,6 @@ import {
 import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogSource,
   CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
@@ -265,21 +266,6 @@ export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
   }
   const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
   return { ...outerRest, ...nestedInput, id: selectorValue };
-}
-
-function getTelemetry(catalog: ToolSearchCatalogSession) {
-  const sources: Record<CatalogSource, number> = { openclaw: 0, mcp: 0, client: 0 };
-  for (const entry of catalog.entries) {
-    sources[entry.source] += 1;
-  }
-  return {
-    catalogSize: catalog.entries.length,
-    sources,
-    counterScope: catalog.counterScope,
-    searchCount: catalog.searchCount,
-    describeCount: catalog.describeCount,
-    callCount: catalog.callCount,
-  };
 }
 
 type CatalogSchemaName = "inputSchema" | "outputSchema";
@@ -641,6 +627,8 @@ export class ToolSearchRuntime {
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      // Projection changes object identity; move the private terminal receipt with it.
+      transferToolEffectReceipt(candidate, snapshot);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
       return snapshot;
     };
@@ -665,6 +653,7 @@ export class ToolSearchRuntime {
           sourceName: entry.sourceName,
           toolCallId,
           parentToolCallId: options?.parentToolCallId,
+          replaySafe: this.isReplaySafeExactId(entry.id),
           input: normalizedInput,
           signal,
           onUpdate: options?.onUpdate,
@@ -711,7 +700,7 @@ export class ToolSearchRuntime {
   };
 
   telemetry() {
-    return getTelemetry(resolveCatalog(this.ctx));
+    return readToolSearchCatalogTelemetry(this.ctx);
   }
 }
 

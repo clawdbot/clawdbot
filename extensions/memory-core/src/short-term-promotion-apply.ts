@@ -631,7 +631,8 @@ export async function applyShortTermPromotions(
             extractPromotionKeys(value.content),
           ),
         );
-        pruneMemoryEntryOrigins({
+        await pruneMemoryEntryOrigins({
+          workspaceDir,
           agentIds: originAgentIds,
           entryKeys: extractPromotionKeys(existingMemory),
           retainedEntryKeys: new Set([

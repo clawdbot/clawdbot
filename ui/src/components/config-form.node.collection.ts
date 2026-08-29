@@ -38,7 +38,7 @@ import {
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
-  renderCollectionDefaultPresentation,
+  renderCollectionDefaultDescription,
   renderFlatDefaultRow,
   renderFieldRow,
   renderJsonTextareaControl,
@@ -98,7 +98,7 @@ export function renderObject(
     fallback && typeof fallback === "object" && !Array.isArray(fallback)
       ? (fallback as Record<string, unknown>)
       : {};
-  const defaultPresentation = renderCollectionDefaultPresentation(params, fallback);
+  const defaultDescription = renderCollectionDefaultDescription(params, fallback);
   const entries = objectPropertyKeys(schema)
     .map((key) => [key, objectPropertySchema(schema, key)] as const)
     .filter((entry): entry is readonly [string, ConfigNodeRenderParams["schema"]] =>
@@ -197,7 +197,7 @@ export function renderObject(
   // Top-level objects and label-less contexts emit rows directly into the
   // surrounding settings-group so row dividers stay sibling-driven.
   if (path.length === 1 || params.showLabel === false) {
-    return html`${path.length === 1 ? renderFlatDefaultRow(defaultPresentation) : nothing}${fields}`;
+    return html`${path.length === 1 ? renderFlatDefaultRow(defaultDescription) : nothing}${fields}`;
   }
 
   // Nested objects get collapsible treatment as an indented sub-block.
@@ -208,12 +208,11 @@ export function renderObject(
           <span class="settings-row__title">${label}</span>
           ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
           ${schema.default !== undefined
-            ? html`<span class="settings-row__desc">${defaultPresentation.description}</span>`
+            ? html`<span class="settings-row__desc">${defaultDescription}</span>`
             : nothing}
           ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
-          ${defaultPresentation.action}
           <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
         </div>
       </summary>
@@ -272,7 +271,7 @@ export function renderArray(
     : Array.isArray(schema.default)
       ? schema.default
       : UNSET_ARRAY_SOURCE_IDENTITY;
-  const defaultPresentation = renderCollectionDefaultPresentation(params, arrayValue);
+  const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
   const rowIdentities = rowIdentitiesForArray(arrayValue);
   const {
     minItems: minimumItems,
@@ -356,7 +355,7 @@ export function renderArray(
             ? html`<span class="settings-row__desc">${help}</span>`
             : nothing}
           ${showHeaderMeta && schema.default !== undefined
-            ? html`<span class="settings-row__desc">${defaultPresentation.description}</span>`
+            ? html`<span class="settings-row__desc">${defaultDescription}</span>`
             : nothing}
           ${renderTags(tags)}
         </div>
@@ -366,7 +365,6 @@ export function renderArray(
               count: String(arrayValue.length),
             })}</span
           >
-          ${defaultPresentation.action}
           <button
             type="button"
             class="btn btn--sm"

@@ -4,7 +4,8 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 import type { PluginHookRegistration } from "./types.js";
 
 describe("hook correlation fields", () => {
@@ -116,7 +117,10 @@ describe("hook correlation fields", () => {
       {
         cwd: process.cwd(),
         encoding: "utf8",
-        timeout: 3_000,
+        // Boots tsx in a child process, so the deadline must cover compile time on a
+        // loaded machine. A tight bound kills the probe (status null) and fails the
+        // assertions below for a reason unrelated to the hook timeout under test.
+        timeout: 30_000,
       },
     );
     oneShotAgentEndProbe = {

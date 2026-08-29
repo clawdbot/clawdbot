@@ -12,7 +12,8 @@ import {
 const requireFromHere = createRequire(import.meta.url);
 const repoRoot = process.cwd();
 const repoSourceEntry = path.join(repoRoot, "src", "entry.ts");
-const trustedTsxLoader = requireFromHere.resolve("tsx", { paths: [repoRoot] });
+const trustedTsxLoader = pathToFileURL(requireFromHere.resolve("tsx", { paths: [repoRoot] })).href;
+const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
 
 describe("resolveCurrentOpenClawCliInvocation", () => {
@@ -24,12 +25,35 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
         "--inspect",
         "127.0.0.1:9231",
         "--inspect-brk=0",
+        "--inspect-wait=0",
         "--inspect-port",
         "9230",
+        "--inspect-port=9232",
         "--trace-warnings",
       ]),
     ).toEqual(["--import", "/loader.mjs", "--trace-warnings"]);
   });
+
+  it.each([{ tsxArgs: ["--import", "tsx"] }, { tsxArgs: ["--import=tsx"] }])(
+    "pins the source parent's TSX import while preserving other runtime hooks: $tsxArgs",
+    ({ tsxArgs }) => {
+      const runtimeArgs = ["--trace-warnings", "--import", "/other-loader.mjs"];
+      const invocation = resolveCurrentOpenClawCliInvocation(commandArgs, {
+        argv1: repoSourceEntry,
+        cwd: repoRoot,
+        execArgv: [...runtimeArgs, ...tsxArgs],
+        execPath: process.execPath,
+      });
+      expect(invocation.args).toEqual([
+        ...runtimeArgs,
+        ...(tsxArgs.length === 2
+          ? ["--import", trustedTsxLoader]
+          : [`--import=${trustedTsxLoader}`]),
+        repoSourceEntry,
+        ...commandArgs,
+      ]);
+    },
+  );
 
   it("uses the source entry for a Node-hosted checkout harness", () => {
     expect(
@@ -43,6 +67,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
+      env: sourceEnv,
     });
   });
 
@@ -122,6 +147,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
+      env: sourceEnv,
     });
   });
 
@@ -136,6 +162,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
+      env: sourceEnv,
     });
   });
 });

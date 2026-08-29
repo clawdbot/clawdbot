@@ -58,6 +58,7 @@ export type AgentRuntimeIdentity = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   cronToolsAllowCapture?: "final-executable-surface";
+  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
@@ -89,6 +90,7 @@ type AgentRuntimeIdentityTokenPayload = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   cronToolsAllowCapture?: "final-executable-surface";
+  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
@@ -227,6 +229,9 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   messageActionContext: messageActionContextSchema.optional(),
   cronSelfManagementContext: cronSelfManagementContextSchema.optional(),
   cronToolsAllowCapture: z.literal("final-executable-surface").optional(),
+  cronExecToolTarget: z
+    .object({ host: z.literal("gateway"), ask: z.literal("always").optional() })
+    .optional(),
   cronCreatorAuthorityGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
   executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
@@ -372,6 +377,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     const sessionSpawnContext = raw.sessionSpawnContext;
     const executionLineageHandoffId = raw.executionLineageHandoffId;
     const cronToolsAllowCapture = raw.cronToolsAllowCapture;
+    const cronExecToolTarget = cronToolsAllowCapture ? raw.cronExecToolTarget : undefined;
     const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
     if (cronCreatorAuthorityGrant && !cronToolsAllowCapture) {
       return undefined;
@@ -404,6 +410,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
       ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
+      ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(executionIdentity ? { executionIdentity } : {}),
     };
@@ -426,6 +433,7 @@ export type AgentRuntimeIdentityTokenParams = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
   cronToolsAllowCapture?: "final-executable-surface";
+  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
@@ -528,6 +536,10 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
     ...(params.cronToolsAllowCapture === "final-executable-surface"
       ? { cronToolsAllowCapture: params.cronToolsAllowCapture }
       : {}),
+    ...(params.cronToolsAllowCapture === "final-executable-surface" &&
+    params.cronExecToolTarget?.host === "gateway"
+      ? { cronExecToolTarget: { ...params.cronExecToolTarget } }
+      : {}),
     ...(params.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: params.cronCreatorAuthorityGrant }
       : {}),
@@ -617,6 +629,7 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.cronToolsAllowCapture
       ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
       : {}),
+    ...(payload.cronExecToolTarget ? { cronExecToolTarget: payload.cronExecToolTarget } : {}),
     ...(payload.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),

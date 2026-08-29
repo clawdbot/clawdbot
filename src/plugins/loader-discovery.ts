@@ -5,11 +5,7 @@ import {
 } from "./discovery.js";
 import { pluginLoaderCacheState } from "./loader-cache.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
-import {
-  buildProvenanceIndex,
-  compareDuplicateCandidateOrder,
-  warnWhenAllowlistIsOpen,
-} from "./loader-provenance.js";
+import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
@@ -97,14 +93,9 @@ export function resolvePluginLoadDiscovery(params: {
   const manifestBySource = new Map(
     manifestRegistry.plugins.map((record) => [record.source, record]),
   );
-  const orderedCandidates = [...discovery.candidates].toSorted((left, right) =>
-    compareDuplicateCandidateOrder({
-      left,
-      right,
-      manifestBySource,
-      provenance,
-      env: context.env,
-    }),
+  // Manifest selection owns duplicate precedence; runtime consumes only its winners.
+  const orderedCandidates = discovery.candidates.filter((candidate) =>
+    manifestBySource.has(candidate.source),
   );
   return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
 }

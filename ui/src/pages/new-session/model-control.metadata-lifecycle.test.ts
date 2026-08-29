@@ -54,13 +54,14 @@ describe("new-session model metadata lifecycle", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     const { context, request } = contextWith(models);
     const firstControl = new NewSessionModelControl(() => undefined);
     firstControl.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(firstControl.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(firstControl.modelUnavailableReason(agent)).toBe("missing-auth"));
     firstControl.reset();
 
     const remountedControl = new NewSessionModelControl(() => undefined);
@@ -68,13 +69,11 @@ describe("new-session model metadata lifecycle", () => {
 
     const container = renderControl(remountedControl, context, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
-    expect(remountedControl.isModelUnavailable(agent)).toBe(true);
+    expect(remountedControl.modelUnavailableReason(agent)).toBe("missing-auth");
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
     ).not.toBeNull();
-    expect(container.textContent).toContain(
-      "Authentication failed. Review the provider credential or sign-in, then retry.",
-    );
+    expect(container.textContent).toContain("No models available");
     expect(request).toHaveBeenCalledOnce();
   });
 

@@ -39,7 +39,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
-import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -115,8 +115,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
     (deriveAvatarInitial(cardName || cardAgentId) || "?");
   const newSessionAccess = host.readNewSessionAccess();
-  // The sidebar action follows gateway availability; collapsed native chrome
-  // keeps its separate offline-tolerant ⌘N mirror.
   return html`
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
@@ -147,21 +145,14 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
-        <openclaw-tooltip
-          .content=${newSessionAccess.allowed
-            ? t("chat.runControls.newSession")
-            : newSessionAccess.reason}
-        >
-          <button
-            class="sidebar-brand__icon sidebar-brand__new-thread"
-            type="button"
-            @click=${() => host.requestOpenNewSession(host.expandedAgentId())}
-            aria-label=${t("chat.runControls.newSession")}
-            ?disabled=${!newSessionAccess.allowed}
-          >
-            ${icons.plus}
-          </button>
-        </openclaw-tooltip>
+        ${renderNewSessionLink({
+          basePath: host.basePath,
+          agentId: host.expandedAgentId(),
+          className: "sidebar-brand__icon sidebar-brand__new-thread",
+          label: t("chat.runControls.newSession"),
+          disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+        })}
       </div>
     </div>
   `;
@@ -321,21 +312,16 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
               users,
               (user) => user.id,
               (user) => {
-                const activity = personActivityLink(
-                  user.id,
-                  personActivityRouting({
-                    basePath: host.basePath,
-                    navigate: (route, options) => host.onNavigate?.(route, options),
-                  }),
-                )!;
                 return html`<div class="sidebar-online__row">
-                  <a
+                  <button
                     class="sidebar-online__person ${isPresenceViewerIdle(user)
                       ? "sidebar-online__person--away"
                       : ""}"
+                    type="button"
                     data-online-user-id=${user.id}
-                    href=${activity.href}
-                    @click=${activity.open}
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
                   >
                     <openclaw-viewer-avatar
                       .user=${user}
@@ -343,17 +329,10 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       variant="footer"
                       aria-hidden="true"
                     ></openclaw-viewer-avatar>
-                    <span class="sidebar-online__person-name"
-                      >${presenceViewerLabel(user)}</span
-                    > </a
-                  ><button
-                    class="sidebar-online__details"
-                    type="button"
-                    aria-haspopup="dialog"
-                    aria-expanded="false"
-                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
-                  >
-                    <span aria-hidden="true">${icons.chevronRight}</span>
+                    <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                    <span class="sidebar-online__person-action" aria-hidden="true"
+                      >${icons.chevronRight}</span
+                    >
                   </button>
                 </div>`;
               },

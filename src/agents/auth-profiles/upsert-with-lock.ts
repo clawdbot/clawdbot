@@ -11,7 +11,7 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "./sqlite.js";
 import { buildPersistedAuthProfileState } from "./state.js";
-import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
+import { saveAuthProfileStoreWithPreparedOwner, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
@@ -54,9 +54,9 @@ export async function persistAuthProfileBatch(
   const appliedProfiles = new Map<string, AuthProfileCredential>();
   let storeWasAbsent = false;
   let stateWasAbsent = false;
-  runAuthProfileWriteTransaction(
+  const preparedOwner = runAuthProfileWriteTransaction(
     params.agentDir,
-    (database) => {
+    (database, owner) => {
       storeWasAbsent =
         inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
       stateWasAbsent =
@@ -83,13 +83,15 @@ export async function persistAuthProfileBatch(
         }
       }
       if (appliedProfiles.size > 0) {
-        saveAuthProfileStore(
+        saveAuthProfileStoreWithPreparedOwner(
           next,
           params.agentDir,
           { filterExternalAuthProfiles: false, syncExternalCli: false },
           database,
+          owner,
         );
       }
+      return owner;
     },
     { sharedStoreWrite: true, stateDir: params.stateDir },
   );
@@ -102,7 +104,10 @@ export async function persistAuthProfileBatch(
       }
       runAuthProfileWriteTransaction(
         params.agentDir,
-        (database) => {
+        (database, owner) => {
+          if (database.path !== preparedOwner.databasePath) {
+            throw new Error("auth profile batch rollback belongs to another owner");
+          }
           const current = loadPersistedAuthProfileStore(params.agentDir, { database });
           if (!current) {
             return;
@@ -144,11 +149,12 @@ export async function persistAuthProfileBatch(
               }
             }
           }
-          saveAuthProfileStore(
+          saveAuthProfileStoreWithPreparedOwner(
             current,
             params.agentDir,
             { filterExternalAuthProfiles: false, syncExternalCli: false },
             database,
+            owner,
           );
           if (storeWasAbsent && Object.keys(current.profiles).length === 0) {
             deletePersistedAuthProfileStoreRaw(params.agentDir, database);
@@ -157,7 +163,7 @@ export async function persistAuthProfileBatch(
             writePersistedAuthProfileStateRaw(null, params.agentDir, database);
           }
         },
-        { sharedStoreWrite: true, stateDir: params.stateDir },
+        { sharedStoreWrite: true, env: preparedOwner.env },
       );
       rolledBack = true;
     },

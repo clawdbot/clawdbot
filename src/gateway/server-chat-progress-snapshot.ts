@@ -27,6 +27,9 @@ export function updateChatRunProgressSnapshot(
     event.stream === "run_status" &&
     [
       "preparing_workspace",
+      "naming_worktree",
+      "creating_worktree",
+      "running_setup",
       "provisioning_environment",
       "preparing_context",
       "starting_model",

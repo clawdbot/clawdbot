@@ -303,87 +303,92 @@ describe("Buzz bus lifecycle", () => {
     expect(relayMocks.send).not.toHaveBeenCalled();
   });
 
-  it("anchors signed threaded replies and typing while preserving top-level replies", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
-    const account: ResolvedBuzzAccount = {
-      accountId: ACCOUNT_ID,
-      name: "OpenClaw",
-      enabled: true,
-      configured: true,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      authTag: "",
-      publicKey: BOT_PUBLIC_KEY,
-      config: {
-        groupPolicy: "open",
-        groups: { [CHANNEL_ID]: { requireMention: false } },
-      },
-    };
-    const bus = await startTestBus({
-      onMessage: async (message, activeBus, signal, assertCurrent) =>
-        await handleBuzzInbound({
-          account,
-          cfg: {},
-          bus: activeBus,
-          message,
-          signal,
-          assertCurrent,
-          historyMap: new Map(),
-        }),
-    });
+  it.each(["all", "off"] as const)(
+    "signs %s-mode replies and typing without changing inbound threads",
+    async (replyToMode) => {
+      relayMocks.auth.mockResolvedValue("ok");
+      const runtime = createPluginRuntimeMock();
+      setBuzzRuntime(runtime);
+      const account: ResolvedBuzzAccount = {
+        accountId: ACCOUNT_ID,
+        name: "OpenClaw",
+        enabled: true,
+        configured: true,
+        relayUrl: "wss://buzz.example.com",
+        privateKey: PRIVATE_KEY,
+        authTag: "",
+        publicKey: BOT_PUBLIC_KEY,
+        config: {
+          groupPolicy: "open",
+          replyToMode,
+          groups: { [CHANNEL_ID]: { requireMention: false } },
+        },
+      };
+      const bus = await startTestBus({
+        onMessage: async (message, activeBus, signal, assertCurrent) =>
+          await handleBuzzInbound({
+            account,
+            cfg: {},
+            bus: activeBus,
+            message,
+            signal,
+            assertCurrent,
+            historyMap: new Map(),
+          }),
+      });
 
-    try {
-      const rootId = "a".repeat(64);
-      const messageSubscription = relayMocks.subscriptions.find((entry) =>
-        subscriptionIncludesKind(entry, 9),
-      );
-      for (const [index, parentId] of ["b".repeat(64), "c".repeat(64), undefined].entries()) {
-        const inbound = signSenderEvent({
-          kind: 9,
-          created_at: 1_700_000_000 + index,
-          content: `follow-up ${index + 1}`,
-          tags: [
-            ["h", CHANNEL_ID],
-            ...(parentId
-              ? [
-                  ["e", rootId, "", "root"],
-                  ["e", parentId, "", "reply"],
-                ]
-              : []),
-          ],
-        });
-        messageSubscription?.handlers.onevent(inbound);
-        await vi.waitFor(() =>
-          expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1),
+      try {
+        const rootId = "a".repeat(64);
+        const messageSubscription = relayMocks.subscriptions.find((entry) =>
+          subscriptionIncludesKind(entry, 9),
         );
-        const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[index]?.[0];
-        await dispatch?.delivery.deliver({ text: `reply ${index + 1}` }, { kind: "final" });
-        await dispatch?.replyPipeline?.typing?.start();
+        for (const [index, parentId] of ["b".repeat(64), "c".repeat(64), undefined].entries()) {
+          const inbound = signSenderEvent({
+            kind: 9,
+            created_at: 1_700_000_000 + index,
+            content: `follow-up ${index + 1}`,
+            tags: [
+              ["h", CHANNEL_ID],
+              ...(parentId
+                ? [
+                    ["e", rootId, "", "root"],
+                    ["e", parentId, "", "reply"],
+                  ]
+                : []),
+            ],
+          });
+          messageSubscription?.handlers.onevent(inbound);
+          await vi.waitFor(() =>
+            expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1),
+          );
+          const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[index]?.[0];
+          expect(dispatch?.ctxPayload.MessageThreadId).toBe(parentId ? rootId : undefined);
+          await dispatch?.delivery.deliver({ text: `reply ${index + 1}` }, { kind: "final" });
+          await dispatch?.replyPipeline?.typing?.start();
 
-        const published = relayMocks.publish.mock.calls.find(
-          ([event]) => event.kind === 9 && event.content === `reply ${index + 1}`,
-        )?.[0];
-        const typing = relayMocks.send.mock.calls
-          .map(([frame]) => JSON.parse(frame) as [string, Event])
-          .filter(
-            ([frameType, event]) =>
-              frameType === "EVENT" && event.kind === BUZZ_TYPING_INDICATOR_KIND,
-          )[index]?.[1];
-        const expectedTags = [
-          ["h", CHANNEL_ID],
-          ["e", parentId ? rootId : inbound.id, "", "reply"],
-        ];
-        expect(published?.tags).toEqual(expectedTags);
-        expect(typing?.tags).toEqual(expectedTags);
-        expect(published && verifyEvent(published)).toBe(true);
-        expect(typing && verifyEvent(typing)).toBe(true);
+          const published = relayMocks.publish.mock.calls.find(
+            ([event]) => event.kind === 9 && event.content === `reply ${index + 1}`,
+          )?.[0];
+          const typing = relayMocks.send.mock.calls
+            .map(([frame]) => JSON.parse(frame) as [string, Event])
+            .filter(
+              ([frameType, event]) =>
+                frameType === "EVENT" && event.kind === BUZZ_TYPING_INDICATOR_KIND,
+            )[index]?.[1];
+          const expectedTags = [
+            ["h", CHANNEL_ID],
+            ...(replyToMode === "all" ? [["e", parentId ? rootId : inbound.id, "", "reply"]] : []),
+          ];
+          expect(published?.tags).toEqual(expectedTags);
+          expect(typing?.tags).toEqual(expectedTags);
+          expect(published && verifyEvent(published)).toBe(true);
+          expect(typing && verifyEvent(typing)).toBe(true);
+        }
+      } finally {
+        await bus.close();
       }
-    } finally {
-      await bus.close();
-    }
-  });
+    },
+  );
 
   it("drops typing while the active relay is disconnected", async () => {
     relayMocks.auth.mockResolvedValue("ok");

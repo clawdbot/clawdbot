@@ -16,6 +16,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PackageManifest } from "./manifest.js";
 import { resolvePackageSetupSource } from "./package-entry-resolution.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   cleanupTrackedTempDirs,
@@ -1173,21 +1174,29 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
-  it.runIf(canCreateDirectorySymlinks).each([
-    { name: "official registry", overrides: {}, ambiguous: false, trusted: true },
-    {
-      name: "local archive",
-      overrides: { sourcePath: "/tmp/diffs.tgz", artifactKind: "npm-pack", artifactFormat: "tgz" },
-      ambiguous: false,
-      trusted: undefined,
-    },
-    { name: "conflicting owners", overrides: {}, ambiguous: true, trusted: undefined },
-  ] satisfies Array<{
-    name: string;
-    overrides: Partial<PluginInstallRecord>;
-    ambiguous: boolean;
-    trusted: true | undefined;
-  }>)("preserves $name trust through configured aliases and bundled ownership", (scenario) => {
+  it.runIf(canCreateDirectorySymlinks).each(
+    (
+      [
+        { name: "official registry", overrides: {}, ambiguous: false, trusted: true },
+        {
+          name: "local archive",
+          overrides: {
+            sourcePath: "/tmp/diffs.tgz",
+            artifactKind: "npm-pack",
+            artifactFormat: "tgz",
+          },
+          ambiguous: false,
+          trusted: undefined,
+        },
+        { name: "conflicting owners", overrides: {}, ambiguous: true, trusted: undefined },
+      ] satisfies Array<{
+        name: string;
+        overrides: Partial<PluginInstallRecord>;
+        ambiguous: boolean;
+        trusted: true | undefined;
+      }>
+    ).flatMap((scenario) => [false, true].map((bundled) => Object.assign({ bundled }, scenario))),
+  )("preserves $name ownership through configured aliases (bundled: $bundled)", (scenario) => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled");
     const pluginDir = path.join(bundledDir, "diffs");
@@ -1206,9 +1215,10 @@ describe("discoverOpenClawPlugins", () => {
       );
     }
     symlinkDirectory(pluginDir, aliasDir);
-    const env = buildDiscoveryEnvWithOverrides(stateDir, {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-    });
+    const env = buildDiscoveryEnvWithOverrides(
+      stateDir,
+      scenario.bundled ? { OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir } : {},
+    );
     const record: PluginInstallRecord = {
       source: "npm",
       spec: "@openclaw/diffs",
@@ -1235,7 +1245,7 @@ describe("discoverOpenClawPlugins", () => {
       ["two", "one"].map((entry) => ({
         id: `diffs/${entry}`,
         source: fs.realpathSync(path.join(pluginDir, `${entry}.js`)),
-        origin: "config",
+        origin: scenario.bundled ? "bundled" : "config",
         owner: scenario.ambiguous ? undefined : "diffs",
         ambiguous: scenario.ambiguous,
       })),
@@ -1251,7 +1261,7 @@ describe("discoverOpenClawPlugins", () => {
       ["two", "one"].map((entry) => ({
         id: `diffs/${entry}`,
         owner: scenario.ambiguous ? undefined : "diffs",
-        trusted: scenario.trusted,
+        trusted: scenario.bundled ? undefined : scenario.trusted,
       })),
     );
     expect(result.diagnostics).toEqual(
@@ -3058,6 +3068,37 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
+  it.runIf(canCreateDirectorySymlinks)(
+    "does not grant bundled provenance to an outside package symlink",
+    () => {
+      const stateDir = makeTempDir();
+      const bundledDir = path.join(stateDir, "bundled");
+      const outsideDir = path.join(stateDir, "outside");
+      mkdirSafe(bundledDir);
+      createPackagePluginWithEntry({
+        packageDir: outsideDir,
+        packageName: "@openclaw/codex",
+        pluginId: "codex",
+        entryPath: "index.js",
+      });
+      symlinkDirectory(outsideDir, path.join(bundledDir, "codex"));
+      for (const extraPaths of [[], [outsideDir]]) {
+        const result = discoverOpenClawPlugins({
+          env: buildDiscoveryEnvWithOverrides(stateDir, {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          }),
+          extraPaths,
+        });
+        expect(result.candidates).toHaveLength(extraPaths.length);
+        expect(result.candidates.every((candidate) => candidate.origin === "config")).toBe(true);
+        expectDiagnostic({
+          diagnostics: result.diagnostics,
+          messageIncludes: "escapes bundled root",
+        });
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "world-open");
@@ -3271,7 +3312,7 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
-  it("keeps strict global package manifests fresh between standalone discovery calls", () => {
+  it("keeps strict global package manifests fixed until a fresh operation", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "fresh-package");
     createPackagePluginWithEntry({
@@ -3300,13 +3341,13 @@ describe("discoverOpenClawPlugins", () => {
     expect(replacementStat.size).toBe(originalStat.size);
     expect(replacementStat.mtimeMs).toBe(originalStat.mtimeMs);
 
-    const second = discoverWithEnv({ env });
+    const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(requireCandidateById(second.candidates, "fresh-package").packageName).toBe(
       "@openclaw/cache-two",
     );
   });
 
-  it("does not cache missing manifests for mutable external roots with relaxed hardlink checks", () => {
+  it("observes newly installed package manifests only in a fresh operation", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "fresh-package");
     mkdirSafe(pluginDir);
@@ -3324,13 +3365,13 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./index.js"],
     });
 
-    const second = discoverWithEnv({ env });
+    const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(requireCandidateById(second.candidates, "fresh-package").packageName).toBe(
       "@openclaw/fresh-package",
     );
   });
 
-  it("reflects plugin root changes on the next discovery call", () => {
+  it("reflects removed plugin roots in a fresh operation", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "fresh");
     createPackagePluginWithEntry({
@@ -3345,7 +3386,7 @@ describe("discoverOpenClawPlugins", () => {
 
     fs.rmSync(pluginDir, { recursive: true, force: true });
 
-    const second = discoverWithEnv({ env });
+    const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(second.candidates.map((candidate) => candidate.idHint)).not.toContain("fresh");
   });
 

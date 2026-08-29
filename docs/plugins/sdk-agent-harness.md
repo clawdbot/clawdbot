@@ -206,18 +206,28 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
-Host-authorized calls must use the supplied model and credential without
-substitution. Harness-authorized calls may resolve only the supplied prepared
+Host-authorized calls must use the supplied model and credential without substitution.
+Bundled host-authorized harnesses share one host-prepared completion helper that
+preserves the exact route, deadline, sampling options, and empty tool surface.
+Harness-authorized calls may resolve only the supplied prepared
 route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
 
 Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
 content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
-output are rejected. If the harness cannot prove these semantics, omit the capability.
+output are rejected. Title requests set `outputTextPolicy: "strict-visible"`:
+keep reasoning separate without recovering ambiguous reasoning as visible text;
+an empty visible result is valid. The host-prepared helper maps this policy to
+strict parsing before recovery. Omission preserves ordinary recovery behavior.
+CLI-backed title calls also allow clean empty output without a silent-reply token;
+ordinary CLI calls still reject empty responses.
+Older external harnesses may ignore the policy; a final title filter cannot
+restore provenance that a harness already discarded, so this is not a universal
+reasoning-privacy guarantee. If the harness cannot enforce isolation, omit the capability.
 Callers that require isolated completion then fail closed before invoking that
 harness; OpenClaw does not replay the request through another runtime.
-Plugin callers select this behavior through
+Plugin callers request isolated execution through
 `api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
 the harness callback is the provider-side enforcement SPI, not a second caller
 API.
@@ -457,6 +467,40 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+### Paired-device execution
+
+Declare `cloudPlacement.devicePlacement.requiredNodeCommands` for the exact node
+commands the harness needs to execute on a paired device. Core snapshots this
+set when it creates the selected harness's host capabilities. An admitted
+**Full access** session can authorize only those commands through the node
+policy's `invokeNodeWithSessionFull` callback; other commands owned by the same
+plugin do not inherit that permission. An absent declaration or an unlisted
+command returns `undefined`, so the policy must use its ordinary approval or
+denial path. Mutating the declaration during the attempt cannot widen authority.
+
+This declaration narrows authority; it does not grant it. Pairing, command
+allowlisting, hosting consent, node-local policy, and the exact live session,
+placement, and turn remain independently enforced. Plugins remain trusted code,
+not sandboxed by this callback.
+
+### Native model inventory
+
+`loadModelCatalog(params)` lists models for the supplied agent, workspace, and
+config snapshot. Rows owned by native model selection set `nativeRuntime` to
+the harness ID and omit host `api` and `baseUrl` claims. Core does not enrich
+these rows with transport or capabilities from a host route.
+
+An optional synchronous `readModelCatalogReadiness(params)` returns only
+`{ accountType: string }` for a current native account observation
+covering that exact scope and model. Preserve the native account type; it does
+not imply a host credential or OAuth refresh lifecycle. Return `undefined` for missing, failed,
+superseded, or disposed observations. Readiness must remain with the physical
+native owner and be revalidated at use; never serialize it on catalog rows,
+perform I/O in this callback, or infer it from a successful earlier turn.
+Gateway uses this metadata for native-owned picker rows; authored host routes,
+credentials, and profile locks still use host readiness. This is not execution
+authorization, and all run-time compatibility and permission checks still apply.
 
 ### Native MCP inventory
 

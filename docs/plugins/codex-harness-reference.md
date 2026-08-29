@@ -488,8 +488,15 @@ cloud worker is a separate, placement-owned execution path and does not require
 app-server and provider auth local, while the authorized node runs the managed,
 pinned Codex exec-server over its existing duplex connection. It requires
 explicit `gateway.nodes.commands.allow` authorization for
-`codex.exec-server.stdio.v1`, the approved pairing surface, and separate
-allow-once node invocation approval for each attempt. The node receives a
+`codex.exec-server.stdio.v1`, the approved pairing surface, and launch
+authorization for each attempt. A deliberately selected session **Full access**
+permission can replace the critical allow-once prompt only while the exact
+admitted turn and placement remain current and both node-local `tools.exec`
+and exec-approvals floors allow full/off execution. Ordinary and raw callers
+still require human approval. Local deny blocks either launch; local ask and
+allowlist policies cannot be bypassed with Full access. Changed local policy
+during setup refuses the launch. Gateway and node must both support this
+authorization path; missing node policy support fails closed. The node receives a
 fresh private home and sanitized environments, never Gateway provider, cloud,
 or GitHub credentials. A lost node connection terminates the attempt and
 process instead of resuming it. Each node-backed attempt uses its own Gateway
@@ -509,14 +516,28 @@ and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-wo
 
 ## Auth and environment isolation
 
-In the default per-agent home, managed stdio launches use Codex's ephemeral
-credential store. OpenClaw supplies auth in this order:
+In the default per-agent home, stdio launches use Codex's ephemeral credential
+store, including custom commands selected by `appServer.command` or
+`OPENCLAW_CODEX_APP_SERVER_BIN`. Command wrappers must forward Codex's `-c`
+configuration arguments. For stdio launches with an explicit `app-server`
+subcommand, OpenClaw groups `-c` / `--config` overrides before that subcommand,
+preserving their order and leaving wrapper prefixes and other arguments in place.
+This prevents Codex from dropping earlier overrides when flags appear on both
+sides of `app-server`. OpenClaw's ephemeral credential-store override remains
+last when OpenClaw owns auth; native user-home auth is unchanged.
+Workspace-write turns also preserve explicit `sandbox_workspace_write` temporary
+root exclusions from these arguments, including attached `-ckey=value` flags
+and TOML comments after boolean values. The last explicit value wins.
+Explicit turn sandbox policies and network-proxy permission profiles keep their
+existing precedence.
+
+OpenClaw supplies auth in this order:
 
 1. An explicit or ordered OpenClaw auth profile for the agent.
 2. For an API-key route only, a prepared key or local stdio fallback from
    `CODEX_API_KEY`, then `OPENAI_API_KEY`.
 
-The managed app-server does not read an existing `codex-home/auth.json` in
+The app-server does not read an existing `codex-home/auth.json` in
 this mode. Import that file explicitly as described below. Set
 `appServer.homeScope: "user"` only when the app-server should instead own and
 use the operator's native Codex account.
@@ -533,7 +554,12 @@ an `account/chatgptAuthTokens/refresh` request back to OpenClaw over the same
 connection. OpenClaw refreshes against its own auth profile store and returns a
 fresh access token, so the refresh token stays in SQLite. A refresh that does
 not answer within the app-server's timeout fails that turn rather than falling
-back to another credential.
+back to another credential. A failed refresh retires the shared client from
+reuse; existing leases drain, and the next request starts a fresh client. If the
+workspace changed, retry the request. If credentials cannot refresh, sign in
+again with `openclaw models auth login --provider openai` and select that profile.
+Shared clients recheck the selected profile before reuse so changing accounts
+under the same profile ID also selects a new client.
 
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile (OAuth or
 token credential type), it removes `CODEX_API_KEY` and `OPENAI_API_KEY` from
@@ -562,7 +588,9 @@ read, fork, rename, archive, and unarchive those threads. Fork a thread before
 continuing it in OpenClaw; independent Codex processes do not coordinate
 concurrent writers for the same thread.
 
-That `homeScope` opt-in applies to ordinary harness sessions. A Chat created
+That `homeScope` opt-in applies to ordinary harness sessions. Hosted web search
+and settled-turn finalization use private temporary homes and OpenClaw auth
+even when ordinary sessions share the user home. A Chat created
 through Codex Sessions uses its private supervision connection instead, which
 preserves the native connection's auth and provider configuration for the
 canonical branch and future resumes.
@@ -756,6 +784,42 @@ OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
 points `appServer.command` at a different Codex binary. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
+
+Native discovery reads `model/list` and `account/read` from the same scoped
+app-server client. An API-key account remains API-key authentication; model
+listing does not imply a ChatGPT transport or endpoint. Picker readiness is
+valid only while that native owner and its account/config observation remain
+current. A missing account, failed refresh, account/config mutation, or retired
+client leaves native models unavailable until discovery succeeds again.
+
+Use the Models page **Refresh** action (`models.list` with `view: "all"` and
+`refresh: true`) to publish the full catalog for the selected agent. Prepared-only
+reads do not start discovery. Native configuration changes outside OpenClaw
+require the native owner's supported reload/restart and a catalog refresh;
+OpenClaw does not poll native home files for readiness. Authored host routes and
+explicit profile selections retain their existing auth and compatibility checks.
+
+Native catalog identifiers are runtime identifiers, not privacy labels. A
+deployment using a broker-owned alias must supply an alias-safe native catalog
+before starting app-server: both `id` and `model` in `model/list` must be the
+alias, with the desired `displayName`. Different native runtime identifiers are
+preserved in OpenClaw model parameters. Renaming the picker label does not hide
+those identifiers from requests or session state.
+
+Codex's startup `model_catalog_json` setting can supply a native catalog; a
+per-thread override does not reload it. Preserve the complete model capability,
+instruction, compaction, and reviewer metadata. Catalog membership does not
+reject arbitrary model overrides, so the broker must enforce allowed selectors
+on every request. Disable native session discovery with
+`sessionCatalog.enabled: false` when no native history should be imported.
+
+A custom endpoint is not automatically a supported Codex route. Explicit
+`agentRuntime.id: "codex"` does not bypass prepared-route compatibility or the
+trusted-endpoint requirement for model-backed approval review. A workload API
+key also does not provide ChatGPT account identity or subscription refresh.
+Verify those contracts before using a broker with the native harness; do not
+substitute a custom provider, remove safety metadata, or weaken review to make
+an inference smoke test pass.
 
 If discovery is temporarily unavailable or times out, the subscription route
 uses offline hints derived from the bundled OpenAI model manifest, with Codex

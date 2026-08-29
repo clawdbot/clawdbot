@@ -52,11 +52,54 @@
     "suppressions": [
       {
         "provider": "qwen",
+        "model": "qwen3.8-max",
+        "reason": "qwen3.8-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "qwen",
+        "model": "qwen3.8-flash",
+        "reason": "qwen3.8-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.8-max",
+        "reason": "qwen3.8-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.8-flash",
+        "reason": "qwen3.8-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "qwen",
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -64,8 +107,7 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -73,8 +115,7 @@
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -82,12 +123,151 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       }
     ],
     "providers": {
+      "qwen": {
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-plus",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.7-max",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.7-plus",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.8-max",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
+            "id": "qwen3.8-flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
+            "id": "qwen3-max-2026-01-23",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3-coder-next",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3-coder-plus",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "MiniMax-M2.5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "glm-5",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 16384
+          },
+          {
+            "id": "glm-4.7",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 16384
+          },
+          {
+            "id": "kimi-k2.5",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768
+          }
+        ]
+      },
       "qwen-token-plan": {
         "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
         "api": "openai-completions",
@@ -100,6 +280,77 @@
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 1000000,
             "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.8-max",
+            "name": "qwen3.8-max",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
+            "id": "qwen3.8-flash",
+            "name": "qwen3.8-flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
           },
           {
             "id": "qwen3.6-plus",

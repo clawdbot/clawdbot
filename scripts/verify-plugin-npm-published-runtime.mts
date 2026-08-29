@@ -420,8 +420,7 @@ async function verifyPublishedPluginRuntime(spec: string) {
       readme = packedPackage.readme;
     }
     return {
-      packageName: packedPackage.packageJson.name,
-      version: packedPackage.packageJson.version,
+      packageLabel: formatPackageLabel(packedPackage.packageJson, spec),
       fileCount: packedPackage.files.length,
       readmeLength: readme.length,
     };
@@ -438,7 +437,7 @@ async function main(argv: string[]) {
   }
   const result = await verifyPublishedPluginRuntime(args.spec);
   console.log(
-    `plugin-npm-published-runtime-check: ${result.packageName}@${result.version} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
+    `plugin-npm-published-runtime-check: ${result.packageLabel} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
   );
 }
 

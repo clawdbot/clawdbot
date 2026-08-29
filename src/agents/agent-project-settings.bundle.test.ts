@@ -79,15 +79,6 @@ const bundleTestDeps = await vi.hoisted(async () => {
   return { fsSync, loadBundleRegistry, loadEmbeddedAgentMcpConfig };
 });
 
-vi.mock("../infra/boundary-file-read.js", () => {
-  return {
-    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
-      ok: true,
-      fd: bundleTestDeps.fsSync.openSync(absolutePath, "r"),
-    }),
-  };
-});
-
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: bundleTestDeps.loadBundleRegistry,
 }));

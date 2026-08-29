@@ -11,7 +11,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
@@ -650,8 +650,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("channels")}
-            ${renderDocsLink(CHANNELS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("channels")} ${renderLearnMoreLink(CHANNELS_DOCS_URL)}
           </div>
         </div>
       </section>

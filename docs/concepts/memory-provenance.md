@@ -87,10 +87,20 @@ share a workspace; the model does not own the origin rows.
 
 Origins for replaced entries remain while retained rewrite preimages still
 reference their promotion markers. Backup rotation prunes those origins only
-when live entries, retained preimages, and indexed snapshots no longer reference them.
+when live entries, retained preimages, diary excerpts, and indexed snapshots no longer reference them.
+
+New consolidation-history excerpts retain the replacement entry's lineage,
+including its merged or superseded parents. Their origin rows remain while
+those excerpts remain, even after backup rotation. Diary history has no
+automatic expiry; long revision histories can retain growing origin sets.
 
 When backfill coalesces the same claim from several sessions, it retains every
 source origin without counting the repeated claim as extra evidence.
+Session-backfill diary lines also carry markers tied to source origins before
+publication. This includes REM facts, reflections, and combined claims, even
+when displayed citations are shortened or a later apply step fails. Forgetting
+any contributing session removes the whole marked line, not unrelated diary
+lines. Earlier unmarked backfill diaries do not gain lineage retroactively.
 
 Coverage is not universal. Handwritten notes, direct agent edits, and entries
 staged before lineage tracking may lack entry origins. The report's
@@ -200,7 +210,11 @@ reason `forgotten`.
 The memory plugin coordinates purges with its staging and file mutations.
 A pending dream narrative is skipped if its tracked source entries or prior
 diary context were removed before publication. This does not retroactively
-identify untracked paraphrases in older diary entries.
+identify untracked paraphrases in older diary entries. Historical consolidation
+highlights with quoted markers also lack reliable deletion boundaries. The
+report warns in `refusals` when it recognizes remaining highlights in that
+format; review them manually. The warning is not an inventory of all untracked
+history, and missing historical lineage is not reconstructed.
 
 Indexing checks again before publishing chunks or cached embeddings, so a
 result prepared before the purge cannot restore forgotten session data or a

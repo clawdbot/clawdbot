@@ -5,12 +5,12 @@ import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 
-const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
+const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexAppServerAttempt = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
-  completeWithPreparedSimpleCompletionModel,
+  runHostPreparedIsolatedCompletion,
 }));
 vi.mock("./src/app-server/isolated-completion.js", () => ({
   runCodexIsolatedCompletion,
@@ -29,6 +29,19 @@ import {
   sessionBindingIdentity,
   testCodexAppServerBindingStore,
 } from "./src/app-server/session-binding.test-helpers.js";
+
+const isolatedTask = {
+  config: {},
+  systemPrompt: "system",
+  prompt: "user",
+  timeoutMs: 1_000,
+  provider: "openai",
+  modelId: "gpt-test",
+  agentId: "main",
+  agentDir: "/tmp/agent",
+  workspaceDir: "/tmp/workspace",
+  outputTextPolicy: "strict-visible" as const,
+};
 
 describe("Codex agent harness supports()", () => {
   it("owns auth bootstrap for every native attempt", () => {
@@ -63,37 +76,30 @@ describe("Codex agent harness supports()", () => {
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
     };
-    completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce(assistant);
+    runHostPreparedIsolatedCompletion.mockResolvedValueOnce({ assistant });
     const params = {
       model: { provider: "openai", id: "gpt-test", api: "openai-chatgpt-responses" },
       auth: { apiKey: "secret", source: "profile:test", mode: "oauth" },
-      config: {},
-      systemPrompt: "system",
-      prompt: "user",
-      timeoutMs: 1_000,
-      provider: "openai",
-      modelId: "gpt-test",
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
+      ...isolatedTask,
     } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletion>>[0];
 
     await expect(harness.runIsolatedCompletion?.(params)).resolves.toEqual({ assistant });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: params.model,
-        auth: params.auth,
-        context: {
-          systemPrompt: "system",
-          messages: [expect.objectContaining({ role: "user", content: "user" })],
-          tools: [],
-        },
+        authorization: expect.objectContaining({
+          owner: "host",
+          model: params.model,
+          auth: params.auth,
+        }),
+        systemPrompt: "system",
+        prompt: "user",
+        outputTextPolicy: "strict-visible",
       }),
     );
   });
 
   it("delegates V2 isolated completion to the native bounded adapter", async () => {
-    const legacyCallCount = completeWithPreparedSimpleCompletionModel.mock.calls.length;
+    const legacyCallCount = runHostPreparedIsolatedCompletion.mock.calls.length;
     const result = {
       assistant: {
         role: "assistant",
@@ -111,20 +117,12 @@ describe("Codex agent harness supports()", () => {
         },
         authProfileStore: { version: 1, profiles: {} },
       },
-      config: {},
-      systemPrompt: "system",
-      prompt: "user",
-      timeoutMs: 1_000,
-      provider: "openai",
-      modelId: "gpt-test",
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
+      ...isolatedTask,
     } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
 
     await expect(harness.runIsolatedCompletionV2?.(params)).resolves.toBe(result);
     expect(runCodexIsolatedCompletion).toHaveBeenCalledWith(params, { pluginConfig: undefined });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(legacyCallCount);
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledTimes(legacyCallCount);
   });
 
   it("keeps V2 host authorization on the prepared direct transport", async () => {
@@ -134,7 +132,7 @@ describe("Codex agent harness supports()", () => {
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
     };
-    completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce(assistant);
+    runHostPreparedIsolatedCompletion.mockResolvedValueOnce({ assistant });
     const websocketHarness = createCodexAppServerAgentHarness({
       bindingStore: testCodexAppServerBindingStore,
       pluginConfig: {
@@ -153,27 +151,13 @@ describe("Codex agent harness supports()", () => {
         model: hostModel,
         auth: hostAuth,
       },
-      config: {},
-      systemPrompt: "system",
-      prompt: "user",
-      timeoutMs: 1_000,
-      provider: "openai",
-      modelId: "gpt-test",
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
+      ...isolatedTask,
     } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
 
     await expect(websocketHarness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
       assistant,
     });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: hostModel,
-        auth: hostAuth,
-        context: expect.objectContaining({ tools: [] }),
-      }),
-    );
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(params);
     expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
   });
 
@@ -255,30 +239,36 @@ describe("Codex agent harness supports()", () => {
     expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });
 
-  it("lets explicitly selected Codex discover unlisted models with its own account", () => {
-    expect(
-      harness.supports({
-        provider: "openai",
-        modelId: "gpt-future",
-        requestedRuntime: "codex",
-        modelProvider: {
-          requestTransportOverrides: "none",
-          preparedAuth: { source: "harness" },
-        },
-      }),
-    ).toEqual({ supported: true, priority: 100 });
-  });
+  it.each(["gpt-future", "umbreon-latest"])(
+    "lets explicitly selected Codex discover %s with its own account",
+    (modelId) => {
+      expect(
+        harness.supports({
+          provider: "openai",
+          modelId,
+          requestedRuntime: "codex",
+          modelProvider: {
+            requestTransportOverrides: "none",
+            preparedAuth: { source: "harness" },
+          },
+        }),
+      ).toEqual({ supported: true, priority: 100 });
+    },
+  );
 
-  it("lets explicit Codex model discovery run before auth has been prepared", () => {
-    expect(
-      harness.supports({
-        provider: "openai",
-        modelId: "gpt-future",
-        requestedRuntime: "codex",
-        modelProvider: { requestTransportOverrides: "none" },
-      }),
-    ).toEqual({ supported: true, priority: 100 });
-  });
+  it.each(["gpt-future", "umbreon-latest"])(
+    "lets explicit Codex discovery of %s run before auth has been prepared",
+    (modelId) => {
+      expect(
+        harness.supports({
+          provider: "openai",
+          modelId,
+          requestedRuntime: "codex",
+          modelProvider: { requestTransportOverrides: "none" },
+        }),
+      ).toEqual({ supported: true, priority: 100 });
+    },
+  );
 
   it.each([
     {

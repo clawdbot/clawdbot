@@ -406,61 +406,58 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
   const updateButtonTitle = !props.canAdmin ? t("updates.adminRequired") : "";
   return html`
     <div id="config-section-update">
-      ${renderSettingsPage(
-        [
-          !props.canAdmin
-            ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
-            : nothing,
-          renderBuildFacts(props),
-          renderRecordedAttempt(props),
-          renderSettingsSection({ title: t("updates.page.policyTitle") }, policyRows),
-          renderSettingsSection({ title: t("updates.page.statusTitle") }, [
-            renderSettingsRow({
-              title: t("updates.page.scheduleStatus"),
-              control: html`
-                <div class="updates-status-control">
-                  ${renderScheduleStatus(props)}
-                  ${showHold
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          ?disabled=${props.updateBusy}
-                          @click=${() => void props.onHoldUpdate()}
-                        >
-                          ${t("updates.holdOneHour")}
-                        </button>
-                      `
-                    : nothing}
-                </div>
-              `,
-            }),
-            renderCommitList(props),
-            renderSettingsRow({
-              title: t("updates.page.updateNow"),
-              description: t("updates.page.updateNowDescription"),
-              control: html`
-                <button
-                  type="button"
-                  class="btn primary"
-                  title=${updateButtonTitle}
-                  ?disabled=${props.updateBusy || !props.canUpdate}
-                  @click=${props.onUpdateNow}
-                >
-                  ${icons.download}
-                  ${props.updateBusy ? t("chat.updating") : t("updates.page.updateNow")}
-                </button>
-              `,
-            }),
-          ]),
-          html`<p class="settings-page__hint">
-            <a href="https://docs.openclaw.ai/install/update-troubleshooting" target="_blank"
-              >${t("updates.page.troubleshoot")}</a
-            >
-          </p>`,
-        ],
-        { intro: t("updates.page.intro") },
-      )}
+      ${renderSettingsPage([
+        !props.canAdmin
+          ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
+          : nothing,
+        renderBuildFacts(props),
+        renderRecordedAttempt(props),
+        renderSettingsSection({ title: t("updates.page.policyTitle") }, policyRows),
+        renderSettingsSection({ title: t("updates.page.statusTitle") }, [
+          renderSettingsRow({
+            title: t("updates.page.scheduleStatus"),
+            control: html`
+              <div class="updates-status-control">
+                ${renderScheduleStatus(props)}
+                ${showHold
+                  ? html`
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        ?disabled=${props.updateBusy}
+                        @click=${() => void props.onHoldUpdate()}
+                      >
+                        ${t("updates.holdOneHour")}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `,
+          }),
+          renderCommitList(props),
+          renderSettingsRow({
+            title: t("updates.page.updateNow"),
+            description: t("updates.page.updateNowDescription"),
+            control: html`
+              <button
+                type="button"
+                class="btn primary"
+                title=${updateButtonTitle}
+                ?disabled=${props.updateBusy || !props.canUpdate}
+                @click=${props.onUpdateNow}
+              >
+                ${icons.download}
+                ${props.updateBusy ? t("chat.updating") : t("updates.page.updateNow")}
+              </button>
+            `,
+          }),
+        ]),
+        html`<p class="settings-page__hint">
+          <a href="https://docs.openclaw.ai/install/update-troubleshooting" target="_blank"
+            >${t("updates.page.troubleshoot")}</a
+          >
+        </p>`,
+      ])}
     </div>
   `;
 }

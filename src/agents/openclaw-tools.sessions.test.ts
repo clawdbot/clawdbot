@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   configureExecutionDecisionWorkSink,
   type ExecutionDecisionWork,
@@ -13,6 +14,7 @@ import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.j
 import type { OpenClawConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
+  listSessionParticipantsReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
@@ -23,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -60,6 +63,8 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const TEST_CONFIG = {
   session: {
@@ -434,11 +439,12 @@ describe("sessions tools", () => {
   });
 
   it("sessions_list forwards mailbox filters and includes messages", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-sessions-list-"), "sessions.json");
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          path: storePath,
           sessions: [
             {
               key: "agent:main:main",
@@ -1324,6 +1330,79 @@ describe("sessions tools", () => {
       clearDecisionSink();
     }
   });
+
+  it.each([
+    { timeoutSeconds: 0, admitted: true },
+    { timeoutSeconds: 1, admitted: true },
+    { timeoutSeconds: 0, admitted: false },
+    { timeoutSeconds: 1, admitted: false },
+  ])(
+    "records exactly one cross-agent contribution at the original prompt time only after admission (timeoutSeconds: $timeoutSeconds, admitted: $admitted)",
+    async ({ timeoutSeconds, admitted }) => {
+      const storePath = path.join(
+        tempDirs.make("openclaw-session-send-participant-"),
+        "agents",
+        "research",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const scope = { agentId: "research", sessionKey: "agent:research:main", storePath };
+      const sessionId = "participant-target";
+      const promptedAt = 1_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(promptedAt);
+      try {
+        await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+        callGatewayMock.mockImplementation(async (opts: unknown) => {
+          const request = opts as GatewayCall;
+          if (request.method === "sessions.resolve") {
+            return { key: scope.sessionKey, agentId: scope.agentId };
+          }
+          if (request.method === "agent") {
+            clock.mockReturnValue(promptedAt + 100);
+            if (!admitted) {
+              throw new Error("admission rejected");
+            }
+            return { runId: "participant-run", status: "accepted" };
+          }
+          if (request.method === "agent.wait") {
+            return { status: "ok" };
+          }
+          return { messages: [] };
+        });
+        const tool = createSessionsSendTool({
+          agentSessionKey: "agent:main:main",
+          expectedTargetSessionId: sessionId,
+          config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: storePath } },
+          callGateway: callGatewayMock,
+        });
+        const result = await tool.execute("participant-send", {
+          sessionKey: scope.sessionKey,
+          message: "Review this input",
+          timeoutSeconds,
+        });
+        expect(result.details).toMatchObject(
+          admitted
+            ? { status: timeoutSeconds === 0 ? "accepted" : "no_reply", runId: "participant-run" }
+            : { status: "error", error: "admission rejected" },
+        );
+        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? []).toEqual(
+          admitted
+            ? [
+                {
+                  identity: { type: "agent", id: "main" },
+                  contributionCount: 1,
+                  firstPromptedAt: promptedAt,
+                  lastPromptedAt: promptedAt,
+                },
+              ]
+            : [],
+        );
+      } finally {
+        clock.mockRestore();
+        disposeOpenClawAgentDatabaseByPath(storePath);
+      }
+    },
+  );
 
   it("sessions_send returns pending agent error diagnostics on timeout", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];

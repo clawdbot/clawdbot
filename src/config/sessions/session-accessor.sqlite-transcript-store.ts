@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../../agents/runtime/index.js";
+import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
   executeSqliteQuerySync,
@@ -686,7 +687,11 @@ export function redactTranscriptMessageForStorage<TMessage>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "config">,
 ): TMessage {
   return isTranscriptAgentMessage(message)
-    ? (redactTranscriptMessage(message, options.config) as TMessage)
+    ? (redactTranscriptMessage(
+        message,
+        options.config,
+        getCodeModeSourceAppend(options),
+      ) as TMessage)
     : redactSecrets(message);
 }
 

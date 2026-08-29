@@ -10,6 +10,7 @@ import {
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
+import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -277,7 +278,7 @@ export function findCanvasInsertionIndex(
   return maximumIndex;
 }
 
-export function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
   for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
     const value = message[field];
     if (typeof value === "string" && value.trim()) {
@@ -461,6 +462,7 @@ function textOnlyMessageParts(message: unknown) {
   return {
     role: normalizeRoleForGrouping(normalized.role).toLowerCase(),
     senderLabel: (normalized.senderLabel ?? "").trim(),
+    senderKey: senderIdentityKey(normalized.sender),
     text: textParts.join("\n"),
   };
 }
@@ -501,7 +503,7 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
     return null;
   }
   const senderLabel = role === "user" || role === "assistant" ? parts.senderLabel : "";
-  return `${role}:${senderLabel}:${text}`;
+  return `${role}:${senderLabel}:${parts.senderKey ?? ""}:${text}`;
 }
 
 export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
@@ -568,7 +570,9 @@ export function hasRenderableNormalizedMessage(
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
   const media = role === "user" && readTranscriptMediaEntries(message).length;
-  return Boolean(normalized.content.length || normalized.replyTarget || label || media);
+  return Boolean(
+    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+  );
 }
 
 export function sanitizeStreamText(text: string): string {
@@ -577,12 +581,11 @@ export function sanitizeStreamText(text: string): string {
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
-  const runId = item.sendRunId ?? item.pendingRunId;
   return buildLocalUserMessage({
     text: item.text,
     attachments: item.attachments,
     createdAt: item.createdAt,
-    ...(runId ? { runId } : {}),
+    runId: item.sendRunId ?? item.pendingRunId,
     replyToId: item.replyToId,
     sender: item.sender,
     pending: {
@@ -605,7 +608,6 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "notice":
       return item.timestamp;
     case "stream":
-      return item.startedAt;
     case "question":
       return item.startedAt;
     case "reading-indicator":

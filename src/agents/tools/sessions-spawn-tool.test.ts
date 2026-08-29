@@ -679,7 +679,7 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it.each([{ category: undefined }, { category: "" }])(
+  it.each([{ category: undefined }, { category: "" }, { category: " \t\n " }])(
     "keeps a visible session ungrouped when category is $category",
     async ({ category }) => {
       const callGateway = vi.fn(async () => ({
@@ -849,22 +849,67 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("requires visible sessions for worktree options", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+  describe.each([
+    {
+      runtime: "subagent",
+      spawn: hoisted.spawnSubagentDirectMock,
+      other: hoisted.spawnAcpDirectMock,
+    },
+    { runtime: "acp", spawn: hoisted.spawnAcpDirectMock, other: hoisted.spawnSubagentDirectMock },
+  ])("$runtime category preflight", ({ runtime, spawn, other }) => {
+    beforeEach(() => registerAcpBackendForTest());
 
-    await expect(
-      tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
-    ).rejects.toThrow("Parameters require visible=true: worktree");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
+    it.each([undefined, "", " \t\n "])("dispatches once with category %j", async (category) => {
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
+      const request = {
+        task: "inspect",
+        runtime,
+        model: "openai/gpt-5.6-luna",
+        thinking: "ultra",
+        sandbox: "require",
+        mode: "run",
+      };
 
-  it.each(["Projects", ""])("rejects category %j without visible mode", async (category) => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+      const result = await tool.execute("hidden-category", {
+        ...request,
+        visible: false,
+        ...(category !== undefined ? { category } : {}),
+      });
 
-    await expect(tool.execute("hidden-category", { task: "inspect", category })).rejects.toThrow(
-      "Parameters require visible=true: category",
-    );
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(result.details).toMatchObject({ status: "accepted", runId: `run-${runtime}` });
+      expect(spawn).toHaveBeenCalledOnce();
+      const { runtime: _runtime, ...forwarded } = request;
+      expect(spawn).toHaveBeenCalledWith(expect.objectContaining(forwarded), expect.any(Object));
+      expect(other).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { category: "Projects" },
+      { worktree: true },
+      { worktreeName: "repair" },
+      { worktreeBaseRef: "main" },
+    ])("rejects visible-only options %j with actionable recovery", async (options) => {
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
+
+      await expect(
+        tool.execute("hidden-visible-options", {
+          task: "inspect",
+          runtime,
+          mode: "run",
+          ...options,
+        }),
+      ).rejects.toThrow(
+        `Parameters require visible=true: ${Object.keys(options).join(", ")}. ` +
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+      );
+      expect(spawn).not.toHaveBeenCalled();
+      expect(other).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    });
   });
 
   it("applies a per-run timeout to visible dashboard sessions", async () => {

@@ -222,7 +222,7 @@
   /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  /* Claw's own face (fonts/claw.css, loaded per-theme by app/theme.ts); the
+  /* Claw's own face (fonts/instrument-sans.css, loaded by app/typography.ts); the
      stack keeps system fallbacks so a failed font load degrades gracefully. */
   --font-body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
@@ -835,6 +835,11 @@ a[href] {
 
 a:hover {
   text-decoration-thickness: 2px;
+}
+
+.learn-more-link,
+.learn-more-link:hover {
+  text-decoration: none;
 }
 
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on

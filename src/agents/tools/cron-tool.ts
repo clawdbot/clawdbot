@@ -48,6 +48,7 @@ import {
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
   cronCreateRequiresCreatorAuthority,
+  resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import {
   assertCronPacingInput,
@@ -187,7 +188,7 @@ ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the 
 ADD: ${addFields}. Required: schedule+payload.
 
 SCHEDULE:
-- {kind:"at",at:"ISO-8601"} one-shot; no tz=UTC; auto-deletes after run.
+- {kind:"at",at:"ISO-8601"} one-shot; no tz=UTC; auto-deletes after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.
 - {kind:"every",everyMs}.
 - {kind:"cron",expr,tz?:"IANA"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:"0 18 * * *",tz:"Asia/Shanghai"}.${streamScheduleLine}
 
@@ -203,11 +204,11 @@ PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least on
 
 ${triggerSection}
 
-DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message.${silentWatcherCue} webhook posts finished-run event to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
+DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
-FAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route immediately and does not increment the execution streak.
+FAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.
 
-Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`;
+Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`;
 }
 
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
@@ -235,6 +236,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
       };
       const runtimeConfig = getRuntimeConfig();
       const callerScope = resolveCronToolCallerScope(opts, runtimeConfig);
+      const creatorExecToolTarget = resolveCronCreatorExecToolTarget(opts?.creatorToolAllowlist);
       const callerIdentity =
         callerScope && opts?.agentSessionKey?.trim()
           ? {
@@ -246,7 +248,10 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 : {}),
               ...(opts?.creatorToolAllowlistCaptureRef?.value?.version === 1 &&
               opts.creatorToolAllowlistCaptureRef.value.source === "final-executable-surface"
-                ? { cronToolsAllowCapture: "final-executable-surface" as const }
+                ? {
+                    cronToolsAllowCapture: "final-executable-surface" as const,
+                    ...(creatorExecToolTarget ? { cronExecToolTarget: creatorExecToolTarget } : {}),
+                  }
                 : {}),
             }
           : undefined;
@@ -485,11 +490,17 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 }
               }
             }
+            const resolvedExecToolTarget = resolveCronCreatorExecToolTarget(
+              resolvedAuthority?.tools,
+            );
             const writeCallerIdentity =
               resolvedAuthority && callerIdentity
                 ? {
                     ...callerIdentity,
                     cronToolsAllowCapture: "final-executable-surface" as const,
+                    ...(resolvedExecToolTarget
+                      ? { cronExecToolTarget: resolvedExecToolTarget }
+                      : {}),
                     cronCreatorAuthorityGrant: resolvedAuthority.grant,
                   }
                 : callerIdentity;
@@ -560,15 +571,22 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 creatorToolAllowlistCaptureRef: opts?.creatorToolAllowlistCaptureRef,
                 resolveCreatorToolAuthority: opts?.resolveCreatorToolAuthority,
                 withCreatorAuthorityProvenance: callerIdentity
-                  ? async (authority, run) =>
-                      await withGatewayToolCallerIdentity(
+                  ? async (authority, run) => {
+                      const authorityExecToolTarget = resolveCronCreatorExecToolTarget(
+                        authority.tools,
+                      );
+                      return await withGatewayToolCallerIdentity(
                         {
                           ...callerIdentity,
                           cronToolsAllowCapture: "final-executable-surface",
+                          ...(authorityExecToolTarget
+                            ? { cronExecToolTarget: authorityExecToolTarget }
+                            : {}),
                           cronCreatorAuthorityGrant: authority.grant,
                         },
                         run,
-                      )
+                      );
+                    }
                   : undefined,
                 gatewayOpts,
                 callGateway,

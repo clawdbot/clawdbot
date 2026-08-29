@@ -59,7 +59,8 @@ export async function storeMemoryPreimage(params: {
   const retainedKeys = new Set(entries.flatMap(({ value }) => extractPromotionKeys(value.content)));
   // Rotation releases only expired backup references. The current preimage and
   // staged keys still protect live content if the following MEMORY write fails.
-  pruneMemoryEntryOrigins({
+  await pruneMemoryEntryOrigins({
+    workspaceDir: params.workspaceDir,
     agentIds: params.agentIds,
     entryKeys: current.flatMap(({ value }) => extractPromotionKeys(value.content)),
     retainedEntryKeys: new Set([...retainedKeys, ...params.retainedEntryKeys]),
@@ -79,12 +80,7 @@ export async function appendConsolidationSummary(params: {
     `- Added: ${params.result.added}`,
     `- Merged: ${params.result.merged}`,
     `- Superseded: ${params.result.superseded}`,
-    ...(params.result.highlights.length > 0
-      ? [
-          "- Highlights:",
-          ...params.result.highlights.map((line) => `  - \`${line.replaceAll("`", "'")}\``),
-        ]
-      : []),
+    ...params.result.highlights,
     "",
   ];
   await updateDreamsFile({

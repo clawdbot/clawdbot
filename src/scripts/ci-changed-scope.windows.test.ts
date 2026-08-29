@@ -4,6 +4,32 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes source CLI invocation owners and their native proof to Windows", () => {
+    for (const sourceCliPath of [
+      "src/infra/openclaw-cli-invocation.ts",
+      "src/infra/openclaw-cli-invocation.test.ts",
+      "src/infra/openclaw-cli-invocation.test-support.ts",
+      "src/infra/openclaw-cli-shim.ts",
+      "src/infra/openclaw-cli-shim.test.ts",
+      "src/infra/openclaw-cli-shim.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([sourceCliPath]), sourceCliPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+        runMacos: false,
+        runAndroid: false,
+      });
+    }
+
+    for (const unrelatedPath of [
+      "src/infra/openclaw-root.ts",
+      "src/infra/openclaw-cli-other.test.ts",
+      "src/infra/openclaw-cli-shim-extra.ts",
+    ]) {
+      expect(detectChangedScope([unrelatedPath]).runWindows, unrelatedPath).toBe(false);
+    }
+  });
+
   it("routes worker bundle producers, archives, installers, and regression coverage to Windows", () => {
     for (const bundlePath of [
       "src/shared/worker-bundle-archive.ts",

@@ -149,29 +149,32 @@ describe("heartbeat wake preemption retry", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
-  it("retries preempted task work after idle grace without losing its payload", async () => {
-    const tasks = [{ jobId: "job-backup", name: "backup", prompt: "Check backup" }];
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "preempted" })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    requestHeartbeat({
-      source: "background-task",
-      intent: "task",
-      reason: "heartbeat-task:job-backup",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      tasks,
-      coalesceMs: 0,
-    });
+  it.each(["preempted", "channel-not-ready"])(
+    "retries %s task work after idle grace without losing its payload",
+    async (reason) => {
+      const tasks = [{ jobId: "job-backup", name: "backup", prompt: "Check backup" }];
+      const handler = vi
+        .fn()
+        .mockResolvedValueOnce({ status: "skipped", reason })
+        .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+      setHeartbeatWakeHandler(handler);
+      requestHeartbeat({
+        source: "background-task",
+        intent: "task",
+        reason: "heartbeat-task:job-backup",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        tasks,
+        coalesceMs: 0,
+      });
 
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(handler).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls[1]?.[0]).toMatchObject({ tasks, retainedWork: true });
-  });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(handler).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler.mock.calls[1]?.[0]).toMatchObject({ tasks, retainedWork: true });
+    },
+  );
 
   it("lets a fresh manual wake bypass a scheduled idle grace", async () => {
     const target = { agentId: "main", sessionKey: "agent:main:main" };

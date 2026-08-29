@@ -10,6 +10,7 @@ import type {
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
   HeartbeatWakeOverride,
+  HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
@@ -39,10 +40,12 @@ export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
 export const HEARTBEAT_SKIP_PREEMPTED = "preempted";
+export const HEARTBEAT_SKIP_CHANNEL_NOT_READY = "channel-not-ready";
 const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
 
@@ -406,12 +409,13 @@ function queuePendingWakeReason(params: {
 }
 
 function resolveHeartbeatRetrySchedule(
-  pendingWake: PendingWakeReason,
+  pendingWake: Pick<HeartbeatWakeRequest, "intent">,
   result: Extract<HeartbeatRunResult, { status: "skipped" }>,
 ): { delayMs: number; deferWakeOnly: boolean } {
   const now = Date.now();
   const deferWakeOnly =
     result.reason === HEARTBEAT_SKIP_PREEMPTED ||
+    result.reason === HEARTBEAT_SKIP_CHANNEL_NOT_READY ||
     (result.reason === HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT &&
       (pendingWake.intent === "scheduled" || pendingWake.intent === "task"));
   return {
@@ -426,7 +430,7 @@ function resolveHeartbeatRetrySchedule(
 }
 
 function retryPendingWake(
-  pendingWake: PendingWakeReason,
+  pendingWake: Parameters<typeof queuePendingWakeReason>[0],
   retrySchedule: { delayMs: number; deferWakeOnly: boolean } = {
     delayMs: DEFAULT_RETRY_MS,
     deferWakeOnly: false,
@@ -747,5 +751,15 @@ export function requestHeartbeat(opts: {
       readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
     });
     schedule(coalesceMs);
+  });
+}
+
+/** Transfers a direct attempt to the wake owner's existing retry lifecycle. */
+export function requestHeartbeatRetry(
+  wake: HeartbeatWakeRequest,
+  result: Extract<HeartbeatRunResult, { status: "skipped" }>,
+) {
+  runWithoutOwnedSessionTranscriptWrites(() => {
+    retryPendingWake(wake, resolveHeartbeatRetrySchedule(wake, result));
   });
 }

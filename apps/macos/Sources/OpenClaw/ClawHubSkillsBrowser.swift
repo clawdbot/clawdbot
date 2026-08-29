@@ -2,15 +2,12 @@ import Observation
 import OpenClawKit
 import SwiftUI
 
-private enum ClawHubReviewSheet: Identifiable {
-    case install(ClawHubSkillInstallReview, route: GatewayConnection.Route)
-    case risk(ClawHubSkillInstallReview, route: GatewayConnection.Route, message: String, warning: String?)
+private struct ClawHubReviewSheet: Identifiable {
+    let review: ClawHubSkillInstallReview
+    let route: GatewayConnection.Route
 
     var id: String {
-        switch self {
-        case let .install(review, _): "install:\(review.id)"
-        case let .risk(review, _, _, _): "risk:\(review.id)"
-        }
+        "install:\(self.review.id)"
     }
 }
 
@@ -84,34 +81,17 @@ struct ClawHubSkillsBrowser: View {
         }
         .task { await self.model.searchIfNeeded() }
         .sheet(item: self.$model.sheet) { sheet in
-            switch sheet {
-            case let .install(review, route):
-                ClawHubInstallReviewSheet(
-                    review: review,
-                    isInstalling: self.model.installingSlug == review.slug,
-                    onCancel: { self.model.sheet = nil },
-                    onInstall: {
-                        Task {
-                            if let skills = await self.model.install(review, route: route, acknowledgeRisk: false) {
-                                self.onInstalled(skills)
-                            }
+            ClawHubInstallReviewSheet(
+                review: sheet.review,
+                isInstalling: self.model.installingSlug == sheet.review.slug,
+                onCancel: { self.model.sheet = nil },
+                onInstall: {
+                    Task {
+                        if let skills = await self.model.install(sheet.review, route: sheet.route) {
+                            self.onInstalled(skills)
                         }
-                    })
-            case let .risk(review, route, message, warning):
-                ClawHubRiskReviewSheet(
-                    review: review,
-                    message: message,
-                    warning: warning,
-                    isInstalling: self.model.installingSlug == review.slug,
-                    onCancel: { self.model.sheet = nil },
-                    onInstall: {
-                        Task {
-                            if let skills = await self.model.install(review, route: route, acknowledgeRisk: true) {
-                                self.onInstalled(skills)
-                            }
-                        }
-                    })
-            }
+                    }
+                })
         }
     }
 }
@@ -187,44 +167,6 @@ private struct ClawHubInstallReviewSheet: View {
         }
         .padding(24)
         .frame(width: 480)
-    }
-}
-
-private struct ClawHubRiskReviewSheet: View {
-    let review: ClawHubSkillInstallReview
-    let message: String
-    let warning: String?
-    let isInstalling: Bool
-    let onCancel: () -> Void
-    let onInstall: () -> Void
-    @State private var warningExpanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Label("Gateway warning", systemImage: "exclamationmark.triangle.fill")
-                .font(.title2.bold())
-                .foregroundStyle(.orange)
-            ClawHubReviewDetails(review: self.review)
-            Text(self.message).font(.body)
-            DisclosureGroup("Review warning details", isExpanded: self.$warningExpanded) {
-                Text(self.warning ?? "The Gateway requires explicit acknowledgement for this release.")
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .padding(.top, 8)
-            }
-            Text("Expand and review the Gateway warning before acknowledging this exact version.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("Cancel", action: self.onCancel)
-                Button("Acknowledge and install", action: self.onInstall)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!self.warningExpanded || self.isInstalling)
-            }
-        }
-        .padding(24)
-        .frame(width: 520)
     }
 }
 
@@ -324,8 +266,7 @@ private final class ClawHubSkillsBrowserModel {
             }
             return await self.install(
                 ClawHubSkillInstallReview(directInstall: skill),
-                route: route,
-                acknowledgeRisk: false)
+                route: route)
         }
         await self.review(skill)
         return nil
@@ -344,7 +285,7 @@ private final class ClawHubSkillsBrowserModel {
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }
-            self.sheet = .install(review, route: route)
+            self.sheet = ClawHubReviewSheet(review: review, route: route)
         } catch {
             self.notice = Notice(
                 title: "Could not review skill",
@@ -356,8 +297,7 @@ private final class ClawHubSkillsBrowserModel {
 
     func install(
         _ review: ClawHubSkillInstallReview,
-        route: GatewayConnection.Route,
-        acknowledgeRisk: Bool) async -> [SkillStatus]?
+        route: GatewayConnection.Route) async -> [SkillStatus]?
     {
         guard self.installingSlug == nil else { return nil }
         self.installingSlug = review.slug
@@ -367,7 +307,6 @@ private final class ClawHubSkillsBrowserModel {
             let result = try await GatewayConnection.shared.skillsInstallClawHub(
                 slug: review.slug,
                 version: review.version,
-                acknowledgeRisk: acknowledgeRisk,
                 on: route)
             let report = try await GatewayConnection.shared.skillsStatus(on: route)
             guard installedAfter(report.skills, review: review) else {
@@ -389,21 +328,13 @@ private final class ClawHubSkillsBrowserModel {
                 isError: false)
             return report.skills
         } catch let error as GatewayResponseError {
-            let rejection = SkillManagementContract.rejection(from: error, attemptedVersion: review.version)
-            if rejection.requiresAcknowledgement, !acknowledgeRisk {
-                self.sheet = .risk(
-                    review,
-                    route: route,
-                    message: rejection.message,
-                    warning: rejection.warning)
-            } else {
-                self.sheet = nil
-                self.notice = Notice(
-                    title: "Gateway blocked install",
-                    message: rejection.message,
-                    warning: rejection.warning,
-                    isError: true)
-            }
+            let rejection = SkillManagementContract.rejection(from: error)
+            self.sheet = nil
+            self.notice = Notice(
+                title: "Gateway blocked install",
+                message: rejection.message,
+                warning: rejection.warning,
+                isError: true)
             return nil
         } catch {
             if let report = try? await GatewayConnection.shared.skillsStatus(on: route),

@@ -88,6 +88,7 @@ type DispatchGatewayMethodInProcessOptions = {
 };
 
 type ResolvedInProcessGatewayDispatch = {
+  assertContextCurrent: () => void;
   client: NonNullable<GatewayRequestOptions["client"]>;
   context: GatewayRequestContext;
   delegatedToolPolicyHandoffId?: string;
@@ -131,7 +132,9 @@ function resolveInProcessGatewayDispatch(
             ? undefined
             : (explicitSystemActor ?? { kind: "system" })))
     : (scopedRoleActor ?? explicitSystemActor);
-  const context = getInProcessGatewayRequestContext(options?.resolveGatewayContext);
+  // The router installs a nested scope; retain the admitted resolver for later commit checks.
+  const resolveGatewayContext = options?.resolveGatewayContext ?? scope?.resolveGatewayContext;
+  const context = getInProcessGatewayRequestContext(resolveGatewayContext);
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
@@ -244,6 +247,13 @@ function resolveInProcessGatewayDispatch(
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
   return {
+    assertContextCurrent: () => {
+      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+        throw new Error(
+          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+        );
+      }
+    },
     client:
       options?.forceSyntheticClient === true ? syntheticClient : (scopedClient ?? syntheticClient),
     context,
@@ -277,22 +287,6 @@ export async function dispatchGatewayMethodInProcessRaw(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
   return await withInProcessGatewayDispatch(method, options, async (resolved) => {
-    const assertGatewayContextCurrent = options?.resolveGatewayContext
-      ? () => {
-          if (options.resolveGatewayContext?.() !== resolved.context) {
-            throw new Error(
-              `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-            );
-          }
-        }
-      : undefined;
-    const sessionMutationCommitGuard =
-      assertGatewayContextCurrent || options?.sessionMutationCommitGuard
-        ? () => {
-            assertGatewayContextCurrent?.();
-            options?.sessionMutationCommitGuard?.();
-          }
-        : undefined;
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
       context: resolved.context,
@@ -302,7 +296,10 @@ export async function dispatchGatewayMethodInProcessRaw(
       onAccepted: options?.onAccepted,
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
-      ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
+      sessionMutationCommitGuard: () => {
+        resolved.assertContextCurrent();
+        options?.sessionMutationCommitGuard?.();
+      },
       timeoutMs: options?.timeoutMs,
       ...(options?.signal ? { signal: options.signal } : {}),
     });
@@ -317,7 +314,7 @@ export function getInProcessGatewayRequestContext(
     return resolveGatewayContext();
   }
   const scope = getPluginRuntimeGatewayRequestScope();
-  return scope?.resolveGatewayContext?.() ?? scope?.context;
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
 }
 
 export async function dispatchGatewayMethodInProcess<T>(
@@ -328,20 +325,11 @@ export async function dispatchGatewayMethodInProcess<T>(
   if (method === "agent" || method === "agent.wait") {
     return await withInProcessGatewayDispatch(method, options, async (resolved) => {
       const { createInternalAgentTurnFacade } = await loadInternalAgentTurnFacade();
-      const assertContextCurrent = () => {
-        if (
-          getInProcessGatewayRequestContext(options?.resolveGatewayContext) !== resolved.context
-        ) {
-          throw new Error(
-            `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-          );
-        }
-      };
       const facade = createInternalAgentTurnFacade({
-        assertContextCurrent,
+        assertContextCurrent: resolved.assertContextCurrent,
         client: resolved.client,
         getContext: () => {
-          assertContextCurrent();
+          resolved.assertContextCurrent();
           return resolved.context;
         },
         ...(resolved.context.getGatewayMethodRegistry

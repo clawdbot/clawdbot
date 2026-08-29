@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
@@ -7,6 +8,7 @@ import {
   tableExists,
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { DREAMS_FILENAMES, readDreamsFile } from "./dreaming-dreams-file.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
@@ -330,17 +332,23 @@ export function reserveMemoryEntryOrigins(params: {
   return rollback;
 }
 
-export function pruneMemoryEntryOrigins(params: {
+export async function pruneMemoryEntryOrigins(params: {
+  workspaceDir: string;
   agentIds: readonly string[];
   entryKeys: Iterable<string>;
   retainedEntryKeys: ReadonlySet<string>;
-}): void {
+}): Promise<void> {
   const entryKeys = [...new Set(params.entryKeys)].filter(
     (key) => !params.retainedEntryKeys.has(key),
   );
   if (entryKeys.length === 0) {
     return;
   }
+  // Keep diary origins through backup rotation; callers hold the workspace lock.
+  const diaries = await Promise.all(
+    DREAMS_FILENAMES.map((name) => readDreamsFile(path.join(params.workspaceDir, name))),
+  );
+  const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
   for (const agentId of new Set(params.agentIds)) {
     // A sibling may still index an older shared MEMORY snapshot. Retain its
     // lineage until that agent can identify and purge those derived records.
@@ -360,7 +368,9 @@ export function pruneMemoryEntryOrigins(params: {
     );
     deleteMemoryEntryOrigins({
       agentId,
-      entryKeys: entryKeys.filter((key) => !(indexed.found && indexed.value.has(key))),
+      entryKeys: entryKeys.filter(
+        (key) => !diaryKeys.has(key) && !(indexed.found && indexed.value.has(key)),
+      ),
     });
   }
 }

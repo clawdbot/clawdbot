@@ -201,6 +201,7 @@ describe("brave web search provider", () => {
   it.each(["web", "llm-context"] as const)(
     "aborts an in-flight %s request with the caller's reason",
     async (mode) => {
+      const controller = new AbortController();
       const fetchMock = vi.fn(
         async (_url: string, init?: RequestInit) =>
           await new Promise<Response>((_resolve, reject) => {
@@ -210,20 +211,20 @@ describe("brave web search provider", () => {
               return;
             }
             signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+            // First-use DNS/runtime preparation can outlast a polling deadline.
+            // Abort at transport entry so no unfinished request leaks into the next case.
+            controller.abort(new Error("Brave request canceled in flight"));
           }),
       );
       global.fetch = fetchMock as typeof global.fetch;
       const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode } });
-      const controller = new AbortController();
       const result = tool.execute(
         { query: `brave in-flight cancellation ${mode}` },
         { signal: controller.signal },
       );
 
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      controller.abort(new Error("Brave request canceled in flight"));
-
       await expect(result).rejects.toThrow("Brave request canceled in flight");
+      expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     },
   );
@@ -488,6 +489,59 @@ describe("brave web search provider", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(fetchRequestUrl(mockFetch).pathname).toBe("/proxy-one/res/v1/web/search");
     expect(fetchRequestUrl(mockFetch, 1).pathname).toBe("/proxy-two/res/v1/web/search");
+  });
+
+  it.each([
+    { mode: "web", cacheTtlMinutes: 0 },
+    { mode: "web", cacheTtlMinutes: 1 },
+    { mode: "llm-context", cacheTtlMinutes: 0 },
+    { mode: "llm-context", cacheTtlMinutes: 1 },
+  ])("honors current $mode cache TTL $cacheTtlMinutes", async ({ mode, cacheTtlMinutes }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    let requestCount = 0;
+    const mockFetch = vi.fn(async () => {
+      const result = { url: `https://example.com/result-${++requestCount}` };
+      return jsonResponse(
+        mode === "web" ? { web: { results: [result] } } : { grounding: { generic: [result] } },
+      );
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+    const cachedTool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode },
+      searchConfig: { cacheTtlMinutes: 15 },
+    });
+    const currentTool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode },
+      searchConfig: { cacheTtlMinutes },
+    });
+    const args = { query: `brave cache TTL ${mode} ${cacheTtlMinutes}` };
+
+    try {
+      const original = await cachedTool.execute(args);
+      expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+      expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      clock.mockReturnValue(now + 60_000);
+      const fresh = await currentTool.execute(args);
+      expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+      expect(fresh).not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        expect(await currentTool.execute(args)).toMatchObject({
+          results: [{ url: "https://example.com/result-3" }],
+        });
+        expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("rejects invalid Brave mode values in the plugin config schema", () => {

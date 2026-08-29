@@ -281,7 +281,7 @@ async function readSessionTranscriptJsonlBytes(
           .select([
             "session_id",
             /* kysely-allow-raw: exact JSONL bytes bound maintenance worker batches. */
-            sql<number | bigint>`SUM(LENGTH(CAST(event_json AS BLOB)) + 1)`.as("jsonl_bytes"),
+            sql<number | bigint>`SUM(OCTET_LENGTH(event_json) + 1)`.as("jsonl_bytes"),
           ])
           .where("session_id", "in", batch)
           .groupBy("session_id"),

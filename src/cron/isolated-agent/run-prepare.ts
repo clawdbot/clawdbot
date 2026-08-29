@@ -42,12 +42,11 @@ import {
   type ResolvedCronDeliveryTarget,
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
-import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
+import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
   appendCronUnattendedRunPreamble,
   resolveCronAuthSelection,
   loadCronExternalContentRuntime,
-  loadCronModelPreflightRuntime,
   loadSessionAccessorRuntime,
   resolveCronAgentTurnMessage,
   retireRolledCronSessionMcpRuntime,
@@ -98,6 +97,7 @@ export type PreparedCronRunContext = {
   agentDir: string;
   agentSessionKey: string;
   sourceSessionKey?: string;
+  sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
   runSessionId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
@@ -209,6 +209,9 @@ export async function prepareCronRunContext(params: {
     dir: modelOwner.workspaceDir,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !params.isFastTestEnv,
     skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+    provisioning: await (
+      await import("../../agents/acp-workspace-provisioning.js")
+    ).resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: runtimeCfg, agentId }),
   });
   const workspaceDir = workspace.dir;
 
@@ -224,6 +227,10 @@ export async function prepareCronRunContext(params: {
     forceNew: usesDetachedRunSession,
     hookExternalContentSource,
   });
+  const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
+  const sourceSessionGeneration = sourceEntry
+    ? { sessionId: sourceEntry.sessionId, lifecycleRevision: sourceEntry.lifecycleRevision }
+    : undefined;
   const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
   if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
     throw new Error(
@@ -363,79 +370,38 @@ export async function prepareCronRunContext(params: {
       typeof ownerAgentConfig?.model === "string" &&
       resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
         resolveAgentModelPrimaryValue(modelOwner.config.agents?.defaults?.model);
-    let { provider, model } = resolvedModelSelection;
     const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
     const inheritDefaultFallbacksForAgentStringModel =
       matchesDefaultFallbackAgentStringModel &&
       (resolvedModelSelection.modelSource === "default" ||
         resolvedModelSelection.modelSource === "agent");
 
-    const modelPreflightRuntime = await loadCronModelPreflightRuntime();
-    const preflightCandidates = resolveCronPreflightCandidates({
+    const preflight = await resolveCronPreflight({
       cfg: cfgWithAgentDefaults,
       job: input.job,
       agentId: modelOwner.agentId,
-      provider,
-      model,
+      provider: resolvedModelSelection.provider,
+      model: resolvedModelSelection.model,
       useSubagentFallbacks,
       inheritDefaultFallbacksForAgentStringModel,
     });
-    let selectedPreflightCandidate: { provider: string; model: string } | undefined;
-    let selectedPreflightCandidateIndex = -1;
-    let firstUnavailablePreflight:
-      | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
-      | undefined;
-    for (const [index, candidate] of preflightCandidates.entries()) {
-      const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
-        cfg: cfgWithAgentDefaults,
-        provider: candidate.provider,
-        model: candidate.model,
-      });
-      if (candidatePreflight.status === "available") {
-        selectedPreflightCandidate = candidate;
-        selectedPreflightCandidateIndex = index;
-        break;
-      }
-      firstUnavailablePreflight ??= candidatePreflight;
-    }
-    if (!selectedPreflightCandidate && firstUnavailablePreflight?.status === "unavailable") {
-      logWarn(`[cron:${input.job.id}] ${firstUnavailablePreflight.reason}`);
+    if (!preflight.ok) {
+      logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
       sessionWorkAdmission.release();
       return {
         ok: false,
         result: withRunSession({
           status: "skipped",
-          error: firstUnavailablePreflight.reason,
-          diagnostics: createCronRunDiagnosticsFromError(
-            "model-preflight",
-            firstUnavailablePreflight.reason,
-            {
-              severity: "warn",
-            },
-          ),
-          provider,
-          model,
+          error: preflight.reason,
+          diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
+            severity: "warn",
+          }),
+          provider: resolvedModelSelection.provider,
+          model: resolvedModelSelection.model,
         }),
       };
     }
-    const modelFallbacksOverride =
-      selectedPreflightCandidate &&
-      (selectedPreflightCandidate.provider !== provider ||
-        selectedPreflightCandidate.model !== model)
-        ? preflightCandidates
-            .slice(selectedPreflightCandidateIndex + 1)
-            .map((candidate) => `${candidate.provider}/${candidate.model}`)
-        : undefined;
-    // When preflight skips the first local candidate, start at the reachable provider.
-    if (selectedPreflightCandidate && modelFallbacksOverride) {
-      if (firstUnavailablePreflight?.status === "unavailable") {
-        logWarn(
-          `[cron:${input.job.id}] ${firstUnavailablePreflight.reason}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
-        );
-      }
-      provider = selectedPreflightCandidate.provider;
-      model = selectedPreflightCandidate.model;
-    }
+    const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
     const thinkingSelection = await resolveCronThinkingSelection({
       cfg: cfgWithAgentDefaults,
       owner: modelOwner,
@@ -523,16 +489,12 @@ export async function prepareCronRunContext(params: {
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     const originalMessage = resolveCronAgentTurnMessage(input);
-    const sourceSessionEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
     const currentConversationContext =
-      input.job.sessionTarget === "current" &&
-      agentPayload &&
-      sourceSessionKey &&
-      sourceSessionEntry
+      input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
         ? await buildCurrentConversationContextBlock({
             agentId,
-            sourceSessionEntry,
+            sourceSessionEntry: sourceEntry,
             sourceSessionKey,
             storePath: cronSession.storePath,
           })
@@ -629,10 +591,6 @@ export async function prepareCronRunContext(params: {
       authProfileId,
       authProfileIdSource: authSelection?.source,
     };
-    const runtimePluginCandidates =
-      selectedPreflightCandidateIndex >= 0
-        ? preflightCandidates.slice(selectedPreflightCandidateIndex)
-        : preflightCandidates;
     const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
       config: cfgWithAgentDefaults,
       workspaceDir,
@@ -666,6 +624,8 @@ export async function prepareCronRunContext(params: {
             owner: input.job.owner,
           }),
           scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
+          toolsAllowExecTarget: input.job.toolsAllowExecTarget,
+          toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
@@ -685,6 +645,7 @@ export async function prepareCronRunContext(params: {
         agentDir,
         agentSessionKey,
         sourceSessionKey,
+        sourceSessionGeneration,
         runSessionId,
         currentRunSessionId,
         runSessionKey,

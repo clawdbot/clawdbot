@@ -68,7 +68,6 @@ export function suggestionFormPatch(idea: CronSuggestion): Partial<CronFormState
     payloadText: t(idea.promptKey),
     payloadKind: "agentTurn",
     sessionTarget: "isolated",
-    deliveryMode: "announce",
     wakeMode: "now",
     deleteAfterRun: false,
     enabled: true,

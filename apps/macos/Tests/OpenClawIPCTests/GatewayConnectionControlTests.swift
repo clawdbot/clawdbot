@@ -252,6 +252,41 @@ private func assertConfigLookupCannotRecreateRoute(
         try await self.assertUncancelledFailureRecovers(CancellationError())
     }
 
+    @Test(arguments: [false, true], [false, true]) @MainActor
+    func `Talk phase notifications preserve their payload without activating recovery`(
+        enabled: Bool,
+        failTransport: Bool) async throws
+    {
+        let requests = WebSocketMessageRecorder()
+        try await self.withIsolatedRecoveryFixture { socket, message, sendIndex in
+            guard sendIndex > 0,
+                  let id = GatewayWebSocketTestSupport.requestID(from: message),
+                  let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            if frame["method"] as? String == "talk.mode" {
+                requests.append(message)
+                if failTransport, requests.snapshot().count == 1 {
+                    throw URLError(.networkConnectionLost)
+                }
+            }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, _ in
+            let phase = enabled ? "speaking" : "idle"
+            await connection.talkMode(enabled: enabled, phase: phase)
+
+            #expect(GatewayProcessManager.shared.status == .stopped)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(requests.snapshot().count == 1)
+            let message = try #require(requests.snapshot().first)
+            let data = try #require(Self.messageData(message))
+            let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let params = try #require(frame["params"] as? [String: Any])
+            #expect(params["enabled"] as? Bool == enabled)
+            #expect(params["phase"] as? String == phase)
+        }
+    }
+
     @Test @MainActor
     func `gateway response errors never activate transport recovery`() async throws {
         try await self.withIsolatedRecoveryFixture { socket, message, sendIndex in
@@ -677,7 +712,7 @@ private func assertConfigLookupCannotRecreateRoute(
             tls: firstTLS,
             routeAuthority: nil,
             revision: 1))
-        let connection = GatewayConnection(endpointProvider: { source.snapshot() })
+        let connection = GatewayConnection(testEndpointProvider: { source.snapshot() })
 
         try await connection.refresh()
         let firstGeneration = await connection._test_routeGeneration()
@@ -1206,6 +1241,7 @@ private func assertConfigLookupCannotRecreateRoute(
                     routeAuthority: nil,
                     deviceAuthGatewayID: route.owner)
             },
+            activationBindingKeyProvider: { nil },
             sessionBox: WebSocketSessionBox(session: session))
         _ = try await connection.request(
             method: "health",

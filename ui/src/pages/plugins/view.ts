@@ -58,7 +58,6 @@ export type InstalledFilter = "all" | "enabled" | "disabled" | "issues";
 export type PluginRowMessage = {
   kind: "success" | "error" | "warning";
   text: string;
-  acknowledge?: { packageName: string; version?: string };
   installPolicyWarning?: {
     details: PluginInstallPolicyWarningDetails;
     request: PluginInstallRequest;
@@ -95,7 +94,6 @@ type PluginsViewProps = {
   searchError: string | null;
   busy: Readonly<Record<string, boolean>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
-  pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
   detailInspection: PluginsInspectResult | null;
   detailInspectionError: string | null;
@@ -123,8 +121,6 @@ type PluginsViewProps = {
   onConfirmConsent: () => void;
   onRetryConsentInspection: () => void;
   onDismissMessage: (rowKey: string) => void;
-  onRequestUninstall: (rowKey: string) => void;
-  onCancelUninstall: (rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
   onAddConnector: (suggestion: ConnectorSuggestion) => void;
   onSearchClawHub: (query: string) => void;
@@ -509,31 +505,6 @@ function renderRowMessage(
   return html`
     <div class="plugins-row-message plugins-row-message--${resolvedMessage.kind}" role=${role}>
       <span>${resolvedMessage.text}</span>
-      ${resolvedMessage.acknowledge
-        ? html`
-            <button
-              type="button"
-              class="btn btn--sm"
-              title=${props.mutationBlockedReason ?? ""}
-              ?disabled=${busy || !props.canMutate}
-              @click=${() =>
-                requestInstall(
-                  props,
-                  {
-                    source: "clawhub",
-                    packageName: resolvedMessage.acknowledge?.packageName ?? "",
-                    ...(resolvedMessage.acknowledge?.version
-                      ? { version: resolvedMessage.acknowledge.version }
-                      : {}),
-                    acknowledgeClawHubRisk: true,
-                  },
-                  installIdentity,
-                )}
-            >
-              ${busy ? t("pluginsPage.installing") : t("pluginsPage.acknowledgeRisk")}
-            </button>
-          `
-        : nothing}
     </div>
   `;
 }
@@ -604,7 +575,7 @@ function renderInstallButton(
   installIdentity: string,
 ) {
   const installMessage = props.messages[installIdentity];
-  if (installMessage?.installPolicyWarning || installMessage?.acknowledge) {
+  if (installMessage?.installPolicyWarning) {
     return nothing;
   }
   return html`
@@ -624,54 +595,12 @@ function renderInstallButton(
   `;
 }
 
-function renderRemoveConfirm(
-  plugin: PluginCatalogItem,
-  props: PluginsViewProps,
-  busy: boolean,
-  rowKey: string,
-) {
-  return html`
-    <span
-      class="plugins-remove-confirm"
-      role="alertdialog"
-      aria-label=${t("pluginsPage.removeNamed", { name: plugin.name })}
-    >
-      <span>${t("pluginsPage.removeConfirm")}</span>
-      <button
-        type="button"
-        class="btn btn--sm danger"
-        ?disabled=${busy || !props.canMutate}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          props.onUninstall(plugin.id, rowKey);
-        }}
-      >
-        ${busy ? t("pluginsPage.removing") : t("pluginsPage.remove")}
-      </button>
-      <button
-        type="button"
-        class="btn btn--sm"
-        ?disabled=${busy}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          props.onCancelUninstall(rowKey);
-        }}
-      >
-        ${t("pluginsPage.cancel")}
-      </button>
-    </span>
-  `;
-}
-
 function renderCatalogActions(
   plugin: PluginCatalogItem,
   props: PluginsViewProps,
   busy: boolean,
   rowKey: string,
 ) {
-  if (props.pendingRemoval[rowKey]) {
-    return renderRemoveConfirm(plugin, props, busy, rowKey);
-  }
   if (!plugin.installed) {
     const install = plugin.install;
     return install
@@ -690,7 +619,7 @@ function renderCatalogActions(
       onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
     })}
     ${plugin.removable
-      ? renderRemoveButton(props, busy, plugin.name, () => props.onRequestUninstall(rowKey))
+      ? renderRemoveButton(props, busy, plugin.name, () => props.onUninstall(plugin.id, rowKey))
       : nothing}
   `;
 }
@@ -1217,49 +1146,45 @@ function renderDetailOverlay(props: PluginsViewProps) {
             ${plugin.description || t("pluginsPage.optionalCapability")}
           </p>
           <div class="plugins-detail__actions">
-            ${props.pendingRemoval[key]
-              ? renderRemoveConfirm(plugin, props, busy, key)
-              : html`
-                  ${plugin.installed
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn ${plugin.enabled ? "" : "primary"}"
-                          title=${props.mutationBlockedReason ?? ""}
-                          ?disabled=${!props.canMutate || busy}
-                          @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
-                        >
-                          ${busy
-                            ? t("pluginsPage.working")
-                            : plugin.enabled
-                              ? t("pluginsPage.disableAction")
-                              : t("pluginsPage.enableAction")}
-                        </button>
-                      `
-                    : plugin.install
-                      ? renderInstallButton(
-                          props,
-                          busy,
-                          plugin.name,
-                          plugin.install,
-                          resolveInstallIdentity(props, plugin.install),
-                        )
-                      : nothing}
-                  ${plugin.removable
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn plugins-detail__remove"
-                          title=${props.mutationBlockedReason ?? ""}
-                          ?disabled=${!props.canMutate || busy}
-                          @click=${() => props.onRequestUninstall(key)}
-                        >
-                          <span aria-hidden="true">${icons.trash}</span>
-                          ${t("pluginsPage.remove")}
-                        </button>
-                      `
-                    : nothing}
-                `}
+            ${plugin.installed
+              ? html`
+                  <button
+                    type="button"
+                    class="btn ${plugin.enabled ? "" : "primary"}"
+                    title=${props.mutationBlockedReason ?? ""}
+                    ?disabled=${!props.canMutate || busy}
+                    @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
+                  >
+                    ${busy
+                      ? t("pluginsPage.working")
+                      : plugin.enabled
+                        ? t("pluginsPage.disableAction")
+                        : t("pluginsPage.enableAction")}
+                  </button>
+                `
+              : plugin.install
+                ? renderInstallButton(
+                    props,
+                    busy,
+                    plugin.name,
+                    plugin.install,
+                    resolveInstallIdentity(props, plugin.install),
+                  )
+                : nothing}
+            ${plugin.removable
+              ? html`
+                  <button
+                    type="button"
+                    class="btn plugins-detail__remove"
+                    title=${props.mutationBlockedReason ?? ""}
+                    ?disabled=${!props.canMutate || busy}
+                    @click=${() => props.onUninstall(plugin.id, key)}
+                  >
+                    <span aria-hidden="true">${icons.trash}</span>
+                    ${t("pluginsPage.remove")}
+                  </button>
+                `
+              : nothing}
           </div>
           ${plugin.error
             ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">

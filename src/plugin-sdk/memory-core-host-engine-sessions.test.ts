@@ -47,7 +47,7 @@ describe("memory source sessions", () => {
         );
         recordSessionParticipant(
           { ...scope, sessionKey },
-          { actor: { type: "human", id: "profile-source" }, source: "profile" },
+          { identity: { type: "profile", id: "profile-source" } },
         );
         closeOpenClawAgentDatabasesForTest();
 
@@ -109,8 +109,7 @@ describe("memory source sessions", () => {
           hookExternalContentSource: "gmail",
         });
         recordSessionParticipant(scope, {
-          actor: { type: "human", id: "same-participant" },
-          source: "profile",
+          identity: { type: "profile", id: "same-participant" },
         });
         await appendTranscriptMessage(scope, { message: { role: "user", content: agentId } });
       }

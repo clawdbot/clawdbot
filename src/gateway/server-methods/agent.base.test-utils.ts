@@ -93,7 +93,7 @@ describe("gateway agent handler", () => {
       },
       {
         client: {
-          connect: { scopes: ["operator.admin"] },
+          ...operatorWriteCliClient(["operator.admin"]),
           internal: { isLocalClient: true },
         } as AgentHandlerArgs["client"],
       },
@@ -405,38 +405,62 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
-  it("clears pending dedupe when the routed recipient session is unavailable", async () => {
-    const sessionKey = "agent:ops:whatsapp:direct:+15551234567";
-    const runId = "recipient-session-route-archived";
-    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
-    mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({ sessionKey });
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      entry: { sessionId: "recipient-session", updatedAt: 1, archivedAt: 1 },
-      canonicalKey: sessionKey,
-    });
-    mocks.agentCommand.mockClear();
-    const context = makeContext();
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "ops",
-        channel: "whatsapp",
-        to: "+15551234567",
-        idempotencyKey: runId,
+  it.each([
+    {
+      state: "archived",
+      entry: { archivedAt: 1 },
+      reason: "is archived. Restore it before starting new work.",
+    },
+    {
+      state: "project preparation",
+      entry: { pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git" },
+      reason: "workspace is not ready. Wait for setup to finish or retry in chat.",
+    },
+    {
+      state: "worktree preparation",
+      entry: {
+        pendingWorktree: {
+          workspace: "/tmp/project",
+          titleSource: "Prepare workspace",
+        },
       },
-      { context, respond, reqId: runId, flushDispatch: false },
-    );
+      reason: "workspace is not ready. Wait for setup to finish or retry in chat.",
+    },
+  ])(
+    "clears pending dedupe when the routed recipient session awaits $state",
+    async ({ entry, reason }) => {
+      const sessionKey = "agent:ops:whatsapp:direct:+15551234567";
+      const runId = "recipient-session-route-archived";
+      mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+      mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({ sessionKey });
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "recipient-session", updatedAt: 1, ...entry },
+        canonicalKey: sessionKey,
+      });
+      mocks.agentCommand.mockClear();
+      const context = makeContext();
+      const respond = vi.fn();
 
-    expectRespondError(respond, {
-      message: `Session "${sessionKey}" is archived. Restore it before starting new work.`,
-    });
-    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
+      await invokeAgent(
+        {
+          message: "hi",
+          agentId: "ops",
+          channel: "whatsapp",
+          to: "+15551234567",
+          idempotencyKey: runId,
+        },
+        { context, respond, reqId: runId, flushDispatch: false },
+      );
+
+      expectRespondError(respond, {
+        message: `Session "${sessionKey}" ${reason}`,
+      });
+      expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects agent RPC creation in an agent harness-owned namespace", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:native-thread";

@@ -18,6 +18,8 @@ import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
@@ -413,6 +415,26 @@ export function normalizeCronJobInput(
       };
     } else {
       delete next.toolsAllowProvenance;
+    }
+  }
+
+  if ("toolsAllowExecTarget" in base) {
+    const execTarget = normalizeCronToolsAllowExecTarget(base.toolsAllowExecTarget);
+    if (execTarget) {
+      next.toolsAllowExecTarget = execTarget;
+    } else {
+      delete next.toolsAllowExecTarget;
+    }
+  }
+
+  if ("toolsAllowExecTargetRequirement" in base) {
+    const requirement = normalizeCronToolsAllowExecTargetRequirement(
+      base.toolsAllowExecTargetRequirement,
+    );
+    if (requirement) {
+      next.toolsAllowExecTargetRequirement = requirement;
+    } else {
+      delete next.toolsAllowExecTargetRequirement;
     }
   }
 

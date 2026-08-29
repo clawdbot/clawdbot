@@ -19,6 +19,7 @@ import pMap from "p-map";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 
 type UnknownRecord = Record<string, unknown>;
@@ -125,7 +126,9 @@ function readWorkspace() {
 }
 
 function readPnpmLock() {
-  const lockfile: unknown = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const lockfile: unknown = parseYaml(
+    pnpmLockfileDocuments(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8")).dependencies,
+  );
   return lockfile;
 }
 

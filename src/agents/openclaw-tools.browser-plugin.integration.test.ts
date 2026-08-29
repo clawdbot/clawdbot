@@ -483,7 +483,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
     expect(
       prepareOwnedPluginLoadContext(
-        { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
+        { config, workspaceDir: "/tmp" },
         process.env,
         pluginRegistry,
         metadataSnapshot,
@@ -499,6 +499,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         config,
         workspaceDir: "/tmp",
         preparedModelRuntime: {
+          catalogOwner: undefined,
           agentDir: "/tmp/agent",
           workspaceDir: "/tmp",
           activeProjectKeys: [],

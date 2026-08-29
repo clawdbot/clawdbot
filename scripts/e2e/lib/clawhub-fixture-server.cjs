@@ -184,6 +184,8 @@ function startPrepublishArtifactServer() {
           npmTarballName: entry.tarball,
           createdAt: 0,
         },
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
         trust: {
           scanStatus: "clean",
           moderationState: null,
@@ -781,7 +783,11 @@ async function main() {
       url.pathname ===
       `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/security`
     ) {
-      json(response, securityDetail);
+      json(response, {
+        ...securityDetail,
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
+      });
       return;
     }
     if (

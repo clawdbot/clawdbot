@@ -78,9 +78,8 @@ suite.define(() => {
             String((element as HTMLElement & { value?: string }).value),
           ),
         ).toBe("minutes");
-        // Control: delivery mode's default is also its first option.
-        expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("announce");
-        expect(await pickerValue("wa-select#cron-delivery-channel")).toBe("last");
+        expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("none");
+        expect(await page.locator("wa-select#cron-delivery-channel").count()).toBe(0);
 
         await action.click();
         await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();

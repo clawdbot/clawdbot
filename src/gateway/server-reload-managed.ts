@@ -133,6 +133,7 @@ export function startManagedGatewayConfigReloader(
     applyHotReload,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
+    hasOutstandingGatewayRestart,
     pauseGatewayRestartForConfigCandidate,
     publishAppliedConfigHash,
     publishAcceptedRestartTarget,
@@ -172,9 +173,8 @@ export function startManagedGatewayConfigReloader(
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
     assertRestartReady: () =>
-      import("../state/openclaw-database-preflight.js").then(
-        ({ assertOpenClawDatabasesReadyForRestart }) =>
-          assertOpenClawDatabasesReadyForRestart({ env: process.env }),
+      import("../state/openclaw-database-preflight.js").then(({ assertOpenClawDatabasesReady }) =>
+        assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
       ),
     restartRecoveryAvailable,
     createHealthMonitor: () =>
@@ -489,6 +489,7 @@ export function startManagedGatewayConfigReloader(
       params.commitTerminalConfig(nextConfig);
     },
     onConfigRevisionApplied: publishAppliedConfigHash,
+    hasOutstandingGatewayRestart,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit: async (plan, nextConfig, ownership, sourceConfig) => {
       // Cleared per transaction so a rebuild can never inherit a config committed

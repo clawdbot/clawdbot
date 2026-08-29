@@ -11,15 +11,28 @@ import type { ImapAccountConfig } from "./config.js";
 const AUTH_FRESHNESS_MS = 48 * 60 * 60 * 1_000;
 const DNS_TIMEOUT_MS = 5_000;
 
-export type SenderGateVerdict =
-  | { accepted: true; sender: string; strength: IdentifierAuthentication; reason: string }
+type ImapAuthEvidence = {
+  strength: IdentifierAuthentication;
+  reason:
+    | `dmarc-${Exclude<AuthenticateResult["dmarc"], false>["status"]["result"]}`
+    | "dkim-unsigned-body"
+    | "trusted-authserv-dmarc-pass"
+    | "unverified-authentication"
+    | "authentication-temperror";
+};
+
+type SenderGateVerdict =
+  | { accepted: true; sender: string; reason: "token" }
   | {
       accepted: false;
       sender?: string;
-      strength: IdentifierAuthentication;
-      reason: string;
-      transient: boolean;
-    };
+      reason: "invalid-from" | "sender-not-allowed" | "message-too-old";
+      transient: false;
+    }
+  | (ImapAuthEvidence & { sender: string } & (
+        | { accepted: true }
+        | { accepted: false; transient: boolean }
+      ));
 
 export type MailAuthenticator = typeof authenticate;
 
@@ -119,7 +132,7 @@ function mapImapAuthStrength(
   result: AuthenticateResult | undefined,
   headers: readonly AuthenticationHeader[],
   account: ImapAccountConfig,
-): { strength: IdentifierAuthentication; reason: string; transient: boolean } {
+): ImapAuthEvidence & { transient: boolean } {
   const dmarc = result?.dmarc && result.dmarc.status.result;
   // mailauth omits alignment when no DMARC policy exists or its DNS lookup fails.
   if (result?.dmarc && result.dmarc.alignment?.dkim.underSized) {
@@ -163,29 +176,17 @@ export async function evaluateImapSender(params: {
   const fromValues = params.mail.from?.value ?? [];
   const fromHeaders = params.mail.headerLines.filter(({ key }) => key.toLowerCase() === "from");
   if (fromHeaders.length !== 1 || fromValues.length !== 1 || !fromValues[0]?.address) {
-    return { accepted: false, strength: "mutable", reason: "invalid-from", transient: false };
+    return { accepted: false, reason: "invalid-from", transient: false };
   }
   const sender = fromValues[0].address;
   if (!matchesImapSender(sender, params.account.allowedSenders)) {
-    return {
-      accepted: false,
-      sender,
-      strength: "mutable",
-      reason: "sender-not-allowed",
-      transient: false,
-    };
+    return { accepted: false, sender, reason: "sender-not-allowed", transient: false };
   }
   if (matchingSenderToken(params.mail, sender, params.account)) {
-    return { accepted: true, sender, strength: "mutable", reason: "token" };
+    return { accepted: true, sender, reason: "token" };
   }
   if (Date.now() - params.internalDate.getTime() > AUTH_FRESHNESS_MS) {
-    return {
-      accepted: false,
-      sender,
-      strength: "mutable",
-      reason: "message-too-old",
-      transient: false,
-    };
+    return { accepted: false, sender, reason: "message-too-old", transient: false };
   }
   let result: AuthenticateResult | undefined;
   try {

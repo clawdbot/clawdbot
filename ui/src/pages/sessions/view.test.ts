@@ -541,7 +541,14 @@ describe("sessions view", () => {
               key: "agent:main:ada",
               kind: "direct",
               updatedAt: 2,
-              owner: { actor: { type: "human", id: "profile-ada", label: "Ada Lovelace" } },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-ada",
+                  label: "Ada Lovelace",
+                  identity: { type: "profile", id: "profile-ada" },
+                },
+              },
             },
             { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
           ]),

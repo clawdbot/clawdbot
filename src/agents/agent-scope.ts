@@ -45,6 +45,7 @@ export {
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
+  resolveAgentWorkspaceProvisioning,
   tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveAmbientOwnerAgentId,
@@ -55,6 +56,7 @@ export {
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
   type AgentSelectionContext,
+  type AgentWorkspaceProvisioning,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 

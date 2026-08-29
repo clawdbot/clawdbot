@@ -36,6 +36,8 @@ const DISCORD_REALTIME_TRAILING_SILENCE_MAX_MS = 3_000;
 export type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: string };
 
 type PendingSpeakerTurnStats = {
+  // Final text keeps the audio turn's subscription across capture replacement.
+  transcripts: VoiceSessionEntry["transcripts"];
   inputDiscordBytes: number;
   inputRealtimeBytes: number;
   inputChunks: number;
@@ -48,6 +50,7 @@ type PendingSpeakerTurn = RealtimeVoiceTurnContextHandle<
 >;
 
 type TranscriptUtteranceAttribution = {
+  transcripts: VoiceSessionEntry["transcripts"];
   context: DiscordRealtimeSpeakerContext;
   startedAt: number;
 };
@@ -72,6 +75,7 @@ export class DiscordRealtimeTurns {
         context: DiscordRealtimeSpeakerContext;
         startedAt: number;
         expiresAt: number;
+        transcripts: VoiceSessionEntry["transcripts"];
       }
     | undefined;
 
@@ -101,6 +105,7 @@ export class DiscordRealtimeTurns {
     const turn = this.speakerTurns.open(
       { ...context, userId },
       {
+        transcripts: this.params.entry.transcripts,
         inputDiscordBytes: 0,
         inputRealtimeBytes: 0,
         inputChunks: 0,
@@ -319,7 +324,9 @@ export class DiscordRealtimeTurns {
   private transcriptAttributionFromTurn(
     turn: PendingSpeakerTurn | undefined,
   ): TranscriptUtteranceAttribution | undefined {
-    return turn ? { context: turn.context, startedAt: turn.startedAt } : undefined;
+    return turn
+      ? { context: turn.context, startedAt: turn.startedAt, transcripts: turn.transcripts }
+      : undefined;
   }
 
   private recordTranscriptUtterance(
@@ -327,8 +334,8 @@ export class DiscordRealtimeTurns {
     attribution: TranscriptUtteranceAttribution | undefined,
     providerEpoch: number,
   ): void {
-    const transcripts = this.params.entry.transcripts;
-    if (!transcripts || !attribution) {
+    const transcripts = attribution?.transcripts;
+    if (!transcripts || !attribution || this.params.entry.transcripts !== transcripts) {
       return;
     }
     const context = attribution.context;
@@ -347,7 +354,10 @@ export class DiscordRealtimeTurns {
     };
     void Promise.resolve()
       .then(() => {
-        if (providerEpoch !== this.params.providerEpoch()) {
+        if (
+          providerEpoch !== this.params.providerEpoch() ||
+          this.params.entry.transcripts !== transcripts
+        ) {
           return;
         }
         return transcripts.onUtterance(utterance);
@@ -374,6 +384,7 @@ export class DiscordRealtimeTurns {
     }
     this.pendingWakeNameFollowup = {
       context,
+      transcripts: turn?.transcripts,
       startedAt: turn?.startedAt ?? Date.now(),
       expiresAt,
     };
@@ -397,7 +408,11 @@ export class DiscordRealtimeTurns {
     if (currentTurn) {
       this.consumePendingSpeakerContext();
     }
-    return { context: pending.context, startedAt: pending.startedAt };
+    return {
+      context: pending.context,
+      startedAt: pending.startedAt,
+      transcripts: pending.transcripts,
+    };
   }
 
   private rememberIgnoredWakeNameSpeakerContext(

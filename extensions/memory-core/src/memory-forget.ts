@@ -28,6 +28,7 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
+import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
@@ -40,6 +41,7 @@ import {
   recordMemorySessionTombstones,
 } from "./memory-entry-origins.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
+import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
@@ -83,38 +85,6 @@ type ForgetIndexPlan = {
   vectorRows: number;
   embeddingCacheRows: number;
   hasVectorTable: boolean;
-};
-
-export type MemoryForgetReport = {
-  agentId: string;
-  dryRun: boolean;
-  sessionIds: string[];
-  sessionResolutions: Array<{
-    sessionId: string;
-    sessionKey?: string;
-    source: "live" | "archived" | "unresolved";
-  }>;
-  entryKeys: string[];
-  mixedLineageEntryKeys: string[];
-  untargetableEntryKeys: string[];
-  curatedWrites: Array<{ relativePath: string; observedAt: number }>;
-  artifacts: {
-    memoryFiles: number;
-    memoryEntries: number;
-    memoryLines: number;
-    sessionCorpusFiles: number;
-    sessionCorpusLines: number;
-    indexChunks: number;
-    indexSources: number;
-    ftsRows: number;
-    vectorRows: number;
-    embeddingCacheRows: number;
-    shortTermEntries: number;
-    seenHashScopes: number;
-    backups: number;
-    originRows: number;
-  };
-  refusals: string[];
 };
 
 const PROMOTION_MARKER = /^\s*<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->\s*$/u;
@@ -184,6 +154,7 @@ function scrubMemoryContent(params: {
       continue;
     }
     const heading = /^(#{1,6})\s/u.exec(lines[index] ?? "");
+    const rowIndent = /^(\s*)[-*+]\s/u.exec(lines[index] ?? "")?.[1]?.length;
     if (!heading && !/\bSession ID:/iu.test(lines[index] ?? "")) {
       continue;
     }
@@ -191,6 +162,7 @@ function scrubMemoryContent(params: {
     while (end < lines.length) {
       const nextHeading = /^(#{1,6})\s/u.exec(lines[end] ?? "");
       if (
+        (rowIndent !== undefined && (lines[end] ?? "").search(/\S/u) <= rowIndent) ||
         (nextHeading && (!heading || nextHeading[1]!.length <= heading[1]!.length)) ||
         /\bSession ID:/iu.test(lines[end] ?? "")
       ) {
@@ -388,6 +360,7 @@ async function forgetWorkspaceMemory(
       .map((origin) => origin.entryKey),
   );
   const untargetableEntryKeys = new Set<string>();
+  const refusals: string[] = [];
   const corpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
   const corpusFiles = await fs
     .readdir(corpusDir, { withFileTypes: true })
@@ -436,10 +409,10 @@ async function forgetWorkspaceMemory(
     scrubMemoryContent({ content, entryKeys, sessionIds, corpusSnippets, agentId: params.agentId });
   let removedMemoryEntries = 0;
   let removedMemoryLines = 0;
-  const memoryFiles = await listMemoryFiles(workspaceDir, [
-    path.join(workspaceDir, "DREAMS.md"),
-    path.join(workspaceDir, "dreams.md"),
-  ]);
+  const memoryFiles = await listMemoryFiles(
+    workspaceDir,
+    DREAMS_FILENAMES.map((name) => path.join(workspaceDir, name)),
+  );
   for (const absolutePath of memoryFiles) {
     // Corpus evidence must survive until every dependent artifact is clean.
     if (path.dirname(absolutePath) === corpusDir) {
@@ -453,6 +426,11 @@ async function forgetWorkspaceMemory(
       }
     }
     const scrubbed = scrub(content);
+    if (/^## Memory Consolidation History\r?$[\s\S]*^ {2}- `[+-] /mu.test(scrubbed.content)) {
+      refusals.push(
+        `Cannot trace historical consolidation highlights in ${path.relative(workspaceDir, absolutePath)}; review them manually.`,
+      );
+    }
     if (scrubbed.content !== content) {
       memoryRewrites.push({
         absolutePath,
@@ -495,9 +473,11 @@ async function forgetWorkspaceMemory(
       !entryKeys.has(value.key) &&
       !referencesSession(`${value.path}\n${value.snippet}`, params.agentId, sessionIds),
   );
-  const removedSeenScopes = Object.keys(ingestionState.seenMessages).filter((scope) =>
-    referencesSession(scope, params.agentId, sessionIds),
+  const retainedSeenMessages = Object.entries(ingestionState.seenMessages).filter(
+    ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
   );
+  const removedSeenScopes =
+    Object.keys(ingestionState.seenMessages).length - retainedSeenMessages.length;
   const retainedFileStates = Object.fromEntries(
     Object.entries(ingestionState.files).filter(
       ([key]) => !referencesSession(key, params.agentId, sessionIds),
@@ -575,6 +555,7 @@ async function forgetWorkspaceMemory(
     agentId: params.agentId,
     dryRun: params.dryRun === true,
     sessionIds: [...sessionIds].toSorted(),
+    participantMatches: summarizeParticipantMatches(targets, params.participants),
     sessionResolutions: targets
       .map(({ sessionId, sessionKey, resolution }) =>
         sessionKey
@@ -600,11 +581,11 @@ async function forgetWorkspaceMemory(
       vectorRows: indexPlan.vectorRows,
       embeddingCacheRows: indexPlan.embeddingCacheRows,
       shortTermEntries: shortTermEntries.length - retainedShortTerm.length,
-      seenHashScopes: removedSeenScopes.length,
+      seenHashScopes: removedSeenScopes,
       backups: rewrittenBackups,
       originRows: allOrigins.filter((origin) => entryKeys.has(origin.entryKey)).length,
     },
-    refusals: [],
+    refusals,
   };
   if (params.dryRun || sessionIds.size === 0) {
     return report;
@@ -693,17 +674,13 @@ async function forgetWorkspaceMemory(
       });
     }
     if (
-      removedSeenScopes.length > 0 ||
+      removedSeenScopes > 0 ||
       Object.keys(retainedFileStates).length !== Object.keys(ingestionState.files).length
     ) {
       await writeSessionIngestionState(workspaceDir, {
         ...ingestionState,
         files: retainedFileStates,
-        seenMessages: Object.fromEntries(
-          Object.entries(ingestionState.seenMessages).filter(
-            ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
-          ),
-        ),
+        seenMessages: Object.fromEntries(retainedSeenMessages),
       });
     }
     if (rewrittenBackups > 0) {

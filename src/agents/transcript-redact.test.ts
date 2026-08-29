@@ -6,6 +6,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as loggingConfigModule from "../logging/config.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
@@ -71,6 +73,164 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each([
+    { type: "profile", id: "person" },
+    { type: "remote", pluginId: "chat", domain: "workspace", idKind: "user", id: "person" },
+    {
+      type: "observation",
+      pluginId: "chat",
+      accountId: "account",
+      senderKind: "human",
+      id: "person",
+    },
+  ])("sender provenance survives label redaction but not identity redaction: $type", (identity) => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "private-label",
+      timestamp: 1,
+      __openclaw: { senderId: identity.id, senderIdentity: identity, senderName: "private-label" },
+    });
+    expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+    const labelOnly = redactTranscriptMessage(message, cfg("tools", ["private-label"]));
+    expect(labelOnly).toMatchObject({
+      __openclaw: { senderIdentity: identity, senderId: "person" },
+    });
+    expect(JSON.stringify(labelOnly)).not.toContain("private-label");
+    const redacted = redactTranscriptMessage(message, cfg("tools", ["person"]));
+    expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+    expect(JSON.stringify(redacted)).not.toContain('"person"');
+    expect(Reflect.get(message, "__openclaw").senderIdentity).toBe(identity);
+  });
+
+  it.each([
+    { senderId: "private-raw-id", senderIdentity: { type: "profile", id: "person" } },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "remote",
+        pluginId: "chat",
+        domain: "private-domain",
+        idKind: "user",
+        id: "person",
+      },
+    },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "chat",
+        accountId: "private-account",
+        senderKind: "human",
+        id: "person",
+      },
+    },
+  ])(
+    "drops sender provenance when any qualified source fact or paired ID is redacted: %j",
+    (metadata) => {
+      const message = castAgentMessage({
+        role: "user",
+        content: "visible",
+        timestamp: 1,
+        __openclaw: metadata,
+      });
+      const redacted = redactTranscriptMessage(message, cfg("tools", ["private-[a-z-]+"]));
+      expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+      expect(JSON.stringify(redacted)).not.toContain("private-");
+      expect(Reflect.get(message, "__openclaw")).toBe(metadata);
+    },
+  );
+
+  it.each(["default", "custom", "registered"] as const)(
+    "preserves canonical tool correlation IDs while applying %s redaction to payloads",
+    (policy) => {
+      const ids =
+        policy === "default"
+          ? [
+              "call_lookup|fc-jztpgrWaMLTnokJk",
+              "call_lookup|fc-jztDifferentokJk",
+              "call_lookup:nested:1|fc-jztpgrWaMLTnokJk",
+            ]
+          : [
+              "call_lookup|opaque-first-identity",
+              "call_lookup|opaque-second-identity",
+              "call_lookup:nested:1|opaque-first-identity",
+            ];
+      const payload = {
+        id: ids[0],
+        role: "toolResult",
+        toolCallId: ids[1],
+        assistant: {
+          role: "assistant",
+          content: ids.map((id) => ({ type: "toolCall", id })),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        content: ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+      });
+      const config = cfg(
+        "tools",
+        policy === "custom" ? [String.raw`call_lookup[^\s"]+`] : undefined,
+      );
+      if (policy === "registered") {
+        ids.forEach(registerSecretValueForRedaction);
+      }
+      try {
+        const assistant = redactTranscriptMessage(message, config);
+        expect(assistant).toMatchObject({ content: ids.map((id) => ({ type: "toolCall", id })) });
+        const blocks = msgContent(assistant) as Array<{ arguments: unknown }>;
+        const results = ids.map((toolCallId) =>
+          redactTranscriptMessage(
+            castAgentMessage({
+              role: "toolResult",
+              toolCallId,
+              toolName: "lookup",
+              content: [{ type: "text", text: JSON.stringify(payload) }],
+              details: payload,
+              isError: false,
+              timestamp: 1,
+            }),
+            config,
+          ),
+        );
+        expect(results).toMatchObject(
+          ids.map((toolCallId) => ({ role: "toolResult", toolCallId })),
+        );
+        const userPayload = redactTranscriptMessage(
+          castAgentMessage({ role: "user", content: msgContent(message), toolCallId: ids[0] }),
+          config,
+        );
+        const noncanonical = [
+          {
+            role: "assistant",
+            id: ids[0],
+            content: [{ type: "text", id: ids[1], text: "visible" }],
+          },
+          { role: "assistant", content: [{ type: "toolCall", id: payload }] },
+          { role: "assistant", content: [msgContent(message)] },
+          { role: "toolResult", toolCallId: [ids[0]], content: [] },
+        ].map((value) => redactTranscriptMessage(castAgentMessage(value), config));
+        const redactedPayloads = JSON.stringify([
+          blocks.map((block) => block.arguments),
+          results.map((result) => {
+            expect(result.role).toBe("toolResult");
+            return result.role === "toolResult" ? [result.content, result.details] : [];
+          }),
+          userPayload,
+          noncanonical,
+        ]);
+        for (const id of ids) {
+          expect(redactedPayloads).not.toContain(id);
+        }
+        expect(msgContent(message)).toEqual(
+          ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+        );
+      } finally {
+        resetSecretRedactionRegistryForTest();
+      }
+    },
+  );
+
   it("redacts text block matching default patterns (sk- token)", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz end");
     const result = redactTranscriptMessage(msg, cfg("tools"));

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   createComposerProps as props,
@@ -18,12 +17,6 @@ import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
 const openRealtimeTalkInputMock = vi.fn();
-
-function iconMarkup(icon: unknown): string | undefined {
-  const container = document.createElement("div");
-  render(icon, container);
-  return container.querySelector("svg")?.innerHTML;
-}
 
 describe("suggestion composer", () => {
   it("labels the send action as Suggest and emits ephemeral typing state", () => {
@@ -157,29 +150,6 @@ describe("renderChatComposer controls", () => {
     expect(textarea.value).toBe("");
     expect(onDraftChange).toHaveBeenLastCalledWith("");
     expect(textarea.matches(":placeholder-shown")).toBe(true);
-  });
-
-  it("keeps an unsaved queued-row edit open when normal composer text is double-clicked", () => {
-    const onCancel = vi.fn();
-    const { container } = renderComposer({
-      draft: "select this composer text",
-      queue: [{ id: "queued", text: "original queued text", createdAt: 1 }],
-      queuedEdit: {
-        editingId: "queued",
-        editingText: "unsaved queued edit",
-        onCancel,
-      },
-    });
-    const composer = container.querySelector<HTMLTextAreaElement>(
-      ".agent-chat__composer-combobox textarea",
-    );
-
-    composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
-      "unsaved queued edit",
-    );
   });
 
   it("keeps composing enabled and explains queued delivery while offline", () => {
@@ -649,96 +619,6 @@ describe("renderChatComposer controls", () => {
     mediaDevices.dispatchEvent(new Event("devicechange"));
     await Promise.resolve();
     expect(discoverRealtimeTalkInputsMock.mock.calls.length).toBe(callsWhileClosed);
-  });
-
-  it("offers camera only inside a video-capable active talk session", () => {
-    const onToggleRealtimeCamera = vi.fn();
-    const { container } = renderComposer({
-      onToggleRealtimeTalk: vi.fn(),
-      onToggleRealtimeCamera,
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "listening",
-      realtimeTalkVideoCapable: true,
-    });
-
-    button(container, t("chat.composer.turnCameraOn")).click();
-    expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
-    expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
-
-    const failed = renderComposer({
-      onToggleRealtimeTalk: vi.fn(),
-      onToggleRealtimeCamera,
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "error",
-      realtimeTalkVideoCapable: true,
-    });
-    expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
-  });
-
-  it("renders the camera-off glyph while the talk camera is enabled", () => {
-    const { container } = renderComposer({
-      onToggleRealtimeTalk: vi.fn(),
-      onToggleRealtimeCamera: vi.fn(),
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "listening",
-      realtimeTalkVideoCapable: true,
-      realtimeTalkVideoStream: {} as MediaStream,
-    });
-
-    const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
-    expect(cameraToggle.querySelector("svg")?.innerHTML).toBe(iconMarkup(icons.cameraOff));
-    expect(cameraToggle.querySelector("svg")?.innerHTML).not.toBe(iconMarkup(icons.camera));
-  });
-
-  it("offers camera switching only for a live preview with multiple cameras", () => {
-    const onSwitchRealtimeCamera = vi.fn();
-    const stream = {
-      getVideoTracks: () => [
-        {
-          getSettings: () => ({ facingMode: "user" }),
-        } as MediaStreamTrack,
-      ],
-    } as unknown as MediaStream;
-    const { container } = renderComposer({
-      realtimeTalkVideoStream: stream,
-      realtimeTalkCameraDevices: [
-        { deviceId: "front", label: "Front Camera" },
-        { deviceId: "back", label: "Back Camera" },
-      ],
-      onSwitchRealtimeCamera,
-    });
-
-    button(container, t("chat.composer.switchCamera")).click();
-    expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
-    expect(container.querySelector("video")?.classList).toContain(
-      "agent-chat__video-preview-mirrored",
-    );
-
-    const singleCamera = renderComposer({
-      realtimeTalkVideoStream: stream,
-      realtimeTalkCameraDevices: [{ deviceId: "front", label: "Front Camera" }],
-      onSwitchRealtimeCamera,
-    });
-    expect(
-      singleCamera.container.querySelector(
-        `button[aria-label="${t("chat.composer.switchCamera")}"]`,
-      ),
-    ).toBeNull();
-  });
-
-  it("does not mirror an environment-facing camera preview", () => {
-    const stream = {
-      getVideoTracks: () => [
-        {
-          getSettings: () => ({ facingMode: "environment" }),
-        } as MediaStreamTrack,
-      ],
-    } as unknown as MediaStream;
-    const { container } = renderComposer({ realtimeTalkVideoStream: stream });
-
-    expect(container.querySelector("video")?.classList).not.toContain(
-      "agent-chat__video-preview-mirrored",
-    );
   });
 
   it("keeps send and dictation distinct for attachment-only drafts", () => {

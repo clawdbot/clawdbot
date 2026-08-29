@@ -82,7 +82,7 @@ export function resolveWhereChip(params: {
   if (params.autoDevice) {
     return {
       kind: "auto-device",
-      label: t("newSession.anyAvailableNode"),
+      label: t("newSession.autoDevice"),
       cloudMachines: [],
       selectedMachineId: "",
       devices,
@@ -102,6 +102,7 @@ export function resolveWhereChip(params: {
 }
 
 export function renderWhereChip(params: {
+  autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
   cloudProfileId: string;
@@ -192,7 +193,12 @@ export function renderWhereChip(params: {
               ${renderSessionMenuItem(
                 {
                   value: "auto-device",
-                  label: t("newSession.anyAvailableNode"),
+                  label: t("newSession.autoDevice"),
+                  sub: t(
+                    params.autoPlacementMode === "eligible-order"
+                      ? "newSession.autoDeviceSubEligible"
+                      : "newSession.autoDeviceSub",
+                  ),
                   icon: icons.monitor,
                   checked: params.autoDevice === true,
                   disabled: Boolean(params.state.autoDeviceDisabledReason),
