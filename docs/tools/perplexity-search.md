@@ -60,11 +60,13 @@ If `provider: "perplexity"` is configured and the Perplexity key SecretRef is un
 
 Existing installs pointed at Perplexity Sonar through OpenRouter continue to work. The provider switches to the Sonar chat-completions transport when any of these is set:
 
-- `OPENROUTER_API_KEY` in the Gateway environment
+- `OPENROUTER_API_KEY` in the Gateway environment, when no higher-priority credential is available
 - An `sk-or-...` key stored in `plugins.entries.perplexity.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.baseUrl` or `.model`
 
-In that mode the provider returns AI-synthesized answers with citations instead of structured Search API results. The Search API filter parameters `country`, `language`, `date_after`/`date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return a `not supported` error on the chat-completions path; `freshness` still applies as `search_recency_filter`. New setups should use a `pplx-` key against the native Search API.
+Credential precedence is `plugins.entries.perplexity.config.webSearch.apiKey`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`. The first available credential determines endpoint inference unless an explicit `baseUrl` or `model` forces the legacy transport.
+
+In that mode the provider returns one AI-synthesized answer with citations instead of structured Search API results. `count` is accepted for shared-tool compatibility but does not change that one-answer shape. The Search API filter parameters `country`, `language`, `date_after`/`date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return a `not supported` error on the chat-completions path; `freshness` still applies as `search_recency_filter`. New setups should use a `pplx-` key against the native Search API.
 
 ```json5
 {
@@ -98,7 +100,7 @@ Search query.
 </ParamField>
 
 <ParamField path="count" type="number" default="5">
-Number of results to return (1-10).
+Native Perplexity Search API only. Number of results to return (1-10). The legacy Sonar/OpenRouter transport accepts this parameter for compatibility but still returns one synthesized answer with citations, not an N-result list.
 </ParamField>
 
 <ParamField path="country" type="string">

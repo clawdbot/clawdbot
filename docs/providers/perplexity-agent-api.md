@@ -60,7 +60,9 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
     Create a key in the [Perplexity API console](https://console.perplexity.ai/project/keys). Keys start with `pplx-`.
   </Step>
   <Step title="Persist the credential for the Gateway service">
-    Set the Perplexity key in your current shell, then add it under the custom-provider variable name in the state-directory `.env` before installing the daemon:
+    Set the Perplexity key in your current shell, then choose the path that matches your existing custom-provider setup.
+
+    **No existing custom provider uses `CUSTOM_API_KEY`:** add the key under the custom-provider variable name in the state-directory `.env` before installing the daemon:
 
     ```bash
     export PERPLEXITY_API_KEY="pplx-..."
@@ -72,9 +74,24 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
     export CUSTOM_API_KEY="$PERPLEXITY_API_KEY"
     ```
 
-    If `CUSTOM_API_KEY` is already present in that file, replace its line instead of adding another one. The state-directory `.env` is a trusted, durable environment source for installed Gateway services; a shell export alone disappears when that shell exits. See [Environment variables](/help/environment) for the full loading and precedence rules.
+    Use this path only when `CUSTOM_API_KEY` is not already assigned in your shell or state-directory `.env`. If it is already present, do not replace it: non-interactive custom-provider onboarding uses that same variable for every custom provider.
+
+    **An existing custom provider already uses `CUSTOM_API_KEY`:** preserve that value and add or update a separate `PERPLEXITY_API_KEY` line in the state-directory `.env`:
+
+    ```bash
+    export PERPLEXITY_API_KEY="pplx-..."
+    state_dir="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+    umask 077
+    mkdir -p "$state_dir"
+    printf 'PERPLEXITY_API_KEY=%s\n' "$PERPLEXITY_API_KEY" >> "$state_dir/.env"
+    chmod 600 "$state_dir/.env"
+    ```
+
+    The state-directory `.env` is a trusted, durable environment source for installed Gateway services; a shell export alone disappears when that shell exits. See [Environment variables](/help/environment) for the full loading and precedence rules.
   </Step>
   <Step title="Run onboarding">
+    If `CUSTOM_API_KEY` was unused and you chose the first credential path above, run:
+
     ```bash
     openclaw onboard \
       --non-interactive \
@@ -88,9 +105,32 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
       --install-daemon
     ```
 
+    If another custom provider already uses `CUSTOM_API_KEY`, keep that shared value unchanged. Mask it only for the onboarding process, write a provider-specific SecretRef for Perplexity, and install the daemon after the reference is in place:
+
+    ```bash
+    CUSTOM_API_KEY= openclaw onboard \
+      --non-interactive \
+      --accept-risk \
+      --auth-choice custom-api-key \
+      --secret-input-mode ref \
+      --custom-base-url "https://api.perplexity.ai/v1" \
+      --custom-model-id "anthropic/claude-sonnet-4-6" \
+      --custom-compatibility openai-responses \
+      --custom-provider-id perplexity
+
+    openclaw config set models.providers.perplexity.apiKey \
+      --ref-source env \
+      --ref-provider default \
+      --ref-id PERPLEXITY_API_KEY
+
+    openclaw gateway install
+    ```
+
+    If your environment SecretRef provider alias is not `default`, pass that alias to `--ref-provider` instead. Prefixing only the onboarding command with `CUSTOM_API_KEY=` prevents the CLI from binding Perplexity to the existing shared credential; it does not change the shell or state-directory value.
+
     `--non-interactive` tells OpenClaw to skip the setup wizard and consume the flags directly. `--accept-risk` is required alongside it to acknowledge that agents have full system access. If you omit `--non-interactive`, OpenClaw can enter interactive setup, where the custom-provider values above are not applied. If you keep `--non-interactive` but omit `--accept-risk`, OpenClaw exits with an explicit risk-acknowledgment error before dispatching setup.
 
-    `--secret-input-mode ref` tells OpenClaw to write an environment reference to `openclaw.json` instead of the literal key. The custom-provider auth path reads the key from the `CUSTOM_API_KEY` environment variable, so the previous step bridges Perplexity's `PERPLEXITY_API_KEY` naming to OpenClaw's expected variable name in both the current shell and the durable Gateway environment. The onboarding command then persists `apiKey: { source: "env", id: "CUSTOM_API_KEY" }` rather than the resolved secret. The daemon reads `CUSTOM_API_KEY` from its runtime environment on each request.
+    `--secret-input-mode ref` tells OpenClaw to write an environment reference to `openclaw.json` instead of the literal key. On a default secrets setup, the first path persists `apiKey: { source: "env", provider: "default", id: "CUSTOM_API_KEY" }`; when an environment SecretRef provider alias is configured, `provider` contains that resolved alias instead. The daemon reads the referenced variable from its runtime environment on each request. The existing-custom-provider path replaces the onboarding result with the complete, provider-specific `{ source: "env", provider: "<env-provider-alias>", id: "PERPLEXITY_API_KEY" }` reference before installing the daemon; the command above uses the built-in `default` alias.
 
     `--custom-compatibility openai-responses` is required. Perplexity's Agent API primary endpoint is `POST /v1/agent`; it also accepts requests at `POST /v1/responses` as an OpenAI-Responses-compatible alias, which is what OpenClaw uses in this mode. It does not implement `/v1/chat/completions`, so `openai-completions` will not work.
   </Step>
@@ -131,7 +171,11 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
     providers: {
       perplexity: {
         baseUrl: "https://api.perplexity.ai/v1",
-        apiKey: "${CUSTOM_API_KEY}",
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "CUSTOM_API_KEY",
+        },
         api: "openai-responses",
         models: [
           {
@@ -152,6 +196,8 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
 ```
 
 Each `models[]` entry pins one Agent API model with explicit cost and window metadata. Add another entry for every model you want to route through this provider.
+
+The example shows the SecretRef produced by the fresh custom-provider path. If `CUSTOM_API_KEY` already belongs to another provider, use the existing-custom-provider path above; the same field then references `PERPLEXITY_API_KEY` instead.
 
 Model IDs under the provider block omit the provider prefix. The full model reference adds it: config ID `anthropic/claude-sonnet-4-6`, full ref `perplexity/anthropic/claude-sonnet-4-6`.
 
