@@ -14,6 +14,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import {
@@ -1803,7 +1804,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
               resetTriggered: false,
             })
           : undefined;
-      const deliveryStarted = Promise.withResolvers<void>();
+      const deliveryStarted = createDeferred<void>();
       let blockFlush: Promise<void> | undefined;
       const onBlockReply = vi.fn(async () => {
         deliveryStarted.resolve();
