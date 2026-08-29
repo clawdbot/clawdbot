@@ -258,6 +258,13 @@ enables Runtime, the extension checks current tab access before the relay
 replays existing execution contexts to that new subscriber. This does not
 reset another client's Runtime session.
 
+Runtime binding callbacks go only to logical sessions that successfully registered
+the binding name, independently of `Runtime.enable` and `Runtime.disable`.
+Removing a binding or disconnecting a client preserves other clients' registrations
+of the same name. Context-specific registrations with the same name still share
+the underlying native Runtime; use distinct names when clients need separate
+context selection.
+
 Fetch request interception has one owner per native target session. Another
 client can use other CDP domains, but cannot replace that owner's interception
 settings or resolve its paused requests. Competing interception requests return

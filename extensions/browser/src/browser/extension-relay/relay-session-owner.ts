@@ -44,7 +44,7 @@ export type RelaySessionClient = {
 
 // Cleanup must not wait for a hung body read/evaluation. After one second the
 // native owner detaches even if cleanup is incomplete; detach can resume unseen requests.
-const FETCH_RETIREMENT_MS = 1_000;
+const SESSION_RETIREMENT_MS = 1_000;
 
 /** Owns physical debugger lifetimes and their per-connection logical sessions. */
 export class RelaySessionOwner {
@@ -77,7 +77,9 @@ export class RelaySessionOwner {
     const physical: PhysicalSession = {
       ...scope,
       id: scope.childSessionId ?? scope.rootSessionId,
-      runtime: new RelayRuntime(active.signal),
+      runtime: new RelayRuntime(active.signal, (method, params) =>
+        this.send(physical, method, params),
+      ),
       target: new RelayTarget(
         (params) => this.send(physical, "Target.setAutoAttach", params, "target"),
         () => this.reconcileChildren(physical),
@@ -296,7 +298,7 @@ export class RelaySessionOwner {
     if (!session) {
       return [];
     }
-    session.physical.runtime.disable(session);
+    session.physical.runtime.retire(session);
     client.sessions.delete(sessionId);
     session.physical.subscribers.delete(session);
     session.parent?.children.delete(session.physical);
@@ -356,11 +358,11 @@ export class RelaySessionOwner {
           await Promise.all([
             targetCleanup,
             Promise.race([
-              physical.fetch.close(session),
+              Promise.all([physical.fetch.close(session), physical.runtime.close(session)]),
               new Promise<never>((_resolve, reject) => {
                 timer = setTimeout(
-                  () => reject(new Error("Fetch owner cleanup timed out")),
-                  FETCH_RETIREMENT_MS,
+                  () => reject(new Error("Session owner cleanup timed out")),
+                  SESSION_RETIREMENT_MS,
                 );
                 timer.unref?.();
               }),
@@ -419,7 +421,9 @@ export class RelaySessionOwner {
     if (physical.retiring) {
       return physical.retiring;
     }
-    const preparations = scopes.map((scope) => scope.fetch.prepareRetirement(FETCH_RETIREMENT_MS));
+    const preparations = scopes.map((scope) =>
+      scope.fetch.prepareRetirement(SESSION_RETIREMENT_MS),
+    );
     return (physical.retiring = (async () => {
       try {
         const results = await Promise.all(preparations);
@@ -471,9 +475,7 @@ export class RelaySessionOwner {
     if (physical.fetch.event(method, params)) {
       return;
     }
-    // V8 binding callbacks depend on add/removeBinding, not Runtime.enable.
-    // Preserve their native forwarding independently of Runtime subscriptions.
-    if (method.startsWith("Runtime.") && method !== "Runtime.bindingCalled") {
+    if (method.startsWith("Runtime.")) {
       physical.runtime.event(method, params);
       return;
     }
