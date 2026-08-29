@@ -1132,27 +1132,14 @@ export class NodeRegistry {
     return this.invokeStreams.handleProgress(params);
   }
 
-  /** Re-enters only the root that owns this exact live node invocation. */
+  /** Continues only the exact live owner of a pending node invocation. */
   runPendingInvokeContinuation<T>(params: {
     invokeId: string;
     nodeId: string;
     connId: string | undefined;
     run: () => Promise<T>;
   }): Promise<T> | null {
-    const pending = this.pendingInvokes.get(params.invokeId);
-    if (
-      !pending?.admissionContinuation ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !isNodeRegistryPendingInvokeConnectionActive({
-        registry: this,
-        pending,
-        currentNode: this.nodesById.get(params.nodeId),
-      })
-    ) {
-      return null;
-    }
-    return pending.admissionContinuation.run(params.run);
+    return this.invokeStreams.runPendingContinuation(params);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
