@@ -1,4 +1,5 @@
 // Qa Lab tests cover slack live plugin behavior.
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
@@ -965,9 +966,18 @@ describe("Slack live QA runtime helpers", () => {
     expect(() => verify([{ text: `🛠️ Exec: printf '${output}'`, ts: "tool" }])).toThrow(
       "expected exact tool output",
     );
-    expect(() => verify([{ text: output ?? "", ts: "tool" }])).toThrow(
+    expect(() => verify([{ text: `🛠️ ${output}`, ts: "tool" }])).toThrow(
       "expected exact tool output",
     );
+    // Slack's monitor transform removes compact command headers before delivery.
+    const summary = `🛠️ \`sleep 5; printf '%s\\n' '${output}' # ${command}\``;
+    const deliveredOutput = sanitizeAssistantVisibleText(
+      `${summary}\n\`\`\`txt\n${output}\n\`\`\``,
+    );
+    expect(sanitizeAssistantVisibleText(summary)).toBe("");
+    expect(deliveredOutput).toBe(`\`\`\`txt\n${output}\n\`\`\``);
+    expect(() => verify([{ text: deliveredOutput, ts: "tool" }])).not.toThrow();
+    expect(() => verify([{ text: output ?? "", ts: "tool" }])).not.toThrow();
     expect(() =>
       verify([{ text: `🛠️ Run command: # ${command}\n${output}`, ts: "tool" }]),
     ).not.toThrow();

@@ -733,6 +733,8 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   Both use the same command and require one commentary identity separate from
   the final answer. Full verbosity allows the runtime's command metadata and
   one separate start summary, while requiring a unique completed-output identity.
+  Slack may strip command-summary headers during delivery, so the exact output
+  line, not a tool label, identifies completed output.
   Failures retain bounded
   presentation facts without raw Slack messages or platform identities,
   including marker formatting and `sleep` summaries missing the command marker.

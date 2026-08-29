@@ -299,8 +299,9 @@ export function buildSlackProgressCommentaryRun(
           observedSlackText(message)
             .split(/\r?\n/u)
             .some((line) => line.trim() === outputMarker);
+        // Slack's delivery transform can strip command headers while retaining output.
         const outputTimestamps = new Set(
-          toolMessages.filter(hasOutputLine).map((message) => message.ts),
+          progressMessages.filter(hasOutputLine).map((message) => message.ts),
         );
         // The built-in runtime sends a summary at tool start and output at completion.
         const summaryTimestamps = new Set(
