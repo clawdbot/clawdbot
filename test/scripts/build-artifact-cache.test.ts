@@ -91,6 +91,32 @@ function fixture(noEmit = false, outputRoot = "dist") {
 }
 
 describe("native owner content records", () => {
+  it("traverses deep namespace candidates without resolving ordinary ancestors again", () => {
+    const f = fixture(true);
+    const depth = 32;
+    const nested = `namespace/${"nested/".repeat(depth)}`;
+    f.write(`${nested}candidate.ts`, "export {};");
+    const originalRealpath = fs.realpathSync;
+    let resolutions = 0;
+    fs.realpathSync = new Proxy(originalRealpath, {
+      apply(target, receiver, args) {
+        resolutions += 1;
+        return Reflect.apply(target, receiver, args);
+      },
+    });
+    let first: string;
+    try {
+      const snapshot = new BoundaryInputSnapshot(f.root);
+      first = snapshot.signature(f.config, f.args, []);
+      expect(snapshot.signature(f.config, f.args, [])).toBe(first);
+    } finally {
+      fs.realpathSync = originalRealpath;
+    }
+    expect(resolutions).toBeLessThan(depth);
+    f.write(`${nested}added.ts`, "export {};");
+    expect(new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [])).not.toBe(first);
+  });
+
   it("seals a cold producer reached through its own workspace package alias", () => {
     const f = fixture(false, "packages/sdk/dist");
     f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
