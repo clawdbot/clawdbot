@@ -74,7 +74,7 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
       --install-daemon
     ```
 
-    `--non-interactive` tells OpenClaw to skip the setup wizard and consume the flags directly. `--accept-risk` is required alongside it (OpenClaw enforces this in `register.onboard.ts`) to acknowledge that agents have full system access. Omit either and OpenClaw routes into `runInteractiveSetup`, where the custom-provider values above are not applied.
+    `--non-interactive` tells OpenClaw to skip the setup wizard and consume the flags directly. `--accept-risk` is required alongside it to acknowledge that agents have full system access. If you omit `--non-interactive`, OpenClaw can enter interactive setup, where the custom-provider values above are not applied. If you keep `--non-interactive` but omit `--accept-risk`, OpenClaw exits with an explicit risk-acknowledgment error before dispatching setup.
 
     `--secret-input-mode ref` tells OpenClaw to write an environment reference to `openclaw.json` instead of the literal key. The custom-provider auth path reads the key from the `CUSTOM_API_KEY` environment variable, so the `export` above bridges Perplexity's `PERPLEXITY_API_KEY` naming to OpenClaw's expected variable name. The onboarding command then persists `apiKey: { source: "env", id: "CUSTOM_API_KEY" }` rather than the resolved secret. The daemon reads `CUSTOM_API_KEY` from its runtime environment on each request.
 
