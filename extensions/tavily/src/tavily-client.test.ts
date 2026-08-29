@@ -5,6 +5,11 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
 const writeCache = vi.fn();
+const assertPluginCapabilitySecretAvailable = vi.fn();
+
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  assertPluginCapabilitySecretAvailable,
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
@@ -34,6 +39,7 @@ describe("tavily client X-Client-Source header", () => {
   });
 
   beforeEach(() => {
+    assertPluginCapabilitySecretAvailable.mockReset();
     postTrustedWebToolsJson.mockReset();
     writeCache.mockReset();
     postTrustedWebToolsJson.mockImplementation(
@@ -41,6 +47,28 @@ describe("tavily client X-Client-Source header", () => {
         parse(Response.json({ results: [] })),
     );
   });
+
+  it.each(["search", "extract"] as const)(
+    "rejects unavailable capability state before %s credential or cache access",
+    async (kind) => {
+      const unavailable = Object.assign(new Error("Tavily capability unavailable"), {
+        name: "SecretSurfaceUnavailableError",
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+      });
+      assertPluginCapabilitySecretAvailable.mockImplementationOnce(() => {
+        throw unavailable;
+      });
+
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "unavailable" })
+          : runTavilyExtract({ urls: ["https://example.com/unavailable"] });
+
+      await expect(operation).rejects.toBe(unavailable);
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("runTavilySearch sends X-Client-Source: openclaw", async () => {
     await runTavilySearch({ query: "test query" });
