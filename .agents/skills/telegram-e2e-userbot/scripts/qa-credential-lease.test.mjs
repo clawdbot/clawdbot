@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { acquireQaLease, QaCredentialBrokerError } from "./qa-credential-lease.mjs";
 
@@ -9,41 +6,6 @@ const env = {
   OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test/",
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
-
-test("runs the declared installed Convex CLI without a package runner", async (t) => {
-  const checkoutDir = await mkdtemp(path.join(os.tmpdir(), "telegram-convex-cli-"));
-  t.after(() => rm(checkoutDir, { recursive: true, force: true }));
-  const cliDir = path.join(checkoutDir, "qa", "convex-credential-broker", "node_modules", ".bin");
-  await mkdir(cliDir, { recursive: true });
-  await writeFile(
-    path.join(checkoutDir, "qa", "convex-credential-broker", "package.json"),
-    '{"name":"test-convex-broker","private":true}',
-    "utf8",
-  );
-  const cliPath = path.join(cliDir, "convex");
-  await writeFile(cliPath, "#!/bin/sh\nprintf 'installed-cli-secret\\n'\n", "utf8");
-  await chmod(cliPath, 0o755);
-
-  const fetchImpl = async (url, init) => {
-    assert.equal(init.headers.authorization, "Bearer installed-cli-secret");
-    if (url.endsWith("/acquire")) {
-      return Response.json({
-        status: "ok",
-        credentialId: "credential-installed-cli",
-        leaseToken: "lease-token-installed-cli",
-        payload: {},
-      });
-    }
-    return Response.json({ status: "ok" });
-  };
-  const lease = await acquireQaLease({
-    kind: "telegram-test-userbot",
-    env: {},
-    cwd: checkoutDir,
-    fetchImpl,
-  });
-  await lease.release();
-});
 
 test("uses the authenticated Convex CLI when broker variables are absent", async () => {
   const cliCalls = [];
@@ -115,7 +77,7 @@ test("does not call the broker when Convex CLI access is rejected", async () => 
         return Response.json({ status: "ok" });
       },
     }),
-    /Could not load the QA broker through the installed Convex CLI/u,
+    /Could not load the QA broker through the Convex CLI/u,
   );
   assert.equal(brokerCalls, 0);
 });

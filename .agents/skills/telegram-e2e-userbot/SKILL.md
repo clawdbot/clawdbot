@@ -57,8 +57,9 @@ OpenClaw broker project needs no local broker settings. The lease helper uses
 `qa/convex-credential-broker` in the checkout, reads the production site and
 CI role through the authenticated CLI, and keeps them in process memory. Run
 the same doctor and runner commands below; no credential export is required.
-The broker is part of the `pnpm` workspace, so the normal dependency-ready
-checkout includes its declared Convex CLI.
+Require an authenticated `convex` command on `PATH`. When it is missing or
+cannot access the broker project, stop and ask the user to install and
+authenticate the Convex CLI. Runtime setup must never install or log in.
 
 CI or another non-interactive worker can instead provide the broker pair:
 

@@ -4,7 +4,6 @@ packages:
   - packages/*
   - extensions/*
   - examples/*
-  - qa/convex-credential-broker
 
 minimumReleaseAge: 2880
 minimumReleaseAgeStrict: true
