@@ -251,8 +251,9 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `systemPromptMode`    | `append`                                                                                                                                                                                                      |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
-`--exclude-dynamic-system-prompt-sections` after its bounded Gateway-startup
-version probe. Older, unknown, or failed probes keep the established argv.
+`--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
+first CLI execution. Concurrent executions share the probe; API catalog discovery
+does not start it. Older, unknown, or failed probes keep the established argv.
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
