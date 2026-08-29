@@ -190,6 +190,8 @@ async function repairMissingPluginInstallsWithLease(
     `Failed to converge version-bound configured plugin "${pluginId}" to the ${cohortDescription} release cohort. Existing install records were retained.`;
   const pinFailure = (pluginId: string) =>
     `Failed to preserve the exact npm selector for version-bound configured plugin "${pluginId}". Existing install records were retained.`;
+  const freshGenerationFailure = (pluginId: string) =>
+    `Failed to activate a fresh managed generation while repairing configured plugin "${pluginId}". Existing install records were retained.`;
   const acceptVersionBoundRuntimeRecord = async (input: {
     pluginId: string;
     previousRecord: PluginInstallRecord | undefined;
