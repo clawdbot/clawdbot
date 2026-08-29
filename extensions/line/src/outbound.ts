@@ -519,6 +519,10 @@ export const lineMessageAdapter = defineChannelMessageAdapter({
   ...lineMessageAdapterBase,
   durableFinal: {
     ...lineMessageAdapterBase.durableFinal,
+    // Every queued LINE send records its pushes, so reconciliation is not limited to
+    // callers that ask for it: without this, an ordinary send that crashes mid-flight
+    // is dead-lettered even though the record needed to resolve it is already on disk.
+    automaticUnknownSendReconciliation: true,
     capabilities: { ...lineMessageAdapterBase.durableFinal?.capabilities, afterCommit: true },
     // Every platform send inside one payload carries its own durable key, so a
     // replay resolves each push independently instead of resending the batch.

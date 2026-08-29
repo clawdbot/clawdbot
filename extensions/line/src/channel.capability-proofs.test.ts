@@ -175,6 +175,17 @@ describe("line message adapter capability contracts", () => {
     }
   });
 
+  it("opts an ordinary queued send into reconciliation, not only callers that ask", () => {
+    // Core enables reconciliation when the caller requires it or the channel opts in.
+    // Only agent replies require it, so without the opt-in every other queued send —
+    // `message send`, cron and task notifications — is dead-lettered after a crash.
+    expect(linePlugin.message?.durableFinal).toMatchObject({
+      automaticUnknownSendReconciliation: true,
+      capabilities: { reconcileUnknownSend: true, afterCommit: true },
+      reconcileUnknownSendKinds: { text: true, media: true, payload: true },
+    });
+  });
+
   it("declares receive ack policies for immediate LINE webhook acknowledgement", async () => {
     const proofResults = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
       adapterName: "line",

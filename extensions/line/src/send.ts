@@ -111,8 +111,6 @@ interface LineSendOpts {
   trackingId?: string;
   replyToken?: string;
   durableSend?: LineDurableSendRef;
-  /** Replays a recorded push under the key LINE already deduplicated it by. */
-  retryKey?: string;
   onDurablePush?: (push: { retryKey: string; messages: Message[] }) => Promise<void>;
   onPlatformSendDispatch?: () => Promise<void>;
 }
@@ -134,7 +132,6 @@ type LinePushOpts = Pick<
   | "accountId"
   | "verbose"
   | "durableSend"
-  | "retryKey"
   | "onDurablePush"
   | "onPlatformSendDispatch"
 >;
@@ -424,7 +421,7 @@ async function pushLineMessages(
   // an attempt that was accepted before its outcome reached us. A durable intent
   // id keeps that key stable across processes so recovery can replay this exact
   // request instead of guessing whether it landed.
-  const retryKey = opts.retryKey ?? resolveLinePushRetryKey(opts.durableSend ?? {});
+  const retryKey = resolveLinePushRetryKey(opts.durableSend ?? {});
 
   // Both records must land before the recipient can see anything. The plan is
   // what recovery replays; the dispatch marker is what tells core a send began.
