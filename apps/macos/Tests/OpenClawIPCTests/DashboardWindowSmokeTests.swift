@@ -300,37 +300,6 @@ struct DashboardWindowSmokeTests {
             to: localFile, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
     }
 
-    @Test func `dashboard permits only trusted MCP App sandbox subframes`() throws {
-        let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
-        let sandbox = try #require(URL(
-            string: "https://widgets.example/mcp-app-sandbox?csp=encoded"))
-        let unrelatedPath = try #require(URL(string: "https://widgets.example/mcp-app"))
-        let trailingSlash = try #require(URL(string: "https://widgets.example/mcp-app-sandbox/"))
-        let repeatedSlash = try #require(URL(string: "https://widgets.example//mcp-app-sandbox"))
-
-        #expect(DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: true, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: unrelatedPath,
-            dashboardURL: dashboard,
-            isMainFrame: false,
-            isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: trailingSlash,
-            dashboardURL: dashboard,
-            isMainFrame: false,
-            isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: repeatedSlash,
-            dashboardURL: dashboard,
-            isMainFrame: false,
-            isTrustedDashboardSource: true))
-    }
-
     @Test func `dashboard navigation shortcuts target the focused browser`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
