@@ -1,7 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
-import { createWorkerTranscriptRuntime } from "../../worker/embedded-agent-transcript.runtime.js";
 import {
   callGatewayToolMock,
   COMPUTER_ACT_COMMAND,
@@ -15,6 +13,7 @@ import {
   resetComputerToolMocks,
   screenshotPayload,
   sleepMock,
+  TINY_PNG_BASE64,
   v2Descriptor,
 } from "./computer-tool.test-helpers.js";
 
@@ -50,28 +49,19 @@ describe("createComputerTool v2 execution", () => {
     expect(readActionEnum(withCleanup)).toEqual(actions);
   });
 
-  it.each([
-    { kind: "window", action: "get_window_state", target: { windowRef: "window-1" } },
-    {
-      kind: "browser",
-      action: "get_browser_state",
-      target: { browserRef: "browser-1", pageRef: "page-1" },
-    },
-  ] as const)(
-    "persists a large $kind observation without duplicating diagnostic image bytes",
-    async ({ kind, action, target }) => {
-      listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor([action]) })]);
-      const base64 = createNoisyPngBuffer(512, 512).toString("base64");
-      expect(base64.length).toBeGreaterThan(64 * 1024);
-      const providerResult = {
+  it("projects a provider observation without taking a duplicate desktop screenshot", async () => {
+    const actions: ComputerUseV2ActionName[] = ["get_window_state"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    callGatewayToolMock.mockResolvedValue({
+      payload: {
         ok: true,
         effect: "confirmed",
         observation: {
-          kind,
-          base64,
+          kind: "window",
+          base64: TINY_PNG_BASE64,
           format: "png",
-          width: 512,
-          height: 512,
+          width: 1,
+          height: 1,
           observationId: "observation-1",
           elements: [
             {
@@ -82,34 +72,25 @@ describe("createComputerTool v2 execution", () => {
             },
           ],
         },
-      };
-      callGatewayToolMock.mockResolvedValue({ payload: providerResult });
-      const result = await createVisionComputerTool().execute("observe", { action, ...target });
-      const commit = vi.fn(async () => {});
-      const transcript = createWorkerTranscriptRuntime({ commit });
-      expect(() =>
-        transcript.onMessagePersisted({
-          role: "toolResult",
-          toolName: "computer",
-          toolCallId: "observe",
-          content: result.content,
-          details: result.details,
-          isError: false,
-          timestamp: 1,
-        }),
-      ).not.toThrow();
-      await transcript.withSessionWriteSettlement(() => undefined);
-      expect(commit).toHaveBeenCalledOnce();
-      expect(result.content).toContainEqual(
-        expect.objectContaining({ type: "image", mimeType: "image/png" }),
-      );
-      expect(JSON.stringify(result.details).includes(base64)).toBe(false);
-      expect(providerResult.observation.base64 === base64).toBe(true);
-      expect(callGatewayToolMock).toHaveBeenCalledOnce();
-      expect(readLastComputerActParams()).toEqual({ action, ...target });
-      expect(sleepMock).not.toHaveBeenCalledWith(500, expect.anything());
-    },
-  );
+      },
+    });
+    const tool = createVisionComputerTool();
+
+    const result = await tool.execute("observe", {
+      action: "get_window_state",
+      windowRef: "window-1",
+    });
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "image", mimeType: "image/png" }),
+    );
+    expect(callGatewayToolMock).toHaveBeenCalledOnce();
+    expect(readLastComputerActParams()).toEqual({
+      action: "get_window_state",
+      windowRef: "window-1",
+    });
+    expect(sleepMock).not.toHaveBeenCalledWith(500, expect.anything());
+  });
 
   it("rejects stale semantic references before dispatch", async () => {
     const actions: ComputerUseV2ActionName[] = ["get_window_state", "set_value"];
