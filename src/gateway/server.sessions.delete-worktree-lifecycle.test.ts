@@ -385,6 +385,11 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
     const placements =
       failure === "placement-changed" ? createWorkerSessionPlacementStore() : undefined;
     const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    onTestFinished(async () => {
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    });
     const coordinator = createDispatchReplyOperationCoordinator({
       agentId: "main",
       cfg: { agents: { defaults: { workspace } } },
@@ -396,7 +401,7 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
         InboundEventKind: "user_request",
         InputProvenance: { kind: "external_user", sourceChannel: "discord" },
       }),
-      dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+      dispatcher,
       dispatchOperationSessionKey: key,
       operationSessionStoreEntry: {
         storePath,
