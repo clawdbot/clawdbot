@@ -25,11 +25,23 @@ openclaw-chat-pane {
   overflow: auto;
 }
 
+/* The 6px divider stays fully draggable but overlays the pane boundary instead
+   of consuming a transparent gutter that exposes the split-view background. */
+.chat-split-view > resizable-divider {
+  z-index: 3;
+  margin-inline: -3px;
+}
+
 .chat-split-view__column {
   display: flex;
   flex-direction: column;
   min-width: min(320px, 100%);
   min-height: 0;
+}
+
+.chat-split-view__column > resizable-divider[orientation="horizontal"] {
+  z-index: 3;
+  margin-block: -3px;
 }
 
 /* One cell = pane header + pane; the header lives in-flow with its pane, so
@@ -49,14 +61,26 @@ openclaw-chat-pane {
 .chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
   > .chat-split-view__column
   > .chat-split-view__cell:not(.chat-split-view__cell--active)::after {
-  /* A flat foreground tint separates neutral transcripts in either theme
-     without filtering the subtree or reducing the close control's contrast. */
+  /* The theme-tuned tint and transcript filter separate neutral panes without
+     reducing the close control's contrast. */
   content: "";
   position: absolute;
   z-index: 1;
   inset: 0;
-  background: color-mix(in srgb, var(--text) 12%, transparent);
+  background: rgb(0 0 0 / var(--split-inactive-overlay-alpha));
   pointer-events: none;
+  transition: background-color var(--split-inactive-transition-duration) ease-out;
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-main__conversation {
+  opacity: var(--split-inactive-content-opacity);
+  filter: saturate(var(--split-inactive-saturation)) brightness(var(--split-inactive-brightness));
+  transition:
+    opacity var(--split-inactive-transition-duration) ease-out,
+    filter var(--split-inactive-transition-duration) ease-out;
 }
 
 .chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)

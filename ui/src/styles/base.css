@@ -67,6 +67,11 @@
   --resize-handle-active-line-size: 2px;
   --resize-handle-rest-color: color-mix(in srgb, var(--border) 74%, transparent);
   --resize-handle-active-color: color-mix(in srgb, var(--text) 42%, transparent);
+  --split-inactive-content-opacity: 0.75;
+  --split-inactive-saturation: 0.8;
+  --split-inactive-overlay-alpha: 0.45;
+  --split-inactive-brightness: 1;
+  --split-inactive-transition-duration: 0ms;
 
   /*
    * Accent - Punchy signature red
@@ -508,6 +513,12 @@
 /* Light theme tokens apply to every light-mode family. */
 /* Defaults must lose to named palettes even when their link precedes the app CSS. */
 :root:where([data-theme-mode="light"]) {
+  --split-inactive-content-opacity: 0.75;
+  --split-inactive-saturation: 0.65;
+  --split-inactive-overlay-alpha: 0.1;
+  --split-inactive-brightness: 1;
+  --split-inactive-transition-duration: 0ms;
+
   /*
    * Warm paper light mode - terracotta accent on ivory
    *
