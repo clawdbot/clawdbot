@@ -114,66 +114,58 @@ async function readSourceBoundedForTest(
 
 describe("playback transcode policy", () => {
   it.each([
-    {
-      name: "ADTS AAC",
-      fileName: "raw.aac",
-      mimeType: "audio/aac",
-      audioCodec: "aac",
-      expected: "transcode",
-    },
-    {
-      name: "signed 16-bit PCM WAV",
-      fileName: "pcm16.wav",
-      mimeType: "audio/wav",
-      audioCodec: "pcm_s16le",
-      expected: "native",
-    },
-    {
-      name: "compressed AIFF-C audio",
-      fileName: "compressed.aifc",
-      mimeType: "audio/aiff",
-      audioCodec: "adpcm_ima_qt",
-      expected: "transcode",
-    },
-    {
-      name: "float PCM WAV",
-      fileName: "float.wav",
-      mimeType: "audio/x-wav",
-      audioCodec: "pcm_f32le",
-      expected: "transcode",
-    },
-    {
-      name: "MPEG layer 3 audio",
-      fileName: "layer3.mp3",
-      mimeType: "audio/mpeg",
-      audioCodec: "mp3",
-      expected: "native",
-    },
-    {
-      name: "MPEG layer 2 audio",
-      fileName: "layer2.mp2",
-      mimeType: "audio/mpeg",
-      audioCodec: "mp2",
-      expected: "transcode",
-    },
-    {
-      name: "PCM inside M4A",
-      fileName: "pcm.m4a",
-      mimeType: "audio/m4a",
-      audioCodec: "pcm_s16le",
-      expected: "transcode",
-    },
+    ["audio/m4a", "audio", "native", "aac"],
+    ["audio/mp3", "audio", "native", "mp3"],
+    ["audio/mp4", "audio", "native", "aac"],
+    ["audio/mpeg", "audio", "native", "mp3"],
+    ["audio/wav", "audio", "native", "pcm_s16le"],
+    ["audio/wave", "audio", "native", "pcm_s16le"],
+    ["audio/x-m4a", "audio", "native", "aac"],
+    ["audio/x-wav", "audio", "native", "pcm_s16le"],
+    ["audio/aac", "audio", "transcode", "aac"],
+    ["audio/aiff", "audio", "transcode", "adpcm_ima_qt"],
+    ["audio/amr", "audio", "transcode", "amr_nb"],
+    ["audio/amr-wb", "audio", "transcode", "amr_wb"],
+    ["audio/flac", "audio", "transcode", "flac"],
+    ["audio/ogg", "audio", "transcode", "vorbis"],
+    ["audio/opus", "audio", "transcode", "opus"],
+    ["audio/vorbis", "audio", "transcode", "vorbis"],
+    ["audio/webm", "audio", "transcode", "opus"],
+    ["audio/x-aiff", "audio", "transcode", "pcm_s16be"],
+    ["audio/x-caf", "audio", "transcode", "pcm_s16le"],
+    ["audio/x-ms-wma", "audio", "transcode", "wmav2"],
+    ["video/mp4", "video", "native", "h264"],
+    ["video/avi", "video", "transcode", "mpeg4"],
+    ["video/flv", "video", "transcode", "flv1"],
+    ["video/matroska", "video", "transcode", "vp9"],
+    ["video/quicktime", "video", "transcode", "prores"],
+    ["video/webm", "video", "transcode", "vp9"],
+    ["video/x-flv", "video", "transcode", "flv1"],
+    ["video/x-matroska", "video", "transcode", "vp9"],
+    ["video/x-ms-asf", "video", "transcode", "wmv3"],
+    ["video/x-ms-wmv", "video", "transcode", "wmv3"],
+    ["video/x-msvideo", "video", "transcode", "mpeg4"],
   ] as const)(
-    "classifies $name as $expected",
-    async ({ fileName, mimeType, audioCodec, expected }) => {
-      const source = await createSource(fileName);
+    "classifies accepted $0 $1 as $2 through the public source resolver",
+    async (mimeType, kind, expected, codec) => {
+      const source = await createSource(`${mimeType.replaceAll("/", "-")}-${codec}`);
+      const probe =
+        kind === "audio"
+          ? { durationMs: 1000, audioCodec: codec, audioStreamIndex: 0 }
+          : {
+              durationMs: 1000,
+              videoCodec: codec,
+              videoProfile: codec === "h264" ? "high" : undefined,
+              videoPixelFormat: codec === "h264" ? "yuv420p" : undefined,
+              videoStreamIndex: 0,
+            };
 
       await expect(
         playback.resolvePlaybackModeForSource({
           ...source,
           mimeType,
-          kind: "audio",
-          probe: { durationMs: 1000, audioCodec, audioStreamIndex: 0 },
+          kind,
+          probe,
         }),
       ).resolves.toBe(expected);
     },
@@ -573,7 +565,11 @@ describe("resolvePlaybackTranscode", () => {
     await vi.waitFor(async () => {
       await expect(
         playback.resolvePlaybackTranscode({ ...base, mimeType: "audio/mp4" }),
-      ).resolves.toMatchObject({ kind: "transcoded" });
+      ).resolves.toMatchObject({
+        kind: "transcoded",
+        contentType: "audio/mp4",
+        extension: ".m4a",
+      });
     });
   });
 
