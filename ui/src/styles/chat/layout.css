@@ -3211,6 +3211,7 @@ button.chat-pr__diff {
 .agent-chat__composer-shell,
 .agent-chat__input {
   --chat-composer-surface: var(--popover);
+  --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
     in srgb,
     var(--chat-composer-surface) 60%,
@@ -3324,8 +3325,8 @@ button.chat-pr__diff {
 :root[data-theme-mode="light"] .agent-chat__input {
   border-color: transparent;
   box-shadow:
-    0 0 0 1px rgb(0 0 0 / 6%),
-    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 0 0 1px var(--chat-composer-light-outline),
+    0 1px 2px -1px var(--chat-composer-light-outline),
     0 2px 4px rgb(0 0 0 / 4%);
 }
 
