@@ -92,6 +92,15 @@ and defaults mutations; it does not isolate the process from the host.
 
 ## Troubleshooting
 
+### Build fails while freezing Peekaboo sources
+
+If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
+check the `hdiutil` error on stderr. Routine image creation and attachment output stays
+quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
+Check the temporary location selected by `TMPDIR` and its filesystem or mount permissions
+before retrying. This step runs before signing; source verification and the read-only
+snapshot remain required.
+
 ### Build fails: toolchain or SDK mismatch
 
 The macOS app build expects the latest macOS SDK and the Swift 6.3 toolchain
