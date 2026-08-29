@@ -2918,32 +2918,48 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   it.each([
     {
       name: "upgrade fallback",
-      installedVersion: VERSION,
+      recordVersion: VERSION,
+      payloadVersion: VERSION,
       compatibilityHostVersion: "9999.1.1",
       shouldRepair: true,
     },
     {
       name: "downgrade target",
-      installedVersion: "2026.5.2",
+      recordVersion: "2026.5.2",
+      payloadVersion: "2026.5.2",
       compatibilityHostVersion: "2026.5.2",
+      shouldRepair: false,
+    },
+    {
+      name: "stale payload behind current record",
+      recordVersion: VERSION,
+      payloadVersion: "2026.5.2",
+      compatibilityHostVersion: VERSION,
+      shouldRepair: true,
+    },
+    {
+      name: "newer payload ahead of stale record",
+      recordVersion: "2026.5.2",
+      payloadVersion: "9999.1.1",
+      compatibilityHostVersion: VERSION,
       shouldRepair: false,
     },
   ])(
     "uses the compatibility host version when classifying a managed runtime ($name)",
-    async ({ installedVersion, compatibilityHostVersion, shouldRepair }) => {
+    async ({ recordVersion, payloadVersion, compatibilityHostVersion, shouldRepair }) => {
       const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
       fs.writeFileSync(
         path.join(installDir, "package.json"),
-        JSON.stringify({ name: "@openclaw/codex", version: installedVersion }),
+        JSON.stringify({ name: "@openclaw/codex", version: payloadVersion }),
       );
       const records = {
         codex: {
           source: "npm" as const,
           spec: "@openclaw/codex",
           resolvedName: "@openclaw/codex",
-          resolvedSpec: `@openclaw/codex@${installedVersion}`,
-          resolvedVersion: installedVersion,
-          version: installedVersion,
+          resolvedSpec: `@openclaw/codex@${recordVersion}`,
+          resolvedVersion: recordVersion,
+          version: recordVersion,
           integrity: "sha512-old-codex",
           installPath: installDir,
         },
@@ -2951,7 +2967,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       const pluginMetadata = {
         id: "codex",
         packageName: "@openclaw/codex",
-        packageVersion: installedVersion,
+        packageVersion: payloadVersion,
         providers: ["codex"],
         channels: [],
         origin: "global" as const,
@@ -2968,7 +2984,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         path.join(targetDir, "package.json"),
         JSON.stringify({ name: "@openclaw/codex", version: compatibilityHostVersion }),
       );
-      if (shouldRepair) {
+      if (shouldRepair || recordVersion !== payloadVersion) {
         mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
           successfulInstall({
             pluginId: "codex",
