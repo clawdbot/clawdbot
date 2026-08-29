@@ -86,11 +86,16 @@ describe("findCatalogSessionHovercardRow", () => {
     expect(findCatalogSessionHovercardRow(colorInput)?.color).toBe("cyan");
     // An adopted session's cleared color must not fall back to stale CLI metadata.
     expect(
-      findCatalogSessionHovercardRow({ ...colorInput, liveRow: { label: "Project" } })?.color,
+      findCatalogSessionHovercardRow({
+        ...colorInput,
+        liveRow: { label: "Project", hasAutomation: false },
+      })?.color,
     ).toBeUndefined();
     expect(
-      findCatalogSessionHovercardRow({ ...colorInput, liveRow: { label: "Project", color: "red" } })
-        ?.color,
+      findCatalogSessionHovercardRow({
+        ...colorInput,
+        liveRow: { label: "Project", color: "red", hasAutomation: false },
+      })?.color,
     ).toBe("red");
     expect(
       findCatalogSessionHovercardRow({

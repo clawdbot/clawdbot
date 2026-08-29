@@ -143,7 +143,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("streams session colors to only the requesting connection", async () => {
+  it("streams completed hosts to only the requesting connection", async () => {
     const broadcastToConnIds = vi.fn();
     const host = {
       hostId: "node:fast",
@@ -151,16 +151,7 @@ describe("session catalog Gateway methods", () => {
       kind: "node" as const,
       connected: true,
       nodeId: "fast",
-      sessions: [
-        {
-          threadId: "thread-1",
-          color: "blue",
-          status: "stored",
-          archived: false,
-          canContinue: true,
-          canArchive: false,
-        },
-      ],
+      sessions: [],
     };
     hoisted.activeRegistry.sessionCatalogs = [
       {
