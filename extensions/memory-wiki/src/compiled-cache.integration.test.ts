@@ -110,7 +110,13 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
       },
     ],
     dashboards: {
-      importInsights: { sourceType: "chatgpt", totalItems: 0, totalClusters: 0, clusters: [] },
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
       overview: {
         totalItems: 0,
         totalPages: 0,
@@ -119,6 +125,7 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
         totalQuestions: 0,
         totalContradictions: 0,
         clusters: [],
+        truncated: false,
       },
     },
   };

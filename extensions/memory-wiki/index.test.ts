@@ -48,7 +48,13 @@ function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
     digest: { claimCount: 0, contradictionCount: 0, pages: [] },
     claims: [],
     dashboards: {
-      importInsights: { sourceType: "chatgpt", totalItems: 0, totalClusters: 0, clusters: [] },
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
       overview: {
         totalItems: 0,
         totalPages: 0,
@@ -57,6 +63,7 @@ function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
         totalQuestions: 0,
         totalContradictions: 0,
         clusters: [],
+        truncated: false,
       },
     },
   };

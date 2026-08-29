@@ -95,7 +95,13 @@ async function seedCompiledDigest(params: {
     },
     claims: [],
     dashboards: {
-      importInsights: { sourceType: "chatgpt", totalItems: 0, totalClusters: 0, clusters: [] },
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
       overview: {
         totalItems: 0,
         totalPages: 0,
@@ -104,6 +110,7 @@ async function seedCompiledDigest(params: {
         totalQuestions: 0,
         totalContradictions: 0,
         clusters: [],
+        truncated: false,
       },
     },
   };

@@ -108,7 +108,7 @@ export type MemoryWikiImportInsightsStatus = {
   totalItems: number;
   totalClusters: number;
   clusters: MemoryWikiImportInsightCluster[];
-  truncated?: boolean;
+  truncated: boolean;
 };
 
 export type MemoryWikiOverviewItem = {
@@ -148,7 +148,7 @@ export type MemoryWikiOverviewStatus = {
   totalQuestions: number;
   totalContradictions: number;
   clusters: MemoryWikiOverviewCluster[];
-  truncated?: boolean;
+  truncated: boolean;
 };
 
 export type MemoryWikiCompiledCacheSnapshot = {
@@ -352,9 +352,11 @@ function parseSnapshot(
       typeof parsed.dashboards !== "object" ||
       !parsed.dashboards.importInsights ||
       typeof parsed.dashboards.importInsights !== "object" ||
+      typeof parsed.dashboards.importInsights.truncated !== "boolean" ||
       !Array.isArray(parsed.dashboards.importInsights.clusters) ||
       !parsed.dashboards.overview ||
       typeof parsed.dashboards.overview !== "object" ||
+      typeof parsed.dashboards.overview.truncated !== "boolean" ||
       !Array.isArray(parsed.dashboards.overview.clusters)
     ) {
       return null;

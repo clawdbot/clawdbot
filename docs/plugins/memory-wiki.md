@@ -313,6 +313,9 @@ gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`); inline
 page previews use `wiki.get`, the same lookup agents reach through the
 `wiki_get` tool.
 
+Each dashboard keeps at most the newest 2,500 cards in its compiled snapshot.
+When a vault exceeds that bound, the UI shows the returned and total item counts.
+
 Dashboard requests never scan raw vault pages or wait for a full vault compile.
 During automatic recovery, the UI reports that the dashboards are rebuilding;
 reload the tab shortly. When
