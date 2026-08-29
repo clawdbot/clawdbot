@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import * as responsesEgress from "../../../packages/ai/src/transports/openai-responses-prompt-observer-internal.js";
 import { SessionManager } from "../../agents/sessions/index.js";
-import { readExperienceReviewMessageText } from "./experience-review-decision.test-support.js";
+import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 
 export async function observeExperienceReview(run: () => Promise<void>) {
   let session: SessionManager | undefined;

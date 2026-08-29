@@ -1,16 +1,10 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
-import type { Message } from "../../llm/types.js";
 import type { readSkillReviewOutcomes } from "./collection-review-state.js";
+import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import type { observeExperienceReview } from "./experience-review-observation.test-support.js";
 import type { getSkillProposalRunProgress, listSkillProposals } from "./service.js";
-
-export function readExperienceReviewMessageText(content: Message["content"]): string {
-  return typeof content === "string"
-    ? content
-    : content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-}
 
 export function assertExperienceReviewDecision(params: {
   observation: Awaited<ReturnType<typeof observeExperienceReview>>;
