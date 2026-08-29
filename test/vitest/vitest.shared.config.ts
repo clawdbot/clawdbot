@@ -584,6 +584,6 @@ export const sharedVitestConfig = {
         "src/infra/tailscale.ts",
       ],
     },
-    ...loadVitestExperimentalConfig(),
+    ...loadVitestExperimentalConfig(process.env, process.platform, repoRoot),
   },
 };

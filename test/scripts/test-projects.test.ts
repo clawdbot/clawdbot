@@ -4329,18 +4329,8 @@ describe("scripts/test-projects Vitest cache isolation", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join(
-        "/repo",
-        "node_modules",
-        ".experimental-vitest-cache",
-        "0-test-vitest-vitest.unit-fast.config.ts",
-      ),
-      path.join(
-        "/repo",
-        "node_modules",
-        ".experimental-vitest-cache",
-        "1-test-vitest-vitest.extension-memory.config.ts",
-      ),
+      path.join("/repo", ".cache", "vitest", "0-test-vitest-vitest.unit-fast.config.ts"),
+      path.join("/repo", ".cache", "vitest", "1-test-vitest-vitest.extension-memory.config.ts"),
     ]);
   });
 
