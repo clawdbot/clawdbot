@@ -6,6 +6,7 @@ import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-li
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
+  boardHostNonce: string;
   sandboxOrigin: string;
   sandboxHost: {
     dispose: () => void;
@@ -27,6 +28,7 @@ function createTicketRefreshLifecycle(
     context: () => undefined,
     refreshFrame: () => refreshFrame,
     reportContentHeight: () => {},
+    scrollBy: () => {},
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
@@ -56,6 +58,7 @@ function terminalFailureError(params: {
     context: () => undefined,
     refreshFrame: () => undefined,
     reportContentHeight: () => {},
+    scrollBy: () => {},
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
@@ -107,6 +110,63 @@ describe("board widget frame terminal failure message", () => {
   });
 });
 
+describe("board widget frame scroll handoff", () => {
+  it("accepts a finite vertical remainder only from its exact iframe and nonce", () => {
+    const widget = { name: "long-dashboard", revision: 1 } as BoardWidget;
+    const scrollBy = vi.fn();
+    const lifecycle = new BoardWidgetFrameLifecycle({
+      active: () => true,
+      connected: () => true,
+      context: () => undefined,
+      refreshFrame: () => undefined,
+      reportContentHeight: () => {},
+      scrollBy,
+      requestUpdate: () => {},
+      resolveFrameUrl: () => () => "",
+      root: () => document,
+      widget: () => widget,
+    });
+    const frame = document.createElement("iframe");
+    frame.className = "board-widget__frame";
+    document.body.append(frame);
+    lifecycle.connect();
+    (lifecycle as unknown as LifecycleInternals).boardHostNonce = "board-scroll-nonce";
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "openclaw:widget-scroll", deltaY: 48, nonce: "board-scroll-nonce" },
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        data: { type: "openclaw:widget-scroll", deltaY: 96, nonce: "board-scroll-nonce" },
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          type: "openclaw:widget-scroll",
+          deltaY: Number.POSITIVE_INFINITY,
+          nonce: "board-scroll-nonce",
+        },
+      }),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "openclaw:widget-scroll", deltaY: 192, nonce: "wrong-nonce" },
+      }),
+    );
+
+    expect(scrollBy).toHaveBeenCalledOnce();
+    expect(scrollBy).toHaveBeenCalledWith(48);
+    lifecycle.disconnect();
+  });
+});
+
 describe("board widget frame ticket refresh", () => {
   it("suspends frame work while inactive and reconnects on activation", async () => {
     vi.useFakeTimers();
@@ -125,6 +185,7 @@ describe("board widget frame ticket refresh", () => {
       context: () => undefined,
       refreshFrame: () => refreshFrame,
       reportContentHeight: () => {},
+      scrollBy: () => {},
       requestUpdate: () => {},
       resolveFrameUrl: () => () => "",
       root: () => document,

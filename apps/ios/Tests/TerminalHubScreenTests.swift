@@ -227,6 +227,50 @@ struct TerminalHubScreenTests {
         #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
     }
 
+    @Test func `authenticated dashboard navigation cannot leave its document scope`() throws {
+        let dashboardURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/main/nightly-cleanup"))
+        let canonicalDashboardURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/main/nightly-cleanup-v2"))
+        let dashboardRootURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard"))
+        let siblingURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard-archive/main/nightly-cleanup"))
+        let escapedScopeURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/%2e%2e/%2e%2e/chat"))
+        let ordinaryControlUIURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/chat?session=agent:main:nightly-cleanup"))
+        let alternateOriginURL = try #require(URL(
+            string: "https://replacement.example.com/rosita/focus/dashboard/main/nightly-cleanup"))
+        let embeddedURL = try #require(URL(string: "https://widgets.example.com/report"))
+        let coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: dashboardURL,
+            tls: nil,
+            allowedMainFramePathPrefix: "/rosita/focus/dashboard/")
+
+        #expect(coordinator.navigationDecision(
+            to: canonicalDashboardURL,
+            isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(
+            to: dashboardRootURL,
+            isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(
+            to: ordinaryControlUIURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: siblingURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: escapedScopeURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: alternateOriginURL,
+            isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(
+            to: embeddedURL,
+            isMainFrame: false) == .allow)
+    }
+
     @Test func `authenticated Control UI TLS authority uses the normalized page authority`() throws {
         let controlURL = try #require(URL(string: "https://Gateway.Example.com/control"))
         let coordinator = try AuthenticatedControlUIWebViewCoordinator(
@@ -283,7 +327,7 @@ struct TerminalHubScreenTests {
 
     private static func webView(in window: UIWindow) async throws -> WKWebView {
         for _ in 0..<50 {
-            if let webView = self.findWebView(in: window) {
+            if let webView = findWebView(in: window) {
                 return webView
             }
             try await Task.sleep(for: .milliseconds(10))

@@ -246,12 +246,29 @@ enum AuthenticatedControlUI {
 }
 
 @MainActor
+enum AuthenticatedControlUIWebViewNavigationDecision: Equatable {
+    case allow
+    case cancel
+    case cancelAndExitScope
+}
+
+@MainActor
 final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
     private let expectedOrigin: GatewayTLSAuthority?
+    private let allowedMainFramePathPrefix: String?
+    private let onMainFrameNavigationOutsideScope: (() -> Void)?
     private let tls: GatewayTLSParams?
+    private var hasExitedNavigationScope = false
 
-    init(url: URL, tls: GatewayTLSParams?) {
+    init(
+        url: URL,
+        tls: GatewayTLSParams?,
+        allowedMainFramePathPrefix: String? = nil,
+        onMainFrameNavigationOutsideScope: (() -> Void)? = nil)
+    {
         self.expectedOrigin = GatewayTLSAuthority(url: url)
+        self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
+        self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.tls = tls
     }
 
@@ -260,9 +277,14 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
-        decisionHandler(self.allowsNavigation(
+        let decision = self.navigationDecision(
             to: navigationAction.request.url,
-            isMainFrame: navigationAction.targetFrame?.isMainFrame) ? .allow : .cancel)
+            isMainFrame: navigationAction.targetFrame?.isMainFrame)
+        decisionHandler(decision == .allow ? .allow : .cancel)
+        if decision == .cancelAndExitScope, !self.hasExitedNavigationScope {
+            self.hasExitedNavigationScope = true
+            self.onMainFrameNavigationOutsideScope?()
+        }
     }
 
     func webView(
@@ -305,15 +327,46 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     }
 
     func allowsNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
+        self.navigationDecision(to: candidateURL, isMainFrame: isMainFrame) == .allow
+    }
+
+    func navigationDecision(
+        to candidateURL: URL?,
+        isMainFrame: Bool?) -> AuthenticatedControlUIWebViewNavigationDecision
+    {
         if isMainFrame == false {
-            return true
+            return .allow
         }
-        guard isMainFrame == true, let candidateURL else { return false }
-        return GatewayTLSAuthority(url: candidateURL) == self.expectedOrigin
+        guard isMainFrame == true, let candidateURL else { return .cancel }
+        guard GatewayTLSAuthority(url: candidateURL) == self.expectedOrigin else { return .cancel }
+        guard let allowedMainFramePathPrefix else { return .allow }
+        let candidatePath = Self.normalizedPath(candidateURL.path)
+        guard allowedMainFramePathPrefix != "/" else { return .allow }
+        return candidatePath == allowedMainFramePathPrefix ||
+            candidatePath.hasPrefix(allowedMainFramePathPrefix + "/")
+            ? .allow
+            : .cancelAndExitScope
     }
 
     func matchesExpectedAuthority(host: String, port: Int) -> Bool {
         self.expectedOrigin?.matches(host: host, port: port) == true
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        var segments: [Substring] = []
+        for segment in path.split(separator: "/", omittingEmptySubsequences: true) {
+            switch segment {
+            case ".":
+                continue
+            case "..":
+                if !segments.isEmpty {
+                    segments.removeLast()
+                }
+            default:
+                segments.append(segment)
+            }
+        }
+        return "/" + segments.joined(separator: "/")
     }
 }
 
@@ -324,9 +377,29 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let url: URL
     let authScript: String?
     let tls: GatewayTLSParams?
+    let allowedMainFramePathPrefix: String?
+    let onMainFrameNavigationOutsideScope: (() -> Void)?
+
+    init(
+        url: URL,
+        authScript: String?,
+        tls: GatewayTLSParams?,
+        allowedMainFramePathPrefix: String? = nil,
+        onMainFrameNavigationOutsideScope: (() -> Void)? = nil)
+    {
+        self.url = url
+        self.authScript = authScript
+        self.tls = tls
+        self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
+        self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
+    }
 
     func makeCoordinator() -> AuthenticatedControlUIWebViewCoordinator {
-        AuthenticatedControlUIWebViewCoordinator(url: self.url, tls: self.tls)
+        AuthenticatedControlUIWebViewCoordinator(
+            url: self.url,
+            tls: self.tls,
+            allowedMainFramePathPrefix: self.allowedMainFramePathPrefix,
+            onMainFrameNavigationOutsideScope: self.onMainFrameNavigationOutsideScope)
     }
 
     func makeUIView(context: Context) -> WKWebView {

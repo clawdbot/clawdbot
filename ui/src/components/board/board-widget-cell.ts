@@ -101,6 +101,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,
     reportContentHeight: (name, height) => this.callbacks?.reportContentHeight(name, height),
+    scrollBy: (deltaY) => {
+      this.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" });
+    },
     requestUpdate: () => this.requestUpdate(),
     resolveFrameUrl: () => this.widgetFrameUrl,
     root: () => this,

@@ -21,7 +21,11 @@ struct SessionDashboardScreen: View {
                         pageURL: url,
                         storedOperatorToken: storedOperatorToken,
                         usesNativeNavigationChrome: true),
-                    tls: config?.tls)
+                    tls: config?.tls,
+                    allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
+                    onMainFrameNavigationOutsideScope: {
+                        self.dismiss()
+                    })
                     .id(AuthenticatedControlUI.webContentIdentity(
                         config: config,
                         storedOperatorToken: storedOperatorToken))
@@ -84,8 +88,12 @@ struct SessionDashboardScreen: View {
         else { return nil }
 
         let encodedSegments = parts.dropFirst().map { part -> String? in
-            if part == "." { return "~dot" }
-            if part == ".." { return "~dotdot" }
+            if part == "." {
+                return "~dot"
+            }
+            if part == ".." {
+                return "~dotdot"
+            }
             guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(String(part)) else {
                 return nil
             }
@@ -102,5 +110,12 @@ struct SessionDashboardScreen: View {
             config: config,
             path: route,
             queryItems: [])
+    }
+
+    static func dashboardPathPrefix(config: GatewayConnectConfig?) -> String? {
+        AuthenticatedControlUI.pageURL(
+            config: config,
+            path: "focus/dashboard",
+            queryItems: [])?.path
     }
 }

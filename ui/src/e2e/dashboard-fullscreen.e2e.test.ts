@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -206,11 +207,13 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
-        const document = page.locator("openclaw-board-document");
-        await document.locator("openclaw-board-view").waitFor();
+        const dashboardDocument = page.locator("openclaw-board-document");
+        await dashboardDocument.locator("openclaw-board-view").waitFor();
 
         expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-        expect(await document.getByRole("button", { name: "Close dashboard" }).count()).toBe(0);
+        expect(
+          await dashboardDocument.getByRole("button", { name: "Close dashboard" }).count(),
+        ).toBe(0);
         const horizontalOverflow = await page.evaluate(() => {
           const board = document.querySelector("openclaw-board-view");
           return {
@@ -219,6 +222,173 @@ suite.define(() => {
           };
         });
         expect(horizontalOverflow).toEqual({ document: 0, board: 0 });
+      },
+    );
+  });
+
+  it("hands widget scroll remainder to the shell-free dashboard document", async () => {
+    await suite.withPage(
+      {
+        hasTouch: true,
+        isMobile: true,
+        serviceWorkers: "block",
+        viewport: { width: 393, height: 852 },
+      },
+      async ({ context, page }) => {
+        const widgetDocument = buildWidgetDocument(
+          "Nightly disk cleanup",
+          `<style>
+            .local-scroll{height:120px;overflow-y:auto}.local-row{height:40px}
+            .row{height:48px;border-bottom:1px solid #333}
+          </style>
+          <section class="local-scroll">${Array.from(
+            { length: 8 },
+            (_, index) => `<div class="local-row">Local row ${index + 1}</div>`,
+          ).join("")}</section>
+          <main>${Array.from(
+            { length: 28 },
+            (_, index) =>
+              `<div class="row"${index === 27 ? ' id="dashboard-final-row"' : ""}>Cleanup row ${index + 1}</div>`,
+          ).join("")}</main>`,
+        );
+        await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.resolve": {
+              ok: true,
+              key: sessionKey,
+              agentId: "main",
+              displayName: sessionRow.displayName,
+              boardFace: sessionRow.boardFace,
+            },
+            "sessions.describe": { session: sessionRow },
+            "board.get": {
+              ...boardSnapshot,
+              widgets: [
+                {
+                  name: "long-dashboard",
+                  tabId: "main",
+                  title: "Nightly disk cleanup",
+                  contentKind: "html",
+                  sizeW: 12,
+                  sizeH: 6,
+                  position: 0,
+                  grantState: "none",
+                  revision: 1,
+                  frameUrl: `data:text/html;charset=utf-8,${encodeURIComponent(widgetDocument)}`,
+                },
+              ],
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
+        const board = page.locator("openclaw-board-document openclaw-board-view");
+        const frame = page.locator(
+          '.board-widget[data-widget-name="long-dashboard"] .board-widget__frame',
+        );
+        await frame.waitFor();
+        await expect
+          .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
+          .toBe(true);
+        const embeddedFrame = page
+          .frames()
+          .find((candidate) => candidate.url().startsWith("data:text/html"));
+        if (!embeddedFrame) {
+          throw new Error("Dashboard widget document is not mounted");
+        }
+        const localScroller = embeddedFrame.locator(".local-scroll");
+        const localScrollerBox = await localScroller.boundingBox();
+        const boardBox = await board.boundingBox();
+        const frameBox = await frame.boundingBox();
+        if (!localScrollerBox || !boardBox || !frameBox) {
+          throw new Error("Dashboard scroll owner or widget frame is not visible");
+        }
+
+        await board.evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        await page.mouse.move(
+          localScrollerBox.x + localScrollerBox.width / 2,
+          localScrollerBox.y + localScrollerBox.height / 2,
+        );
+        await page.mouse.wheel(0, 80);
+        await expect
+          .poll(() => localScroller.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(0);
+        expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+
+        await embeddedFrame.evaluate(() => {
+          document.body.dispatchEvent(
+            new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }),
+          );
+        });
+        expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+
+        await page.mouse.move(
+          frameBox.x + frameBox.width / 2,
+          Math.min(frameBox.y + frameBox.height / 2, boardBox.y + boardBox.height / 2),
+        );
+        await page.mouse.wheel(0, 500);
+        await expect.poll(() => board.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+        await embeddedFrame.evaluate(() => {
+          if (document.scrollingElement) {
+            document.scrollingElement.scrollTop = 0;
+          }
+        });
+        await board.evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        const cdp = await context.newCDPSession(page);
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const currentBoardBox = await board.boundingBox();
+          const currentFrameBox = await frame.boundingBox();
+          if (!currentBoardBox || !currentFrameBox) {
+            throw new Error("Dashboard scroll owner or widget frame disappeared");
+          }
+          const touchX = currentFrameBox.x + currentFrameBox.width / 2;
+          const touchStartY = Math.min(
+            currentFrameBox.y + currentFrameBox.height - 24,
+            currentBoardBox.y + currentBoardBox.height - 24,
+          );
+          const touchEndY = Math.max(
+            currentFrameBox.y + 24,
+            currentBoardBox.y + 24,
+            touchStartY - 300,
+          );
+          await cdp.send("Input.dispatchTouchEvent", {
+            type: "touchStart",
+            touchPoints: [{ x: touchX, y: touchStartY }],
+          });
+          await cdp.send("Input.dispatchTouchEvent", {
+            type: "touchMove",
+            touchPoints: [{ x: touchX, y: touchEndY }],
+          });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          const remaining = await board.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          );
+          if (remaining <= 1) {
+            break;
+          }
+        }
+        await expect
+          .poll(() =>
+            board.evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+          )
+          .toBeLessThanOrEqual(1);
+        const finalRowBox = await embeddedFrame.locator("#dashboard-final-row").boundingBox();
+        const finalBoardBox = await board.boundingBox();
+        if (!finalRowBox || !finalBoardBox) {
+          throw new Error("Dashboard final row or scroll owner is not visible");
+        }
+        expect(finalRowBox.y + finalRowBox.height).toBeLessThanOrEqual(
+          finalBoardBox.y + finalBoardBox.height + 1,
+        );
       },
     );
   });
