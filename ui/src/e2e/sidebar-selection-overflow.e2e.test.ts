@@ -60,11 +60,16 @@ suite.define(() => {
         const sectionRect = section.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
+          contentEdge:
+            scroller.getBoundingClientRect().right - (scroller.offsetWidth - scroller.clientWidth),
           inset: sectionRect.right - rowRect.right,
           maskImage: scrollerStyle.maskImage,
           maskPosition: scrollerStyle.maskPosition,
           maskSize: scrollerStyle.maskSize,
+          rowRight: rowRect.right,
           overflows: scroller.scrollHeight > scroller.clientHeight,
+          scrollbarGutter: scrollerStyle.scrollbarGutter,
+          scrollbarWidth: scroller.offsetWidth - scroller.clientWidth,
           sectionPaddingEnd: Number.parseFloat(getComputedStyle(section).paddingRight),
         };
       });
@@ -82,6 +87,9 @@ suite.define(() => {
         return getComputedStyle(row.closest<HTMLElement>(".sidebar-shell__body")!).maskPosition;
       });
       expect(rtlMaskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
+      expect(geometry.scrollbarGutter).toBe("stable");
+      expect(geometry.scrollbarWidth).toBeGreaterThan(0);
+      expect(geometry.contentEdge - geometry.rowRight, JSON.stringify(geometry)).toBeCloseTo(4, 1);
 
       if (captureProof) {
         await page.screenshot({

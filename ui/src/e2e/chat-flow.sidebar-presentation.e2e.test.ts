@@ -22,6 +22,141 @@ const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
+  it("aligns sidebar sections and follows the real scrollbar gutter", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessions = Array.from({ length: 60 }, (_, index) => ({
+      key: index === 0 ? "agent:main:alignment" : `agent:main:alignment-${index}`,
+      kind: "direct",
+      label: index === 0 ? "Alignment fixture" : `Overflow session ${index}`,
+      category: index % 2 === 0 ? "OpenClaw" : "Gateway",
+      updatedAt: 60 - index,
+    }));
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(sessions),
+        "sessions.catalog.list": {
+          catalogs: ["codex", "claude"].map((id) => ({
+            id,
+            label: id === "codex" ? "Codex" : "Claude Code",
+            capabilities: { archive: true, continueSession: true },
+            hosts: [
+              {
+                hostId: `gateway:${id}`,
+                label: `Local ${id}`,
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: `thread-${id}`,
+                    name: `${id} alignment session`,
+                    status: "idle",
+                    archived: false,
+                    canContinue: true,
+                    canArchive: true,
+                  },
+                ],
+              },
+            ],
+          })),
+        },
+      },
+      presenceUsers: [
+        { id: "person-a", name: "Ada", watchedSessions: [] },
+        { id: "person-b", name: "Grace", watchedSessions: [] },
+        { id: "person-c", name: "Linus", watchedSessions: [] },
+      ],
+      sessionKey: "agent:main:alignment",
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:alignment"));
+      await page.locator(".sidebar-online__person").first().waitFor();
+      await page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:alignment"]')
+        .waitFor();
+      await page.locator('[data-session-section="catalog:codex"]').waitFor();
+      await page.locator('[data-session-section="catalog:claude"]').waitFor();
+      await page.locator('[data-session-section="category:Gateway"]').waitFor();
+      await page.locator(".sidebar-session-toolbar").waitFor();
+      await page.getByRole("button", { name: "Show more" }).first().waitFor();
+      const activeRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:alignment"]',
+      );
+      await activeRow.hover();
+      await activeRow.getByRole("button", { name: "Open session menu" }).waitFor();
+      const layout = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>(".sidebar-shell__body");
+        if (!scroller) {
+          throw new Error("Missing sidebar scroll container");
+        }
+        const scrollerBounds = scroller.getBoundingClientRect();
+        const scrollbarWidth = scroller.offsetWidth - scroller.clientWidth;
+        const contentEdge = scrollerBounds.right - scrollbarWidth;
+        const bounds = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) {
+            throw new Error(`Missing sidebar alignment fixture ${selector}`);
+          }
+          const box = element.getBoundingClientRect();
+          return { left: Math.round(box.left), right: Math.round(box.right) };
+        };
+        return {
+          contentEdge: Math.round(contentEdge),
+          catalogClaude: bounds(
+            '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
+          ),
+          catalogCodex: bounds(
+            '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
+          ),
+          gateway: bounds(
+            '[data-session-section="category:Gateway"] .sidebar-recent-sessions__head',
+          ),
+          nav: bounds(".nav-item"),
+          onlineHeader: bounds(".sidebar-online .sidebar-recent-sessions__head"),
+          onlineRow: bounds(".sidebar-online__person"),
+          scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
+          scrollbarWidth,
+          overflows: scroller.scrollHeight > scroller.clientHeight,
+          sessionHeader: bounds(".sidebar-sessions .sidebar-recent-sessions__head"),
+          sessionRow: bounds(".sidebar-sessions .sidebar-recent-session"),
+          toolbar: bounds(".sidebar-session-toolbar"),
+        };
+      });
+
+      expect(layout.overflows).toBe(true);
+      expect(layout.scrollbarGutter).toBe("stable");
+      expect(
+        new Set(
+          [
+            layout.nav,
+            layout.onlineHeader,
+            layout.onlineRow,
+            layout.sessionHeader,
+            layout.sessionRow,
+            layout.catalogCodex,
+            layout.catalogClaude,
+            layout.gateway,
+            layout.toolbar,
+          ].map(({ left }) => left),
+        ),
+      ).toEqual(new Set([10]));
+      expect(layout.onlineHeader.right).toBe(layout.sessionHeader.right);
+      expect(layout.onlineRow.right).toBe(layout.sessionRow.right);
+      expect(layout.nav.right).toBe(layout.sessionRow.right);
+      expect(layout.catalogCodex.right).toBe(layout.sessionHeader.right);
+      expect(layout.catalogClaude.right).toBe(layout.sessionHeader.right);
+      expect(layout.contentEdge - layout.sessionRow.right).toBe(4);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps a running subtitle and row height stable when its session is opened", async () => {
     if (captureUiProofEnabled) {
       await mkdir(path.join(suite.artifactDir, "sidebar-subtitle-stability"), { recursive: true });

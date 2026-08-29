@@ -296,7 +296,11 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
     return nothing;
   }
   return html`
-    <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
+    <section
+      class="sidebar-online sidebar-recent-sessions"
+      aria-label=${label}
+      data-session-section=${sectionId}
+    >
       ${renderSidebarSessionSectionHeader({
         sectionId,
         draggable: false,

@@ -1146,10 +1146,11 @@ openclaw-settings-save-indicator:empty {
      horizontal scrollbar beside the divider. */
   overflow-x: hidden;
   overflow-y: auto;
-  /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
-     both values share --sidebar-pad-x so they cannot drift. */
+  scrollbar-gutter: stable;
+  /* Cancel shell padding so the thumb hugs the edge; the browser gutter owns
+     classic width, while this 4px inset stays constant in both modes. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
-  padding-right: var(--sidebar-pad-x);
+  padding-right: 4px;
 }
 
 /* Chrome, not content: the strip bleeds past both shell gutters. Negating the
@@ -1285,10 +1286,9 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  /* Left-only on purpose (#124879): the right 8px of .sidebar-sessions padding is
-     clearance so a classic (non-overlay) scrollbar cannot clip the selection pill.
-     Reclaim space inside the row instead of widening it, or that fix regresses. */
-  margin-inline: -8px 0;
+  /* Cancel the section inset so every sidebar family shares the scroll
+     container's 4px content edge; scrollbar clearance belongs to its gutter. */
+  margin-inline: -8px;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
 }
@@ -2288,7 +2288,7 @@ openclaw-settings-save-indicator:empty {
   flex-direction: column;
   gap: 4px;
   padding-top: 12px;
-  margin: 12px 0 10px;
+  margin-block: 12px 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   border-radius: 0;
 }
