@@ -516,7 +516,7 @@ async function imageResult(params: {
       },
     },
   };
-  const { sanitizeToolResultImages } = await import("../tool-images.js");
+  const { sanitizeToolResultImages } = await import("../tool-images.runtime.js");
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 
