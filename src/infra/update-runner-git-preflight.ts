@@ -17,6 +17,7 @@ import {
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
   resolveInstallEnv,
+  runGitCleanCheck,
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
@@ -413,9 +414,16 @@ async function testPreflightCandidate(params: {
       (shouldRunDevPreflightLint()
         ? await runCandidateCheck("lint", lintArgs, resolveDevPreflightLintEnv(manager.env))
         : null);
-    return failure
-      ? { status: classifyPreflightFailure(failure) }
-      : { status: "ok", selectedSha: params.sha };
+    if (failure) {
+      return { status: classifyPreflightFailure(failure) };
+    }
+    return (await runGitCleanCheck(
+      `preflight clean check (${shortSha})`,
+      params.worktreeDir,
+      params.step,
+    )) === "clean"
+      ? { status: "ok", selectedSha: params.sha }
+      : { status: "failed" };
   } finally {
     await manager.cleanup?.();
   }

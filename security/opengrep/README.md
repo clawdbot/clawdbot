@@ -88,6 +88,25 @@ For SARIF output matching the manual full-repository workflow:
 scripts/run-opengrep.sh --sarif
 ```
 
+## SARIF audit and GitHub upload
+
+Both workflows retain the complete `.opengrep-out/precise.sarif` as their SARIF
+audit artifact, including findings acknowledged by source `nosemgrep` comments.
+OpenGrep 1.27.1 represents these as one `inSource` suppression with no status.
+Observed GitHub ingestion reported those suppressed findings as active alerts,
+even though the scanner's `--error` check passed.
+
+Before upload, `node scripts/project-opengrep-sarif.mjs` writes
+`.opengrep-out/precise-active.sarif`, removing only a single `inSource`
+suppression whose status is absent or `accepted`. Rejected, pending, external,
+unknown, and compound suppressions remain active. All other report data,
+including invocation errors, stays intact. The notice reports both counts and
+points to the full audit artifact, even when no active findings remain.
+
+Scan failure semantics are unchanged. Missing or malformed reports fail
+projection, and upload requires successful projection generation. Neither
+workflow changes alert dispositions or scanner rules.
+
 ## Why `--no-strict`?
 
 Some generated rules trigger non-fatal opengrep warnings (for example,

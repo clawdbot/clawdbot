@@ -1,5 +1,6 @@
 import { DEV_BRANCH } from "./update-channels.js";
-import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
+import { runStep } from "./update-runner-command.js";
+import type { CommandRunner, RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -7,6 +8,39 @@ const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_LOCAL_CHECK_MODE: "throttled",
 };
 const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
+
+export async function runGitCleanCheck(
+  name: string,
+  cwd: string,
+  step: (name: string, argv: string[], cwd: string) => RunStepOptions,
+): Promise<"clean" | "dirty" | "unreadable"> {
+  const options = step(
+    name,
+    ["git", "-C", cwd, "status", "--porcelain", "--", ":!dist/control-ui/"],
+    cwd,
+  );
+  let dirty = false;
+  const result = await runStep({
+    ...options,
+    runCommand: async (argv, commandOptions) => {
+      const status = await options.runCommand(argv, commandOptions);
+      if (status.code !== 0 || !status.stdout.trim()) {
+        return status;
+      }
+      dirty = true;
+      // Qualify before runStep emits completion so progress and recorded steps
+      // both reject dirty source, while preserving Git failures unchanged.
+      return {
+        ...status,
+        code: 1,
+        stderr: [status.stderr, `Working tree is dirty:\n${status.stdout}`]
+          .filter(Boolean)
+          .join("\n"),
+      };
+    },
+  });
+  return dirty ? "dirty" : result.exitCode === 0 ? "clean" : "unreadable";
+}
 
 export function shouldInstallWithoutScriptsOnWindows(manager: "pnpm" | "bun" | "npm"): boolean {
   return process.platform === "win32" && manager === "pnpm";
@@ -105,7 +139,7 @@ function isSupersededInstallFailure(
 }
 
 function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:reset|clean|checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
+  return /^preflight (?:reset|clean(?: check)?|checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
     step.name,
   );
 }

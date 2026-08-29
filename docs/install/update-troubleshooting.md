@@ -42,8 +42,16 @@ the CLI fallback on the Gateway host.
   confirmed ENOSPC instead of trying older commits; it does not delete shared
   package-manager stores. See [Git checkout flow](/cli/update#git-checkout-flow)
   for staging placement and the older published-updater limitation.
+- `clean-check-failed`: Git could not inspect the checkout. Resolve the Git,
+  index, or filesystem error shown in the failed step before retrying.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
+- `preflight-no-good-commit`: no candidate passed all preflight checks. Inspect
+  the failed candidate steps, including the clean check; the CLI has not yet
+  mutated the final checkout or stopped its managed service.
+- `build-dirty`: the final build changed source files or left unexpected
+  untracked files. The updater rejects the result and attempts rollback. Do not
+  disable the clean-tree check or commit generated dirt merely to pass it.
 - `global-install-failed`: retry after checking package-manager ownership and
   permissions. Re-run the installer if the package install is incomplete.
 - `doctor-failed`: run Doctor on the Gateway host, resolve its findings, then
@@ -72,6 +80,35 @@ openclaw update
 Use `openclaw update --dry-run` to preview a new attempt. If a package update
 failed after installation began, follow the installer recovery steps in
 [Updating](/install/updating#alternative-re-run-the-installer).
+
+## Source builds that change the pnpm lockfile
+
+An older pnpm launcher can report the target version after switching to it,
+while first rewriting the target checkout's `pnpm-lock.yaml`. In particular,
+pnpm 11.15.1 launching a pnpm 12 checkout can add an umbrella `@pnpm/exe` entry
+to pnpm 12's canonical toolchain lock. Even `pnpm --version` can cause this;
+`install --frozen-lockfile` does not prevent the earlier bootstrap write.
+
+Current updaters check the launcher outside the target workspace and provision
+a scoped matching launcher when needed. However, an update runs the **installed
+updater**, not the target's new updater code. An older updater may therefore
+still require a one-time launcher correction:
+
+1. Check the actual launcher, not only a version reported after switching.
+   Probe outside any pnpm workspace, and account for inherited
+   `NPM_CONFIG_WORKSPACE_DIR` or `PNPM_CONFIG_LOCKFILE_DIR` overrides (including
+   lowercase forms), which can redirect that probe.
+2. Have the deployment owner provision the target checkout's exact
+   `packageManager` version through the tool that owns the launcher. Do not
+   change the repository lock or disable package-manager checks to accommodate
+   an old launcher.
+3. Build the exact candidate in a separate disposable checkout and verify that
+   its source tree remains clean. If rollback may be needed, also verify the
+   launcher can select the predecessor's pin without changing its lock.
+4. Retry the supported update only after that proof passes.
+
+This prerequisite also applies to direct pnpm source-build commands and the
+source-server reference script, which do not use the CLI's scoped bootstrap.
 
 ## Rollback boundary
 

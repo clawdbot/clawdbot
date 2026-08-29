@@ -166,6 +166,8 @@ describe("run-opengrep.sh", () => {
       git(repo, "commit", "-qm", "initial");
 
       const { argsPath, binDir } = installOpengrepStub(repo);
+      // A failed new scan must not let a previous audit masquerade as its output.
+      writeFile(path.join(repo, ".opengrep-out/precise.sarif"), "stale audit");
       if (failedGitCommand) {
         const realGit = execFileSync("bash", ["-lc", "command -v git"], {
           encoding: "utf8",
@@ -246,5 +248,133 @@ describe("run-opengrep.sh", () => {
     const args = fs.readFileSync(argsPath, "utf8");
     expect(args).toContain("src/pr.ts");
     expect(args).not.toContain("src/main-only.ts");
+  });
+});
+
+describe("OpenGrep GitHub SARIF projection", () => {
+  const projectScript = path.resolve("scripts/project-opengrep-sarif.mjs");
+  const activeResult = { ruleId: "fixture", message: { text: "active" }, locations: [] };
+  const suppressedResult = {
+    ...activeResult,
+    message: { text: "reviewed fixture" },
+    suppressions: [{ kind: "inSource" }],
+  };
+  const tool = {
+    driver: { name: "Opengrep OSS", semanticVersion: "1.27.1", rules: [{ id: "fixture" }] },
+  };
+
+  function project(audit: string | undefined) {
+    const repo = createTempDir("openclaw-opengrep-projection-");
+    const auditPath = path.join(repo, ".opengrep-out/precise.sarif");
+    const activePath = path.join(repo, ".opengrep-out/precise-active.sarif");
+    if (audit !== undefined) {
+      writeFile(auditPath, audit);
+    }
+    writeFile(activePath, "stale projection");
+    const processResult = spawnSync(process.execPath, [projectScript], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    return { ...processResult, auditPath, activePath };
+  }
+
+  it.each([
+    {
+      name: "mixed findings",
+      results: [activeResult, suppressedResult],
+      expected: [activeResult],
+      suppressed: 1,
+    },
+    { name: "all suppressed", results: [suppressedResult], expected: [], suppressed: 1 },
+    { name: "no findings", results: [], expected: [], suppressed: 0 },
+  ])(
+    "projects $name while retaining the full audit and metadata",
+    ({ results, expected, suppressed }) => {
+      const report = {
+        version: "2.1.0",
+        properties: { audit: "retained" },
+        runs: [
+          { tool, results, invocations: [{ executionSuccessful: true }] },
+          {
+            tool,
+            results: [],
+            invocations: [
+              {
+                executionSuccessful: false,
+                toolExecutionNotifications: [{ level: "error", message: { text: "parse failed" } }],
+              },
+            ],
+          },
+        ],
+      };
+      const audit = JSON.stringify(report);
+      const result = project(audit);
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(result.auditPath, "utf8")).toBe(audit);
+      expect(JSON.parse(fs.readFileSync(result.activePath, "utf8"))).toEqual({
+        ...report,
+        runs: [{ ...report.runs[0], results: expected }, report.runs[1]],
+      });
+      expect(result.stdout).toContain(
+        `::notice title=OpenGrep upload projection::${expected.length} active findings; ${suppressed} source-suppressed findings.`,
+      );
+      expect(result.stdout).toContain("workflow SARIF artifact (.opengrep-out/precise.sarif)");
+    },
+  );
+
+  it("retains pending, rejected, external, unknown and compound suppressions as active risk", () => {
+    const suppressions = [
+      [{ kind: "inSource", status: "underReview" }],
+      [{ kind: "inSource", status: "rejected" }],
+      [{ kind: "inSource", status: "unknown" }],
+      [{ kind: "inSource", status: null }],
+      [{ kind: "external", status: "accepted" }],
+      [{ kind: "unknown" }],
+      [{ kind: "inSource" }, { kind: "inSource", status: "rejected" }],
+    ];
+    const retained = suppressions.map((entries) => ({
+      ruleId: "fixture",
+      message: { text: "retained suppression" },
+      suppressions: entries,
+    }));
+    const accepted = {
+      ...suppressedResult,
+      suppressions: [{ kind: "inSource", status: "accepted" }],
+    };
+    const result = project(
+      JSON.stringify({ version: "2.1.0", runs: [{ tool, results: [...retained, accepted] }] }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(result.activePath, "utf8")).runs[0].results).toEqual(
+      retained,
+    );
+    expect(result.stdout).toContain("7 active findings; 1 source-suppressed findings");
+  });
+
+  it.each([
+    { name: "missing report", audit: undefined },
+    { name: "truncated JSON", audit: '{"version":' },
+    { name: "missing runs", audit: '{"version":"2.1.0"}' },
+    { name: "missing results", audit: JSON.stringify({ version: "2.1.0", runs: [{ tool }] }) },
+    {
+      name: "invalid result",
+      audit: JSON.stringify({ version: "2.1.0", runs: [{ tool, results: [null] }] }),
+    },
+    {
+      name: "malformed suppressed result",
+      audit: JSON.stringify({
+        version: "2.1.0",
+        runs: [{ tool, results: [{ suppressions: [{ kind: "inSource" }] }] }],
+      }),
+    },
+  ])("fails closed for $name without leaving a stale upload", ({ audit }) => {
+    const result = project(audit);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[project-opengrep-sarif] FAILED (exit 1)");
+    expect(result.stdout).not.toContain("::notice");
+    expect(fs.existsSync(result.activePath)).toBe(false);
+    if (audit !== undefined) {
+      expect(fs.readFileSync(result.auditPath, "utf8")).toBe(audit);
+    }
   });
 });

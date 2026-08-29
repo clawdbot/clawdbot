@@ -80,6 +80,7 @@ jobs:
         run: opengrep --version
 
       - name: Run opengrep on PR diff
+        id: scan
         env:
           OPENCLAW_OPENGREP_BASE_REF: ${{ github.event.pull_request.base.sha }}...HEAD
           OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1"
@@ -89,14 +90,20 @@ jobs:
         # at the repo root and are picked up automatically.
         run: |
           mkdir -p .opengrep-out
+          rm -f .opengrep-out/precise.sarif .opengrep-out/precise-active.sarif
           scripts/run-opengrep.sh --changed --sarif --error
+
+      - name: Project active findings for GitHub
+        id: project-sarif
+        if: ${{ !cancelled() && (steps.scan.outcome == 'success' || steps.scan.outcome == 'failure') }}
+        run: node scripts/project-opengrep-sarif.mjs
 
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        # Only upload if the scan actually produced a SARIF file.
-        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        # Upload only the successfully generated projection, including after findings fail the scan.
+        if: ${{ !cancelled() && steps.project-sarif.outcome == 'success' }}
         with:
-          sarif_file: .opengrep-out/precise.sarif
+          sarif_file: .opengrep-out/precise-active.sarif
           category: opengrep-pr-diff
 
       - name: Upload SARIF as workflow artifact

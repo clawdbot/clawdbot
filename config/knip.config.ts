@@ -90,6 +90,7 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
+  "scripts/project-opengrep-sarif.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mts!",

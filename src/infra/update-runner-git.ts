@@ -23,6 +23,7 @@ import {
   findBlockingGitFailure,
   resolveBuildEnv,
   resolveInstallEnv,
+  runGitCleanCheck,
   shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
@@ -269,15 +270,12 @@ export async function updateGitCheckout(params: {
     return buildError(reason);
   };
 
-  const statusCheck = await runStep(
-    step(
-      "clean check",
-      ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
-      gitRoot,
-    ),
-  );
-  if (statusCheck.stdoutTail?.trim()) {
-    return buildError("dirty", "skipped");
+  const cleanliness = await runGitCleanCheck("clean check", gitRoot, step);
+  if (cleanliness !== "clean") {
+    return buildError(
+      cleanliness === "dirty" ? "dirty" : "clean-check-failed",
+      cleanliness === "dirty" ? "skipped" : "error",
+    );
   }
 
   if (channel === "dev") {
@@ -456,18 +454,9 @@ export async function updateGitCheckout(params: {
     if (buildStep.exitCode !== 0) {
       return await rollbackError("build-failed");
     }
-    const buildCleanCheck = await runStep(
-      step(
-        "build clean check",
-        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
-        gitRoot,
-      ),
-    );
-    if (buildCleanCheck.exitCode !== 0) {
-      return await rollbackError("build-failed");
-    }
-    if (buildCleanCheck.stdoutTail?.trim()) {
-      return await rollbackError("build-dirty");
+    const buildCleanliness = await runGitCleanCheck("build clean check", gitRoot, step);
+    if (buildCleanliness !== "clean") {
+      return await rollbackError(buildCleanliness === "dirty" ? "build-dirty" : "build-failed");
     }
     const builtUiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
     if (builtUiHealth.kind !== "ready") {

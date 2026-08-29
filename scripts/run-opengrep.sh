@@ -65,6 +65,7 @@ while (( $# > 0 )); do
     --sarif)
       mkdir -p "$REPO_ROOT/.opengrep-out"
       SARIF_OUTPUT="$REPO_ROOT/.opengrep-out/$BUCKET.sarif"
+      rm -f -- "$SARIF_OUTPUT"
       EXTRA_ARGS+=( "--sarif-output=$SARIF_OUTPUT" )
       shift
       ;;

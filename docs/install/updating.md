@@ -118,11 +118,14 @@ service's Node path, and checks that Node version against the target release's
 ## Source-checkout servers (reference script)
 
 Teams running a gateway directly from a git checkout on a server can update it
-with `scripts/update-gateway.sh` from inside that checkout. It is the reference
-for an efficient source-server update: it restores tracked build outputs that
-`pnpm build` rewrites, fails closed on any other local changes, fast-forwards
-`main` (or rebases a local server branch onto `origin/main`), installs
-dependencies, builds clean, and restarts the gateway.
+with `scripts/update-gateway.sh` from inside that checkout. It requires no
+tracked local changes, fast-forwards `main` (or rebases a local server branch
+onto `origin/main`), installs dependencies, rebuilds from clean output
+directories, and restarts the gateway. Unlike the CLI updater, this reference
+script expects an already-compatible pnpm launcher and does not preflight a
+candidate in a temporary checkout. Resolve [source bootstrap
+problems](/install/update-troubleshooting#source-builds-that-change-the-pnpm-lockfile)
+before using it across a package-manager upgrade.
 
 Generated output roots such as `dist`, `dist-runtime`, and package-local
 `dist` directories must be real directories. Builds refuse symbolic-link roots

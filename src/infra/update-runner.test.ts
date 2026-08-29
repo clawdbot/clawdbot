@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import type { CommandRunner } from "./update-runner-types.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -486,7 +487,15 @@ describe("runGatewayUpdate", () => {
     );
     await fs.writeFile(path.join(sourceRoot, "openclaw.mjs"), "export {};\n");
     await fs.writeFile(path.join(sourceRoot, "README.md"), "base\n");
-    await runRealGit(sourceRoot, "add", "package.json", "openclaw.mjs", "README.md");
+    await fs.writeFile(path.join(sourceRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    await runRealGit(
+      sourceRoot,
+      "add",
+      "package.json",
+      "openclaw.mjs",
+      "README.md",
+      "pnpm-lock.yaml",
+    );
     await runRealGit(sourceRoot, "commit", "-m", "base");
     const baseSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
     await runRealGit(path.dirname(localRoot), "clone", "--quiet", sourceRoot, localRoot);
@@ -703,20 +712,55 @@ describe("runGatewayUpdate", () => {
     };
   }
 
-  it("skips git update when worktree is dirty", async () => {
-    await setupGitCheckout();
-    const beforeGitMutation = vi.fn<() => Promise<void>>();
-    const { runner, calls } = createRunner({
-      ...buildGitWorktreeProbeResponses({ status: " M README.md" }),
-    });
+  it.each([
+    {
+      name: "dirty",
+      response: { stdout: " M README.md" },
+      status: "skipped",
+      reason: "dirty",
+      exitCode: 1,
+    },
+    {
+      name: "unreadable",
+      response: { code: 128, stderr: "fatal: unable to read index" },
+      status: "error",
+      reason: "clean-check-failed",
+      exitCode: 128,
+    },
+    {
+      name: "timed out",
+      response: { code: null, stderr: "Command timed out" },
+      status: "error",
+      reason: "clean-check-failed",
+      exitCode: null,
+    },
+  ])(
+    "stops git update when the initial worktree is $name",
+    async ({ response, status, reason, exitCode }) => {
+      await setupGitCheckout();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const { runner, calls } = createRunner({
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: response,
+      });
 
-    const result = await runWithRunner(runner, { beforeGitMutation });
+      const onStepComplete = vi.fn();
+      const result = await runGatewayUpdate({
+        cwd: tempDir,
+        runCommand: runner,
+        beforeGitMutation,
+        progress: { onStepComplete },
+      });
 
-    expect(result.status).toBe("skipped");
-    expect(result.reason).toBe("dirty");
-    expect(beforeGitMutation).not.toHaveBeenCalled();
-    expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
-  });
+      expect(result).toMatchObject({ status, reason });
+      expect(result.steps).toMatchObject([{ name: "clean check", exitCode }]);
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "clean check", exitCode }),
+      );
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.includes(" fetch ") || call.includes("rebase"))).toBe(false);
+    },
+  );
 
   it("uses the supplied update cwd when the process cwd disappeared", async () => {
     await setupGitCheckout();
@@ -856,6 +900,149 @@ describe("runGatewayUpdate", () => {
     expect(beforeGitMutation).not.toHaveBeenCalled();
     expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${targetSha}`);
   });
+
+  it.each([
+    "tracked lockfile",
+    "staged lockfile",
+    "untracked output",
+    "unreadable status",
+  ] as const)(
+    "rejects an exact preflight candidate with %s before git mutation",
+    async (failure) => {
+      const { localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const onStepComplete = vi.fn();
+      const realRunner = createRealGitUpdateRunner();
+      const unreadable = failure === "unreadable status";
+      const changedPath = failure === "untracked output" ? "generated.tmp" : "pnpm-lock.yaml";
+      let preflightBuilds = 0;
+      const runCommand: CommandRunner = async (argv, options) => {
+        const preflightDir = options.cwd;
+        if (
+          preflightDir &&
+          preflightPrefixPattern.test(preflightDir) &&
+          unreadable &&
+          argv[0] === "git" &&
+          argv[3] === "status"
+        ) {
+          return toCommandResult({ code: 128, stderr: "fatal: unable to read index" });
+        }
+        const result = await realRunner(argv, options);
+        if (
+          preflightDir &&
+          preflightPrefixPattern.test(preflightDir) &&
+          argv[0] === "pnpm" &&
+          argv[1] === "build"
+        ) {
+          preflightBuilds += 1;
+          if (!unreadable) {
+            await fs.writeFile(path.join(preflightDir, changedPath), "build changed source\n");
+            if (failure === "staged lockfile") {
+              await runRealGit(preflightDir, "add", changedPath);
+            }
+          }
+        }
+        return result;
+      };
+
+      const result = await runGatewayUpdate({
+        cwd: localRoot,
+        channel: "dev",
+        devTarget: { mode: "detached", ref: targetSha },
+        timeoutMs: 5000,
+        runCommand,
+        beforeGitMutation,
+        progress: { onStepComplete },
+      });
+
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+      expect(preflightBuilds).toBe(1);
+      const cleanStep = {
+        name: `preflight clean check (${targetSha.slice(0, 8)})`,
+        exitCode: unreadable ? 128 : 1,
+        stderrTail: expect.stringContaining(unreadable ? "unable to read index" : changedPath),
+      };
+      expect(result.steps).toContainEqual(expect.objectContaining(cleanStep));
+      expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(cleanStep));
+      expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+      expect(await runRealGit(localRoot, "status", "--porcelain")).toBe("");
+      expect(await fs.readFile(path.join(localRoot, "pnpm-lock.yaml"), "utf8")).toBe(
+        "lockfileVersion: '9.0'\n",
+      );
+    },
+  );
+
+  it.each(["dirty build", "unreadable status"] as const)(
+    "walks back from preflight %s to a clean candidate before git mutation",
+    async (failure) => {
+      const { sourceRoot, localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
+      await fs.writeFile(path.join(sourceRoot, "README.md"), "dirty tip\n");
+      await runRealGit(sourceRoot, "add", "README.md");
+      await runRealGit(sourceRoot, "commit", "-m", "dirty tip");
+      const dirtySha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
+      const realRunner = createRealGitUpdateRunner();
+      const builtCandidates: string[] = [];
+      const runCommand: CommandRunner = async (argv, options) => {
+        if (
+          failure === "unreadable status" &&
+          options.cwd &&
+          preflightPrefixPattern.test(options.cwd) &&
+          argv[0] === "git" &&
+          argv[3] === "status" &&
+          builtCandidates.at(-1) === dirtySha
+        ) {
+          return toCommandResult({ code: 128, stderr: "fatal: unable to read index" });
+        }
+        const result = await realRunner(argv, options);
+        if (
+          options.cwd &&
+          preflightPrefixPattern.test(options.cwd) &&
+          argv[0] === "pnpm" &&
+          argv[1] === "build"
+        ) {
+          const sha = await runRealGit(options.cwd, "rev-parse", "HEAD");
+          builtCandidates.push(sha);
+          if (failure === "dirty build" && sha === dirtySha) {
+            await fs.writeFile(path.join(options.cwd, "pnpm-lock.yaml"), "build changed source\n");
+            await runRealGit(options.cwd, "add", "pnpm-lock.yaml");
+            await fs.writeFile(path.join(options.cwd, "generated.tmp"), "untracked\n");
+          }
+        }
+        return result;
+      };
+      const beforeGitMutation = vi.fn(async () => {
+        expect(builtCandidates).toEqual([dirtySha, targetSha]);
+        expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+        expect(await runRealGit(localRoot, "status", "--porcelain")).toBe("");
+      });
+
+      const result = await runGatewayUpdate({
+        cwd: localRoot,
+        channel: "dev",
+        timeoutMs: 5000,
+        runCommand,
+        beforeGitMutation,
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.after?.sha).toBe(targetSha);
+      expect(beforeGitMutation).toHaveBeenCalledTimes(1);
+      expect(
+        result.steps.filter((step) => step.name.startsWith("preflight clean check")),
+      ).toMatchObject([
+        {
+          name: `preflight clean check (${dirtySha.slice(0, 8)})`,
+          exitCode: failure === "dirty build" ? 1 : 128,
+        },
+        { name: `preflight clean check (${targetSha.slice(0, 8)})`, exitCode: 0 },
+      ]);
+      expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(targetSha);
+      expect(await runRealGit(localRoot, "status", "--porcelain", "--", ":!dist/control-ui/")).toBe(
+        "",
+      );
+    },
+  );
 
   it("hands beforeGitMutation an unreadable marker when target metadata cannot be read", async () => {
     await setupGitCheckout();
@@ -2027,6 +2214,7 @@ describe("runGatewayUpdate", () => {
     expect(result.steps).toContainEqual(
       expect.objectContaining({
         name: "build clean check",
+        exitCode: 1,
         stdoutTail:
           " M extensions/browser/chrome-extension/modules/copilot-runtime.js\n?? generated-build-output.tmp",
       }),
@@ -2188,26 +2376,34 @@ describe("runGatewayUpdate", () => {
   it("bootstraps pnpm via corepack when pnpm is missing", async () => {
     await setupGitPackageManagerFixture();
     const stableTag = "v1.0.1-1";
-    let pnpmVersionChecks = 0;
+    let shimDir = "";
+    const executions: Array<{ command: string; binDir: string | undefined }> = [];
     const { calls, runCommand } = createGitInstallRunner({
       stableTag,
       installCommand: "pnpm install",
       buildCommand: "pnpm build",
       uiBuildCommand: "pnpm ui:build",
       doctorCommand: `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
-      onCommand: (key) => {
-        if (key === "pnpm --version") {
-          pnpmVersionChecks += 1;
-          if (pnpmVersionChecks === 1) {
+      onCommand: (key, options) => {
+        if (key.startsWith("pnpm ")) {
+          const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
+          const binDir = envPath.split(path.delimiter)[0];
+          if (!shimDir || binDir !== shimDir) {
             throw new Error("spawn pnpm ENOENT");
           }
-          return { stdout: PNPM_VERSION };
+          if (key === "pnpm --version") {
+            return { stdout: PNPM_VERSION };
+          }
+          if (key === "pnpm install" || key === "pnpm build") {
+            expect(options?.cwd).toBe(tempDir);
+            executions.push({ command: key, binDir });
+          }
         }
         if (key === "corepack --version") {
           return { stdout: "0.30.0" };
         }
-        if (key === "corepack enable") {
-          return { stdout: "" };
+        if (key === "npm --version") {
+          return { code: 1, stderr: "npm unavailable" };
         }
         return undefined;
       },
@@ -2215,14 +2411,32 @@ describe("runGatewayUpdate", () => {
 
     const result = await runGatewayUpdate({
       cwd: tempDir,
-      runCommand: async (argv, _options) => runCommand(argv),
+      runCommand: async (argv, options) => {
+        if (argv[0] === "corepack" && argv[1] === "enable") {
+          expect(argv).toEqual([
+            "corepack",
+            "enable",
+            "--install-directory",
+            expect.any(String),
+            "pnpm",
+          ]);
+          shimDir = argv[3] ?? "";
+        }
+        return runCommand(argv, options);
+      },
       timeoutMs: 5000,
       channel: "stable",
     });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain("corepack enable");
-    expect(calls).toContain("pnpm install");
+    expect(shimDir).not.toBe("");
+    expect(shimDir).not.toBe(tempDir);
+    expect(calls).toContain(`corepack enable --install-directory ${shimDir} pnpm`);
+    expect(calls).not.toContain("corepack enable");
+    expect(executions).toEqual([
+      { command: "pnpm install", binDir: shimDir },
+      { command: "pnpm build", binDir: shimDir },
+    ]);
     expect(calls).not.toContain("npm install --no-package-lock --legacy-peer-deps");
   });
 
@@ -2692,6 +2906,35 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(`git -C ${tempDir} rev-parse --show-toplevel`);
     expect(calls).toContain(`git -C ${gitRoot} checkout --detach ${targetSha}`);
     expect(calls).not.toContain(`git -C ${gitRoot} rev-parse @{upstream}`);
+  });
+
+  it("reports probe workspace allocation failure before preparing a Git mutation", async () => {
+    await setupGitPackageManagerFixture();
+    const { calls, runCommand } = createDevGitRunner();
+    const beforeGitMutation = vi.fn(async () => {});
+    const createTemporaryDirectory = fs.mkdtemp;
+    const allocation = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
+      if (prefix.includes("openclaw-update-pnpm-")) {
+        throw Object.assign(new Error("temporary storage unavailable"), { code: "EACCES" });
+      }
+      return createTemporaryDirectory(prefix);
+    });
+    try {
+      const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
+      expect(result).toMatchObject({ status: "error", reason: "preferred-manager-unavailable" });
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "preflight package manager (upstream)",
+          exitCode: 1,
+          stderrTail: "preferred-manager-unavailable",
+        }),
+      );
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls).not.toContain("pnpm --version");
+      expect(calls).not.toContain("pnpm install");
+    } finally {
+      allocation.mockRestore();
+    }
   });
 
   it("does not fall back to npm scripts when a pnpm repo cannot bootstrap pnpm", async () => {
@@ -3375,9 +3618,10 @@ describe("runGatewayUpdate", () => {
       const stableTag = "v1.0.1-1";
       let currentHead = beforeSha;
       let buildCount = 0;
+      let rollbackPrefix = "";
       const calls: string[] = [];
       const buildEnvs: NodeJS.ProcessEnv[] = [];
-      const managerVersions: string[] = [];
+      const managerExecutions: Array<{ command: string; version: string }> = [];
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
       const writeRuntime = async (head: string) => {
@@ -3440,17 +3684,37 @@ describe("runGatewayUpdate", () => {
           );
           return toCommandResult();
         }
-        if (key === "pnpm --version") {
-          expect(options?.cwd).toBe(tempDir);
-          const version = currentHead === beforeSha ? "11.22.0" : "12.0.0";
-          managerVersions.push(version);
-          return toCommandResult({ stdout: version });
+        if (key === "corepack --version") {
+          return toCommandResult({ code: 1, stderr: "corepack unavailable" });
         }
-        if (key === "pnpm build") {
-          buildCount += 1;
-          buildEnvs.push(options?.env ?? {});
-          await writeRuntime(currentHead);
+        if (key === "npm --version") {
+          return toCommandResult({ stdout: "10.0.0" });
+        }
+        if (argv[0] === "npm" && argv[1] === "install" && argv[2] === "--prefix") {
+          expect(argv[4]).toBe("pnpm@11.22.0");
+          rollbackPrefix = argv[3] ?? "";
           return toCommandResult();
+        }
+        if (argv[0] === "pnpm") {
+          const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
+          const usesRollbackPnpm =
+            rollbackPrefix &&
+            envPath.split(path.delimiter)[0] === path.join(rollbackPrefix, "node_modules", ".bin");
+          // The ambient launcher remains pnpm 12 when Git restores the pnpm 11 checkout.
+          const version = usesRollbackPnpm ? "11.22.0" : "12.0.0";
+          if (key === "pnpm --version") {
+            return toCommandResult({ stdout: version });
+          }
+          if (key === "pnpm install" || key === "pnpm build") {
+            expect(options?.cwd).toBe(tempDir);
+            managerExecutions.push({ command: key, version });
+          }
+          if (key === "pnpm build") {
+            buildCount += 1;
+            buildEnvs.push(options?.env ?? {});
+            await writeRuntime(currentHead);
+            return toCommandResult();
+          }
         }
         if (key === doctorCommand) {
           return toCommandResult({ code: 1, stderr: "doctor failed after build" });
@@ -3470,7 +3734,13 @@ describe("runGatewayUpdate", () => {
         },
       );
 
-      expect(managerVersions).toEqual(["12.0.0", "11.22.0"]);
+      expect(managerExecutions).toEqual([
+        { command: "pnpm install", version: "12.0.0" },
+        { command: "pnpm build", version: "12.0.0" },
+        { command: "pnpm install", version: "11.22.0" },
+        { command: "pnpm build", version: "11.22.0" },
+      ]);
+      expect(calls).toContain(`npm install --prefix ${rollbackPrefix} pnpm@11.22.0`);
       expect(result).toMatchObject({
         status: "error",
         reason: "doctor-failed",
