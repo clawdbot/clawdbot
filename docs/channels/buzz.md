@@ -133,12 +133,16 @@ preserves an existing agent-directory profile and channel-add policy; for a new
 profile it allows authorized Buzz users to add the identity. This lets Buzz
 assign the **Bot** role when the identity is invited to additional rooms
 instead of treating it as a normal member. OpenClaw still receives messages
-only from rooms explicitly selected in `channels.buzz.groups`.
+only from rooms explicitly selected in that account's `groups`: use
+`channels.buzz.groups` for the implicit root identity or
+`channels.buzz.accounts.<id>.groups` for a nested identity.
 
 Buzz displays `owner unavailable` when the bot profile has no valid NIP-OA
-owner attestation. This does not mean room access failed. When
-`channels.buzz.authTag` is configured, OpenClaw includes that attestation in the
-published profile so Buzz can show the verified human owner.
+owner attestation. This does not mean room access failed. Configure the selected
+identity's `authTag` at `channels.buzz.authTag` for the implicit root identity or
+`channels.buzz.accounts.<id>.authTag` for a nested identity. OpenClaw includes
+that attestation in the published profile so Buzz can show the verified human
+owner.
 
 While the Gateway is connected, OpenClaw publishes and refreshes the bot's
 ephemeral Buzz presence every 30 seconds. Buzz removes the presence when the
@@ -547,7 +551,10 @@ command saves credentials and settings; use guided setup to discover and select
 rooms before starting a new bot.
 
 If a hosted workspace operator gives you an identity authorization value, set
-`channels.buzz.authTag` or `BUZZ_AUTH_TAG`. It can use the same plaintext or
+the selected identity's `authTag`. The implicit root identity uses
+`channels.buzz.authTag` and can fall back to `BUZZ_AUTH_TAG`. Nested identities,
+including `accounts.default`, use `channels.buzz.accounts.<id>.authTag` and
+never borrow that environment fallback. The field accepts the same plaintext or
 SecretRef forms as the private key. Treat this delegated, reusable value as a
 secret: keep it out of logs, screenshots, chat, and source control, and prefer a
 SecretRef for persistent deployments. Request a replacement and revoke the old
