@@ -453,6 +453,10 @@ export class CodexToolProgressProjection {
     if (params.finalOutput) {
       this.resultOutputItemIds.add(params.itemId);
     }
+    // Channel drafts consume structured events; this legacy formatted callback must stay private.
+    if (this.params.messageChannel || this.params.messageProvider) {
+      return;
+    }
     try {
       void Promise.resolve(
         this.params.onToolResult?.({

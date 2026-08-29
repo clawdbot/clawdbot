@@ -62,6 +62,7 @@ describe("chat pane lazy sidebar failures", () => {
     renderCurrent();
 
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(container.querySelector("[data-primary]")?.textContent).toContain("Primary chat");
     expect(container.querySelector(".lazy-view-error__detail")?.textContent).toContain(
       "sidebar-region.js",

@@ -16,7 +16,6 @@ import type {
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
-import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 
 /**
@@ -37,14 +36,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     },
   },
 
-  /** Twitch chat message limit is 500 characters */
+  // The client manager chunks after the sender strips Markdown once.
+  // A core chunker would reparse literal Markdown and could erase visible text.
   textChunkLimit: TWITCH_CHAT_MESSAGE_LIMIT,
 
   /** Strip internal assistant tool-trace scaffolding before delivery */
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-
-  /** Word-boundary chunker with markdown stripping */
-  chunker: chunkTextForTwitch,
 
   /**
    * Resolve target from context.
@@ -155,6 +152,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
 
     return {
       channel: "twitch",
+      ...(result.outcome ? { outcome: result.outcome } : {}),
       messageId: result.messageId,
       receipt: result.receipt,
       timestamp: Date.now(),

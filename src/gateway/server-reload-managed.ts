@@ -173,9 +173,8 @@ export function startManagedGatewayConfigReloader(
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
     assertRestartReady: () =>
-      import("../state/openclaw-database-preflight.js").then(
-        ({ assertOpenClawDatabasesReadyForRestart }) =>
-          assertOpenClawDatabasesReadyForRestart({ env: process.env }),
+      import("../state/openclaw-database-preflight.js").then(({ assertOpenClawDatabasesReady }) =>
+        assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
       ),
     restartRecoveryAvailable,
     createHealthMonitor: () =>
@@ -327,13 +326,12 @@ export function startManagedGatewayConfigReloader(
     }
   };
 
-  const { onEffectiveConfigUnchanged, onHotReload, onNoopConfigCommit } =
-    createManagedReloadSecretHandlers({
-      params,
-      prepareRuntimeCandidate,
-      tryPrepareRuntimeSecrets,
-      applyHotReload,
-    });
+  const { onEffectiveConfigUnchanged, onHotReload } = createManagedReloadSecretHandlers({
+    params,
+    prepareRuntimeCandidate,
+    tryPrepareRuntimeSecrets,
+    applyHotReload,
+  });
 
   let lastCommittedRuntimeConfig: OpenClawConfig | undefined;
   const configReloader = startGatewayConfigReloader({
@@ -496,8 +494,8 @@ export function startManagedGatewayConfigReloader(
       // Cleared per transaction so a rebuild can never inherit a config committed
       // by an earlier one when this commit does not reach markRuntimeCommitted.
       lastCommittedRuntimeConfig = undefined;
-      await onNoopConfigCommit(plan, nextConfig, ownership, sourceConfig);
-      if (!canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
+      const applicationStatus = await onHotReload(plan, nextConfig, ownership, sourceConfig);
+      if (isNoopGatewayReloadPlan(plan) && !canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         // Rebuild against the committed runtime config, not the source-derived
         // candidate. `secrets.providers.*` resolves to a different object, and
         // stamping the rebuilt owner with the pre-resolution identity makes every
@@ -510,6 +508,7 @@ export function startManagedGatewayConfigReloader(
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
         });
       }
+      return applicationStatus;
     },
     onHotReload,
     onRestart: runManagedRestart,

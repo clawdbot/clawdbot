@@ -332,7 +332,7 @@ export class ChatTurnRouter {
       return {
         text: [
           baseText,
-          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+          `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
         ].join("\n\n"),
         action: "open-tui",
         agentDraft: "hatch",
@@ -479,7 +479,7 @@ export class ChatTurnRouter {
     if (recordedOperation.kind === "open-tui") {
       this.clearPendingProposals();
       return {
-        text: "Opening your normal agent TUI. Use /openclaw there to come back.",
+        text: `Opening a chat with your agent. ${this.agentHandoffReturnHint()}`,
         action: "open-tui",
         handoff: recordedOperation,
       };
@@ -633,6 +633,13 @@ export class ChatTurnRouter {
       ...this.options.deps,
       ...(this.options.surface ? { setupSurface: this.options.surface } : {}),
     };
+  }
+
+  private agentHandoffReturnHint(): string {
+    // Only the TUI uses /openclaw for navigation; web chat runs rescue in place.
+    return this.options.surface === "gateway"
+      ? "You can return through Settings → Ask OpenClaw."
+      : "Use /openclaw to come back.";
   }
 
   private clearPendingProposals(): void {

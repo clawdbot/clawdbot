@@ -10,16 +10,10 @@ import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
-  getReusableCatalogSnapshotCountForTest,
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
-import {
-  appendToolSearchCodeStderrTail,
-  readToolSearchCode,
-  runCodeMode,
-  runCodeModeChild,
-} from "./tool-search-code-mode.js";
+import { readToolSearchCode, runCodeMode, runCodeModeChild } from "./tool-search-code-mode.js";
 import {
   isToolSearchCodeModeSupported,
   resolveToolSearchConfig,
@@ -418,7 +412,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 }
 
 const testing = {
-  getReusableCatalogSnapshotCountForTest,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,
@@ -426,7 +419,6 @@ const testing = {
   setToolSearchMinCodeTimeoutMsForTest,
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
-  appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
 

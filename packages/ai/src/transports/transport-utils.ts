@@ -46,17 +46,13 @@ export function redactSensitiveText(text: string, _options?: unknown): string {
   return getAiTransportHost().redactToolPayloadText(text);
 }
 
-export function resolveSecretSentinel(value: string): string {
-  return getAiTransportHost().resolveSecretSentinel(value);
-}
-
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
   if (!model.headers) {
     return model;
   }
   let headers: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
-    const resolved = resolveSecretSentinel(value);
+    const resolved = getAiTransportHost().resolveSecretSentinel(value);
     if (resolved !== value) {
       headers ??= { ...model.headers };
       headers[name] = resolved;

@@ -273,6 +273,11 @@ network grants, and no child-process or worker grants. OpenClaw enforces a
 parent-process wall-clock timeout and kills the subprocess on timeout, including
 after async continuations.
 
+Outstanding bridged tool calls are canceled when the child settles, including
+fatal exits and final results. Failed exits wait for stderr to drain before
+rendering a bounded diagnostic. The error separately reports bytes discarded
+from the 64 KiB retained tail and bytes omitted from its final text preview.
+
 The runtime exposes only:
 
 - `console.log`, `console.warn`, and `console.error`

@@ -80,7 +80,11 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
         });
         const placement = params.placements.get(sessionId);
-        if (placement?.state !== "active" && placement?.state !== "draining") {
+        if (
+          placement?.state !== "active" &&
+          placement?.state !== "draining" &&
+          placement?.state !== "reclaimed"
+        ) {
           throw new Error(
             `Session ${sessionKey} has active work; wait before stopping its cloud worker`,
           );
@@ -111,8 +115,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         authorize?.();
         // Eligibility ends at this operation's drain, unlike caller authority during teardown.
         beforeDrain?.();
-        const drainingPlacement = begin();
-        reclaimedPlacement = await reclaim(worktreePath, drainingPlacement, authorize);
+        const placement = begin();
+        reclaimedPlacement = await reclaim(worktreePath, placement, authorize);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
       },
     });

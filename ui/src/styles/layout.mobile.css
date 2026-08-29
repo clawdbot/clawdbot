@@ -370,6 +370,13 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding-bottom: 0;
   }
 
+  /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
+     content rule below from stacking shell spacing onto that owner. */
+  main.content--custodian {
+    gap: 0;
+    padding: 0;
+  }
+
   .content {
     --content-inline-padding: 4px;
     padding: 4px var(--content-inline-padding) 16px;

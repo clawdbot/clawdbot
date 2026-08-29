@@ -468,6 +468,40 @@ runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
 
+### Paired-device execution
+
+Declare `cloudPlacement.devicePlacement.requiredNodeCommands` for the exact node
+commands the harness needs to execute on a paired device. Core snapshots this
+set when it creates the selected harness's host capabilities. An admitted
+**Full access** session can authorize only those commands through the node
+policy's `invokeNodeWithSessionFull` callback; other commands owned by the same
+plugin do not inherit that permission. An absent declaration or an unlisted
+command returns `undefined`, so the policy must use its ordinary approval or
+denial path. Mutating the declaration during the attempt cannot widen authority.
+
+This declaration narrows authority; it does not grant it. Pairing, command
+allowlisting, hosting consent, node-local policy, and the exact live session,
+placement, and turn remain independently enforced. Plugins remain trusted code,
+not sandboxed by this callback.
+
+### Native model inventory
+
+`loadModelCatalog(params)` lists models for the supplied agent, workspace, and
+config snapshot. Rows owned by native model selection set `nativeRuntime` to
+the harness ID and omit host `api` and `baseUrl` claims. Core does not enrich
+these rows with transport or capabilities from a host route.
+
+An optional synchronous `readModelCatalogReadiness(params)` returns only
+`{ accountType: string }` for a current native account observation
+covering that exact scope and model. Preserve the native account type; it does
+not imply a host credential or OAuth refresh lifecycle. Return `undefined` for missing, failed,
+superseded, or disposed observations. Readiness must remain with the physical
+native owner and be revalidated at use; never serialize it on catalog rows,
+perform I/O in this callback, or infer it from a successful earlier turn.
+Gateway uses this metadata for native-owned picker rows; authored host routes,
+credentials, and profile locks still use host readiness. This is not execution
+authorization, and all run-time compatibility and permission checks still apply.
+
 ### Native MCP inventory
 
 A harness that owns MCP connections outside OpenClaw's in-process MCP runtime

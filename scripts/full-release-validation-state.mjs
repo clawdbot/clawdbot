@@ -6,12 +6,14 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { buildFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
 import {
   affectedActiveRunIds,
   buildReleaseExecutionPlan,
@@ -22,6 +24,8 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
@@ -59,6 +63,14 @@ function positiveInteger(value, label) {
     throw new Error(`${label} must be a positive integer`);
   }
   return normalized;
+}
+
+function requiredBoolean(value, label) {
+  const normalized = requiredString(value, label);
+  if (normalized !== "true" && normalized !== "false") {
+    throw new Error(`${label} must be true or false`);
+  }
+  return normalized === "true";
 }
 
 async function abortableSleep(milliseconds, signal) {
@@ -411,8 +423,9 @@ async function validateReuse(plan, planInputs, signal) {
 }
 
 function writeArtifact(path, payload) {
+  const json = serializeReleaseArtifact(payload);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
+  writeFileSync(path, json);
 }
 
 function writeResult(path, payload) {
@@ -474,6 +487,9 @@ async function cancelAffectedChildren(children, blockers, cancelledRunIds, signa
 
 function readArtifact(path, label) {
   try {
+    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
+      throw new Error("release artifact exceeds the size limit");
+    }
     return JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     throw new Error(
@@ -487,6 +503,7 @@ function verifyMode() {
   const expected = {
     maxParentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
+    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
     rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
     targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
@@ -509,12 +526,39 @@ function verifyMode() {
 function planExpected() {
   return {
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
+    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
     rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
     targetSha: stringValue(process.env.TARGET_SHA),
     workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
     workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
   };
+}
+
+function candidateRequestFromInputs(planInputs) {
+  return buildFullReleaseCandidateRequest(planInputs.candidateRequestInput);
+}
+
+function candidateRequestFromEnvironment() {
+  return buildFullReleaseCandidateRequest({
+    repository: process.env.GITHUB_REPOSITORY,
+    targetSha: process.env.TARGET_SHA,
+    toolingSha: process.env.GITHUB_SHA,
+    releaseProfile: process.env.RELEASE_PROFILE,
+    releaseSoak: requiredBoolean(process.env.CANDIDATE_RELEASE_SOAK, "candidate release soak"),
+    upgradeSurvivorBaseline: process.env.CANDIDATE_UPGRADE_SURVIVOR_BASELINE,
+    upgradeSurvivorBaselines: process.env.CANDIDATE_UPGRADE_SURVIVOR_BASELINES,
+    upgradeSurvivorScenarios: process.env.CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS,
+    allowFrozenTargetScenarioOmissions: requiredBoolean(
+      process.env.CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS,
+      "candidate frozen-target policy",
+    ),
+    allowUnreleasedChangelog: requiredBoolean(
+      process.env.CANDIDATE_ALLOW_UNRELEASED_CHANGELOG,
+      "candidate changelog policy",
+    ),
+    sharedImagePolicy: process.env.CANDIDATE_SHARED_IMAGE_POLICY,
+  });
 }
 
 function evidenceReuseFromInputs(planInputs, sourceManifest = {}) {
@@ -534,6 +578,34 @@ function trustedWorkflowFromInputs(planInputs) {
   return planInputs.trustedWorkflow;
 }
 
+function candidateFromInputs(planInputs, gates) {
+  const candidate = planInputs.candidateEvidence ?? null;
+  const bindingRequired = gates.some(
+    (gate) =>
+      ["Acquire full release candidate", "Prepare shared release candidate"].includes(gate.name) &&
+      gate.required,
+  );
+  if (!bindingRequired) {
+    if (candidate !== null) {
+      throw new Error("release candidate evidence exists when candidate binding is not required");
+    }
+    return null;
+  }
+  if (
+    stringValue(planInputs.candidateAcquisitionResult ?? planInputs.candidateBindingResult) ===
+    "success"
+  ) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("successful release candidate binding omitted producer evidence");
+    }
+    return candidate;
+  }
+  if (candidate !== null) {
+    throw new Error("release candidate evidence exists without successful binding");
+  }
+  return null;
+}
+
 async function planMode() {
   const outputPath = requiredString(
     process.env.FULL_RELEASE_EXECUTION_PLAN_PATH,
@@ -543,10 +615,14 @@ async function planMode() {
   const currentAttempt = positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt");
 
   if (process.env.FULL_RELEASE_RESTORE_PLAN === "true") {
-    const restored = validateReleaseExecutionPlanArtifact(
-      readArtifact(outputPath, "execution plan"),
-      { ...expected, sourceParentRunAttempt: 1 },
-    );
+    const restoredPayload = readArtifact(outputPath, "execution plan");
+    const restored = validateReleaseExecutionPlanArtifact(restoredPayload, {
+      ...expected,
+      ...(restoredPayload.attemptEvidenceVersion !== undefined
+        ? { candidateRequest: candidateRequestFromEnvironment() }
+        : {}),
+      sourceParentRunAttempt: 1,
+    });
     writeExecutionPlan(outputPath, restored);
     return;
   }
@@ -555,14 +631,18 @@ async function planMode() {
   }
 
   const planInputs = parsePlanInputs(process.env.FULL_RELEASE_PLAN_INPUTS_JSON);
+  const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
+  const candidate = candidateFromInputs(planInputs, built.gates);
+  const candidateRequest = candidateRequestFromInputs(planInputs);
   const abortController = new AbortController();
   let finished = false;
   let plan = buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 1,
+    attemptEvidenceVersion,
+    candidate,
     children: built.children,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
-    expected: { ...expected, parentRunAttempt: currentAttempt },
+    expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
@@ -574,8 +654,9 @@ async function planMode() {
     }
     abortController.abort(new Error("execution plan collection cancelled"));
     plan = buildReleaseExecutionPlanArtifact({
-      attemptEvidenceVersion: 1,
+      attemptEvidenceVersion,
       blockers: plan.blockers,
+      candidate: plan.candidate,
       children: plan.children,
       errors: [
         ...plan.errors,
@@ -586,7 +667,11 @@ async function planMode() {
         },
       ],
       evidenceReuse: plan.evidenceReuse,
-      expected: { ...expected, parentRunAttempt: currentAttempt },
+      expected: {
+        ...expected,
+        candidateRequest: plan.candidateRequest,
+        parentRunAttempt: currentAttempt,
+      },
       gates: plan.gates,
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,
@@ -604,12 +689,13 @@ async function planMode() {
     return;
   }
   plan = buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 1,
+    attemptEvidenceVersion,
     blockers: reuse.blockers,
+    candidate,
     children: reuse.children,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
-    expected: { ...expected, parentRunAttempt: currentAttempt },
+    expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
@@ -626,6 +712,7 @@ async function collectMode(mode) {
   const expected = {
     parentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
+    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     targetSha: stringValue(process.env.TARGET_SHA),
     workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
     workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
@@ -640,6 +727,7 @@ async function collectMode(mode) {
     ),
     {
       parentRunId: expected.parentRunId,
+      repository: expected.repository,
       releaseProfile,
       rerunGroup,
       targetSha: expected.targetSha,
@@ -851,6 +939,7 @@ async function validateManifestMode() {
   const expected = {
     maxParentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
+    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
     rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
     targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
@@ -867,7 +956,7 @@ async function validateManifestMode() {
   );
   const executionPlan = validateReleaseExecutionPlanArtifact(executionPlanPayload, expected);
   const verified =
-    executionPlan.attemptEvidenceVersion === 1
+    executionPlan.attemptEvidenceVersion !== undefined
       ? verifyReleaseStateArtifacts(
           executionPlanPayload,
           readArtifact(
@@ -885,18 +974,18 @@ async function validateManifestMode() {
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
+    candidateBinding: executionPlan.candidate ?? null,
+    repository: expected.repository,
     runAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
     runId: executionPlan.parentRunId,
     workflowRef: executionPlan.workflowRef,
     workflowSha: executionPlan.workflowSha,
   });
   const expectedChildRunIds = Object.fromEntries(
-    ["normalCi", "npmTelegram", "pluginPrerelease", "productPerformance", "releaseChecks"].map(
-      (key) => {
-        const child = executionPlan.children.find((entry) => entry.key === key);
-        return [key, child?.selected ? stringValue(child.runId) : ""];
-      },
-    ),
+    executionPlan.children.map((child) => [
+      child.key,
+      child.selected ? stringValue(child.runId) : "",
+    ]),
   );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
     ? {
@@ -941,7 +1030,7 @@ async function validateManifestMode() {
       JSON.stringify(canonicalJson(expectedChildRunIds)) ||
     JSON.stringify(canonicalJson(manifest.evidenceReuse)) !==
       JSON.stringify(canonicalJson(expectedEvidenceReuse)) ||
-    (executionPlan.attemptEvidenceVersion === 1 &&
+    (executionPlan.attemptEvidenceVersion !== undefined &&
       JSON.stringify(canonicalJson(rawManifest.childEvidence)) !==
         JSON.stringify(canonicalJson(expectedChildEvidence))) ||
     rawManifest.executionPlanSha256 !== executionPlan.sha256 ||
@@ -949,6 +1038,7 @@ async function validateManifestMode() {
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
+  writeArtifact(manifestPath, rawManifest);
 }
 
 function selectMode() {
@@ -958,6 +1048,7 @@ function selectMode() {
       "current parent run attempt",
     ),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
+    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
     rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
     targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),

@@ -1,6 +1,5 @@
 // Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { spawn } from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,14 +28,6 @@ import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
 
-function createMockPipe() {
-  const pipe = new EventEmitter() as EventEmitter & {
-    setEncoding: (encoding: string) => void;
-  };
-  pipe.setEncoding = () => {};
-  return pipe;
-}
-
 afterEach(() => {
   for (const rootDir of tempRoots) {
     fs.rmSync(rootDir, { force: true, recursive: true });
@@ -45,8 +36,8 @@ afterEach(() => {
 });
 
 async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     try {
       // writeFileSync is not atomic for concurrent readers: the path can exist
       // before the payload is flushed. Wait for non-empty content, or pid
@@ -184,13 +175,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     await expect(
       runNodeStepsInParallel([
         {
-          label: "fail-fast",
-          args: ["--eval", "process.exit(2)"],
+          label: "slow-step",
+          args: ["--eval", "setTimeout(() => {}, 60_000)"],
           timeoutMs: slowStepTimeoutMs,
         },
         {
-          label: "slow-step",
-          args: ["--eval", "setTimeout(() => {}, 60_000)"],
+          label: "fail-fast",
+          args: ["--eval", "process.exit(2)"],
           timeoutMs: slowStepTimeoutMs,
         },
       ]),
@@ -263,6 +254,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const rootDir = makeTempDir(tempRoots, "openclaw-boundary-abort-drain-");
       const readyPath = path.join(rootDir, "descendant.ready");
       const drainedPath = path.join(rootDir, "descendant.drained");
+      const failPath = path.join(rootDir, "fail");
       const descendantScript = [
         "const fs = require('node:fs');",
         "process.on('SIGTERM', () => {",
@@ -271,7 +263,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         "    process.exit(0);",
         "  }, 50);",
         "});",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const parentScript = [
@@ -280,19 +272,16 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("\n");
-
-      // Fail the sibling only once the descendant installed its SIGTERM trap
-      // (signalled via readyPath) so the group abort cannot race its boot.
-      const failWhenDescendantReady = [
+      const failWhenRequested = [
         "const fs = require('node:fs');",
         "setInterval(() => {",
-        `  try { if (fs.readFileSync(${JSON.stringify(readyPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
+        `  if (fs.existsSync(${JSON.stringify(failPath)})) process.exit(2);`,
         "}, 25);",
       ].join("\n");
       const command = runNodeStepsInParallel([
         {
           label: "delayed-fail",
-          args: ["--eval", failWhenDescendantReady],
+          args: ["--eval", failWhenRequested],
           timeoutMs: 30_000,
         },
         {
@@ -302,39 +291,28 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           timeoutMs: 60_000,
         },
       ]);
-
-      await waitForFile(readyPath, 10_000);
+      const outcome = command.catch((error: unknown) => error);
+      const clock = vi.spyOn(Date, "now");
+      let descendantPid = 0;
+      try {
+        descendantPid = Number(await waitForFile(readyPath, 10_000));
+        // Hold the supervisor's grace clock, not the real child's cleanup timer.
+        // Separate force-kill tests cover expiry; this case proves graceful drain.
+        clock.mockReturnValue(Date.now());
+        fs.writeFileSync(failPath, "fail");
+        expect(await waitForFile(drainedPath, 10_000)).toBe("drained");
+      } finally {
+        clock.mockRestore();
+        fs.writeFileSync(failPath, "fail");
+        await outcome;
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+          await waitForDead(descendantPid, 2_000);
+        }
+      }
       await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
-      expect(await waitForFile(drainedPath, 10_000)).toBe("drained");
     },
   );
-
-  it("hard-kills timed out prep steps", async () => {
-    const signals: Array<NodeJS.Signals | number | undefined> = [];
-    const child = new EventEmitter() as EventEmitter & {
-      kill: (signal?: NodeJS.Signals | number) => boolean;
-      stderr: ReturnType<typeof createMockPipe>;
-      stdout: ReturnType<typeof createMockPipe>;
-    };
-    child.stdout = createMockPipe();
-    child.stderr = createMockPipe();
-    child.kill = (signal) => {
-      signals.push(signal);
-      return true;
-    };
-
-    await expect(
-      runNodeStep("hung-prep", ["--eval", "setTimeout(() => {}, 60_000)"], 5, {
-        spawnImpl(command: string, args: string[]) {
-          expect(command).toBe(process.execPath);
-          expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
-          return child;
-        },
-      }),
-    ).rejects.toThrow("hung-prep timed out after 5ms");
-
-    expect(signals).toEqual(["SIGKILL"]);
-  });
 
   it("clamps oversized prep step timers before scheduling", async () => {
     await expect(

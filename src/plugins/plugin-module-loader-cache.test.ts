@@ -567,10 +567,14 @@ describe("getCachedPluginModuleLoader", () => {
     expect(createJiti).not.toHaveBeenCalled();
     expect(fromSourceTransformer).not.toHaveBeenCalled();
     expectNativeOptions(nativeStub, "/repo/dist/extensions/demo/api.js");
-    const options = callArg(nativeStub, 0, 1, "native options") as {
-      aliasMap?: Record<string, string>;
-    };
-    expect(options.aliasMap?.["openclaw/plugin-sdk/core"]).toBe("/repo/dist/plugin-sdk/core.js");
+    const options = callArg(nativeStub, 0, 1, "native options") as NonNullable<
+      Parameters<typeof import("./native-module-require.js").tryNativeRequireJavaScriptModule>[1]
+    >;
+    const target =
+      typeof options.aliasMap === "function"
+        ? options.aliasMap("openclaw/plugin-sdk/core")
+        : options.aliasMap?.["openclaw/plugin-sdk/core"];
+    expect(target).toBe("/repo/dist/plugin-sdk/core.js");
     expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
       nativeHits: 1,
@@ -935,10 +939,10 @@ describe("plugin module cache generation cleanup", () => {
     { boundaryRoot: "/repo/dist/extensions", dependencyRoot: "/repo/dist" },
     { boundaryRoot: "/repo/installed/demo", dependencyRoot: "/repo/installed/demo" },
   ])("evicts native dependencies under $dependencyRoot for $boundaryRoot", async (params) => {
-    const clearNativeRequireJavaScriptModuleCache = vi.fn();
+    const clearPluginModuleRequireCache = vi.fn();
     vi.doMock("./native-module-require.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      clearNativeRequireJavaScriptModuleCache,
+      clearPluginModuleRequireCache,
     }));
     const { recordPluginModuleRoot } = await importPluginModuleLoader(
       "./plugin-module-loader-cache.js?scope=lifecycle-disposal",
@@ -949,7 +953,7 @@ describe("plugin module cache generation cleanup", () => {
 
     resetPluginCache();
 
-    expect(clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(modulePath, {
+    expect(clearPluginModuleRequireCache).toHaveBeenCalledWith(modulePath, {
       dependencyRoot: params.dependencyRoot,
     });
     expect(getPluginCache()).not.toBe(previous);

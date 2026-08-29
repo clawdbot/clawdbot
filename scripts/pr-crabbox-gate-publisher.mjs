@@ -183,7 +183,6 @@ function validateServicePrincipal(value) {
     principal.auth !== "bearer" ||
     principal.org !== ORGANIZATION ||
     principal.admin !== false ||
-    principal.owner === "unknown" ||
     (principal.tokenExpiresAt !== undefined && typeof principal.tokenExpiresAt !== "string")
   ) {
     throw new Error("Crabbox coordinator did not resolve the expected service principal");

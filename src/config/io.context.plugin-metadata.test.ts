@@ -3,6 +3,7 @@ import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
 } from "../plugins/candidate-install-owner.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -56,31 +57,33 @@ function workspaceSnapshot(
   plugins: PluginManifestRecord[],
   disabledIds: readonly string[] = [],
 ) {
+  const index: InstalledPluginIndex = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 1,
+    workspaceDir,
+    installRecords: {},
+    diagnostics: [],
+    plugins: plugins.map((plugin) => ({
+      pluginId: plugin.id,
+      source: plugin.source,
+      manifestPath: plugin.manifestPath,
+      manifestHash: "test",
+      rootDir: plugin.rootDir,
+      origin: plugin.origin,
+      enabled: !disabledIds.includes(plugin.id),
+      startup: { sidecar: false, memory: false, agentHarnesses: [] },
+      compat: [],
+    })),
+  };
   return restorePluginMetadataSnapshot({
     workspaceDir,
     policyHash: "test",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 1,
-      workspaceDir,
-      installRecords: {},
-      diagnostics: [],
-      plugins: plugins.map((plugin) => ({
-        pluginId: plugin.id,
-        source: plugin.source,
-        manifestPath: plugin.manifestPath,
-        manifestHash: "test",
-        rootDir: plugin.rootDir,
-        origin: plugin.origin,
-        enabled: !disabledIds.includes(plugin.id),
-        startup: { sidecar: false, memory: false, agentHarnesses: [] },
-        compat: [],
-      })),
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -198,7 +201,10 @@ describe("config IO plugin metadata snapshots", () => {
       "primary",
       "research-chat-plugin",
     ]);
+    expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
+    expect(snapshot?.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
     expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
+    expect(structuredClone(snapshot?.manifestRegistry)).toEqual(mergedRegistry);
     expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(
       false,
     );
@@ -261,6 +267,12 @@ describe("config IO plugin metadata snapshots", () => {
       "shared",
       "secondary",
     ]);
+    expect(structuredClone(snapshot.manifestRegistry)).toEqual(snapshot.manifestRegistry);
+    expect(
+      structuredClone(
+        resolveConfigWidePluginManifestRegistry({ config: { agents }, env: {}, pluginIds: [] }),
+      ).plugins,
+    ).toEqual([]);
     expect(snapshot.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",

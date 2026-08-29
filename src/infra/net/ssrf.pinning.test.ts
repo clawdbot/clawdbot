@@ -1,6 +1,8 @@
 // SSRF pinning tests cover DNS pinning behavior, blocked DNS results, hostname
 // allowlists, and IPv4/IPv6 address ordering.
+import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createPinnedLookup,
   type LookupFn,
@@ -14,6 +16,48 @@ function createPublicLookupMock(): LookupFn {
 }
 
 describe("ssrf pinning", () => {
+  it.each(["success", "failure", "cancel"] as const)(
+    "releases the DNS abort listener after %s without changing errors",
+    async (outcome) => {
+      const caller = new AbortController();
+      const dns = createDeferredCore<Awaited<ReturnType<LookupFn>>>();
+      const lookupFn = vi.fn(() => dns.promise);
+      const reason = new Error("DNS lifecycle stopped");
+      const result = resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn,
+        signal: caller.signal,
+      });
+      const settled = result.catch((error: unknown) => error);
+      try {
+        expect(lookupFn).toHaveBeenCalledOnce();
+        if (outcome === "success") {
+          dns.resolve([{ address: "93.184.216.34", family: 4 }]);
+          await expect(result).resolves.toMatchObject({ addresses: ["93.184.216.34"] });
+        } else {
+          if (outcome === "cancel") {
+            caller.abort(reason);
+          } else {
+            dns.reject(reason);
+          }
+          expect(
+            await Promise.race([
+              settled,
+              new Promise((resolve) => {
+                setImmediate(() => resolve("DNS still pending"));
+              }),
+            ]),
+          ).toBe(reason);
+        }
+        expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+      } finally {
+        caller.abort(reason);
+        // Cancellation must still observe a later DNS rejection.
+        dns.reject(reason);
+        await settled;
+      }
+    },
+  );
+
   it("pins resolved addresses for the target hostname", async () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },

@@ -43,6 +43,13 @@ supported-upgrade proof or move it to `removal-pending` with a documented
 blocker. `removal-pending` records do not fail the date guard, but remain in the
 explicit review queue until their upgrade conditions are met.
 
+A maintainer-approved doctor deadline renewal preserves the original date as
+`previousRemoveAfter`, records the approval date as `renewedAt`, and sets a new
+`removeAfter` no more than three months later. Renewal changes review timing
+only; it does not change runtime compatibility, config handling, migration
+behavior, or lifecycle status. On August 29, 2026, all 44 current doctor
+records were renewed through November 29, 2026.
+
 Release sweeps should check both registries. Do not delete a doctor
 migration just because the matching runtime or config compatibility record
 expired; first verify there is no supported upgrade path that still needs

@@ -332,6 +332,7 @@ export {
   AuditListParamsSchema,
   AuditListResultSchema,
   GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
   UserProfileSchema,

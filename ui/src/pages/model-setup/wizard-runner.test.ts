@@ -1,8 +1,85 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
 describe("ModelSetupWizardRunner", () => {
+  it.each(["cancelled", "error", "done"])(
+    "binds cancellation to the original client and fences late %s after repeated resets",
+    async (terminal) => {
+      const cancellation = createDeferred<unknown>();
+      const lateNext = createDeferred<unknown>();
+      let firstNext = true;
+      const originalRequest = vi.fn(async (method: string) => {
+        if (method === "openclaw.setup.auth.start") {
+          return { done: false, status: "running" };
+        }
+        if (method === "wizard.cancel") {
+          return await cancellation.promise;
+        }
+        if (firstNext) {
+          firstNext = false;
+          return { done: false, status: "running", step: { id: "login", type: "text" } };
+        }
+        return await lateNext.promise;
+      });
+      const replacementRequest = vi.fn(async (method: string) => {
+        if (method === "openclaw.setup.auth.start") {
+          return { done: false, status: "running" };
+        }
+        return { done: false, status: "running", step: { id: "replacement", type: "text" } };
+      });
+      let client = { request: originalRequest } as unknown as GatewayBrowserClient;
+      const originalTerminal = vi.fn();
+      const replacementTerminal = vi.fn();
+      const runner = new ModelSetupWizardRunner({
+        getClient: () => client,
+        getAgentId: () => null,
+        onChange: () => undefined,
+        onStart: vi.fn().mockReturnValueOnce(originalTerminal).mockReturnValue(replacementTerminal),
+        requestFailedMessage: () => "failed",
+        cancelledMessage: () => "cancelled",
+        sessionExpiredMessage: () => "expired",
+      });
+      await runner.start("original");
+      const next = runner.answer("answer");
+      client = { request: replacementRequest } as unknown as GatewayBrowserClient;
+      const cancelled = runner.cancel({ settleActiveRequest: true });
+      await runner.cancel();
+      runner.close();
+      await runner.start("replacement");
+      expect(
+        originalRequest.mock.calls.filter(([method]) => method === "wizard.cancel"),
+      ).toHaveLength(1);
+      expect(
+        replacementRequest.mock.calls.filter(([method]) => method === "wizard.cancel"),
+      ).toHaveLength(0);
+      cancellation.resolve({ status: "running" });
+      await cancelled;
+      expect(originalTerminal).not.toHaveBeenCalled();
+      lateNext.resolve({
+        done: true,
+        status: terminal,
+        modelActivation: { modelRef: "provider/original" },
+      });
+      await expect(next).resolves.toBeNull();
+      if (terminal !== "done") {
+        expect(originalTerminal).toHaveBeenCalledOnce();
+        expect(originalTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ status: terminal }),
+        );
+      } else {
+        expect(originalTerminal).not.toHaveBeenCalled();
+      }
+      expect(replacementTerminal).not.toHaveBeenCalled();
+      expect(runner.state).toMatchObject({
+        phase: "step",
+        authChoice: "replacement",
+        step: { id: "replacement" },
+      });
+    },
+  );
+
   it("starts, advances an unbounded note step, and guards duplicate answers", async () => {
     let resolveDone: ((value: unknown) => void) | null = null;
     const request = vi.fn((method: string, _params?: unknown, _options?: unknown) => {
@@ -185,10 +262,12 @@ describe("ModelSetupWizardRunner", () => {
         },
       );
       const client = { request } as unknown as GatewayBrowserClient;
+      const terminalResult = vi.fn();
       const runner = new ModelSetupWizardRunner({
         getClient: () => client,
         getAgentId: () => null,
         onChange: () => undefined,
+        onStart: () => terminalResult,
         requestFailedMessage: () => "failed",
         cancelledMessage: () => "cancelled",
         sessionExpiredMessage: () => "expired",
@@ -206,6 +285,7 @@ describe("ModelSetupWizardRunner", () => {
       await firstStart;
 
       expect(runningSession).toBeNull();
+      expect(terminalResult).toHaveBeenCalledWith({ done: true, status: "cancelled" });
       expect(request).toHaveBeenCalledWith(
         "wizard.cancel",
         { sessionId: firstSessionId },
@@ -217,13 +297,20 @@ describe("ModelSetupWizardRunner", () => {
   );
 
   it.each([
-    ["openclaw.setup.auth.start", false],
-    ["openclaw.setup.prepare.start", false],
-    ["openclaw.setup.auth.start", true],
-    ["openclaw.setup.prepare.start", true],
+    ["openclaw.setup.auth.start", "running"],
+    ["openclaw.setup.prepare.start", "running"],
+    ["openclaw.setup.auth.start", "done"],
+    ["openclaw.setup.prepare.start", "done"],
+    ["openclaw.setup.auth.start", "error"],
+    ["openclaw.setup.prepare.start", "error"],
+    ["openclaw.setup.auth.start", "cancelled"],
+    ["openclaw.setup.prepare.start", "cancelled"],
+    ["openclaw.setup.auth.start", "busy"],
+    ["openclaw.setup.prepare.start", "busy"],
   ] as const)(
-    "retains late %s responses after the local deadline (terminal: %s)",
-    async (method, terminal) => {
+    "retains late %s responses after the local deadline (status: %s)",
+    async (method, status) => {
+      const terminal = status !== "running";
       vi.useFakeTimers();
       try {
         let runningSession: string | null = null;
@@ -256,10 +343,20 @@ describe("ModelSetupWizardRunner", () => {
                     );
                   }
                   resolveFirstStart = () => {
+                    if (status === "busy") {
+                      reject(
+                        new GatewayRequestError({
+                          code: "UNAVAILABLE",
+                          message: "Setup busy",
+                          details: { code: "SETUP_ADMISSION_BUSY" },
+                        }),
+                      );
+                      return;
+                    }
                     if (!terminal) {
                       runningSession = sessionId;
                     }
-                    resolve({ sessionId, done: terminal, status: terminal ? "done" : "running" });
+                    resolve({ sessionId, done: terminal, status });
                   };
                 });
               }
@@ -279,10 +376,12 @@ describe("ModelSetupWizardRunner", () => {
           },
         );
         const client = { request } as unknown as GatewayBrowserClient;
+        const terminalResult = vi.fn();
         const runner = new ModelSetupWizardRunner({
           getClient: () => client,
           getAgentId: () => null,
           onChange: () => undefined,
+          onStart: () => terminalResult,
           requestFailedMessage: () => "failed",
           cancelledMessage: () => "cancelled",
           sessionExpiredMessage: () => "expired",
@@ -299,6 +398,7 @@ describe("ModelSetupWizardRunner", () => {
         resolveFirstStart();
         await vi.runAllTimersAsync();
         expect(runningSession).toBeNull();
+        expect(terminalResult).toHaveBeenCalledTimes(status === "done" ? 0 : 1);
         const cancelCalls = request.mock.calls.filter(
           ([requestMethod]) => requestMethod === "wizard.cancel",
         );
@@ -383,37 +483,75 @@ describe("ModelSetupWizardRunner", () => {
     expect(runner.state).toMatchObject({ phase: "step", authChoice: "replacement" });
   });
 
-  it.each(["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const)(
-    "does not cancel a terminal %s result after its wizard closes",
-    async (method) => {
+  it.each(
+    (["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const).flatMap((method) =>
+      ["done", "busy"].flatMap((status) =>
+        ["open", "closed"].map((lifecycle) => ({ method, status, lifecycle })),
+      ),
+    ),
+  )(
+    "does not cancel a terminal $method $status result ($lifecycle presentation)",
+    async ({ method, status, lifecycle }) => {
       let resolveStart: () => void = () => {
         throw new Error("the setup request did not start");
       };
       const request = vi.fn(async (requestMethod: string) => {
         if (requestMethod === method) {
-          return await new Promise((resolve) => {
-            resolveStart = () => resolve({ done: true, status: "done" });
+          return await new Promise((resolve, reject) => {
+            resolveStart = () => {
+              if (status === "busy") {
+                reject(
+                  new GatewayRequestError({
+                    code: "UNAVAILABLE",
+                    message: "Setup busy",
+                    details: { code: "SETUP_ADMISSION_BUSY" },
+                  }),
+                );
+              } else {
+                resolve({
+                  done: true,
+                  status: "done",
+                  modelActivation: { modelRef: "provider/late" },
+                });
+              }
+            };
           });
         }
         throw new Error(`unexpected request ${requestMethod}`);
       });
       const client = { request } as unknown as GatewayBrowserClient;
+      const terminalResult = vi.fn();
       const runner = new ModelSetupWizardRunner({
         getClient: () => client,
         getAgentId: () => null,
         onChange: () => undefined,
+        onStart: () => terminalResult,
         requestFailedMessage: () => "failed",
         cancelledMessage: () => "cancelled",
         sessionExpiredMessage: () => "expired",
       });
 
       const start = runner.start("original", method);
-      runner.close();
+      if (lifecycle === "closed") {
+        runner.close();
+      }
       resolveStart();
       await start;
+      await runner.cancel();
 
       expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual([method]);
       expect(runner.state).toEqual({ phase: "idle" });
+      if (status === "busy") {
+        expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ done: true, status: "error", error: "Setup busy" }),
+        );
+      } else if (lifecycle === "open") {
+        expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ done: true, status: "done" }),
+        );
+      } else {
+        expect(terminalResult).not.toHaveBeenCalled();
+      }
     },
   );
 

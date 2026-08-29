@@ -10,6 +10,7 @@ import {
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import { runLinePushWithRetries } from "./send-retry.js";
 
 describe("deliverLineAutoReply HTTP recovery", () => {
   const createHttpError = (status: number) =>
@@ -313,6 +314,45 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       }),
     ).rejects.toBe(quotaError);
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recover text after an ambiguous push ends in a rejection", async () => {
+    vi.useFakeTimers();
+    let ambiguousFailure: unknown;
+    try {
+      let attempt = 0;
+      const failurePromise = runLinePushWithRetries(async () => {
+        attempt += 1;
+        throw attempt === 1
+          ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
+          : createHttpError(400);
+      }, "line:push").catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      ambiguousFailure = await failurePromise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
+    const pushMessagesLine = vi.fn(async () => {
+      throw ambiguousFailure;
+    });
+    const { deps } = createDeps({
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        replyToken: undefined,
+        payload: { text: "do not duplicate", channelData: { line: lineData } },
+        lineData,
+        deps,
+      }),
+    ).rejects.toBe(ambiguousFailure);
+    expect(pushMessagesLine).toHaveBeenCalledOnce();
   });
 
   it("recovers quick replies from a rejected rich-only push", async () => {

@@ -14,9 +14,8 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
-import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
+import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -262,6 +261,20 @@ async function collectPluginDoctorStateMigrationPlans(params: {
           env: params.env,
           config,
           repairAuthority: params.repairAuthority,
+          // Detection runs before exclusive state ownership, so it is handed
+          // inspection-only ingress access and no mutation gate. Untrusted owners get
+          // no ingress lane at all: Doctor must not widen the runtime's durable-store
+          // trust gate.
+          // `?? true` keeps older or hand-built hosts working; a real registry record
+          // always carries the decision explicitly.
+          ...((entry.trustedForDurableStores ?? true)
+            ? {
+                channelIngress: {
+                  channelIds: entry.channelIds ?? [],
+                  stateDir: params.stateDir,
+                },
+              }
+            : {}),
         }),
       });
     } catch (err) {
@@ -271,6 +284,8 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     if (detected?.preview.length) {
       plans.push({
         pluginId: entry.pluginId,
+        channelIds: entry.channelIds,
+        trustedForDurableStores: entry.trustedForDurableStores,
         migration: entry.migration,
         preview: detected.preview,
       });
@@ -955,7 +970,27 @@ async function migratePluginDoctorStatePlans(params: {
     return { changes, warnings };
   }
 
+  // Mutable ingress access lives and dies with this call. Handles a migration keeps
+  // past its own return re-check this gate and fail rather than writing outside the
+  // section that owns the state.
+  let ingressMutationActive = false;
+  const assertIngressMutationCurrent = () => {
+    if (!ingressMutationActive) {
+      throw new Error("Plugin Doctor ingress queue access has expired.");
+    }
+    params.repairAuthority?.assertCurrent();
+  };
+
   const migrate = async () => {
+    ingressMutationActive = true;
+    try {
+      return await migrateWithIngressAuthority();
+    } finally {
+      ingressMutationActive = false;
+    }
+  };
+
+  const migrateWithIngressAuthority = async () => {
     for (const plan of params.plans) {
       try {
         params.repairAuthority?.assertCurrent();
@@ -969,6 +1004,15 @@ async function migratePluginDoctorStatePlans(params: {
             env: params.env,
             config: params.config,
             repairAuthority: params.repairAuthority,
+            ...((plan.trustedForDurableStores ?? true)
+              ? {
+                  channelIngress: {
+                    channelIds: plan.channelIds ?? [],
+                    stateDir: params.stateDir,
+                    mutation: { assertCurrent: assertIngressMutationCurrent },
+                  },
+                }
+              : {}),
           }),
         });
         params.repairAuthority?.assertCurrent();
@@ -1517,30 +1561,18 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
-  const configuredAgentDatabaseTargets = resolveSessionStoreTargets(
-    params.cfg,
-    { allAgents: true },
-    { env },
-  ).map((target) => {
-    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-      agentId: target.agentId,
-      defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
-        ? target.agentId
-        : resolveSessionStoreCompatibilityAgentId(params.cfg),
-      env,
-    });
-    return { agentId: resolved.agentId ?? target.agentId, path: resolved.path };
-  });
-  const transcriptDirectives = migrateHistoricalTranscriptDirectives({
-    configuredAgentDatabaseTargets,
+  const agentMigrationOptions = {
+    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  };
+  // Media owns the historical cutover and stopped-writer lease before current consumers.
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
-      ? migrateLegacyMediaPersistence({
-          configuredAgentDatabaseTargets,
-          env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-        })
+      ? await migrateLegacyMediaPersistence(agentMigrationOptions)
+      : { changes: [], warnings: [] };
+  const transcriptDirectives =
+    mediaPersistence.warnings.length === 0
+      ? migrateHistoricalTranscriptDirectives(agentMigrationOptions)
       : { changes: [], warnings: [] };
   if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
     return {

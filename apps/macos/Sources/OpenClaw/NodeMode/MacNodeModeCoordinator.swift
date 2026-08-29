@@ -204,6 +204,11 @@ final class MacNodeModeCoordinator: NSObject {
             object: nil)
         self.notificationCenter.addObserver(
             self,
+            selector: #selector(self.nodeHostManifestChanged),
+            name: .openclawNodeHostManifestChanged,
+            object: nil)
+        self.notificationCenter.addObserver(
+            self,
             selector: #selector(self.nodeHostWorkerFailed),
             name: .openclawNodeHostWorkerFailed,
             object: nil)
@@ -222,6 +227,12 @@ final class MacNodeModeCoordinator: NSObject {
             selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawCuaDriverAvailabilityChanged,
             object: nil)
+    }
+
+    @objc private nonisolated func nodeHostManifestChanged() {
+        Task { @MainActor [weak self] in
+            self?.enqueueRouteInvalidation(mode: .reconnectRefresh)
+        }
     }
 
     deinit {
@@ -662,7 +673,7 @@ final class MacNodeModeCoordinator: NSObject {
                     installedRoute,
                     authorityGeneration: attempt.routeAuthorityGeneration) ?? true
                 guard workerRouteInstalled else { return }
-                await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
+                await self.nodeHostWorker?.gatewayConnected(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 await self.channelStatus.record(.connected(
                     workerUnavailableReason: attempt.workerUnavailable?.reason,

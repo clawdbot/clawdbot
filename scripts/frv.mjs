@@ -10,6 +10,7 @@ import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseChildSpec,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
@@ -127,6 +128,18 @@ function execGh(args, options = {}) {
   });
 }
 
+function verifierEvidenceNeedsRefresh(error) {
+  if (!error || typeof error !== "object" || typeof error.stdout !== "string") {
+    return false;
+  }
+  try {
+    const failure = JSON.parse(error.stdout);
+    return failure?.valid === false && failure.refreshable === true;
+  } catch {
+    return false;
+  }
+}
+
 async function sleep(milliseconds) {
   await new Promise((resolvePromise) => {
     setTimeout(resolvePromise, milliseconds);
@@ -193,7 +206,7 @@ async function downloadExecutionPlan(repository, runId) {
     }
     const path = join(directory, PLAN_FILENAME);
     const size = statSync(path, { throwIfNoEntry: false })?.size ?? 0;
-    if (size < 1 || size > 128 * 1024) {
+    if (size < 1 || size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error("immutable execution plan artifact is missing or oversized");
     }
     return JSON.parse(readFileSync(path, "utf8"));
@@ -393,11 +406,46 @@ export function createClient(repository, dependencies = {}) {
           : ["api", `repos/${repository}/${path}`],
       ));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
+  const rerun = (runId, action) =>
+    mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
   const execute = dependencies.execCommand ?? execCommand;
   const attemptJobs =
     dependencies.getAttemptJobs ??
     ((runId, runAttempt) => ghAttemptJobs(repository, runId, runAttempt));
-  const client = {
+  const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
+    const sourceSha = plan.trustedWorkflow?.sha;
+    return execute(
+      process.execPath,
+      [
+        "scripts/release-ci-summary.mjs",
+        "--validate-run",
+        runId,
+        "--repo",
+        repository,
+        "--trusted-workflow-ref",
+        plan.trustedWorkflow?.ref ?? "main",
+        "--trusted-workflow-full-ref",
+        plan.trustedWorkflow?.fullRef ?? "refs/heads/main",
+        "--trusted-workflow-sha",
+        sourceSha,
+        "--verifier-source-sha",
+        sourceSha,
+        "--verifier-source-file",
+        "scripts/release-ci-summary.mjs",
+        ...(expectedRunAttempts === undefined
+          ? []
+          : ["--expected-run-attempts-json", JSON.stringify(expectedRunAttempts)]),
+        "--json",
+      ],
+      {
+        timeoutMs: remainingOperationTime(
+          operationDeadline ?? createOperationDeadline(),
+          "FRV verification",
+        ),
+      },
+    );
+  };
+  return {
     repository,
     getAttemptJobs(runId, runAttempt) {
       return attemptJobs(runId, runAttempt);
@@ -423,54 +471,49 @@ export function createClient(repository, dependencies = {}) {
     getJobLog(jobId) {
       return apiText(`actions/jobs/${jobId}/logs`);
     },
-    async rerunFailed(runId) {
-      await mutate(["run", "rerun", runId, "--repo", repository, "--failed"]);
-    },
-    async rerunParent(runId) {
-      await mutate(["run", "rerun", runId, "--repo", repository]);
-      return runId;
-    },
-    async verify(runId, plan, operationDeadline = createOperationDeadline()) {
-      const sourceSha = plan.trustedWorkflow?.sha;
-      return execute(
-        process.execPath,
-        [
-          "scripts/release-ci-summary.mjs",
-          "--validate-run",
-          runId,
-          "--repo",
-          repository,
-          "--trusted-workflow-ref",
-          plan.trustedWorkflow?.ref ?? "main",
-          "--trusted-workflow-full-ref",
-          plan.trustedWorkflow?.fullRef ?? "refs/heads/main",
-          "--trusted-workflow-sha",
-          sourceSha,
-          "--verifier-source-sha",
-          sourceSha,
-          "--verifier-source-file",
-          "scripts/release-ci-summary.mjs",
-          "--json",
-        ],
-        {
-          timeoutMs: remainingOperationTime(operationDeadline, "FRV verification"),
-        },
-      );
+    rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
+    rerunParent: (runId) => rerun(runId, "rerun"),
+    verify,
+    async verifySeal(runId, plan, operationDeadline, expectedRunAttempts) {
+      try {
+        await verify(runId, plan, operationDeadline, expectedRunAttempts);
+        return true;
+      } catch (error) {
+        if (verifierEvidenceNeedsRefresh(error)) {
+          return false;
+        }
+        throw error;
+      }
     },
   };
-  return client;
 }
 
-async function waitForTerminal(runIds, client, operationDeadline, minimumAttempts = new Map()) {
-  validateOperationDeadline(operationDeadline);
+function controllerRunAttempt(run, sourceAttempt, expectedAttempt) {
+  const runId = String(run.id);
+  const observedAttempt = positiveInteger(run.run_attempt, `${runId} run attempt`);
+  switch (true) {
+    case observedAttempt < sourceAttempt:
+      throw new Error(`rerun source ${runId} attempt regressed`);
+    case observedAttempt > expectedAttempt:
+      throw new Error(`controller-owned run ${runId} advanced past attempt ${expectedAttempt}`);
+    default:
+      return observedAttempt;
+  }
+}
+
+async function waitForTerminal(runIds, client, operationDeadline, expectedAttempts = new Map()) {
   const pollMs = configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS);
   while (Date.now() < operationDeadline) {
     const runs = await Promise.all(runIds.map((runId) => client.getRun(runId)));
-    const ready = runs.every(
-      (run) =>
-        run.status === "completed" &&
-        Number(run.run_attempt) >= Number(minimumAttempts.get(String(run.id)) ?? 1),
-    );
+    const ready = runs.every((run) => {
+      const runId = String(run.id);
+      const expectedAttempt = expectedAttempts.get(runId);
+      if (expectedAttempt === undefined) {
+        return run.status === "completed";
+      }
+      const observedAttempt = controllerRunAttempt(run, expectedAttempt - 1, expectedAttempt);
+      return run.status === "completed" && observedAttempt === expectedAttempt;
+    });
     if (ready) {
       return runs;
     }
@@ -479,106 +522,128 @@ async function waitForTerminal(runIds, client, operationDeadline, minimumAttempt
   throw new Error(`timed out waiting for runs: ${runIds.join(", ")}`);
 }
 
-async function reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline) {
-  validateOperationDeadline(operationDeadline);
-  const reconcileStartedAt = Date.now();
-  const reconcileTimeoutMs = configuredTimeout(
-    "OPENCLAW_FRV_RECONCILE_TIMEOUT_MS",
-    DEFAULT_RECONCILE_TIMEOUT_MS,
+async function reconcileAttemptStarts(
+  minimumAttempts,
+  priorRuns,
+  client,
+  mutationResults,
+  operationDeadline,
+) {
+  const reconcileDeadline = Math.min(
+    operationDeadline,
+    Date.now() +
+      configuredTimeout("OPENCLAW_FRV_RECONCILE_TIMEOUT_MS", DEFAULT_RECONCILE_TIMEOUT_MS),
   );
-  const pending = new Set(minimumAttempts.keys());
-  while (
-    pending.size > 0 &&
-    Date.now() < operationDeadline &&
-    Date.now() - reconcileStartedAt < reconcileTimeoutMs
-  ) {
+  const hardFailures = mutationResults.filter(
+    (result) =>
+      result.status === "rejected" && classifyReleaseGhTransportError(result.reason) === "hard",
+  );
+  const pending = new Set(
+    [...minimumAttempts.keys()].filter(
+      (_, index) => !hardFailures.includes(mutationResults[index]),
+    ),
+  );
+  while (pending.size > 0 && Date.now() < reconcileDeadline) {
     const runs = await Promise.all([...pending].map((runId) => client.getRun(runId)));
     for (const run of runs) {
       const runId = String(run.id);
-      if (Number(run.run_attempt) >= minimumAttempts.get(runId)) {
+      const priorRun = priorRuns.get(runId);
+      if (JSON.stringify(runIdentity(run)) !== JSON.stringify(runIdentity(priorRun))) {
+        throw new Error(`rerun source ${runId} changed during mutation reconciliation`);
+      }
+      const sourceAttempt = positiveInteger(priorRun.run_attempt, `${runId} source run attempt`);
+      const expectedAttempt = minimumAttempts.get(runId);
+      const observedAttempt = controllerRunAttempt(run, sourceAttempt, expectedAttempt);
+      if (observedAttempt === expectedAttempt) {
         pending.delete(runId);
       }
     }
     if (pending.size > 0) {
-      const remainingReconcileTime = reconcileTimeoutMs - (Date.now() - reconcileStartedAt);
+      const remainingReconcileTime = reconcileDeadline - Date.now();
       if (remainingReconcileTime < 1) {
         break;
       }
       await sleep(
         Math.min(
           configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS),
-          remainingOperationTime(operationDeadline),
           remainingReconcileTime,
         ),
       );
     }
   }
-  remainingOperationTime(operationDeadline);
   if (pending.size > 0) {
-    const failures = mutationResults
-      .map((result, index) =>
-        result.status === "rejected"
-          ? `${[...minimumAttempts.keys()][index]}: ${
-              result.reason instanceof Error ? result.reason.message : String(result.reason)
-            }`
-          : "",
-      )
-      .filter(Boolean);
+    const runIds = [...minimumAttempts.keys()];
+    const failures = [...pending].flatMap((runId) => {
+      const result = mutationResults[runIds.indexOf(runId)];
+      if (result?.status !== "rejected") {
+        return [];
+      }
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return [`${runId}: ${reason}`];
+    });
     throw new Error(
       `rerun mutation did not produce an observable newer attempt for ${[...pending].join(
         ", ",
       )}${failures.length > 0 ? ` (${failures.join("; ")})` : ""}`,
     );
   }
+  if (hardFailures[0]) {
+    throw hardFailures[0].reason;
+  }
+  remainingOperationTime(operationDeadline);
 }
 
-function exactTerminalRunState(run, runId) {
-  const state = {
+function runIdentity(run) {
+  return {
+    actor: String(run.actor?.login ?? ""),
     displayTitle: String(run.display_title ?? ""),
-    conclusion: run.conclusion ?? null,
     event: String(run.event ?? ""),
     headBranch: String(run.head_branch ?? ""),
     headSha: String(run.head_sha ?? ""),
     id: String(run.id),
     path: String(run.path ?? ""),
     repository: String(run.repository?.full_name ?? run.repository ?? ""),
-    runAttempt: positiveInteger(run.run_attempt, `${runId} run attempt`),
-    status: String(run.status ?? ""),
-    triggeringActor: String(run.triggering_actor?.login ?? ""),
   };
-  if (state.id !== runId || state.status !== "completed") {
+}
+
+function exactTerminalRunState(run, runId) {
+  const state = {
+    ...runIdentity(run),
+    conclusion: run.conclusion ?? null,
+    runAttempt: positiveInteger(run.run_attempt, `${runId} run attempt`),
+  };
+  if (state.id !== runId || String(run.status ?? "") !== "completed") {
     throw new Error(`rerun source ${runId} is no longer the exact terminal run`);
   }
   return state;
 }
 
-async function rerunWithTransientRetry(runId, priorRun, mutation, client, operationDeadline) {
-  const prior = exactTerminalRunState(priorRun, runId);
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    remainingOperationTime(operationDeadline);
-    try {
-      await mutation(runId);
-      return;
-    } catch (error) {
-      if (classifyReleaseGhTransportError(error) !== "transient") {
-        throw error;
-      }
-      const observedRun = await client.getRun(runId);
-      const observedAttempt = positiveInteger(observedRun.run_attempt, `${runId} run attempt`);
-      if (observedAttempt > prior.runAttempt) {
-        return;
-      }
-      const observed = exactTerminalRunState(observedRun, runId);
-      if (JSON.stringify(observed) !== JSON.stringify(prior)) {
-        throw new Error(`rerun source ${runId} changed after a rejected mutation`, {
-          cause: error,
-        });
-      }
-      if (attempt === 2) {
-        throw error;
-      }
+async function freezeVerificationAttempts(plan, rootRunId, status, client) {
+  const expectedRunAttempts = new Map(
+    status.children.map((child) => [child.runId, child.effectiveRunAttempt]),
+  );
+  // Reuse verification rereads its root and selected parent manifests too.
+  const parentRunIds = new Set([
+    rootRunId,
+    ...(plan.evidenceReuse?.requested
+      ? [plan.evidenceReuse.rootRunId, plan.evidenceReuse.selectedRunId]
+      : []),
+  ]);
+  for (const parentRunId of parentRunIds) {
+    const run = await client.getRun(parentRunId);
+    if (String(run.id) !== parentRunId) {
+      throw new Error(`verification parent run identity changed: ${parentRunId}`);
     }
+    const terminal = parentRunId === rootRunId ? exactTerminalRunState(run, rootRunId) : undefined;
+    if (terminal && terminal.conclusion !== "success") {
+      throw new Error(`final parent rerun failed: ${rootRunId}`);
+    }
+    expectedRunAttempts.set(
+      parentRunId,
+      terminal?.runAttempt ?? positiveInteger(run.run_attempt, `${parentRunId} run attempt`),
+    );
   }
+  return Object.fromEntries(expectedRunAttempts.entries());
 }
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
@@ -586,6 +651,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     options.operationDeadline === undefined
       ? createOperationDeadline()
       : validateOperationDeadline(options.operationDeadline);
+  const ownedAttempts = new Map();
   await preflightContinuation(plan, rootRunId, client, client.repository ?? DEFAULT_REPOSITORY);
   let status = await inspectContinuation(plan, client);
   if (status.active.length > 0) {
@@ -618,18 +684,18 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     const minimumAttempts = new Map(
       status.failed.map((child) => [child.runId, child.effectiveRunAttempt + 1]),
     );
+    remainingOperationTime(operationDeadline);
     const mutationResults = await Promise.allSettled(
-      status.failed.map((child) =>
-        rerunWithTransientRetry(
-          child.runId,
-          priorRuns.get(child.runId),
-          client.rerunFailed.bind(client),
-          client,
-          operationDeadline,
-        ),
-      ),
+      status.failed.map((child) => client.rerunFailed(child.runId)),
     );
-    await reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline);
+    await reconcileAttemptStarts(
+      minimumAttempts,
+      priorRuns,
+      client,
+      mutationResults,
+      operationDeadline,
+    );
+    minimumAttempts.forEach((attempt, runId) => ownedAttempts.set(runId, attempt));
     await waitForTerminal(
       status.failed.map((child) => child.runId),
       client,
@@ -637,6 +703,16 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       minimumAttempts,
     );
     status = await inspectContinuation(plan, client);
+    for (const child of status.children) {
+      const expectedAttempt = ownedAttempts.get(child.runId);
+      if (expectedAttempt !== undefined) {
+        controllerRunAttempt(
+          { id: child.runId, run_attempt: child.effectiveRunAttempt },
+          expectedAttempt,
+          expectedAttempt,
+        );
+      }
+    }
   }
   if (status.active.length > 0 || status.failed.length > 0) {
     throw new Error("failed child reruns did not produce a complete green composite");
@@ -651,32 +727,52 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   if (parent.status !== "completed") {
     await waitForTerminal([rootRunId], client, operationDeadline);
   }
-  const completedParent = await client.getRun(rootRunId);
-  let parentReran = false;
-  if (completedParent.conclusion !== "success" || childEvidenceAdvanced) {
-    const minimumAttempts = new Map([
-      [rootRunId, positiveInteger(completedParent.run_attempt, "parent run attempt") + 1],
-    ]);
-    const mutationResults = await Promise.allSettled([
-      rerunWithTransientRetry(
-        rootRunId,
-        completedParent,
-        client.rerunParent.bind(client),
-        client,
-        operationDeadline,
-      ),
-    ]);
-    await reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline);
-    parentReran = true;
+  let completedParent = await client.getRun(rootRunId);
+  let verificationAttempts;
+  let parentSealed = false;
+  if (
+    completedParent.conclusion === "success" &&
+    childEvidenceAdvanced &&
+    client.verifySeal !== undefined
+  ) {
+    verificationAttempts = await freezeVerificationAttempts(plan, rootRunId, status, client);
+    parentSealed = await client.verifySeal(
+      rootRunId,
+      plan,
+      operationDeadline,
+      verificationAttempts,
+    );
+    if (!parentSealed) {
+      const verifiedParent = exactTerminalRunState(completedParent, rootRunId);
+      completedParent = await client.getRun(rootRunId);
+      const currentParent = exactTerminalRunState(completedParent, rootRunId);
+      if (JSON.stringify(currentParent) !== JSON.stringify(verifiedParent)) {
+        throw new Error(`verification parent run changed before rerun dispatch: ${rootRunId}`);
+      }
+    }
+  }
+  if (!parentSealed && (completedParent.conclusion !== "success" || childEvidenceAdvanced)) {
+    const terminalParent = exactTerminalRunState(completedParent, rootRunId);
+    const minimumAttempts = new Map([[rootRunId, terminalParent.runAttempt + 1]]);
+    remainingOperationTime(operationDeadline);
+    const mutationResults = await Promise.allSettled([client.rerunParent(rootRunId)]);
+    await reconcileAttemptStarts(
+      minimumAttempts,
+      new Map([[rootRunId, completedParent]]),
+      client,
+      mutationResults,
+      operationDeadline,
+    );
+    ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
   }
-  const finalParent = await client.getRun(rootRunId);
-  if (finalParent.conclusion !== "success") {
-    throw new Error(`final parent rerun failed: ${rootRunId}`);
+  if (!parentSealed) {
+    await waitForTerminal([...ownedAttempts.keys()], client, operationDeadline, ownedAttempts);
+    verificationAttempts = await freezeVerificationAttempts(plan, rootRunId, status, client);
+    await client.verify(rootRunId, plan, operationDeadline, verificationAttempts);
   }
-  await client.verify(rootRunId, plan, operationDeadline);
   return {
-    action: parentReran ? "reran-parent" : "verified-parent",
+    action: ownedAttempts.has(rootRunId) ? "reran-parent" : "verified-parent",
     finalRunId: rootRunId,
     status,
   };
@@ -688,7 +784,7 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
     throw new Error("run has no authenticated immutable FRV plan");
   }
   const plan = validateReleaseExecutionPlanArtifact(payload, { parentRunId: options.runId });
-  if (plan.attemptEvidenceVersion !== 1) {
+  if (plan.attemptEvidenceVersion === undefined) {
     throw new Error("run predates attempt-aware immutable plans; run a fresh all-group FRV");
   }
   if (plan.rerunGroup !== "all") {

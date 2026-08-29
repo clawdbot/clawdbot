@@ -73,6 +73,8 @@ export type MessageActionInput = {
   toolContext?: ChannelThreadingToolContext;
   /** @internal Host media grant captured before untrusted caller code can mutate config. */
   mediaAccess?: OutboundMediaAccess;
+  /** @internal Workspace transport reader whose use remains subject to sender policy. */
+  workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;

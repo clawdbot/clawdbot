@@ -67,6 +67,7 @@ suite.define(() => {
             __openclaw: { id: "archive-action-assistant", seq: 2 },
           },
         ],
+        mainSessionKey: "agent:main:main",
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "sessions.branches.list": {
@@ -238,6 +239,7 @@ suite.define(() => {
       { archived: true },
     );
     const gateway = await installMockGateway(page, {
+      mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.branches.list": {
           branches: [

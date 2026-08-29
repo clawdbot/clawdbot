@@ -637,9 +637,6 @@ async function handleTelegramModelCallback(params: {
     };
     const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
     const sessionStore = { [sessionState.sessionKey]: sessionEntry };
-    const modelCatalog = [...byProvider.entries()].flatMap(([provider, models]) =>
-      [...models].map((model) => ({ provider, id: model, name: model })),
-    );
     const currentModelRef = sessionState.model?.trim();
     const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
     const currentProvider =
@@ -663,8 +660,7 @@ async function handleTelegramModelCallback(params: {
         defaultModel: resolvedDefault.model,
         currentProvider,
         currentModel,
-        allowedModelKeys: new Set(modelCatalog.map((entry) => `${entry.provider}/${entry.id}`)),
-        modelCatalog,
+        modelCatalog: modelData.modelCatalog,
         canPersistStickyModelSelection: false,
         request: {
           provider: selection.provider,

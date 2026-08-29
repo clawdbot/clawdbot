@@ -90,6 +90,42 @@ describe("Control UI Gateway target lineage", () => {
     expect(surface).not.toContain("<openclaw-app-shell");
   });
 
+  it("re-scopes credentials when the login draft changes Gateway", () => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.connect({ token: "old-token", password: "old-password" });
+    clients[0]?.opts.onClose?.({ code: 1006, reason: "login required", willRetry: true });
+    const app = document.createElement("openclaw-app") as unknown as {
+      runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
+      render: () => { strings: readonly string[] };
+      synchronizeGateway: (gateway: ApplicationGateway) => void;
+    };
+    app.runtime = {
+      documentMode: null,
+      context: {
+        gateway,
+        basePath: "",
+        agentSelection: { state: { selectedId: null } },
+        config: { current: { terminalEnabled: false } },
+        theme: { resolvedMode: "dark" },
+      } as unknown as ApplicationContext,
+    };
+    app.synchronizeGateway(gateway);
+    const container = document.createElement("div");
+    render(app.render(), container);
+    const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
+      props: {
+        onGatewayUrlChange: (value: string) => void;
+        onConnect: () => void;
+      };
+    };
+
+    loginGate.props.onGatewayUrlChange("wss://other-gateway.example.test");
+    loginGate.props.onConnect();
+
+    expect(clients[1]?.opts.token).toBeUndefined();
+    expect(clients[1]?.opts.password).toBeUndefined();
+  });
+
   it("keeps retryable Gateway startup on the initial progress surface", () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();

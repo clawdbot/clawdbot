@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,6 +20,7 @@ import {
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -382,7 +385,7 @@ describe("worker placement dispatch reclaim", () => {
     expect(restarted.log).not.toContain("placement:reclaimed");
   });
 
-  it("reclaims an environment-free failed placement back to clean local state", async () => {
+  it("serializes concurrent reclaim of an environment-free failed placement back to clean local state", async () => {
     const harness = createHarness(placementStore);
     const requested = placementStore.startDispatch(REQUEST);
     const failed = placementStore.fail({
@@ -391,13 +394,12 @@ describe("worker placement dispatch reclaim", () => {
       recoveryError: "device worker is offline",
     });
 
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({
+    const results = await Promise.all([
+      harness.service.reclaim(REQUEST),
+      harness.service.reclaim(REQUEST),
+    ]);
+    expect(results[1]).toEqual(results[0]);
+    expect(results[0]).toMatchObject({
       state: "local",
       generation: failed.generation + 1,
       environmentId: null,
@@ -732,7 +734,58 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("returns success when a dropped tunnel loses the race to durable teardown", async () => {
+  it("rejects a replaced reclaimed owner after waiting to enter the lifecycle fence", async () => {
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const harness = createHarness(placementStore, {
+      runReclaimBarrier: async ({ beforeDrain, begin, reclaim, authorize }) => {
+        entered.resolve();
+        await resume.promise;
+        authorize?.();
+        beforeDrain?.();
+        const placement = begin();
+        return placement.state === "reclaimed"
+          ? placement
+          : await reclaim("/gateway/workspace", placement, authorize);
+      },
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    const stop = prepareSessionWorkerPlacementStop({
+      ...REQUEST,
+      action: "delete",
+      context: {
+        workerSessionPlacementService: placementStore,
+        workerPlacementDispatchService: harness.service,
+        workerEnvironmentService: harness.environments,
+      },
+    })();
+    const rejected = expect(stop).rejects.toThrow("cloud worker placement identity changed");
+    await entered.promise;
+    try {
+      const peer = createHarness(placementStore);
+      peer.markEnvironmentOwnerEpoch(2);
+      const reclaimed = await peer.service.reclaim(REQUEST);
+      placementStore.retireSessionPlacement({
+        sessionId: reclaimed.sessionId,
+        expectedState: "reclaimed",
+        expectedGeneration: reclaimed.generation,
+      });
+      const replacement = createHarness(placementStore, { environmentGeneration: 2 });
+      replacement.placements.seedActive(2);
+      replacement.markEnvironmentOwnerEpoch(2);
+      const settled = await replacement.service.reclaim(REQUEST);
+      expect(settled.environmentId).not.toBe(active.environmentId);
+      resume.resolve();
+      await rejected;
+      expect(placementStore.get(REQUEST.sessionId)).toEqual(settled);
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await rejected;
+    }
+  });
+
+  it("completes a session stop when a dropped tunnel loses the race to durable teardown", async () => {
     const harness = createHarness(placementStore, { terminalizeReclaimOnTunnelDrop: true });
     await harness.service.dispatch(REQUEST);
 
@@ -741,11 +794,19 @@ describe("worker placement dispatch reclaim", () => {
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
     };
-    const first = harness.service.reclaim(request);
+    const first = prepareSessionWorkerPlacementStop({
+      ...request,
+      action: "delete",
+      context: {
+        workerSessionPlacementService: placementStore,
+        workerPlacementDispatchService: harness.service,
+        workerEnvironmentService: harness.environments,
+      },
+    })();
     const coalesced = harness.service.reclaim(request);
 
     await expect(Promise.all([first, coalesced])).resolves.toMatchObject([
-      { state: "reclaimed", turnClaim: null },
+      undefined,
       { state: "reclaimed", turnClaim: null },
     ]);
 
@@ -884,5 +945,61 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
       { workspaceAcceptedAtMs: null, stagedResultRef: null },
     ]);
+  });
+
+  it("a lifecycle owner can reclaim while another reclaim waits behind its fence", async () => {
+    const scope = root;
+    const queued = createDeferredCore();
+    const locked = createDeferredCore();
+    const resume = createDeferredCore();
+    const identities = [REQUEST.sessionKey, REQUEST.sessionId];
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+      runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
+        queued.resolve();
+        return await runExclusiveSessionLifecycleMutation({
+          scope,
+          identities,
+          run: async () => {
+            authorize?.();
+            beforeDrain?.();
+            const placement = begin();
+            return placement.state === "reclaimed"
+              ? placement
+              : await reclaim(root, placement, authorize);
+          },
+        });
+      },
+    });
+    await harness.service.dispatch(REQUEST);
+    const owner = runExclusiveSessionLifecycleMutation({
+      scope,
+      identities,
+      run: async () => {
+        locked.resolve();
+        await resume.promise;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            harness.service.reclaim(REQUEST),
+            new Promise<"blocked">((resolve) => {
+              timer = setTimeout(() => resolve("blocked"), 1_000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+    });
+    await locked.promise;
+    const competing = harness.service.reclaim(REQUEST);
+    await queued.promise;
+    resume.resolve();
+    try {
+      expect(await owner).toMatchObject({ state: "reclaimed" });
+    } finally {
+      await Promise.allSettled([owner, competing]);
+    }
   });
 });

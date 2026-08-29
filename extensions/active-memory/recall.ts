@@ -427,10 +427,7 @@ async function resolveActiveRecall(
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
         transcriptSources,
-        rawReply: partialTimeoutData.rawReply,
-        searchDebug: partialTimeoutData.searchDebug,
-        hasUsableMemoryResult: partialTimeoutData.hasUsableMemoryResult,
-        hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
+        ...partialTimeoutData,
         toolsAllow: params.config.toolsAllow,
       });
       if (params.config.logging) {

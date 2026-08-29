@@ -12,6 +12,7 @@ import {
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
+  runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -147,12 +148,11 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
 
     try {
-      const result = resultDetails(
-        await expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
-          "code-call-circular-flush",
-          { code: "return await release_flush({});" },
-        ),
-      );
+      const result = await runUntilCompleted({
+        execTool: expectDefined(harness.tools[0], "Code Mode exec test invariant"),
+        waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
+        code: "return await release_flush({});",
+      });
 
       expect(result.status, JSON.stringify(result)).toBe("completed");
       expect(result.value).toEqual({ released: true });

@@ -22,7 +22,7 @@ import {
   classifyFailoverReasonFromCode,
   failoverReasonFromClassification,
   inferSignalStatus,
-  isClaudeCliLoggedOutError,
+  isClaudeCliAuthError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
   isTransientHttpError,
@@ -60,6 +60,7 @@ export {
 export {
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
   isReasoningConstraintErrorMessage,
 } from "./context-overflow.js";
 export {
@@ -122,6 +123,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isUnsupportedImageInputErrorMessage(raw)) {
     return toReasonClassification("format");
+  }
+  if (isClaudeCliAuthError(raw, provider)) {
+    return toReasonClassification("auth");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
@@ -192,9 +196,6 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
-  if (isClaudeCliLoggedOutError(raw, provider)) {
-    return toReasonClassification("auth");
-  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");

@@ -878,8 +878,10 @@ wa-dropdown-item[type="checkbox"] {
 /* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
    through exported parts; feature styles continue to own content geometry. */
 wa-dropdown::part(menu),
+wa-dropdown-item::part(submenu),
 wa-popover::part(body),
 wa-select::part(listbox) {
+  background: var(--popover);
   border-color: var(--overlay-border);
   box-shadow: var(--overlay-shadow);
 }

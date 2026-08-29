@@ -105,20 +105,27 @@ function isTestOnlyPath(changedPath: string) {
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
 // the build pipeline itself (mirrors the build-all cache key in ci.yml).
-// Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
-// cannot change dist or bundled plugin asset bytes.
+// Built-artifact test inputs below also require this lane even though they do
+// not change the bytes under test.
 const BUILD_INPUT_RE =
   /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+const BUILT_ARTIFACT_TEST_INPUTS = new Set([
+  "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "extensions/browser/src/browser/extension-install.test-support.ts",
+]);
 
 /**
  * True when a changed path can influence built dist/packaging bytes: a
- * non-test build-input source or the build pipeline itself. Diffs entirely
- * outside that set (tests, repo scripts, workflows, qa scenarios) let the
+ * non-test build-input source, build pipeline, or built-artifact test input.
+ * Diffs entirely outside that set (ordinary tests, repo scripts, workflows) let the
  * manifest skip the build-artifacts lane.
  */
 export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   return changedPaths.some(
-    (changedPath) => BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath),
+    (changedPath) =>
+      BUILT_ARTIFACT_TEST_INPUTS.has(changedPath) ||
+      (BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath)),
   );
 }
 
@@ -486,11 +493,14 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  const targets = resolvePreciseChangedTargets(
-    regularLivePaths,
-    cwd,
-    [...policyTargetsByPath.values()].flat(),
-  );
+  const targets = resolvePreciseChangedTargets(regularLivePaths, cwd, [
+    ...[...policyTargetsByPath.values()].flat(),
+    // Plugin changes normally select only extension suites. This host-owned
+    // proof also exercises the real Copilot entrypoint and manifest discovery.
+    ...(livePaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
+      ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
+      : []),
+  ]);
   if (targets === null) {
     return null;
   }

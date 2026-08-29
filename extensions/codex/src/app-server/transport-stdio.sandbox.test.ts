@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import http from "node:http";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
+import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 import { buildTurnStartParams } from "./turn-params.js";
@@ -53,17 +53,11 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
     "keeps temporary-root exclusions at the native execution boundary: $name",
     { timeout: 75_000 },
     async ({ args, excluded }, context) => {
-      const root = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "codex-turn-sandbox-")),
-      );
-      context.onTestFinished(() => fs.rm(root, { recursive: true, force: true }));
-      const slashTmp = await fs.realpath(await fs.mkdtemp("/tmp/codex-turn-denied-"));
-      context.onTestFinished(() => fs.rm(slashTmp, { recursive: true, force: true }));
-      const cwd = path.join(root, "workspace");
-      const home = path.join(root, "home");
-      const codexHome = path.join(home, ".codex");
-      const tmp = path.join(root, "tmp");
-      await Promise.all([cwd, codexHome, tmp].map((dir) => fs.mkdir(dir, { recursive: true })));
+      const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
+      const root = tempDirs.make("codex-turn-sandbox-");
+      const slashTmpRoot = await fs.realpath("/tmp");
+      const slashTmp = tempDirs.make("codex-turn-denied-", slashTmpRoot);
+      const { cwd, codexHome, tmp, command, env } = await createCodexNativeTestState(root);
       const targets = [
         path.join(cwd, "workspace.txt"),
         path.join(slashTmp, "slash-tmp.txt"),
@@ -127,6 +121,8 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
           );
         });
       });
+      // Vitest deadlines do not unwind a stalled callback. Finish hooks own teardown
+      // in reverse order: native child, provider server, then temporary directories.
       context.onTestFinished(async () => {
         server.closeAllConnections();
         if (server.listening) {
@@ -168,41 +164,9 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
         "supports_websockets=false",
       ].join("\n");
       await fs.writeFile(path.join(codexHome, "config.toml"), config);
-      const require = createRequire(import.meta.url);
-      const launcher = path.join(
-        path.dirname(require.resolve("@openai/codex/package.json")),
-        "bin/codex.js",
-      );
-      const command = resolveManagedCodexNativeCommand(launcher);
-      if (!command) {
-        throw new Error("Pinned native Codex package is required");
-      }
-      const proxy = "http://127.0.0.1:9";
-      const env = {
-        PATH: "/usr/bin:/bin",
-        HOME: home,
-        USERPROFILE: home,
-        CODEX_HOME: codexHome,
-        TMPDIR: tmp,
-        TMP: tmp,
-        TEMP: tmp,
-        SHELL: "/bin/sh",
-        XDG_CONFIG_HOME: path.join(home, ".config"),
-        XDG_DATA_HOME: path.join(home, ".local/share"),
-        XDG_STATE_HOME: path.join(home, ".local/state"),
-        XDG_CACHE_HOME: path.join(home, ".cache"),
-        HTTP_PROXY: proxy,
-        HTTPS_PROXY: proxy,
-        ALL_PROXY: proxy,
-        http_proxy: proxy,
-        https_proxy: proxy,
-        all_proxy: proxy,
-        NO_PROXY: "127.0.0.1,localhost,::1",
-        no_proxy: "127.0.0.1,localhost,::1",
-      };
       const child = createStdioTransport(
         { transport: "stdio", command, commandSource: "config", args, cwd, headers: {} },
-        env,
+        { ...env, PATH: "/usr/bin:/bin", SHELL: "/bin/sh" },
       );
       const lines = createInterface({ input: child.stdout });
       context.onTestFinished(async () => {
@@ -216,10 +180,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
       let nextId = 0;
       let approvals = 0;
       let commandOutput = "";
-      let finishTurn: (value: unknown) => void = () => {};
-      const completed = new Promise<unknown>((resolve) => {
-        finishTurn = resolve;
-      });
+      const { promise: completed, resolve: finishTurn } = createDeferred<unknown>();
       const send = (message: object) => child.stdin.write(`${JSON.stringify(message)}\n`);
       const request = (method: string, params: object) =>
         new Promise<unknown>((resolve, reject) => {
@@ -316,18 +277,16 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
       expect(await completed).toMatchObject({ status: "completed" });
       expect(approvals).toBe(0);
       expect(requestCount).toBe(2);
-      expect(commandOutput).toContain("write-0:ok");
-      expect(await fs.readFile(targets[0], "utf8")).toBe("proof");
+      if (excluded) {
+        expect(commandOutput).toMatch(/Operation not permitted|Permission denied/);
+      }
       for (const [index, target] of targets.entries()) {
-        if (index === 0) {
-          continue;
-        }
-        expect(commandOutput).toContain(`write-${index}:${excluded ? "denied" : "ok"}`);
-        if (excluded) {
-          expect(commandOutput).toMatch(/Operation not permitted|Permission denied/);
-          await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
-        } else {
+        const writable = index === 0 || !excluded;
+        expect(commandOutput).toContain(`write-${index}:${writable ? "ok" : "denied"}`);
+        if (writable) {
           expect(await fs.readFile(target, "utf8")).toBe("proof");
+        } else {
+          await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
         }
       }
       await expect(fs.access(path.join(codexHome, "auth.json"))).rejects.toMatchObject({

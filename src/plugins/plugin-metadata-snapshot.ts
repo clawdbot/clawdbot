@@ -292,7 +292,7 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
   const plugins = manifestRegistry.plugins;
-  return {
+  const rebased = {
     ...snapshot,
     manifestRegistry,
     plugins,
@@ -306,6 +306,9 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
       ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
       : {}),
   };
+  // Rebuilt views retain the original generation even when consumed in another scope.
+  bindPluginMetadataSnapshotCache(rebased, getPluginMetadataSnapshotCache(snapshot));
+  return rebased;
 }
 
 export function projectPluginMetadataSnapshot(
@@ -628,6 +631,7 @@ function loadPluginMetadataSnapshotImpl(
     }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
+    registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
     manifestRegistry,
     plugins: manifestRegistry.plugins,

@@ -2,6 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import {
+  appendTranscriptEventSync,
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
@@ -10,6 +16,7 @@ import {
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -113,6 +120,7 @@ type PreparedCliRunContextOverrides = {
   prompt?: string;
   sessionId?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionEntry?: PreparedCliRunContext["params"]["sessionEntry"];
   agentId?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
@@ -192,11 +200,13 @@ export function buildPreparedCliRunContext(
   return {
     params: {
       admittedRunContext: createTestAdmittedRunContext(runId),
-      sessionId: overrides.sessionId ?? "s1",
-      sessionKey: overrides.sessionKey,
+      sessionId: overrides.sessionId ?? overrides.sessionTarget?.sessionId ?? "s1",
+      sessionKey: overrides.sessionKey ?? overrides.sessionTarget?.sessionKey,
+      sessionTarget: overrides.sessionTarget,
       sessionEntry: overrides.sessionEntry,
-      agentId: overrides.agentId,
-      sessionFile: "/tmp/session.jsonl",
+      agentId: overrides.agentId ?? overrides.sessionTarget?.agentId,
+      sessionFile:
+        overrides.sessionTarget?.sessionKey ?? overrides.sessionKey ?? overrides.sessionId ?? "s1",
       workspaceDir,
       config: overrides.config,
       prompt: overrides.prompt ?? "hi",
@@ -315,26 +325,34 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
   const tempDirs = new Set<string>();
   const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  let defaultSession: { dir: string; sessionFile: string } | undefined;
+  let defaultSession:
+    | { dir: string; sessionFile: string; sessionTarget: SessionTranscriptRuntimeTarget }
+    | undefined;
+  const databasePaths = new Set<string>();
 
   const createSession = () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-")));
     tempDirs.add(dir);
     process.env.OPENCLAW_STATE_DIR = dir;
-    const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
-    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-    fs.writeFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "session-test",
-        timestamp: new Date(0).toISOString(),
-        cwd: dir,
-      })}\n`,
-      "utf-8",
-    );
-    return { dir, sessionFile };
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-test",
+      sessionKey: "agent:main:main",
+      storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    };
+    databasePaths.add(sessionTarget.storePath);
+    replaceSessionEntrySync(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 0 });
+    const appended = appendTranscriptEventSync(sessionTarget, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionTarget.sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: dir,
+    });
+    if (!appended.ok) {
+      throw new Error("Could not initialize CLI fixture transcript");
+    }
+    return { dir, sessionFile: sessionTarget.sessionKey, sessionTarget };
   };
 
   const getSession = () => (defaultSession ??= createSession());
@@ -344,10 +362,11 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
     },
     createSession,
     prepare(overrides: Partial<Omit<RunCliAgentParams, "admittedRunContext">> = {}) {
-      const { dir, sessionFile } = getSession();
+      const { dir, sessionFile, sessionTarget } = getSession();
       const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         prompt: "latest ask",
         provider: "test-cli",
@@ -370,10 +389,23 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       timestamp: string;
       message: unknown;
     }) {
-      const { sessionFile } = getSession();
-      fs.appendFileSync(sessionFile, `${JSON.stringify({ type: "message", ...entry })}\n`, "utf-8");
+      const { dir, sessionTarget } = getSession();
+      const appended = appendTranscriptMessageSync(sessionTarget, {
+        cwd: dir,
+        eventId: entry.id,
+        parentId: entry.parentId,
+        now: Date.parse(entry.timestamp),
+        message: entry.message,
+      });
+      if (!appended) {
+        throw new Error("Could not append CLI fixture transcript message");
+      }
     },
     cleanup() {
+      for (const databasePath of databasePaths) {
+        closeOpenClawAgentDatabaseByPath(databasePath);
+      }
+      databasePaths.clear();
       for (const dir of tempDirs) {
         fs.rmSync(dir, { recursive: true, force: true });
       }

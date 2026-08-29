@@ -411,6 +411,7 @@ describe("scripts/changed-lanes", () => {
       `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
       "pnpm deps:patches:check",
       "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
+      "pnpm lint:tmp:tsgo-core-boundary",
       "pnpm tsgo:test:root",
       "pnpm lint:scripts",
     ]);
@@ -1469,6 +1470,7 @@ describe("scripts/changed-lanes", () => {
       // orphan an export here too.
       "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       "test temp creation report (warning-only)",
+      "core tsgo graph boundary",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -1820,22 +1822,22 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("runs Plugin SDK export and surface checks for direct SDK changes", () => {
-    expect(
-      shouldRunPluginSdkSurfaceChecks([
-        "src/plugin-sdk/core.ts",
-        "scripts/plugin-sdk-surface-report.mts",
-        "scripts/sync-plugin-sdk-exports.mts",
-        "scripts/lib/plugin-sdk-entries.mts",
-        "scripts/lib/plugin-sdk-entrypoints.json",
-        "package.json",
-      ]),
-    ).toBe(true);
+  it.each([
+    "src/plugin-sdk/core.ts",
+    "scripts/plugin-sdk-surface-report.mts",
+    "scripts/sync-plugin-sdk-exports.mts",
+    "scripts/lib/plugin-sdk-entries.mts",
+    "scripts/lib/plugin-sdk-entrypoints.json",
+    "extensions/tsconfig.package-boundary.paths.json",
+    "extensions/xai/tsconfig.json",
+  ])("runs Plugin SDK export and surface checks for %s", (changedPath) => {
+    expect(shouldRunPluginSdkSurfaceChecks([changedPath])).toBe(true);
+    expect(shouldRunPluginSdkSurfaceChecks(["package.json"])).toBe(true);
     expect(shouldRunPluginSdkSurfaceChecks(["src/config/sessions/session-accessor.ts"])).toBe(
       false,
     );
 
-    const result = detectChangedLanes(["src/plugin-sdk/core.ts"]);
+    const result = detectChangedLanes([changedPath]);
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
@@ -1852,6 +1854,43 @@ describe("scripts/changed-lanes", () => {
     );
     expect(releaseMetadataPlan.commands.map((command) => command.args[0])).not.toContain(
       "plugin-sdk:check-exports",
+    );
+  });
+
+  it.each([
+    "extensions/copilot/src/tool-bridge.test.ts",
+    "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+    "extensions/copilot/src/test-support/fixture.ts",
+    "test/helpers/plugins/fixture.ts",
+    "scripts/check-no-extension-test-core-imports.ts",
+    "scripts/check-file-utils.ts",
+    "scripts/check-changed.mts",
+  ])("checks extension test import boundaries for %s", (changedPath) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]));
+    expect(plan.commands).toContainEqual({
+      name: "extension test core imports",
+      args: ["lint:plugins:no-extension-test-core-imports"],
+    });
+  });
+
+  it.each([
+    ["src/agents/prepared-model-runtime.copilot.integration.test.ts", true],
+    ["src/plugins/loader.ts", true],
+    ["src/gateway/gateway-acp-bind.live.test.ts", true],
+    ["packages/normalization-core/src/result.ts", true],
+    ["ui/src/app.ts", true],
+    ["test/helpers/temp-dir.ts", true],
+    ["test/tsconfig/tsconfig.core.test.agents-root.json", true],
+    ["scripts/check-tsgo-core-boundary.mts", true],
+    ["scripts/lib/tsgo-core-test-shards.mts", true],
+    ["scripts/check-changed.mts", true],
+    ["tsconfig.json", true],
+    ["docs/ci.md", false],
+    ["extensions/copilot/index.ts", false],
+  ])("routes the core tsgo graph boundary for %s: %s", (changedPath, expected) => {
+    const commands = createChangedCheckPlan(detectChangedLanes([changedPath])).commands;
+    expect(commands.some((command) => command.args[0] === "lint:tmp:tsgo-core-boundary")).toBe(
+      expected,
     );
   });
 

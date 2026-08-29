@@ -21,9 +21,16 @@ import {
   type DockerE2eReleaseProfileInput,
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
+import {
+  normalizeUpgradeSurvivorBaselineSpec,
+  parseUpgradeSurvivorBaselineSpecs,
+  parseUpgradeSurvivorScenarios,
+  supportsUpgradeSurvivorScenarioAtBaseline,
+} from "./upgrade-survivor-policy.mjs";
 
 export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
+export { normalizeUpgradeSurvivorBaselineSpec };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
@@ -47,7 +54,6 @@ export const RELEASE_PATH_PROFILE = "release-path";
 
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
-type PublishedReleaseVersion = { year: number; month: number; patch: number };
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
@@ -102,37 +108,6 @@ function sanitizeLaneNameSuffix(value: string): string {
       .replace(/^-+|-+$/g, "") || "baseline"
   );
 }
-
-const UPGRADE_SURVIVOR_SCENARIOS = [
-  "base",
-  "acpx-openclaw-tools-bridge",
-  "feishu-channel",
-  "bootstrap-persona",
-  "channel-post-core-restore",
-  "plugin-deps-cleanup",
-  "configured-plugin-installs",
-  "stale-source-plugin-shadow",
-  "prerelease-plugin-registry",
-  "tilde-log-path",
-  "meeting-transcripts-sqlite",
-  "versioned-runtime-deps",
-  "cron-scheduled-authority",
-  "sqlite-volume",
-];
-
-// Prerelease registry proof requires an explicit artifact contract and must not
-// join broad survivor sweeps that do not supply one.
-const UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS = UPGRADE_SURVIVOR_SCENARIOS.filter(
-  (scenario) => scenario !== "prerelease-plugin-registry",
-);
-
-const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
-  [
-    "reported-issues",
-    UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS.filter((scenario) => scenario !== "sqlite-volume"),
-  ],
-  ["far-reaching", UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS],
-]);
 
 // Upgrade recipes select an OpenAI model whose runtime is supplied by the
 // version-matched Codex companion after the candidate replaces the baseline.
@@ -285,122 +260,6 @@ function filterUpgradeSurvivorScenariosForTarget(
   );
   const supportedScenarios = new Set(targetScenarios);
   return scenarios.filter((scenario) => supportedScenarios.has(scenario));
-}
-
-export function normalizeUpgradeSurvivorBaselineSpec(raw: string | undefined): string | undefined {
-  const value = raw?.trim() ?? "";
-  if (!value) {
-    return undefined;
-  }
-  const spec = value.startsWith("openclaw@") ? value : `openclaw@${value}`;
-  if (
-    !/^openclaw@(?:alpha|beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|alpha\.[0-9]+|beta\.[0-9]+))?)$/u.test(
-      spec,
-    )
-  ) {
-    throw new Error(
-      `invalid published upgrade survivor baseline: ${JSON.stringify(
-        value,
-      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.PATCH.`,
-    );
-  }
-  return spec;
-}
-
-function parseUpgradeSurvivorBaselineSpecs(raw: string | undefined): string[] {
-  if (!raw) {
-    return [];
-  }
-  return [
-    ...new Set(
-      raw
-        .split(/[,\s]+/u)
-        .map(normalizeUpgradeSurvivorBaselineSpec)
-        .filter((spec): spec is string => spec !== undefined),
-    ),
-  ];
-}
-
-function normalizeUpgradeSurvivorScenario(raw: string | undefined): string | undefined {
-  const value = raw?.trim() ?? "";
-  if (!value) {
-    return undefined;
-  }
-  if (!UPGRADE_SURVIVOR_SCENARIOS.includes(value)) {
-    throw new Error(
-      `invalid published upgrade survivor scenario: ${JSON.stringify(
-        value,
-      )}. Expected one of: ${UPGRADE_SURVIVOR_SCENARIOS.join(", ")}, reported-issues, or far-reaching.`,
-    );
-  }
-  return value;
-}
-
-function parseUpgradeSurvivorScenarios(raw: string | undefined): string[] {
-  if (!raw) {
-    return [];
-  }
-  return [
-    ...new Set(
-      raw
-        .split(/[,\s]+/u)
-        .map((token) => token.trim())
-        .filter(Boolean)
-        .flatMap((token) => UPGRADE_SURVIVOR_SCENARIO_ALIASES.get(token) ?? [token])
-        .map(normalizeUpgradeSurvivorScenario)
-        .filter((scenario): scenario is string => scenario !== undefined),
-    ),
-  ];
-}
-
-function parsePublishedReleaseVersion(spec: string | undefined): PublishedReleaseVersion | null {
-  const match = /^openclaw@([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(spec ?? "");
-  if (!match) {
-    return null;
-  }
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    patch: Number(match[3]),
-  };
-}
-
-function comparePublishedReleaseVersion(a: PublishedReleaseVersion, b: PublishedReleaseVersion) {
-  return a.year - b.year || a.month - b.month || a.patch - b.patch;
-}
-
-function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec: string | undefined) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
-}
-
-function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec: string | undefined) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
-}
-
-function supportsUpgradeSurvivorScenarioAtBaseline(
-  scenario: string | undefined,
-  baselineSpec: string | undefined,
-) {
-  return (
-    (scenario !== "plugin-deps-cleanup" ||
-      supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
-    (scenario !== "acpx-openclaw-tools-bridge" ||
-      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
-  );
 }
 
 function expandedUpgradeSurvivorLaneName(

@@ -317,7 +317,7 @@ async function inspectOrMigrateTarget(params: {
       : listUnreferencedJsonlFiles(params.target.storePath, [...referencedTranscriptFiles]),
   });
   if (params.mode === "compact") {
-    compactSqliteDatabase(params.target, report, { env: params.env });
+    await compactSqliteDatabase(params.target, report, { env: params.env });
     report.sqliteEntries = readSqliteEntryCount(params.target);
   }
   if (isSqliteStore || params.mode === "inspect" || params.mode === "compact") {
@@ -357,7 +357,7 @@ async function inspectOrMigrateTarget(params: {
     }
     if (validationPassed) {
       // Finalization enables incremental vacuum where needed and releases free pages.
-      compactSqliteDatabase(params.target, report, {
+      await compactSqliteDatabase(params.target, report, {
         env: params.env,
         operation: "import-finalize",
       });
@@ -1182,19 +1182,19 @@ function appendSqliteDbStats(
   }
 }
 
-function compactSqliteDatabase(
+async function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
   options: {
     env?: NodeJS.ProcessEnv;
     operation?: "import-finalize";
   } = {},
-): void {
+): Promise<void> {
   try {
     if (options.operation === "import-finalize") {
       closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
     }
-    report.compact = compactDoctorSessionSqliteTarget(target, options);
+    report.compact = await compactDoctorSessionSqliteTarget(target, options);
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",

@@ -26,6 +26,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import {
+  findTranscriptEventInDatabase,
+  readTranscriptEventMessage,
+} from "./session-accessor.sqlite-read.js";
+import {
   cloneSessionEntry,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
@@ -34,6 +38,7 @@ import {
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
@@ -58,7 +63,7 @@ export async function appendExpectedSessionTranscriptTurn(
     atomicGroup?: boolean;
     config?: import("../types.openclaw.js").OpenClawConfig;
     cwd?: string;
-    expectedLifecycleRevision?: string;
+    expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
@@ -175,7 +180,20 @@ export async function appendExpectedSessionTranscriptTurn(
         : undefined;
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
       for (const append of messages) {
-        const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+        const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
+        if (shouldAppendInTransaction) {
+          const latestAssistant = findTranscriptEventInDatabase(
+            transactionDb,
+            resolved.sessionId,
+            (event) => readTranscriptEventMessage(event)?.role === "assistant",
+          );
+          const latestAssistantMessage = latestAssistant
+            ? readTranscriptEventMessage(latestAssistant.event)
+            : undefined;
+          if (!shouldAppendInTransaction(latestAssistantMessage)) {
+            continue;
+          }
+        }
         let message = appendOptions.message;
         if (mutation && goal && isRecord(message) && message.role === "user") {
           message = {

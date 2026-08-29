@@ -157,6 +157,15 @@ the aggregate receipt omits `threadId`. Channels with read receipts or
 device-delivery state should track those facts through a separate
 channel-specific path.
 
+When an adapter intentionally omits a send before dispatch, return
+`outcome: "not_sent"` with an empty receipt and no message ID (legacy outbound
+adapters use an empty `messageId`). Core records `adapter_returned_no_send` as
+an intentional suppression, counts no physical send, and skips send-success
+and commit hooks. Do not use this outcome for an acknowledged send without a
+platform ID or for an unknown result after dispatch. An empty receipt alone
+does not distinguish those states; existing acknowledgement behavior is
+unchanged when `outcome` is omitted.
+
 If a channel adapter can prove that retrying a failure cannot duplicate a
 recipient-visible send and no finalization-capable call began, throw
 `new PlatformMessageNotDispatchedError("...", { cause: error })` from
