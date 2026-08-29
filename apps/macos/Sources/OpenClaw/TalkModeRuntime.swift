@@ -70,7 +70,7 @@ actor TalkModeRuntime {
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
     private var lastTranscript: String = ""
-    private var lastSpeechEnergyAt: Date?
+    var lastSpeechEnergyAt: Date?
 
     private var defaultVoiceId: String?
     private var currentVoiceId: String?
@@ -128,8 +128,32 @@ actor TalkModeRuntime {
     private var lastPlaybackWasPCM: Bool = false
 
     private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
+    private var idleTimeout: TimeInterval?
+    var lastInteractionAt: Date?
+    private static let idleSpeechRecognitionGrace: TimeInterval = 1.0
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
+
+    static func shouldExpireIdleTimeout(
+        now: Date,
+        lastInteractionAt: Date,
+        idleTimeout: TimeInterval,
+        lastSpeechEnergyAt: Date?,
+        speechRecognitionGrace: TimeInterval) -> Bool
+    {
+        guard idleTimeout > 0 else { return false }
+        let deadline = lastInteractionAt.addingTimeInterval(idleTimeout)
+        guard now >= deadline else { return false }
+        guard speechRecognitionGrace > 0,
+              now < deadline.addingTimeInterval(speechRecognitionGrace),
+              let lastSpeechEnergyAt,
+              lastSpeechEnergyAt <= now,
+              now.timeIntervalSince(lastSpeechEnergyAt) <= speechRecognitionGrace
+        else {
+            return true
+        }
+        return false
+    }
 
     init(realtimeTalkBootstrapProvider: @escaping RealtimeTalkBootstrapProvider = {
         try await GatewayConnection.shared.acquireRealtimeTalkBootstrap()
@@ -186,6 +210,7 @@ actor TalkModeRuntime {
                 else { return }
                 self.lastTranscript = ""
                 self.lastHeard = nil
+                self.lastInteractionAt = nil
                 self.lastSpeechEnergyAt = nil
                 self.phase = .idle
                 _ = await projectRealtimeRelay(relayGeneration, realtimeSession) {
@@ -227,6 +252,7 @@ actor TalkModeRuntime {
         if paused {
             self.lastTranscript = ""
             self.lastHeard = nil
+            self.lastInteractionAt = nil
             self.lastSpeechEnergyAt = nil
             await MainActor.run { TalkModeController.shared.updatePartialTranscript("") }
             self.stopRecognition()
@@ -262,6 +288,7 @@ actor TalkModeRuntime {
         self.silenceTask = nil
         self.lastTranscript = ""
         self.lastHeard = nil
+        self.lastInteractionAt = nil
         self.lastSpeechEnergyAt = nil
         self.phase = .idle
         self.stopRecognition()
@@ -460,6 +487,7 @@ actor TalkModeRuntime {
         if !trimmed.isEmpty {
             self.lastTranscript = trimmed
             self.lastHeard = Date()
+            self.lastInteractionAt = self.lastHeard
         }
 
         await MainActor.run { TalkModeController.shared.updatePartialTranscript(trimmed) }
@@ -486,7 +514,8 @@ actor TalkModeRuntime {
 
     private func checkSilence() async {
         guard !self.isPaused else { return }
-        guard self.phase == .listening else { return }
+        await self.checkIdleTimeout()
+        guard self.isEnabled, self.phase == .listening else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
         guard let lastHeard else { return }
@@ -495,10 +524,33 @@ actor TalkModeRuntime {
         await self.finalizeTranscript(transcript)
     }
 
+    private func checkIdleTimeout() async {
+        guard let idleTimeout else { return }
+        let anchor = self.lastInteractionAt ?? Date()
+        if self.lastInteractionAt == nil {
+            self.lastInteractionAt = anchor
+        }
+        let now = Date()
+        guard Self.shouldExpireIdleTimeout(
+            now: now,
+            lastInteractionAt: anchor,
+            idleTimeout: idleTimeout,
+            lastSpeechEnergyAt: self.lastSpeechEnergyAt,
+            speechRecognitionGrace: Self.idleSpeechRecognitionGrace)
+        else { return }
+        let elapsed = now.timeIntervalSince(anchor)
+        self.logger.info("talk idle timeout expired after \(elapsed, privacy: .public)s")
+        self.lastTranscript = ""
+        self.lastHeard = nil
+        await self.setEnabled(false)
+        await AppStateStore.shared.setTalkEnabled(false)
+    }
+
     private func startListening() async {
         self.phase = .listening
         self.lastTranscript = ""
         self.lastHeard = nil
+        self.lastInteractionAt = Date()
         await MainActor.run {
             TalkModeController.shared.updatePhase(.listening)
             TalkModeController.shared.updateLevel(0)
@@ -509,6 +561,7 @@ actor TalkModeRuntime {
     private func finalizeTranscript(_ text: String) async {
         self.lastTranscript = ""
         self.lastHeard = nil
+        self.lastInteractionAt = Date()
         self.phase = .thinking
         await MainActor.run {
             TalkModeController.shared.commitTranscript(text)
@@ -685,6 +738,7 @@ extension TalkModeRuntime {
                 return
             }
             guard self.isCurrent(gen) else { return }
+            self.lastInteractionAt = Date()
 
             self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
             await self.playAssistant(text: assistantText)
@@ -702,6 +756,7 @@ extension TalkModeRuntime {
         if self.isPaused {
             self.lastTranscript = ""
             self.lastHeard = nil
+            self.lastInteractionAt = nil
             self.lastSpeechEnergyAt = nil
             await MainActor.run {
                 TalkModeController.shared.updateLevel(0)
@@ -1549,6 +1604,7 @@ extension TalkModeRuntime {
                         "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
         }
         self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
+        self.idleTimeout = cfg.idleTimeoutS.map(TimeInterval.init)
         self.speechLocaleID = cfg.speechLocaleID
         self.apiKey = cfg.apiKey
         self.mlxReferenceAudioPath = cfg.referenceAudioPath
@@ -1565,6 +1621,7 @@ extension TalkModeRuntime {
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
                     "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
+                    "idleTimeoutS=\(cfg.idleTimeoutS ?? 0, privacy: .public) " +
                     "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public) " +
                     "realtimeMode=\(cfg.realtimeMode ?? "off", privacy: .public) " +
                     "realtimeTransport=\(cfg.realtimeTransport ?? "default", privacy: .public) " +
@@ -1580,6 +1637,10 @@ extension TalkModeRuntime {
 
     static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
         TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: self.defaultSilenceTimeoutMs)
+    }
+
+    static func resolvedIdleTimeoutS(_ talk: [String: AnyCodable]?) -> Int? {
+        TalkConfigParsing.resolvedIdleTimeoutS(talk)
     }
 
     // MARK: - Audio level handling
@@ -1626,3 +1687,12 @@ extension TalkModeRuntime {
         return spoken.contains(probe)
     }
 }
+
+#if DEBUG
+extension TalkModeRuntime {
+    func _test_isSilenceMonitorActive() -> Bool {
+        guard let silenceTask else { return false }
+        return !silenceTask.isCancelled
+    }
+}
+#endif

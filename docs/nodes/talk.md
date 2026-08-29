@@ -56,6 +56,7 @@ stopping Talk releases the camera and microphone tracks.
 - **Listening &rarr; Thinking &rarr; Speaking** phase transitions.
 - Phase notifications are best-effort: a failed update does not start the local Gateway or restart its tunnel. Starting Talk retains normal connection recovery.
 - On a short pause (silence window), the current transcript is sent.
+- Optional `idleTimeoutS`: if there is no recognized user speech or assistant reply for that many seconds, Talk deactivates. Raw microphone energy does not count as interaction. If Voice Wake is enabled, wake-word listening resumes after teardown.
 - Replies are written to WebChat (same as typing).
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
 
@@ -167,6 +168,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
     },
     speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
+    idleTimeoutS: 30,
     interruptOnSpeech: true,
     realtime: {
       provider: "openai",
@@ -252,6 +254,7 @@ to waitlist-enabled Platform access.
 | `providers.mlx.referenceText`            | -                                          | Exact transcript of `referenceAudioPath`; Fish S2 Pro uses both values for local voice cloning.                                                                                                                                                                                         |
 | `providers.elevenlabs.apiKey`            | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                                             |
 | `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                                                          |
+| `idleTimeoutS`                           | unset (disabled)                           | macOS: seconds of no recognized user speech or assistant reply before Talk deactivates. Raw microphone energy does not reset the timer. If Voice Wake is enabled, wake-word listening resumes after teardown. iOS and Android ignore this field. |
 | `interruptOnSpeech`                      | `true`                                     |                                                                                                                                                                                                                                                                                         |
 | `providers.<id>.outputFormat`            | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                                     |
 | `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                               |

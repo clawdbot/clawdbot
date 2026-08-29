@@ -252,6 +252,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
+  "talk.idleTimeoutS":
+    "Seconds without recognized user speech or an assistant reply before macOS Talk mode deactivates. Raw microphone energy does not reset the timer. If Voice Wake is enabled, wake-word listening resumes after teardown. Leave unset to disable idle auto-deactivation. iOS and Android ignore this field.",
   acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and selecting streamed turn projection behavior.",
   "acp.enabled":
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",

@@ -1515,6 +1515,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
     consultFastMode: true,
     speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
+    idleTimeoutS: 30,
     interruptOnSpeech: true,
     realtime: {
       provider: "openai",
@@ -1550,6 +1551,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
 - `consultFastMode` sets a one-shot fast-mode override for Control UI Talk realtime consults without changing the session's normal fast-mode setting.
 - `speechLocale` sets the BCP 47 locale id used by Android, iOS, and macOS Talk speech recognition and by the iOS system-voice fallback. Android also uses its language component to guide realtime input transcription. Leave unset to use the device default.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
+- `idleTimeoutS` sets the number of seconds without recognized user speech or an assistant reply before macOS Talk deactivates. Raw microphone energy does not reset the timer. If Voice Wake is enabled, wake-word listening resumes after teardown. Unset disables idle auto-deactivation. iOS and Android ignore this field.
 - `realtime.instructions` appends provider-facing system instructions to OpenClaw's built-in realtime prompt, so voice style can be configured without losing default `openclaw_agent_consult` guidance.
 - `realtime.vadThreshold` sets the provider voice-activity threshold from `0` (most sensitive) to `1` (least sensitive). Unset keeps the provider default.
 - `realtime.silenceDurationMs` sets the positive whole-number silence window before the provider commits a realtime user turn. Unset keeps the provider default.

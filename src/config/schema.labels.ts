@@ -882,6 +882,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.speechLocale": "Talk Speech Locale",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
+  "talk.idleTimeoutS": "Talk Idle Timeout (s)",
   "talk.consultThinkingLevel": "Talk Consult Thinking Level",
   "talk.consultFastMode": "Talk Consult Fast Mode",
   messages: "Messages",

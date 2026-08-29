@@ -63,6 +63,23 @@ describe("talk config validation fail-closed behavior", () => {
     );
   });
 
+  it.each([
+    ["boolean", true],
+    ["string", "30"],
+    ["zero", 0],
+    ["float", 30.5],
+  ])("rejects %s talk.idleTimeoutS during config load", async (_label, value) => {
+    await expectInvalidTalkConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        talk: {
+          idleTimeoutS: value,
+        },
+      },
+      /idleTimeoutS|talk/i,
+    );
+  });
+
   it("rejects talk.provider when it does not match talk.providers during config load", async () => {
     await expectInvalidTalkConfig(
       {

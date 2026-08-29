@@ -99,6 +99,31 @@ describe("OpenClawSchema talk validation", () => {
     ).toThrow(/silenceTimeoutMs|number|integer/i);
   });
 
+  it("accepts a positive integer talk.idleTimeoutS", () => {
+    const result = OpenClawSchema.safeParse({
+      talk: {
+        idleTimeoutS: 30,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["boolean", true],
+    ["string", "30"],
+    ["zero", 0],
+    ["float", 30.5],
+  ])("rejects %s talk.idleTimeoutS", (_label, value) => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          idleTimeoutS: value,
+        },
+      }),
+    ).toThrow(/idleTimeoutS|number|integer/i);
+  });
+
   it("rejects talk.provider when it does not match talk.providers", () => {
     expect(() =>
       OpenClawSchema.parse({

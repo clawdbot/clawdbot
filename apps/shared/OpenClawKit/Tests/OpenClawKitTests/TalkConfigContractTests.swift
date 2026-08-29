@@ -5,6 +5,7 @@ import Testing
 private struct TalkConfigContractFixture: Decodable {
     let selectionCases: [SelectionCase]
     let timeoutCases: [TimeoutCase]
+    let idleTimeoutCases: [IdleTimeoutCase]
 
     struct SelectionCase: Decodable {
         let id: String
@@ -43,6 +44,12 @@ private struct TalkConfigContractFixture: Decodable {
         let id: String
         let fallback: Int
         let expectedTimeoutMs: Int
+        let talk: [String: AnyCodable]
+    }
+
+    struct IdleTimeoutCase: Decodable {
+        let id: String
+        let expectedIdleTimeoutS: Int?
         let talk: [String: AnyCodable]
     }
 }
@@ -91,6 +98,14 @@ struct TalkConfigContractTests {
                 TalkConfigParsing.resolvedSilenceTimeoutMs(
                     fixture.talk,
                     fallback: fixture.fallback) == fixture.expectedTimeoutMs,
+                "\(fixture.id)")
+        }
+    }
+
+    @Test func `idle timeout fixtures`() throws {
+        for fixture in try TalkConfigContractFixtureLoader.load().idleTimeoutCases {
+            #expect(
+                TalkConfigParsing.resolvedIdleTimeoutS(fixture.talk) == fixture.expectedIdleTimeoutS,
                 "\(fixture.id)")
         }
     }

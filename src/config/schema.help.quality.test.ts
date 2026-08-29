@@ -156,6 +156,12 @@ describe("config help copy quality", () => {
     expect(help).toContain("rewrite or drop");
   });
 
+  it("conditions Talk idle timeout recovery on Voice Wake being enabled", () => {
+    const help = requireHelp("talk.idleTimeoutS");
+    expect(help).toMatch(/if Voice Wake is enabled/i);
+    expect(help).not.toMatch(/deactivates and returns to wake-word waiting/i);
+  });
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(requireLabel(key)).not.toHaveLength(0);

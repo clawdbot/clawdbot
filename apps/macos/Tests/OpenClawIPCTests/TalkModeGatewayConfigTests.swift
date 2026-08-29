@@ -32,6 +32,7 @@ struct TalkModeGatewayConfigTests {
                         ],
                     ],
                     "speechLocale": "ru-RU",
+                    "idleTimeoutS": 30,
                 ]),
             ],
             issues: nil)
@@ -50,8 +51,86 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.apiKey == nil)
         #expect(parsed.voiceId == "unused-voice")
         #expect(parsed.speechLocaleID == "ru-RU")
+        #expect(parsed.idleTimeoutS == 30)
         #expect(parsed.referenceAudioPath == "/tmp/reference.wav")
         #expect(parsed.referenceText == "reference transcript")
+    }
+
+    @Test func `does not use local idle timeout when gateway succeeds without it`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "silenceTimeoutMs": 700,
+                ]),
+            ],
+            issues: nil)
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            snapshot: snapshot,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
+            envVoice: nil,
+            sagVoice: nil,
+            envApiKey: nil)
+
+        #expect(parsed.idleTimeoutS == nil)
+        #expect(parsed.silenceTimeoutMs == 700)
+    }
+
+    @Test func `gateway idle timeout is authoritative`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "idleTimeoutS": 45,
+                ]),
+            ],
+            issues: nil)
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            snapshot: snapshot,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
+            envVoice: nil,
+            sagVoice: nil,
+            envApiKey: nil)
+
+        #expect(parsed.idleTimeoutS == 45)
+    }
+
+    @Test func `reads idle timeout from a local config snapshot`() {
+        let snapshot = TalkModeGatewayConfigParser.snapshot(fromLocalConfig: [
+            "talk": [
+                "idleTimeoutS": 30,
+                "silenceTimeoutMs": 700,
+            ],
+        ])
+
+        #expect(snapshot != nil)
+        let parsed = TalkModeGatewayConfigParser.parse(
+            snapshot: snapshot!,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
+            envVoice: nil,
+            sagVoice: nil,
+            envApiKey: nil)
+
+        #expect(parsed.idleTimeoutS == 30)
+        #expect(parsed.silenceTimeoutMs == 700)
     }
 
     @Test func `realtime config uses top level overrides and normalizes control values`() {
