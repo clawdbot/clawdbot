@@ -41,7 +41,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
-  requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
@@ -2864,7 +2863,10 @@ function buildLiveGatewayAuthProfileStore(params: {
         );
       }
     } else if (
-      !requiresLiveProfileCredential(provider, params.requireProfileKeys ?? REQUIRE_PROFILE_KEYS)
+      resolveLiveCredentialPrecedence(
+        provider,
+        params.requireProfileKeys ?? REQUIRE_PROFILE_KEYS,
+      ) === "env-first"
     ) {
       if (auth.mode !== "aws-sdk") {
         if (!auth.apiKey) {
