@@ -94,6 +94,23 @@ describe("event Web Push classification", () => {
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
+  it("sanitizes and bounds agent labels in identified event payloads", async () => {
+    const rawAgentId = `agent\u202e\n${"x".repeat(100)}`;
+    const displayAgentId = `agent ${"x".repeat(74)}`;
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    delivery.handleEvent("chat", { state: "final", runId: "run-1", agentId: rawAgentId });
+
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          body: `${displayAgentId}: An agent completed its response.`,
+        }),
+      }),
+    );
+    expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("\u202e");
+  });
+
   it("sends questions with control characters removed from durable tags", async () => {
     listDevicePairingMock.mockReturnValue({
       pending: [],

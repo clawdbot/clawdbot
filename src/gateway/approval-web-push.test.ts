@@ -221,6 +221,43 @@ describe("approval Web Push delivery", () => {
     expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("sensitive command");
   });
 
+  it("sanitizes and bounds agent labels in identified approval payloads", async () => {
+    const rawAgentId = `agent\u202e\n${"x".repeat(100)}`;
+    const displayAgentId = `agent ${"x".repeat(74)}`;
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      { command: "sensitive command", agentId: rawAgentId },
+      60_000,
+      "exec:safe-agent-label",
+    );
+    const subscription = {
+      ...boundSubscription("label-device", null),
+      devicePreferences: { enabled: true, label: "", detailLevel: "identified" as const },
+    };
+    listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+    listDevicePairingMock.mockReturnValue({
+      pending: [],
+      paired: [pairedOperator("label-device", ["operator.approvals", "operator.read"])],
+    });
+    preparedWebPushSendMock.mockResolvedValue([
+      { ok: true, subscriptionId: subscription.subscriptionId, statusCode: 201 },
+    ]);
+
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    await expect(
+      createApprovalWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleRequested(record),
+    ).resolves.toBe(true);
+
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          body: `Open OpenClaw to review an approval for ${displayAgentId}.`,
+        }),
+      }),
+    );
+    expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("\u202e");
+  });
+
   it("rechecks the profile role and excludes unbound role-based subscriptions", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:role-check");

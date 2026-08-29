@@ -34,6 +34,7 @@ import {
   isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-record-lookup.js";
 import { listCurrentWebPushTargets, webPushTargetClient } from "./web-push-authority.js";
+import { webPushDisplayLabel } from "./web-push-display-label.js";
 
 const WEB_PUSH_APPROVAL_TIMEOUT_MS = 10_000;
 const WEB_PUSH_TERMINAL_TTL_SECONDS = 5 * 60;
@@ -70,10 +71,10 @@ function approvalPreferences(params: {
 function approvalNotificationCopy(params: {
   terminal: boolean;
   preferences: ReturnType<typeof approvalPreferences>;
-  agentId?: string;
+  agentLabel?: string;
 }) {
   const label = params.preferences.label ? `${params.preferences.label} · ` : "";
-  const agent = params.agentId ? ` for ${params.agentId}` : "";
+  const agent = params.agentLabel ? ` for ${params.agentLabel}` : "";
   if (params.terminal) {
     return {
       title: `${label}OpenClaw approval updated`,
@@ -176,13 +177,14 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
   const source = isRecord(params.record.request) ? params.record.request : undefined;
   const agentId = normalizeOptionalString(source?.agentId);
+  const agentLabel = webPushDisplayLabel(agentId);
   const requestGroups = new Map<
     string,
     { copy: ReturnType<typeof approvalNotificationCopy>; subscriptions: BoundWebPushSubscription[] }
   >();
   for (const subscription of subscriptions) {
     const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-    const copy = approvalNotificationCopy({ terminal: false, preferences, agentId });
+    const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
     const key = JSON.stringify(copy);
     const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
     group.subscriptions.push(subscription);
