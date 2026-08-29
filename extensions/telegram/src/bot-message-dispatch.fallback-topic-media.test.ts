@@ -133,6 +133,46 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
     const call = generateTopicLabel.mock.calls[0]?.[0] as { userMessage: string };
     expect(call.userMessage).toBe("[Audio transcript]: Remind me to renew the domain");
+    await vi.waitFor(() => {
+      expect(bot.api["editForumTopic"]).toHaveBeenCalledWith(123, 777, {
+        name: "Topic label",
+      });
+    });
+  });
+
+  it("labels a DM topic opened by captionless media from the inbound envelope", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "s1", updatedAt: 1 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
+    });
+    const bot = createBot();
+    const inboundEnvelope = "[Telegram Ada id:42]";
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          RawBody: "",
+          BodyForAgent: "",
+          Body: inboundEnvelope,
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(generateTopicLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ userMessage: inboundEnvelope }),
+      );
+      expect(bot.api["editForumTopic"]).toHaveBeenCalledWith(123, 777, {
+        name: "Topic label",
+      });
+    });
   });
 
   it("skips the DM topic auto-rename when no field carries text", async () => {
