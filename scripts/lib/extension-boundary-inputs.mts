@@ -162,6 +162,12 @@ export class BoundaryInputSnapshot {
           ) {
             continue;
           }
+          // Tool scratch (.vite-temp bundles, jiti/vitest caches) churns under
+          // installed roots while sibling tasks run and would flip the topology
+          // digest mid-compile. Resolution never enters dot-entries except .pnpm.
+          if (installed && entry.name !== ".pnpm" && entry.name.startsWith(".")) {
+            continue;
+          }
           if (
             /^extensions\/[^/]+\/(?:__rootdir_boundary_canary__\.ts|tsconfig\.rootdir-canary\.json)$/u.test(
               id,
