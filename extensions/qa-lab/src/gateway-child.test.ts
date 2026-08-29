@@ -1685,7 +1685,9 @@ describe("buildQaRuntimeEnv", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) throw new Error("expected package plugin setup error");
+    if (!(error instanceof Error)) {
+      throw new Error("expected package plugin setup error");
+    }
     expect(error.message).toContain("installed package plugin setup failed: OpenClaw CLI exited 8");
     expect(error.message).not.toContain("fixture-plugin-secret");
     expect(String(error.cause)).not.toContain("fixture-plugin-secret");
