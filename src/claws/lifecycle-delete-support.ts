@@ -31,8 +31,13 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { ClawRemovePlanAction } from "./lifecycle-remove-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
+import {
+  CLAW_ADOPTED_WORKSPACE_MARKER_PATH,
+  deleteAdoptedWorkspaceRow,
+} from "./workspace-origin.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type WorkspaceFileRow = {
@@ -91,9 +96,10 @@ export function readAllClawWorkspaceFiles(
       `SELECT schema_version, agent_id, workspace, target_path, source_path,
               content_digest, status, created_at_ms, updated_at_ms
          FROM claw_workspace_files
+        WHERE target_path <> ?
         ORDER BY agent_id, target_path`,
     )
-    .all() as WorkspaceFileRow[];
+    .all(CLAW_ADOPTED_WORKSPACE_MARKER_PATH) as WorkspaceFileRow[];
   return rows.map(rowToWorkspaceFile);
 }
 
@@ -144,6 +150,31 @@ export function deletionEffects(config: OpenClawConfig, agentId: string, fallbac
     sessionsDir,
     workspaceSharedWith,
     workspaceRetained: workspaceSharedWith.length > 0,
+  };
+}
+
+/** Resolves the retain/trash plan for a workspace using the canonical reason priority. */
+export function planClawWorkspaceRemoval(params: {
+  sharedWith: string[];
+  adopted: boolean;
+  modified: boolean;
+  untracked: boolean;
+}): Pick<ClawRemovePlanAction, "action" | "details" | "reason"> {
+  const retained =
+    params.sharedWith.length > 0 || params.adopted || params.modified || params.untracked;
+  const reason = params.sharedWith.length
+    ? "Workspace overlaps another agent."
+    : params.adopted
+      ? "Workspace existed before this Claw adopted it."
+      : params.modified
+        ? "Workspace contains locally modified Claw-managed files."
+        : params.untracked
+          ? "Workspace contains files or directories not managed by this Claw."
+          : undefined;
+  return {
+    action: retained ? "retain" : "trash",
+    details: { retained, sharedWith: params.sharedWith },
+    ...(reason ? { reason } : {}),
   };
 }
 
@@ -487,6 +518,9 @@ export function releaseClawRemoveRows(
         .prepare("DELETE FROM claw_installs WHERE agent_id = ?")
         .run(agentId);
     }
+    // Drop the origin with the install it describes; a later agent reusing this id must not
+    // inherit an adopted-workspace claim from a Claw that no longer exists.
+    deleteAdoptedWorkspaceRow(db, agentId);
   }, options);
   if (complete) {
     deleteCachedClawInstallSchemaVersion(agentId, options);

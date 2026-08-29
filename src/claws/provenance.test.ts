@@ -841,7 +841,7 @@ describe("applyClawAddPlan", () => {
     expect(installPackages).not.toHaveBeenCalled();
   });
 
-  it("records parent-directory creation failures before workspace mutation", async () => {
+  it("blocks an uninspectable workspace parent at plan time, before workspace mutation", async () => {
     const root = tempDirs.make("openclaw-claw-add-");
     const blockedParent = join(root, "blocked-parent");
     await writeFile(blockedParent, "not a directory", "utf8");
@@ -849,12 +849,17 @@ describe("applyClawAddPlan", () => {
       workspace: join(blockedParent, "workspace-worker"),
     });
 
+    // Resolving the workspace under a regular file fails ENOTDIR, not ENOENT. Planning fails
+    // closed on it, so consent is never offered for a path apply would refuse mid-mutation.
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_parent_failed", path: "$.workspace" }),
+    );
     await expect(
       applyClawAddPlan(plan, {
         consentPlanIntegrity: plan.planIntegrity,
         env: stateEnv(root),
       }),
-    ).rejects.toMatchObject({ code: "workspace_parent_failed" });
+    ).rejects.toMatchObject({ code: "plan_blocked" });
     expect(readInstallRow("worker", root)).toBeUndefined();
   });
 

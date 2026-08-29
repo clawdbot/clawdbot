@@ -28,6 +28,7 @@ import {
 } from "./provenance-runtime-read.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
+import { deleteAdoptedWorkspaceRow, persistClawWorkspaceOrigin } from "./workspace-origin.js";
 export {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   type PersistedClawPackageRef,
@@ -254,6 +255,7 @@ export function persistClawInstallRecord(
       added_at_ms: nowMs,
       updated_at_ms: nowMs,
     });
+    persistClawWorkspaceOrigin({ db, plan, nowMs });
     return {
       schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
       claw: plan.claw,
@@ -322,6 +324,7 @@ export function deleteClawInstallRecord(
       db /* sqlite-allow-raw: this Claw prototype state-table delete is scoped to one owned row. */
         .prepare(`DELETE FROM claw_installs WHERE agent_id = ?${expectedClause}`)
         .run(agentId, ...expectedStatuses);
+    deleteAdoptedWorkspaceRow(db, agentId);
     if (result.changes !== 1) {
       throw new Error(
         `Claw install record for agent ${JSON.stringify(agentId)} did not match the expected phase.`,

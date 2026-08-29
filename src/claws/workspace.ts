@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
+import { CLAW_ADOPTED_WORKSPACE_MARKER_PATH } from "./workspace-origin.js";
 
 export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
   "openclaw.clawWorkspaceFileRecord.v1" as const;
@@ -319,10 +320,10 @@ export function readClawWorkspaceFiles(
         `SELECT schema_version, agent_id, workspace, target_path, source_path,
               content_digest, status, created_at_ms, updated_at_ms
          FROM claw_workspace_files
-        WHERE agent_id = ?
+        WHERE agent_id = ? AND target_path <> ?
         ORDER BY target_path`,
       )
-      .all(agentId) as WorkspaceFileRow[];
+      .all(agentId, CLAW_ADOPTED_WORKSPACE_MARKER_PATH) as WorkspaceFileRow[];
   return rows.map(rowToWorkspaceFile);
 }
 
@@ -426,6 +427,37 @@ export async function createClawWorkspaceFiles(
       }
       if (await workspace.exists(targetRelative)) {
         if (!existingRecord || existingRecord.status === "failed") {
+          if (action.action === "adopt") {
+            const adoptedTarget = await workspace.read(targetRelative, {
+              hardlinks: "reject",
+              maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
+              symlinks: "reject",
+            });
+            if (contentDigest(adoptedTarget.buffer) !== expectedRecord.contentDigest) {
+              throw new ClawWorkspaceWriteError(
+                [
+                  diagnostic(
+                    action,
+                    "workspace_file_conflict",
+                    `Adoptable workspace destination ${JSON.stringify(targetRelative)} changed after planning; adoption never overwrites existing files.`,
+                  ),
+                ],
+                createdFiles,
+              );
+            }
+            const adoptedRecord = existingRecord ?? expectedRecord;
+            if (existingRecord) {
+              const previousStatus = existingRecord.status;
+              existingRecord.status = "complete";
+              existingRecord.updatedAtMs = nowMs;
+              updateWorkspaceFileStatus(existingRecord, [previousStatus], options);
+            } else {
+              adoptedRecord.status = "complete";
+              persistWorkspaceFile(adoptedRecord, options);
+            }
+            createdFiles.push(adoptedRecord);
+            continue;
+          }
           throw new ClawWorkspaceWriteError(
             [
               diagnostic(
@@ -460,6 +492,18 @@ export async function createClawWorkspaceFiles(
         updateWorkspaceFileStatus(existingRecord, [previousStatus], options);
         createdFiles.push(existingRecord);
         continue;
+      }
+      if (action.action === "adopt") {
+        throw new ClawWorkspaceWriteError(
+          [
+            diagnostic(
+              action,
+              "workspace_file_conflict",
+              `Adoptable workspace destination ${JSON.stringify(targetRelative)} disappeared after planning; adoption never writes missing files.`,
+            ),
+          ],
+          createdFiles,
+        );
       }
       const record = existingRecord ?? expectedRecord;
       if (existingRecord) {

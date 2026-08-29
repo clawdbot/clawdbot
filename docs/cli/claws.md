@@ -340,6 +340,37 @@ instructions, writes declared workspace assets, realizes workspace skills, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
 
+By default an existing workspace directory is a `workspace_collision` blocker.
+Pass `--adopt-existing-workspace` during both preview and apply to install into
+an existing directory instead:
+
+```bash
+openclaw claws add ./incident-triage.claw.json \
+  --workspace ~/agents/incident-triage \
+  --adopt-existing-workspace \
+  --dry-run --json
+```
+
+At plan time each declared file is compared against the existing content:
+identical files become `adopt` actions and are recorded as managed without
+being rewritten, missing files are written normally, and differing content is a
+`workspace_file_conflict` blocker — adoption never overwrites existing files.
+If the package defines first-run instructions, any existing package bootstrap
+file is also a conflict, even when its content matches; Claws cannot safely
+claim or later remove a bootstrap file it did not create.
+Apply re-verifies content digests and fails closed when an adoptable file
+changed after planning. The agent is added to configuration only after every
+workspace file has been safely revalidated and recorded, so a failed adoption
+cannot leave a partially owned workspace routable. Adoption is disclosed as a
+distinct capability change in the plan, and a workspace already configured for
+another agent still blocks.
+
+Adoption transfers lifecycle ownership of matching declared files to Claws.
+After adoption, `claws update` may replace an unchanged adopted file with the
+content from the reviewed target package, and `claws remove` may delete an
+unchanged adopted file. Locally modified adopted files are retained and must be
+reconciled explicitly. Preview update and removal plans before applying them.
+
 ## Inspect installed state
 
 ```bash
@@ -477,7 +508,7 @@ credentials, sessions, and unowned local state are excluded.
 | `claws dev [path]`                  | Build and preview locally without mutation.         |
 | `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
-| `claws add <source>`                | Preview or create one new agent and workspace.      |
+| `claws add <source>`                | Preview or create one agent and its workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
 | `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |

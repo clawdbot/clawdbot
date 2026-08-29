@@ -12,6 +12,7 @@ import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawAddPlan, ClawSourceIdentity } from "./types.js";
+import { clawWorkspaceWasAdopted } from "./workspace-origin.js";
 import { ClawWorkspaceWriteError, createClawWorkspaceFiles } from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,6 +25,46 @@ async function writeSource(root: string, path: string, content: string): Promise
   const target = join(root, path);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, content, "utf8");
+}
+
+async function makeAdoptionPlan(params?: { existingAgentsContent?: string }) {
+  const root = tempDirs.make("openclaw-claw-workspace-adopt-");
+  const workspace = join(root, "workspace-agent");
+  await writeSource(root, "content/AGENTS.md", "# Agent\n");
+  await writeSource(root, "content/policy.md", "Policy\n");
+  await mkdir(workspace, { recursive: true });
+  await writeFile(
+    join(workspace, "AGENTS.md"),
+    params?.existingAgentsContent ?? "# Agent\n",
+    "utf8",
+  );
+  const parsed = parseClawManifest({
+    schemaVersion: 1,
+    agent: { id: "workspace-agent" },
+    workspace: {
+      bootstrapFiles: { "AGENTS.md": { source: "content/AGENTS.md" } },
+      files: [{ source: "content/policy.md", path: "reference/policy.md" }],
+    },
+  });
+  if (!parsed.ok) {
+    throw new Error(JSON.stringify(parsed.diagnostics));
+  }
+  const source: ClawSourceIdentity = {
+    kind: "package",
+    name: "@acme/workspace-agent",
+    version: "1.0.0",
+    packageRoot: root,
+    manifestPath: join(root, "openclaw.claw.json"),
+    integrityKind: "development-snapshot",
+    integrity: "sha256:manifest",
+    byteLength: 0,
+  };
+  const plan = await buildClawAddPlan({
+    manifest: parsed.manifest,
+    source,
+    context: { workspace, adoptExistingWorkspace: true },
+  });
+  return { root, workspace, plan };
 }
 
 async function makePlan(params?: {
@@ -201,6 +242,54 @@ describe("createClawWorkspaceFiles", () => {
       await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe(body.toString());
     },
   );
+
+  it("adopts an existing identical file without rewriting and records complete provenance", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    expect(plan.blockers).toEqual([]);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "AGENTS.md", action: "adopt" }),
+    );
+
+    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
+
+    expect(records).toContainEqual(
+      expect.objectContaining({ path: "AGENTS.md", status: "complete" }),
+    );
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toBe(
+      "Policy\n",
+    );
+  });
+
+  it("fails closed when an adoptable file changes between planning and apply", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    expect(plan.blockers).toEqual([]);
+    await writeFile(join(workspace, "AGENTS.md"), "# Changed after planning\n", "utf8");
+
+    await expect(
+      createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 }),
+    ).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: "workspace_file_conflict" })],
+    });
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe(
+      "# Changed after planning\n",
+    );
+  });
+
+  it("fails closed when an adoptable file disappears between planning and apply", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    expect(plan.blockers).toEqual([]);
+    await rm(join(workspace, "AGENTS.md"));
+
+    await expect(
+      createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 }),
+    ).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ code: "workspace_file_conflict" })],
+    });
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {
     const { root, workspace, plan } = await makePlan();
@@ -405,6 +494,118 @@ describe("createClawWorkspaceFiles", () => {
 });
 
 describe("workspace files in the consented add lifecycle", () => {
+  it("completes an adoption add without rewriting existing files and commits the agent", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    expect(plan.blockers).toEqual([]);
+    let config: OpenClawConfig = {};
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      nowMs: 30,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "complete",
+      workspaceCreated: true,
+      workspaceFiles: [
+        expect.objectContaining({ path: "AGENTS.md", status: "complete" }),
+        expect.objectContaining({ path: "reference/policy.md", status: "complete" }),
+      ],
+      installRecord: { status: "complete" },
+    });
+    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
+    expect(readInstallStatus("workspace-agent", root)).toBe("complete");
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toBe(
+      "Policy\n",
+    );
+  });
+
+  it("preserves an adopted workspace when config commit rolls back", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    let config: OpenClawConfig = {};
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      nowMs: 35,
+      commitConfig: async () => {
+        throw new Error("config unavailable");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      workspaceCreated: true,
+      configCommitted: false,
+      workspaceFiles: [],
+      installRecord: { status: "workspace_ready" },
+      error: { code: "config_commit_failed", message: "config unavailable" },
+    });
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+
+    const resumed = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      nowMs: 36,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(resumed).toMatchObject({
+      status: "complete",
+      configCommitted: true,
+      installRecord: { status: "complete" },
+    });
+    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
+  });
+
+  it("records adopted origin but leaves the agent unroutable when file revalidation fails", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    let config: OpenClawConfig = {};
+    await writeFile(join(workspace, "AGENTS.md"), "# Changed after planning\n", "utf8");
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      nowMs: 37,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      installRecord: { status: "workspace_ready" },
+      error: {
+        code: "workspace_files_failed",
+        diagnostics: [expect.objectContaining({ code: "workspace_file_conflict" })],
+      },
+    });
+    expect(config.agents?.entries?.["workspace-agent"]).toBeUndefined();
+    const originRows = openOpenClawStateDatabase({ env: stateEnv(root) })
+      .db.prepare(
+        "SELECT target_path, workspace, content_digest FROM claw_workspace_files WHERE agent_id = ? ORDER BY target_path",
+      )
+      .all("workspace-agent");
+    expect(originRows).toEqual([
+      {
+        target_path: ".",
+        workspace: plan.agent.workspace,
+        content_digest: "openclaw:adopted-workspace",
+      },
+    ]);
+    expect(
+      clawWorkspaceWasAdopted("workspace-agent", plan.agent.workspace, { env: stateEnv(root) }),
+    ).toBe(true);
+  });
+
   it("marks the root install complete after every declared file is created", async () => {
     const { root, plan } = await makePlan({ createWorkspace: false });
     let config: OpenClawConfig = {};
@@ -451,14 +652,14 @@ describe("workspace files in the consented add lifecycle", () => {
     expect(result).toMatchObject({
       status: "partial",
       workspaceFiles: [expect.objectContaining({ path: "AGENTS.md" })],
-      installRecord: { status: "config_committed" },
+      installRecord: { status: "workspace_ready" },
       error: {
         code: "workspace_files_failed",
         diagnostics: [expect.objectContaining({ code: "workspace_source_changed" })],
       },
     });
-    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
-    expect(readInstallStatus("workspace-agent", root)).toBe("config_committed");
+    expect(config.agents?.entries?.["workspace-agent"]).toBeUndefined();
+    expect(readInstallStatus("workspace-agent", root)).toBe("workspace_ready");
 
     await writeFile(join(root, "content", "policy.md"), "Policy\n", "utf8");
     const resumed = await applyClawAddPlan(plan, {
