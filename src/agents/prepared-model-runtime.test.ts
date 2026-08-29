@@ -9,9 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
-import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -31,29 +29,6 @@ const mocks = getPreparedModelRuntimeMocks();
 describe("prepared model runtime snapshots", () => {
   beforeEach(() => {
     resetPreparedModelRuntimeHarness();
-  });
-
-  it("allows a direct serialized build without a lifecycle generation guard", async () => {
-    const input = {
-      config: {},
-      agentDir: "/tmp/direct-prepared-model-runtime-build",
-      readOnly: true,
-    };
-    const build = startSerializedSnapshotBuild(
-      { input, catalogOwner: preparePublishedModelCatalogOwnerIdentity(input) },
-      new Map(),
-      1_000,
-      "static",
-    );
-
-    await expect(build.pending).resolves.toMatchObject({
-      snapshot: {
-        agentDir: input.agentDir,
-        config: input.config,
-      },
-      pluginGeneration: expect.any(Object),
-    });
-    await expect(build.completion).resolves.toBeUndefined();
   });
 
   it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {

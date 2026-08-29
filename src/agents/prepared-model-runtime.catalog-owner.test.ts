@@ -174,6 +174,29 @@ describe("prepared catalog owner lifecycle", () => {
 });
 
 describe("prepared build candidate lifetime", () => {
+  it("allows a direct serialized build without a lifecycle generation guard", async () => {
+    const input = {
+      config: {},
+      agentDir: "/tmp/direct-prepared-model-runtime-build",
+      readOnly: true,
+    };
+    const build = startSerializedSnapshotBuild(
+      { input, catalogOwner: preparePublishedModelCatalogOwnerIdentity(input) },
+      new Map(),
+      1_000,
+      "static",
+    );
+
+    await expect(build.pending).resolves.toMatchObject({
+      snapshot: {
+        agentDir: input.agentDir,
+        config: input.config,
+      },
+      pluginGeneration: expect.any(Object),
+    });
+    await expect(build.completion).resolves.toBeUndefined();
+  });
+
   it.each([
     {
       name: "single default",
