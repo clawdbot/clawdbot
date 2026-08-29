@@ -3771,9 +3771,10 @@ describe("initSessionState reset authorization", () => {
         }
         expect.soft(acknowledgement?.shouldContinue).toBe(false);
         if (allowed) {
-          expect
-            .soft(acknowledgement?.reply?.text)
-            .toBe(body === "/new" ? "✅ New session started." : "✅ Session reset.");
+          expect.soft(acknowledgement?.reply).toEqual({
+            text: body === "/new" ? "✅ New session started." : "✅ Session reset.",
+            isStatusNotice: true,
+          });
         } else if (scopes) {
           expect.soft(acknowledgement?.reply?.text).toMatch(/not authorized/i);
           expect.soft(acknowledgement?.reply?.text).toContain("operator.admin");

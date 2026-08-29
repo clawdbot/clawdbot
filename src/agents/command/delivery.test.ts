@@ -471,7 +471,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
 
     await deliverAgentCommandResultForTest({
-      payloads: [{ text: "✅ New session started.", isStatusNotice: true }],
+      payloads: [{ text: "✅ New session started.", isStatusNotice: true }] as never,
     });
 
     expect(latestOutboundDeliveryArgs().payloads).toEqual([
