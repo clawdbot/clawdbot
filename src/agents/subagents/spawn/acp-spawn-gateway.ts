@@ -59,6 +59,7 @@ export async function launchAcpChildThroughGateway(params: {
       gatewayRunId: readGatewayRunId(response) ?? params.childIdem,
       expectedSessionId: params.initializedSession.sessionId,
       expectedLifecycleRevision: params.initializedSession.sessionEntry?.lifecycleRevision,
+      releaseSessionAfterAbort: true,
     });
     params.onAcceptedRunTermination(ownership);
     params.signal.throwIfAborted();

@@ -64,6 +64,7 @@ describe("subagent spawn cleanup identity", () => {
       gatewayRunId: "gateway-run",
       expectedSessionId: "session-id",
       expectedLifecycleRevision: "session-revision",
+      releaseSessionAfterAbort: true,
       callGateway,
     });
 
@@ -92,6 +93,7 @@ describe("subagent spawn cleanup identity", () => {
         gatewayRunId: "gateway-run",
         expectedSessionId: "session-id",
         expectedLifecycleRevision: "session-revision",
+        releaseSessionAfterAbort: true,
         callGateway,
       }),
     ).resolves.toBe("changed");

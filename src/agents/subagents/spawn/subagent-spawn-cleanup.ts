@@ -116,6 +116,7 @@ export async function terminateAcceptedCollectorRun(params: {
   gatewayRunId: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  releaseSessionAfterAbort?: boolean;
   callGateway?: GatewayCall;
   timeoutMs?: number;
 }): Promise<AcceptedRunCleanupOwnership> {
@@ -135,6 +136,9 @@ export async function terminateAcceptedCollectorRun(params: {
       } catch {
         // Fall through to exact-session deletion.
       }
+    }
+    if (runAborted && params.releaseSessionAfterAbort !== true) {
+      return true;
     }
     const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
       deleteTranscript: true,
