@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -123,11 +125,25 @@ describe("cross-OS packaged upgrade lane evidence", () => {
   it("records bounded evidence when the supported Windows timeout fallback succeeds", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     arrangeSuccessfulLane();
-    mocks.runOpenClaw.mockRejectedValueOnce(
-      new Error(
+    let npmLogPath = "";
+    let capturedBeforeFallback = false;
+    mocks.runOpenClaw.mockImplementationOnce(async ({ env }) => {
+      const npmLogsDir = join(env.LOCALAPPDATA, "npm-cache", "_logs");
+      mkdirSync(npmLogsDir, { recursive: true });
+      npmLogPath = join(npmLogsDir, "2026-08-29T00_00_00_000Z-debug-0.log");
+      writeFileSync(npmLogPath, "0 error code ETIMEDOUT\n1 error token=updater-secret\n");
+      throw new Error(
         "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
-      ),
-    );
+      );
+    });
+    mocks.installPackageSpec
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => {
+        capturedBeforeFallback = readFileSync(join(logsDir, "upgrade-update.log"), "utf8").includes(
+          '"errorCodes":["ETIMEDOUT"]',
+        );
+        writeFileSync(npmLogPath, "0 verbose exit 0\n");
+      });
 
     const result = await runUpgradeLane(upgradeParams());
 
@@ -145,6 +161,10 @@ describe("cross-OS packaged upgrade lane evidence", () => {
         expect.objectContaining({ name: "update-fallback-install", status: "pass" }),
       ]),
     );
+    expect(capturedBeforeFallback).toBe(true);
+    expect(readFileSync(join(logsDir, "upgrade-update.log"), "utf8")).not.toContain(
+      "updater-secret",
+    );
   });
 
   it("retains sanitized updater timings when a later upgrade phase fails", async () => {
@@ -154,7 +174,7 @@ describe("cross-OS packaged upgrade lane evidence", () => {
       exitCode: 0,
       stdout: JSON.stringify({
         durationMs: 622_000,
-        root: String.raw`C:\private\openclaw`,
+        root: String.raw`C:\npm-updater-private-fixture\openclaw`,
         steps: [
           {
             name: "global update",
@@ -186,7 +206,7 @@ describe("cross-OS packaged upgrade lane evidence", () => {
         expect.objectContaining({ name: "run-bundled-plugin-postinstall", status: "fail" }),
       ]),
     );
-    expect(JSON.stringify(result)).not.toContain("private");
+    expect(JSON.stringify(result)).not.toContain("npm-updater-private-fixture");
     expect(JSON.stringify(result)).not.toContain("npm install");
   });
 });
