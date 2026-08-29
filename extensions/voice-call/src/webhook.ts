@@ -1076,7 +1076,14 @@ export class VoiceCallWebhookServer {
 
       if (result.text && !result.deliveredEarly) {
         this.logger.info(`AI response delivered ${callId} chars=${result.text.length}`);
-        await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
+        await this.manager.speak(callId, result.text, {
+          listenAfterPlayback: !result.endCall,
+        });
+      }
+
+      if (result.endCall) {
+        this.logger.info(`Agent requested hangup for call ${callId}`);
+        this.manager.endCallAfterPlayback(callId, "Agent hangup");
       }
     } catch (err) {
       this.logger.error(`Auto-response error: ${String(err)}`);

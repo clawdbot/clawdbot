@@ -76,6 +76,13 @@ export interface VoiceCallProvider {
   playTts(input: PlayTtsInput): Promise<void>;
 
   /**
+   * Whether `playTts` resolves only after the carrier confirms playback finished.
+   * Providers that merely acknowledge a playback request must leave this unset so
+   * callers keep a grace period before hanging up.
+   */
+  awaitsPlaybackCompletion?: (providerCallId: string) => boolean;
+
+  /**
    * Send DTMF digits to an active call.
    */
   sendDtmf?: (input: SendDtmfInput) => Promise<void>;

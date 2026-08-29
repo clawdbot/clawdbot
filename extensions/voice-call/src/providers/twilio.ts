@@ -199,6 +199,13 @@ export class TwilioProvider implements VoiceCallProvider {
     this.activeStreamCalls.delete(callSid);
   }
 
+  /** Stream playback is mark-confirmed, so `playTts` resolves after audio drains. */
+  awaitsPlaybackCompletion(providerCallId: string): boolean {
+    return Boolean(
+      this.callStreamMap.has(providerCallId) && this.ttsProvider && this.mediaStreamHandler,
+    );
+  }
+
   isConversationStreamConnectEnabled(): boolean {
     return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }

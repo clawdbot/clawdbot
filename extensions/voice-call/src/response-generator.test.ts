@@ -598,6 +598,60 @@ describe("generateVoiceResponse", () => {
     expect(result.text).toBeNull();
   });
 
+  it("reads the end_call hangup request from the spoken contract", async () => {
+    const { result } = await runGenerateVoiceResponse([
+      { text: '{"spoken":"Talk to you later.","end_call":true}' },
+    ]);
+
+    expect(result.text).toBe("Talk to you later.");
+    expect(result.endCall).toBe(true);
+  });
+
+  it("stays on the line when end_call is absent or false", async () => {
+    const { result: omitted } = await runGenerateVoiceResponse([
+      { text: '{"spoken":"Still here."}' },
+    ]);
+    const { result: explicitFalse } = await runGenerateVoiceResponse([
+      { text: '{"spoken":"Still here.","end_call":false}' },
+    ]);
+
+    expect(omitted.endCall).toBeUndefined();
+    expect(explicitFalse.endCall).toBeUndefined();
+  });
+
+  it("ignores a non-boolean end_call value", async () => {
+    const { result } = await runGenerateVoiceResponse([
+      { text: '{"spoken":"Still here.","end_call":"yes"}' },
+    ]);
+
+    expect(result.text).toBe("Still here.");
+    expect(result.endCall).toBeUndefined();
+  });
+
+  it("reads end_call from fenced JSON", async () => {
+    const { result } = await runGenerateVoiceResponse([
+      { text: '```json\n{"spoken":"Goodbye.","end_call":true}\n```' },
+    ]);
+
+    expect(result.text).toBe("Goodbye.");
+    expect(result.endCall).toBe(true);
+  });
+
+  it("hangs up on an end_call request that carries no closing words", async () => {
+    const { result } = await runGenerateVoiceResponse([{ text: '{"spoken":"","end_call":true}' }]);
+
+    expect(result.text).toBeNull();
+    expect(result.endCall).toBe(true);
+  });
+
+  it("advertises the end_call contract to the model", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([{ text: '{"spoken":"Hi."}' }]);
+    await runGenerateVoiceResponse([], { runtime });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.extraSystemPrompt).toContain('"end_call"');
+  });
+
   it("strips leading planning text when model returns plain text", async () => {
     const { result } = await runGenerateVoiceResponse([
       {

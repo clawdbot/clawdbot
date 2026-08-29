@@ -367,6 +367,53 @@ export async function sendDtmf(
   }
 }
 
+/**
+ * Hang up once the final reply has reached the caller.
+ *
+ * Providers that confirm playback drain (mark-acknowledged media streams) can end
+ * immediately because `speak` already awaited the audio. Providers that only
+ * acknowledge a playback request get the configured notify grace instead, so the
+ * closing words are not cut off mid-sentence.
+ */
+export function scheduleHangupAfterPlayback(
+  ctx: SpeakContext,
+  callId: CallId,
+  label: string,
+): void {
+  const call = ctx.activeCalls.get(callId);
+  if (!call || TerminalStates.has(call.state)) {
+    return;
+  }
+  const hangUp = async () => {
+    const currentCall = ctx.activeCalls.get(callId);
+    if (!currentCall || TerminalStates.has(currentCall.state)) {
+      return;
+    }
+    const endResult = await endCall(ctx, callId, { reason: "hangup-bot" });
+    if (!endResult.success) {
+      console.warn(
+        `[voice-call] ${label} failed to hang up call ${callId}: ${endResult.error ?? "unknown error"}`,
+      );
+    }
+  };
+
+  const playbackConfirmed = Boolean(
+    call.providerCallId && ctx.provider?.awaitsPlaybackCompletion?.(call.providerCallId),
+  );
+  if (playbackConfirmed) {
+    console.log(`[voice-call] ${label}: playback drained, hanging up call ${callId}`);
+    void hangUp();
+    return;
+  }
+
+  const delaySec = ctx.config.outbound.notifyHangupDelaySec;
+  const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
+  console.log(`[voice-call] ${label}: auto-hangup in ${delaySec}s for call ${callId}`);
+  setTimeout(() => {
+    void hangUp();
+  }, delayMs);
+}
+
 export async function speakInitialMessage(
   ctx: ConversationContext,
   providerCallId: string,
@@ -412,23 +459,7 @@ export async function speakInitialMessage(
     }
 
     if (mode === "notify") {
-      const delaySec = ctx.config.outbound.notifyHangupDelaySec;
-      const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
-      console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-      setTimeout(() => {
-        void (async () => {
-          const currentCall = ctx.activeCalls.get(call.callId);
-          if (currentCall && !TerminalStates.has(currentCall.state)) {
-            console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-            const endResult = await endCall(ctx, call.callId);
-            if (!endResult.success) {
-              console.warn(
-                `[voice-call] Notify mode failed to hang up call ${call.callId}: ${endResult.error ?? "unknown error"}`,
-              );
-            }
-          }
-        })();
-      }, delayMs);
+      scheduleHangupAfterPlayback(ctx, call.callId, "Notify mode");
     } else if (
       mode === "conversation" &&
       ctx.provider &&

@@ -10,6 +10,7 @@ import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
   initiateCall as initiateCallWithContext,
+  scheduleHangupAfterPlayback as scheduleHangupAfterPlaybackWithContext,
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
@@ -344,6 +345,13 @@ export class CallManager {
    */
   endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
     return endCallWithContext(this.getContext(), callId, options);
+  }
+
+  /**
+   * End an active call once its last reply has finished playing to the caller.
+   */
+  endCallAfterPlayback(callId: CallId, label: string): void {
+    scheduleHangupAfterPlaybackWithContext(this.getContext(), callId, label);
   }
 
   private getContext(): CallManagerContext {
