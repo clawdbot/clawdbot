@@ -64,14 +64,13 @@ function makeLegacyConfig(): OpenClawConfig {
         "openai:bravo": {
           provider: "openai",
           mode: "api_key",
-          key: "existing-key",
         },
         "openai-codex:bravo": {
           provider: "openai-codex",
-          mode: "api_key",
-          key: "legacy-key",
+          mode: "oauth",
         },
       },
+      order: { "openai-codex": ["openai-codex:bravo"] },
     },
   } as OpenClawConfig;
 }
@@ -94,6 +93,29 @@ async function writeLegacyRotationState(state: OpenClawTestState): Promise<strin
       order: { "openai-codex": ["openai-codex:bravo"] },
       lastGood: { "openai-codex": "openai-codex:bravo" },
       usageStats: { "openai-codex:bravo": { lastUsed: 123 } },
+    })}\n`,
+  );
+}
+
+async function writeLegacyCredentialStore(state: OpenClawTestState): Promise<string> {
+  return await state.writeText(
+    "agents/main/agent/auth-profiles.json",
+    `${JSON.stringify({
+      version: 1,
+      profiles: {
+        "openai:bravo": {
+          type: "api_key",
+          provider: "openai",
+          key: "existing-key",
+        },
+        "openai-codex:bravo": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: 1_900_000_000_000,
+        },
+      },
     })}\n`,
   );
 }
@@ -128,6 +150,7 @@ describe("interactive Doctor auth migration", () => {
   it("commits config credentials and standalone state with one mapping after acceptance", async () => {
     const state = await makeState();
     const cfg = makeLegacyConfig();
+    await writeLegacyCredentialStore(state);
     await writeLegacyRotationState(state);
     const ctx = createDoctorHealthFlowContext({
       cfg,
@@ -142,7 +165,7 @@ describe("interactive Doctor auth migration", () => {
     expect(loadMigratedStore(state)).toMatchObject({
       profiles: {
         "openai:bravo": { key: "existing-key" },
-        "openai:chatgpt-bravo": { key: "legacy-key" },
+        "openai:chatgpt-bravo": { access: "legacy-access" },
       },
       order: { openai: ["openai:chatgpt-bravo"] },
       lastGood: { openai: "openai:chatgpt-bravo" },
@@ -150,11 +173,13 @@ describe("interactive Doctor auth migration", () => {
     });
     expect(ctx.cfg.auth?.profiles).toHaveProperty("openai:chatgpt-bravo");
     expect(ctx.cfg.auth?.profiles).not.toHaveProperty("openai-codex:bravo");
+    expect(ctx.cfg.auth?.order?.openai).toEqual(["openai:chatgpt-bravo"]);
   });
 
   it("leaves config and standalone state unchanged when migration is declined", async () => {
     const state = await makeState();
     const cfg = makeLegacyConfig();
+    const authPath = await writeLegacyCredentialStore(state);
     const statePath = await writeLegacyRotationState(state);
     const ctx = createDoctorHealthFlowContext({
       cfg,
@@ -167,6 +192,7 @@ describe("interactive Doctor auth migration", () => {
     await authProfilesContribution().run(ctx);
 
     expect(ctx.cfg).toEqual(cfg);
+    expect(fs.existsSync(authPath)).toBe(true);
     expect(fs.existsSync(statePath)).toBe(true);
     expect(loadMigratedStore(state)).toBeNull();
   });

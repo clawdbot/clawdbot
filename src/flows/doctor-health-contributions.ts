@@ -93,8 +93,8 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     openAICodexAuthProfileIdMap,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
-  if (authProfileMigration.configChanged) {
-    // The migration strips credentials only after verified import, so this also proves consent.
+  if (authProfileMigration.migrationApplied) {
+    // The candidate is safe only after the migration verifies and archives its source.
     ctx.cfg = authConfigCandidate;
   }
   await maybeMigrateLegacyPluginModelCatalogs({
