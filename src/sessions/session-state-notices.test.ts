@@ -1,8 +1,10 @@
 // Session-state notice context key decoding: strict UTF-8 after hex validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   decodeSessionStateNoticeContextKey,
+  decodeSessionStateNoticeTarget,
   enqueueSessionStateNotice,
 } from "./session-state-notices.js";
 
@@ -16,6 +18,7 @@ vi.mock("../infra/system-events.js", () => ({
 
 beforeEach(() => {
   vi.mocked(requestHeartbeat).mockClear();
+  vi.mocked(enqueueSystemEvent).mockClear();
 });
 
 function encodeTarget(sessionKey: string): string {
@@ -52,6 +55,7 @@ describe("enqueueSessionStateNotice", () => {
     const notice = {
       watcherSessionKey: "agent:main:main",
       targetSessionKey: "agent:main:slack:channel:C01234567",
+      targetAgentId: "main",
       lastSeenSequence: 42,
     };
 
@@ -67,5 +71,21 @@ describe("enqueueSessionStateNotice", () => {
     vi.mocked(requestHeartbeat).mockClear();
     enqueueSessionStateNotice({ ...notice, queueOnly: true });
     expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the target agent in notices for bare session keys", () => {
+    enqueueSessionStateNotice({
+      watcherSessionKey: "agent:main:main",
+      targetSessionKey: "global",
+      targetAgentId: "ops",
+      lastSeenSequence: 7,
+    });
+
+    const contextKey = vi.mocked(enqueueSystemEvent).mock.calls[0]?.[1]?.contextKey;
+    expect(contextKey).toEqual(expect.stringMatching(/^session-state:/));
+    expect(decodeSessionStateNoticeTarget(contextKey!)).toEqual({
+      agentId: "ops",
+      sessionKey: "global",
+    });
   });
 });

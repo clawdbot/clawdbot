@@ -22,7 +22,7 @@ import {
   type SystemEvent,
 } from "../../infra/system-events.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
-import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
+import { decodeSessionStateNoticeTarget } from "../../sessions/session-state-notices.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
@@ -127,9 +127,9 @@ export async function drainFormattedSystemEvents(params: {
   );
   const sessionStateTargets = queued
     .map((event) =>
-      event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
+      event.contextKey ? decodeSessionStateNoticeTarget(event.contextKey) : undefined,
     )
-    .filter((target): target is string => target !== undefined);
+    .filter((target): target is NonNullable<typeof target> => target !== undefined);
   if (sessionStateTargets.length > 0) {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }

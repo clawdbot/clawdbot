@@ -2,12 +2,49 @@
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import type { SessionStateWatchTarget } from "./session-watch-target.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const SESSION_STATE_WAKE_COALESCE_MS = 20_000;
 
 function encodeNoticeTarget(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("hex");
+}
+
+function encodeNoticeTargetWithAgent(target: SessionStateWatchTarget): string {
+  return Buffer.from(JSON.stringify([target.agentId, target.sessionKey]), "utf8").toString("hex");
+}
+
+export function decodeSessionStateNoticeTarget(
+  contextKey: string,
+): SessionStateWatchTarget | undefined {
+  const sessionKey = decodeSessionStateNoticeContextKey(contextKey);
+  if (sessionKey !== undefined) {
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (agentId) {
+      return { agentId, sessionKey };
+    }
+  }
+  if (!contextKey.startsWith(SESSION_STATE_CONTEXT_PREFIX)) {
+    return undefined;
+  }
+  const encoded = contextKey.slice(SESSION_STATE_CONTEXT_PREFIX.length);
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(encoded, "hex").toString("utf8"));
+    if (
+      !Array.isArray(decoded) ||
+      decoded.length !== 2 ||
+      typeof decoded[0] !== "string" ||
+      typeof decoded[1] !== "string" ||
+      !decoded[0] ||
+      !decoded[1]
+    ) {
+      return undefined;
+    }
+    return { agentId: decoded[0], sessionKey: decoded[1] };
+  } catch {
+    return undefined;
+  }
 }
 
 export function decodeSessionStateNoticeContextKey(contextKey: string): string | undefined {
@@ -54,12 +91,20 @@ export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   targetSessionKey: string;
+  targetAgentId: string;
   lastSeenSequence: number;
   queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
-    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
+    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${
+      parseAgentSessionKey(params.targetSessionKey)?.agentId === params.targetAgentId
+        ? encodeNoticeTarget(params.targetSessionKey)
+        : encodeNoticeTargetWithAgent({
+            agentId: params.targetAgentId,
+            sessionKey: params.targetSessionKey,
+          })
+    }`,
     ...(params.queueOnly ? { replace: true } : {}),
   });
   // Group activity is ambient context. Coalesce it for the next main turn instead

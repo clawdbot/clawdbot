@@ -437,6 +437,68 @@ describe("session state events", () => {
     expect(getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
   });
 
+  it("keeps global target watch cursors independent across agents", () => {
+    const database = createDatabaseOptions();
+    expect(
+      registerSessionStateWatch(
+        { watcherSessionKey: watcher, targetSessionKey: "global", targetAgentId: "main" },
+        database,
+      ),
+    ).toBe(true);
+    expect(
+      registerSessionStateWatch(
+        { watcherSessionKey: watcher, targetSessionKey: "global", targetAgentId: "ops" },
+        database,
+      ),
+    ).toBe(true);
+
+    recordSessionStateEvent(
+      {
+        sessionKey: "global",
+        agentId: "main",
+        kind: "goal_changed",
+        actorType: "human",
+        summary: "main goal",
+        watcherSessionKeys: [],
+      },
+      database,
+    );
+    recordSessionStateEvent(
+      {
+        sessionKey: "global",
+        agentId: "ops",
+        kind: "goal_changed",
+        actorType: "human",
+        summary: "ops goal",
+        watcherSessionKeys: [],
+      },
+      database,
+    );
+
+    const rows = openOpenClawStateDatabase(database)
+      .db.prepare(
+        `SELECT target_session_key, material_sequence
+         FROM session_watch_cursors
+         WHERE watcher_session_key = ?
+         ORDER BY material_sequence`,
+      )
+      .all(watcher) as Array<{ target_session_key: string; material_sequence: number }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.target_session_key).not.toBe(rows[1]?.target_session_key);
+    expect(rows.map((row) => row.material_sequence)).toEqual([1, 2]);
+
+    handleSessionStateSessionDeleted("global", "ops", database);
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          `SELECT COUNT(*) AS count
+           FROM session_watch_cursors
+           WHERE watcher_session_key = ?`,
+        )
+        .get(watcher),
+    ).toEqual({ count: 1 });
+  });
+
   it("acks only drained session-state entries and ignores ordinary events", async () => {
     const database = createDatabaseOptions();
     seedChild(database);
