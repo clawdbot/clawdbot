@@ -133,6 +133,7 @@ export function createPatchedAccountSetupAdapter<
   ensureAccountEnabled?: boolean;
   validateInput?: ChannelSetupAdapter<Input>["validateInput"];
   buildPatch: (input: Input) => Record<string, unknown>;
+  buildClearFields?: (input: Input) => readonly string[];
 }): ChannelSetupAdapter<Input> {
   return {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -161,6 +162,7 @@ export function createPatchedAccountSetupAdapter<
         accountId,
         patch,
         accountPatch: patch,
+        clearFields: params.buildClearFields?.(input),
         ensureChannelEnabled: params.ensureChannelEnabled ?? !params.alwaysUseAccounts,
         ensureAccountEnabled: params.ensureAccountEnabled ?? true,
         scopeDefaultToAccounts: params.alwaysUseAccounts,
@@ -220,6 +222,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
   hasCredentials: (input: ChannelSetupInput) => boolean;
   validateInput?: ChannelSetupAdapter["validateInput"];
   buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
+  buildClearFields?: (input: ChannelSetupInput) => readonly string[];
 }): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
     channelKey: params.channelKey,
@@ -236,6 +239,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
       return params.validateInput?.(inputParams) ?? null;
     },
     buildPatch: params.buildPatch,
+    buildClearFields: params.buildClearFields,
   });
 }
 

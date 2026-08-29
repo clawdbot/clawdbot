@@ -357,6 +357,30 @@ describe("createPatchedAccountSetupAdapter", () => {
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("enabled");
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("authDir");
   });
+
+  it("retires buildClearFields output before applying the replacement patch", () => {
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "demo-setup",
+      buildPatch: (input) =>
+        input.tokenFile ? { tokenFile: input.tokenFile } : { botToken: input.token },
+      buildClearFields: (input) => (input.tokenFile ? ["botToken"] : ["tokenFile"]),
+    });
+    const fromInline = adapter.applyAccountConfig({
+      cfg: asConfig({}),
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { token: "inline-tok" },
+    });
+
+    const rotated = adapter.applyAccountConfig({
+      cfg: fromInline,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { tokenFile: "/run/secrets/tok" },
+    });
+
+    const channel = channelRecord(rotated, "demo-setup");
+    expect(channel.tokenFile).toBe("/run/secrets/tok");
+    expect(channel).not.toHaveProperty("botToken");
+  });
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {

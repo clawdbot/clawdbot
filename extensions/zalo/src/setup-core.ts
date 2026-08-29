@@ -39,6 +39,16 @@ export const zaloSetupAdapter = {
           : input.token
             ? { botToken: input.token }
             : {},
+    // Resolution prefers inline botToken over tokenFile, so writing one source
+    // has to retire the other or the stale credential keeps winning (see #132231).
+    buildClearFields: (input) =>
+      input.useEnv
+        ? ["tokenFile", "botToken"]
+        : input.tokenFile
+          ? ["botToken"]
+          : input.token
+            ? ["tokenFile"]
+            : [],
   }),
   singleAccountKeysToMove: ["webhookSecret", "tokenFile"],
 };

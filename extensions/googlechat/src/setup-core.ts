@@ -48,6 +48,17 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
       ...(webhookUrl ? { webhookUrl } : {}),
     };
   },
+  // Resolution prefers inline serviceAccount over serviceAccountFile, so writing
+  // one source has to retire the other or the stale credential (including the
+  // plaintext private key) keeps winning (see #132231).
+  buildClearFields: (input) =>
+    input.useEnv
+      ? ["serviceAccountFile", "serviceAccount"]
+      : input.tokenFile
+        ? ["serviceAccount"]
+        : input.token
+          ? ["serviceAccountFile"]
+          : [],
 });
 
 export const googlechatSetupContract = defineChannelSetupContract({
