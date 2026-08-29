@@ -4394,46 +4394,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(hasRetainedManagedNpmInstallMarker(pluginDir)).toBe(false);
   });
 
-  it("surfaces non-actionable updater skips for plugins without missing dependencies", async () => {
-    const missingInstallPath = path.join(
-      tempDirs.make("openclaw-plugin-dep-"),
-      "node_modules",
-      "demo",
-    );
-    const records = {
-      demo: {
-        source: "npm",
-        spec: "@openclaw/plugin-demo@1.0.0",
-        installPath: missingInstallPath,
-      },
-    };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [], diagnostics: [] });
-    const skippedMessage = 'Skipping "demo" (disabled by plugin config).';
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: false,
-      config: { plugins: { installs: records } },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          message: skippedMessage,
-        },
-      ],
-    });
-
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: { plugins: { entries: { demo: { enabled: true } } } },
-      env: {},
-    });
-
-    expect(result.warnings).toContain(skippedMessage);
-    expect(result.failedPluginIds).toEqual(["demo"]);
-    expect(result.changes).toEqual([]);
-  });
-
   it("reinstalls a known configured plugin from the catalog when its recorded install path is missing", async () => {
     const records = installedRecords("discord", {
       spec: "@openclaw/discord",

@@ -29,6 +29,7 @@ import {
 } from "./missing-configured-plugin-install.ids.js";
 import {
   installCandidate,
+  isActionableClawHubSkippedOutcome,
   isClawHubReviewNotice,
   resolveRecordInstallPath,
 } from "./missing-configured-plugin-install.install.js";
@@ -351,9 +352,13 @@ async function repairMissingPluginInstallsWithLease(
                 ? `Repaired broken installed plugin "${outcome.pluginId}".`
                 : `Repaired missing configured plugin "${outcome.pluginId}".`,
           );
-        } else {
-          // Every non-success updater outcome is actionable during repair; silently
-          // dropping one can leave broken state without an operator signal.
+        } else if (
+          outcome.status === "error" ||
+          isActionableClawHubSkippedOutcome(outcome) ||
+          installedPluginIdsWithMissingRequiredDependencies.has(outcome.pluginId)
+        ) {
+          // A retained dependency repair must surface every non-success outcome;
+          // ordinary disabled-plugin skips remain intentional no-ops.
           recordFailure(outcome.pluginId, [outcome.message], outcome.code);
         }
       }
