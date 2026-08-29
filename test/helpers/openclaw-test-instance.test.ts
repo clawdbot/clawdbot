@@ -1,5 +1,5 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 import { isProcessAlive } from "./process-wait.js";
-import { createDeferred } from "./promise.js";
+import { createDeferred, withTestTimeout } from "./promise.js";
 
 const MIGRATION_CONVERGENCE_REFUSAL =
   "OpenClaw plugin migration inputs changed during startup convergence;";
@@ -189,7 +189,11 @@ const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
-if (kind === "late-refuse") { const delayed = spawn(process.execPath, ["-e", 'setTimeout(() => process.stderr.write(process.argv[1]), 50)', refusal + " delayed fixture\\n"], { stdio: ["ignore", "ignore", "inherit"] }); recordFixtureProcess(delayed.pid); process.exit(1); }
+if (kind === "late-refuse") {
+  const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', controlUrl, refusal + " delayed fixture\\n"], { stdio: ["ignore", "ignore", "inherit"] });
+  recordFixtureProcess(delayed.pid);
+  process.exit(1);
+}
 if (kind === "resist-after-exit") {
   const resistant = spawn(process.execPath, ["-e", 'const fs = require("node:fs");fs.writeFileSync(process.argv[1], String(process.pid));process.on("SIGTERM", () => fs.appendFileSync(process.argv[2], "SIGTERM"));process.send("ready");setInterval(() => {}, 1_000);', tracePath + ".resistant-pid", tracePath + ".signals"], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
   await new Promise((resolve) => resistant.once("message", resolve));
@@ -394,8 +398,41 @@ describe("openclaw test instance", () => {
   it.each(["refuse", "late-refuse"])(
     "restarts one %s refusal with identical launch state and owns the ready child",
     async (refusalAction) => {
-      const { instance, readAttempts } = await createFakeGateway(`${refusalAction},ready`);
-      await instance.startGateway();
+      const control = refusalAction === "late-refuse" ? await createGatewayControl() : undefined;
+      const { instance, readAttempts } = await createFakeGateway(
+        `${refusalAction},ready`,
+        1_000,
+        1_500,
+        control,
+      );
+      const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+      if (control) {
+        control.observers.onLaunch = () => {
+          if (control.launches.length !== 1) return;
+          const leader = instance.child;
+          if (!leader) {
+            exited.reject(new Error("fixture launched without a process owner"));
+            return;
+          }
+          leader.once("exit", (code, signal) => exited.resolve({ code, signal }));
+        };
+      }
+      const startup = trackOperation(instance.startGateway());
+      try {
+        if (control) {
+          expect(await Promise.race([exited.promise, startup])).toEqual({ code: 1, signal: null });
+          await Promise.race([control.reached, startup]);
+          expect(instance.child?.stderr.closed).toBe(false);
+          expect(instance.logs()).not.toContain(MIGRATION_CONVERGENCE_REFUSAL);
+          // /launch installs the exit observer before the leader proceeds. Only
+          // release its waiting stderr writer after that native exit, never a timer.
+          await control.release();
+        }
+        await startup;
+      } finally {
+        control?.unblock();
+        await Promise.allSettled([startup]);
+      }
       const attempts = await readAttempts();
       expect(attempts).toHaveLength(2);
       expect(attempts[0]?.pid).not.toBe(attempts[1]?.pid);
@@ -511,35 +548,63 @@ describe("openclaw test instance", () => {
   it.runIf(process.platform !== "win32")(
     "reaps terminal children with inherited stdio before starting a new gateway",
     async () => {
+      const stopTimeoutMs = 100;
       const { instance, readAttempts, tracePath } = await createFakeGateway(
         "terminal-drain,ready",
         300,
-        100,
+        stopTimeoutMs,
       );
 
-      const startupError = await instance.startGateway().catch((error: unknown) => error);
-      expect(startupError).toBeInstanceOf(Error);
-      expect((startupError as Error).message).toContain(
-        "gateway exited before readiness (code=7 signal=null)",
-      );
-      expect((startupError as Error).message).toContain("terminal startup failure");
-      expect(instance.child?.exitCode).toBe(7);
-      expect(instance.child?.stderr.closed).toBe(false);
-      const firstAttempt = (await readAttempts())[0];
-      const drainingPid = Number(await fs.readFile(`${tracePath}.draining-pid`, "utf8"));
-      expect(isProcessAlive(drainingPid)).toBe(true);
+      const startup = trackOperation(instance.startGateway());
+      try {
+        const startupError = await startup.catch((error: unknown) => error);
+        expect(startupError).toBeInstanceOf(Error);
+        expect((startupError as Error).message).toContain(
+          "gateway exited before readiness (code=7 signal=null)",
+        );
+        expect((startupError as Error).message).toContain("terminal startup failure");
+        const firstChild = instance.child;
+        expect(firstChild?.exitCode).toBe(7);
+        expect(firstChild?.stderr.closed).toBe(false);
+        if (!firstChild) throw new Error("terminal fixture lost its process owner");
+        const firstAttempt = (await readAttempts())[0];
+        const drainingPid = Number(await fs.readFile(`${tracePath}.draining-pid`, "utf8"));
+        expect(isProcessAlive(drainingPid)).toBe(true);
 
-      await fs.writeFile(`${tracePath}.draining-release`, "");
-      await instance.startGateway();
+        // Keep the inherited pipe held through a complete failed restart: eventual
+        // replacement after release alone cannot prove that stale ownership blocked it.
+        await expect(trackOperation(instance.startGateway())).rejects.toThrow(
+          new Error(`gateway process did not close before stop deadline\n${instance.logs()}`),
+        );
+        expect(instance.child).toBe(firstChild);
+        expect(firstChild.stderr.closed).toBe(false);
+        expect(isProcessAlive(drainingPid)).toBe(true);
+        expect(await readAttempts()).toHaveLength(1);
 
-      const attempts = await readAttempts();
-      expect(attempts).toHaveLength(2);
-      expect(attempts[1]?.pid).not.toBe(firstAttempt?.pid);
-      expect(instance.child?.pid).toBe(attempts[1]?.pid);
-      await instance.stopGateway();
-      expect(instance.child).toBeUndefined();
-      expect(isProcessAlive(attempts[1]?.pid as number)).toBe(false);
-      await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
+        // Register before release, but charge only post-release drain to the stop budget.
+        const closed = trackOperation(once(firstChild, "close"));
+        await fs.writeFile(`${tracePath}.draining-release`, "");
+        await withTestTimeout(
+          closed,
+          stopTimeoutMs * 2,
+          "terminal fixture did not close after release",
+        );
+        expect(firstChild.stdout.closed).toBe(true);
+        expect(firstChild.stderr.closed).toBe(true);
+        await trackOperation(instance.startGateway());
+
+        const attempts = await readAttempts();
+        expect(attempts).toHaveLength(2);
+        expect(attempts[1]?.pid).not.toBe(firstAttempt?.pid);
+        expect(instance.child?.pid).toBe(attempts[1]?.pid);
+        await instance.stopGateway();
+        expect(instance.child).toBeUndefined();
+        expect(isProcessAlive(attempts[1]?.pid as number)).toBe(false);
+        await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
+      } finally {
+        await fs.writeFile(`${tracePath}.draining-release`, "");
+        await Promise.allSettled([startup]);
+      }
     },
   );
 
