@@ -32,23 +32,53 @@ export async function readCodexAppServerProcess(
   return rows?.find((row) => row.pid === pid);
 }
 
+// Absent processes and failed inspection both return undefined. Neither grants
+// callers authority to signal a process.
+export async function readCodexAppServerProcessCommand(
+  pid: number,
+  deadline: number,
+): Promise<string | undefined> {
+  if (process.platform === "linux") {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return undefined;
+    }
+    try {
+      const command = await readFile(`/proc/${pid}/cmdline`, {
+        encoding: "utf8",
+        signal: AbortSignal.timeout(remainingMs),
+      });
+      return command.split("\0").join(" ").trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const output = await readProcessOutput(["-o", "command=", "-p", String(pid)], deadline);
+  return output?.split("\n")[0]?.trim() || undefined;
+}
+
 async function readProcesses(
   args: string[],
   deadline: number,
 ): Promise<PosixProcess[] | undefined> {
+  const output = await readProcessOutput(args, deadline);
+  return output === undefined ? undefined : parseProcesses(output);
+}
+
+async function readProcessOutput(args: string[], deadline: number): Promise<string | undefined> {
   const remainingMs = deadline - Date.now();
   if (remainingMs <= 0) {
     return undefined;
   }
-  return await new Promise<PosixProcess[] | undefined>((resolve) => {
+  return await new Promise<string | undefined>((resolve) => {
     let settled = false;
-    const settle = (processes: PosixProcess[] | undefined) => {
+    const settle = (output: string | undefined) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      resolve(processes);
+      resolve(output);
     };
     const inspector = execFile(
       "ps",
@@ -59,7 +89,7 @@ async function readProcesses(
         env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
       },
       (error, stdout) => {
-        settle(error ? undefined : parseProcesses(stdout));
+        settle(error ? undefined : stdout);
       },
     );
     const timer = setTimeout(
