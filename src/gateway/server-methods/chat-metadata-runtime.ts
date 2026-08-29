@@ -61,10 +61,11 @@ type PreparedAgentProjection = {
   metadata: ChatMetadataResult;
   modelCatalog: ModelCatalogEntry[];
 };
+type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
 type AgentProjectionEntry =
-  | { state: "pending"; promise: Promise<PreparedAgentProjection> }
-  | { state: "ready"; projection: PreparedAgentProjection };
+  | { state: "pending"; promise: Promise<PreparedProjection<PreparedAgentProjection>> }
+  | { state: "ready"; projection: PreparedProjection<PreparedAgentProjection> };
 
 type PreparedMetadataGeneration = {
   epoch: number;
@@ -102,7 +103,7 @@ type ChatMetadataRuntimeDeps = {
     facts: PreparedAgentFacts;
     preferredProfileId?: string;
     lockedProfileId?: string;
-  }) => Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }>;
+  }) => Promise<PreparedProjection<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }>>;
 };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
@@ -236,8 +237,8 @@ async function defaultBuildProjection(params: {
   facts: PreparedAgentFacts;
   preferredProfileId?: string;
   lockedProfileId?: string;
-}): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }> {
-  const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
+}): Promise<PreparedProjection<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }>> {
+  const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list control-plane reads so a slow provider cannot delay chat startup.
@@ -256,9 +257,9 @@ async function defaultBuildProjection(params: {
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });
-  const [modelCatalog, metadata] = await Promise.all([
+  const [modelCatalog, readModels] = await Promise.all([
     projector.projectCatalog(),
-    buildModelsListResult({
+    prepareModelsListResult({
       context: params.context,
       agentId: params.facts.agentId,
       params: { view: "configured" },
@@ -271,7 +272,10 @@ async function defaultBuildProjection(params: {
       catalogProjector: projector,
     }),
   ]);
-  return { modelCatalog, models: metadata.models };
+  return {
+    read: () => ({ modelCatalog, models: readModels.read().models }),
+    isCurrent: readModels.isCurrent,
+  };
 }
 
 export function createGatewayChatMetadataRuntime(params: {
@@ -316,11 +320,11 @@ export function createGatewayChatMetadataRuntime(params: {
       }
     | undefined;
 
-  const projectAgent = (
+  const projectAgent = async (
     generation: PreparedMetadataGeneration,
     agent: PreparedAgentMetadata,
     sessionEntry?: ChatMetadataSessionEntry,
-  ): Promise<PreparedAgentProjection> => {
+  ): Promise<PreparedProjection<PreparedAgentProjection>> => {
     const profiles = resolveSessionProfiles(sessionEntry);
     const neutral =
       profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
@@ -330,7 +334,14 @@ export function createGatewayChatMetadataRuntime(params: {
     const key = neutral ? agent.agentId : sessionProjectionKey(agent.agentId, profiles);
     const existing = projections.get(key);
     if (existing) {
-      return existing.state === "ready" ? Promise.resolve(existing.projection) : existing.promise;
+      const prepared = existing.state === "ready" ? existing.projection : await existing.promise;
+      if (prepared.isCurrent()) {
+        return prepared;
+      }
+      if (projections.get(key) === existing) {
+        projections.delete(key);
+      }
+      return projectAgent(generation, agent, sessionEntry);
     }
     const projection = deps
       .buildProjection({
@@ -338,21 +349,27 @@ export function createGatewayChatMetadataRuntime(params: {
         facts: agent,
         ...profiles,
       })
-      .then(({ modelCatalog, ...models }) => {
-        const prepared = {
-          modelCatalog,
-          metadata: {
-            ...models,
-            ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
-            swarmEnabled: agent.swarmEnabled,
+      .then((prepared) => {
+        const preparedProjection: PreparedProjection<PreparedAgentProjection> = {
+          isCurrent: prepared.isCurrent,
+          read: () => {
+            const { modelCatalog, ...models } = prepared.read();
+            return {
+              modelCatalog,
+              metadata: {
+                ...models,
+                ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
+                swarmEnabled: agent.swarmEnabled,
+              },
+            };
           },
         };
         // Only this pending entry may publish its settlement; eviction or invalidation
         // must not let an obsolete completion replace a newer profile projection.
         if (generation.epoch === invalidationEpoch && projections.get(key) === entry) {
-          projections.set(key, { state: "ready", projection: prepared });
+          projections.set(key, { state: "ready", projection: preparedProjection });
         }
-        return prepared;
+        return preparedProjection;
       })
       .catch((error: unknown) => {
         if (projections.get(key) === entry) {
@@ -487,7 +504,7 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const readCurrent = async <Result>(
-    project: (generation: PreparedMetadataGeneration) => Promise<Result>,
+    project: (generation: PreparedMetadataGeneration) => Promise<PreparedProjection<Result>>,
   ): Promise<Result> => {
     for (;;) {
       const replacementPromise = replacement?.promise;
@@ -539,11 +556,15 @@ export function createGatewayChatMetadataRuntime(params: {
         }
       }
       try {
-        const result = await project(generation);
+        const readProjection = await project(generation);
         // Lazy projections may outlive their generation. Never return an obsolete success after
         // invalidation; retry through the replacement gate so the caller sees one coherent epoch.
-        if (current === generation && generation.epoch === invalidationEpoch) {
-          return result;
+        if (
+          current === generation &&
+          generation.epoch === invalidationEpoch &&
+          readProjection.isCurrent()
+        ) {
+          return readProjection.read();
         }
       } catch (error) {
         if (current === generation && generation.epoch === invalidationEpoch) {
@@ -562,7 +583,8 @@ export function createGatewayChatMetadataRuntime(params: {
           `prepared chat metadata is unavailable for agent "${agentId}"`,
         );
       }
-      return (await projectAgent(generation, agent, readParams.sessionEntry)).metadata;
+      const readProjection = await projectAgent(generation, agent, readParams.sessionEntry);
+      return { read: () => readProjection.read().metadata, isCurrent: readProjection.isCurrent };
     });
 
   const readStartup = async (
@@ -578,7 +600,7 @@ export function createGatewayChatMetadataRuntime(params: {
     });
     const projectStartup = async (
       generation: PreparedMetadataGeneration,
-    ): Promise<ChatStartupProjectionResult> => {
+    ): Promise<PreparedProjection<ChatStartupProjectionResult>> => {
       const agentId = normalizeAgentId(readParams.agentId);
       const agent = generation.agentsById.get(agentId);
       if (!agent) {
@@ -586,9 +608,16 @@ export function createGatewayChatMetadataRuntime(params: {
           `prepared chat startup projection is unavailable for agent "${agentId}"`,
         );
       }
-      const neutralProjection = await projectAgent(generation, agent);
-      const sessionProjection = await projectAgent(generation, agent, readParams.sessionEntry);
-      return assemble(neutralProjection, sessionProjection);
+      const readNeutral = await projectAgent(generation, agent);
+      const readSession = await projectAgent(generation, agent, readParams.sessionEntry);
+      return {
+        isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
+        read: () => {
+          const neutral = readNeutral.read();
+          const session = readSession === readNeutral ? neutral : readSession.read();
+          return assemble(neutral, session);
+        },
+      };
     };
     const profiles = resolveSessionProfiles(readParams.sessionEntry);
     if (readParams.readPolicy !== "ready" && profiles.preferredProfileId) {
@@ -614,9 +643,17 @@ export function createGatewayChatMetadataRuntime(params: {
     const session = profiles.preferredProfileId
       ? generation.sessionProjectionByKey.get(sessionProjectionKey(agentId, profiles))
       : neutral;
-    return neutral?.state === "ready" && session?.state === "ready"
-      ? assemble(neutral.projection, session.projection)
-      : undefined;
+    if (
+      neutral?.state !== "ready" ||
+      session?.state !== "ready" ||
+      !neutral.projection.isCurrent() ||
+      !session.projection.isCurrent()
+    ) {
+      return undefined;
+    }
+    const neutralProjection = neutral.projection.read();
+    const sessionProjection = session === neutral ? neutralProjection : session.projection.read();
+    return assemble(neutralProjection, sessionProjection);
   };
 
   const invalidate = () => {

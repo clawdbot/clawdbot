@@ -8,6 +8,7 @@ import {
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
+  prepareModelsListResult,
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -59,8 +60,21 @@ describe("models.list provider catalog outcomes", () => {
     });
   });
 
-  it("marks configured rows unavailable when stored credentials were rejected", async () => {
+  it.each([
+    { name: "provider auth", rejectionScope: undefined, usageStats: undefined },
+    {
+      name: "model-route auth",
+      rejectionScope: "catalog" as const,
+      usageStats: {
+        "openai:chatgpt": {
+          disabledUntil: 2_000_000_000_000,
+          disabledReason: "auth_permanent" as const,
+        },
+      },
+    },
+  ])("marks configured API-key rows unavailable after $name rejection", async (testCase) => {
     const config = {
+      auth: { order: { openai: ["openai:chatgpt"] } },
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.6-sol" },
@@ -72,8 +86,8 @@ describe("models.list provider catalog outcomes", () => {
       id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
       provider: "openai",
-      api: "openai-chatgpt-responses" as const,
-      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
     };
     const snapshot = markPreparedModelCatalogFull({
       entries: [model],
@@ -82,6 +96,7 @@ describe("models.list provider catalog outcomes", () => {
         {
           provider: "openai",
           profileId: "openai:chatgpt",
+          ...(testCase.rejectionScope ? { rejectionScope: testCase.rejectionScope } : {}),
           status: "auth-rejected" as const,
         },
       ],
@@ -95,11 +110,9 @@ describe("models.list provider catalog outcomes", () => {
         version: 1,
         profiles: {
           "openai:chatgpt": {
-            type: "oauth",
+            type: "api_key",
             provider: "openai",
-            access: "rejected-access-token",
-            refresh: "rejected-refresh-token",
-            expires: Date.now() + 30 * 60_000,
+            key: "rejected-api-key",
           },
           "openai:other": {
             type: "oauth",
@@ -109,6 +122,7 @@ describe("models.list provider catalog outcomes", () => {
             expires: Date.now() + 30 * 60_000,
           },
         },
+        ...(testCase.usageStats ? { usageStats: testCase.usageStats } : {}),
       },
       preferredProfileId: "openai:chatgpt",
     });
@@ -247,17 +261,18 @@ describe("models.list provider catalog outcomes", () => {
       metadataSnapshot,
       preparedAuthStore: emptyAuthStore,
     });
-    vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
+    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
       ...evaluation,
       routeResolution: null,
     });
+    const evaluateNative = vi.spyOn(projector, "evaluateNative");
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot: vi.fn(),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
 
-    const result = await buildModelsListResult({
+    const prepared = await prepareModelsListResult({
       context,
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config, snapshot },
@@ -265,6 +280,12 @@ describe("models.list provider catalog outcomes", () => {
       catalogProjector: projector,
     });
 
-    expect(result.models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    const hostEvaluations = evaluateEntry.mock.calls.length;
+    evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+    evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
+    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+    expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
   });
 });

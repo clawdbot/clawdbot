@@ -24,6 +24,7 @@ import {
   resolveBackgroundTaskFailureStatus,
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
+import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
@@ -47,12 +48,6 @@ import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_COMPLETION_EVIDENCE_MAX_BYTES = 100 * 1024;
-type ApplyRuntimeControls = (params: {
-  sessionKey: string;
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-  meta: SessionAcpMeta;
-}) => Promise<void>;
 
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
@@ -63,7 +58,6 @@ export async function runManagerTurn(params: {
   activeTurnBySession: Map<string, ActiveTurnState>;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
-  applyRuntimeControls: ApplyRuntimeControls;
   setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
     startedAt: number;
@@ -225,11 +219,21 @@ export async function runManagerTurn(params: {
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
-          await params.applyRuntimeControls({
+          await applyManagerRuntimeControls({
             sessionKey,
             runtime,
             handle,
             meta,
+            getCachedRuntimeState: (key) => params.runtimeHandles.get(key),
+            onOptionsChanged: async (runtimeOptions) => {
+              await params.writeSessionMeta({
+                cfg: input.cfg,
+                sessionKey,
+                mutate: (current) => (current ? { ...current, runtimeOptions } : null),
+                failOnError: true,
+              });
+              meta = { ...ensured.meta, runtimeOptions };
+            },
           });
 
           await params.setSessionState({

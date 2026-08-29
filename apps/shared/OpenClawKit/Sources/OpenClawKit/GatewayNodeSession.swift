@@ -1197,8 +1197,8 @@ extension GatewayNodeSession {
                     id: request.id,
                     ok: false,
                     error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "UNAVAILABLE: node lifecycle transition in progress")),
+                        code: .notReady,
+                        message: "Node lifecycle transition in progress")),
                 channel: channel,
                 socketGeneration: socketGeneration)
             return

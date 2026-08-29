@@ -126,6 +126,7 @@ function attributedSuggestionClient(
       syntheticClient: true,
       senderAttribution: {
         id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
         name: `Suggested by ${label}`,
       },
     },

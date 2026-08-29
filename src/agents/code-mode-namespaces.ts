@@ -18,6 +18,7 @@ import {
   type CodeModeApiVirtualFile,
   type McpApiServerDoc,
 } from "./code-mode-mcp-api.js";
+import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
 
 export type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 
@@ -643,9 +644,17 @@ export function createCodeModeNamespaceRuntime(
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const input = target.input ? await target.input(args) : (args[0] ?? {});
+      let input: unknown;
+      try {
+        input = target.input ? await target.input(args) : (args[0] ?? {});
+      } catch (error) {
+        if (target.local) {
+          throw registerToolEffectReceipt(error, { state: "failed_no_effect" });
+        }
+        throw error;
+      }
       if (target.local) {
-        return toCodeModeJsonSafe(input);
+        return registerToolEffectReceipt(toCodeModeJsonSafe(input), { state: "read_completed" });
       }
       if (!target.catalogId) {
         throw new Error(`Code mode namespace path has no catalog tool: ${path.join(".")}`);

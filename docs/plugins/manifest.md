@@ -1409,22 +1409,22 @@ Use `env.allOf` when every listed variable is required and `env.anyOf` when any 
 
 ## Discovery precedence (duplicate plugin ids)
 
-OpenClaw discovers plugins from three roots, checked in this order: bundled plugins shipped with OpenClaw, the global install root (`~/.openclaw/extensions`), and the current workspace root (`<workspace>/.openclaw/extensions`), plus any explicit `plugins.load.paths` entries.
+OpenClaw discovers plugins from explicit `plugins.load.paths` entries, the current workspace root (`<workspace>/.openclaw/extensions`), bundled plugins shipped with OpenClaw, and global install locations (`~/.openclaw/extensions` plus tracked install paths). Discovery order alone does not determine which copy loads.
 
-If two discoveries share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it. Precedence, highest to lowest:
+If two distinct plugin roots share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it. Precedence, highest to lowest:
 
-1. **Config-selected** — a path explicitly pinned in `plugins.entries.<id>`
-2. **Global install matching a tracked install record** — a plugin installed via `openclaw plugin install`/`openclaw plugin update` that OpenClaw's install tracking recognizes for that same id, even when the id also belongs to a bundled plugin
-3. **Bundled** — plugins shipped with OpenClaw
-4. **Workspace** — plugins discovered relative to the current workspace
-5. Any other discovered candidate
+1. **Config-selected** — a path explicitly selected in `plugins.load.paths`
+2. **Development-source bundled** — a bundled plugin inside the checkout selected by `OPENCLAW_DEV_SOURCE_ROOT`
+3. **Global install matching a tracked install record** — an installed global candidate whose path matches its install record, managed by `openclaw plugins install`/`openclaw plugins update`
+4. **Bundled** — other plugins shipped with OpenClaw
+5. **Workspace** — plugins discovered relative to the current workspace
+6. **Untracked global** — other plugins discovered in the global root
 
 Implications:
 
-- A forked or stale copy of a bundled plugin sitting untracked in the workspace or global root will not shadow the bundled build.
-- To override a bundled plugin, either run `openclaw plugin install` for that id so the tracked global install outranks the bundled copy, or pin a specific path via `plugins.entries.<id>` so it wins by config-selected precedence.
-- Duplicate drops are logged so Doctor and startup diagnostics can point at the discarded copy.
-- Config-selected duplicate overrides are worded as explicit overrides in diagnostics, but still warn so stale forks and accidental shadows stay visible.
+- An auto-discovered workspace or untracked global copy will not shadow a bundled plugin, even when its id is enabled or allowlisted. `plugins.allow` and `plugins.entries.<id>.enabled` control load permission, not source selection.
+- To override a bundled plugin intentionally, select its path via `plugins.load.paths`. A tracked global install can also override an ordinary bundled copy, but not a development-source bundled copy.
+- Duplicate warnings identify the discarded copy and selected source, with config-selected winners labeled as explicit overrides. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.
 
 ## JSON Schema requirements
 

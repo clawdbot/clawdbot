@@ -192,7 +192,6 @@ function adoptInitialUserMessage(
     ...authoritative,
     content: handoff.message.content,
     __openclaw: {
-      ...handoff.message["__openclaw"],
       ...authoritativeMetadata,
     },
   };

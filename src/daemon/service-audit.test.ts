@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
+  needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
@@ -133,18 +134,18 @@ describe("auditGatewayServiceConfig", () => {
     resolveBunRuntimeInfo.mockReset();
     resolveBunRuntimeInfo.mockResolvedValue({
       version: "1.4.0",
-      hasNodeSqlite: true,
       sqliteVersion: "3.51.3",
-      supported: true,
+      nodeSharedSqlite: false,
+      status: "supported",
     });
   });
 
   it("flags Bun runtimes without WAL-safe SQLite", async () => {
     resolveBunRuntimeInfo.mockResolvedValue({
       version: "1.4.0",
-      hasNodeSqlite: true,
       sqliteVersion: "3.51.2",
-      supported: false,
+      nodeSharedSqlite: false,
+      status: "unsupported",
     });
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
@@ -170,6 +171,30 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
 
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
+  });
+
+  it("reports a failed Bun probe without recommending runtime migration", async () => {
+    resolveBunRuntimeInfo.mockResolvedValue({
+      status: "probe-failed",
+      error: new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES"),
+    });
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/bun", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed,
+        detail: expect.stringContaining("/opt/bun (cwd /root): EACCES"),
+      }),
+    );
+    expect(needsNodeRuntimeMigration(audit.issues)).toBe(false);
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 

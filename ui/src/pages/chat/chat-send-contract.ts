@@ -27,6 +27,8 @@ export type ChatHost = ChatInputHistoryState &
   ToolStreamHost &
   ChatCommandHost & {
     sessions: SessionCapability;
+    /** Initial placement owns admission even while transport loss hides its content. */
+    hasPendingInitialTurn?: (sessionKey: string) => boolean;
     client: GatewayBrowserClient | null;
     connected: boolean;
     connectionEpoch: number;

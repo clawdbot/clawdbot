@@ -129,15 +129,11 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
       `${JSON.stringify({ name: "@openclaw/ai", version }, null, 2)}\n`,
     );
 
-    const install = spawnSync(
-      "pnpm",
-      ["install", "--ignore-scripts", "--lockfile=false", "--reporter=silent"],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const install = spawnSync("pnpm", ["install", "--ignore-scripts", "--reporter=silent"], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     expect(install.status, install.stderr).toBe(0);
     const packed = spawnSync(
       "pnpm",

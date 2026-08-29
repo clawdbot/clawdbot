@@ -378,6 +378,17 @@ Membership is checked against the latest received roster when context is used.
 If the same identity leaves and rejoins before then, its previously authorized
 messages can remain in the window; leaving does not erase conversation history.
 
+### Reply placement
+
+Buzz keeps automatic replies threaded by default (`channels.buzz.replyToMode: "all"`).
+Set `replyToMode: "off"` to send automatic replies at the top level of the room,
+including replies to messages inside existing threads. Typing indicators follow
+the same placement, including heartbeat typing.
+
+This changes delivery only: inbound thread context and session identity remain
+intact. Explicit message-tool or CLI sends with a thread or reply target still
+honor that target. To restore the default, use `"all"` or remove the setting.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:
@@ -463,6 +474,17 @@ The default account can also read:
 export BUZZ_RELAY_URL="wss://buzz.example.com"
 export BUZZ_PRIVATE_KEY="nsec1..."
 ```
+
+With `BUZZ_PRIVATE_KEY` set, non-interactive setup can also save an account name:
+
+```bash
+openclaw channels add --channel buzz --name "Support bot" \
+  --relay-url wss://buzz.example.com --use-env
+```
+
+Omitting `--name` or supplying a blank name preserves the existing name. This
+command saves credentials and settings; use guided setup to discover and select
+rooms before starting a new bot.
 
 If a hosted workspace operator gives you an identity authorization value, set
 `channels.buzz.authTag` or `BUZZ_AUTH_TAG`. It can use the same plaintext or

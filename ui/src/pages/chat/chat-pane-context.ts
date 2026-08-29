@@ -57,11 +57,13 @@ import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
+  private outboxRecoveryReady = false;
 
   override disconnectedCallback() {
     this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
+    this.outboxRecoveryReady = false;
     super.disconnectedCallback();
   }
 
@@ -307,6 +309,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
+    const recoveryReady = state.connected && Boolean(state.client?.recoveryScopeReady);
+    const resumeOutboxes = recoveryReady && (clientChanged || !this.outboxRecoveryReady);
+    this.outboxRecoveryReady = recoveryReady;
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
@@ -457,7 +462,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         return;
       }
       void syncSelectedSessionMessageSubscription(state, { force: true });
-      void retryReconnectableQueuedChatSends(state);
       const historyRefresh = refreshPageChat(state, {
         startup: true,
         awaitHistory: true,
@@ -475,6 +479,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
       void this.refreshSessionSuggestions();
+    }
+    // Hello precedes recovery readiness. Wake parked outboxes on that publication;
+    // the shared admission check still holds any recovered initial turn.
+    if (resumeOutboxes && !catalogRouteKey) {
+      void retryReconnectableQueuedChatSends(state);
     }
     this.reconcileWaitingApprovalSnapshot();
     state.requestUpdate?.();

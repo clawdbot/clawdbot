@@ -100,7 +100,7 @@ suite.define(() => {
       const prompt = "deliver the work outbox independently";
       await composer.fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
-      const queue = page.locator(".chat-queue");
+      const queue = page.locator(".chat-group.user:has(.chat-queue__item)", { hasText: prompt });
       await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({

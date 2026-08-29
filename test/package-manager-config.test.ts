@@ -7,6 +7,7 @@ import {
   parsePnpmPackageKey,
   readNpmLockOverrides,
 } from "../scripts/generate-npm-package-lock.mts";
+import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
@@ -21,6 +22,8 @@ type RootPackageJson = {
 };
 
 type WorkspaceConfig = PnpmBuildConfig & {
+  minimumReleaseAge?: number;
+  minimumReleaseAgeStrict?: boolean;
   verifyDepsBeforeRun?: boolean;
 };
 
@@ -29,7 +32,9 @@ function readJson(filePath: string): unknown {
 }
 
 function collectPnpmLockPackages(): Set<string> {
-  const lockfile = parse(fs.readFileSync("pnpm-lock.yaml", "utf8")) as {
+  const lockfile = parse(
+    pnpmLockfileDocuments(fs.readFileSync("pnpm-lock.yaml", "utf8")).dependencies,
+  ) as {
     packages?: Record<string, { version?: unknown }>;
   };
   const packages = new Set<string>();
@@ -54,6 +59,8 @@ describe("package manager build policy", () => {
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
+    expect(workspace.minimumReleaseAge).toBe(2880);
+    expect(workspace.minimumReleaseAgeStrict).toBe(true);
     expect(workspace.verifyDepsBeforeRun).toBe(false);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });

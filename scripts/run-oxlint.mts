@@ -278,7 +278,8 @@ async function main(
   }
 
   if (needsArtifactPreparation) {
-    await prepareExtensionPackageBoundaryArtifacts(env);
+    // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
+    await prepareExtensionPackageBoundaryArtifacts(localEnv);
   }
 
   const status = await runManagedCommand({

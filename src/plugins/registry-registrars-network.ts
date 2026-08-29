@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { GatewayMethodProfileAccess } from "../gateway/methods/descriptor.js";
-import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
+import {
+  createPluginGatewayMethodDescriptor,
+  type GatewayMethodProfileAccess,
+} from "../gateway/methods/descriptor.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";

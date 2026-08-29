@@ -66,7 +66,7 @@ function resolveVisibleHistoryProjection(
         "identity.event_type",
         "identity.seq",
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
-        sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
       ])
       .select((eb) =>
         eb
@@ -225,7 +225,7 @@ function resolveRecentHistoryStart(
             .select([
               "active.message_position",
               /* kysely-allow-raw: excluded history payloads must not be fetched or parsed. */
-              sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+              sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
             ])
             .where("active.session_id", "=", projection.resolved.sessionId)
             .where("active.message_position", "in", positions),

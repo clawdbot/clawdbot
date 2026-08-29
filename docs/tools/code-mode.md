@@ -15,6 +15,12 @@ enabled, the model no longer sees every enabled tool schema; instead, it sees
 the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
 program that searches, describes, and calls the hidden tool catalog.
 
+<Note>
+OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
+Tools → Labs** and turn on **Code Mode**. The Labs switch writes the `"auto"`
+tier, which engages only for models marked as preferred Code Mode performers.
+</Note>
+
 This page documents OpenClaw code mode, not Codex Code Mode. The two features
 share a name and the same control-tool names (`exec`, `wait`), but they are
 separate implementations:
@@ -62,6 +68,12 @@ commands are rejected before the QuickJS worker starts with actionable
 - `wait` resumes a suspended code-mode run when nested tool calls are still
   pending.
 
+Call `wait` only when the outer code-mode result has `status: "waiting"`, using
+its top-level `runId`. A completed cell can return a background shell operation
+with its own `sessionId` inside `value`; use the enabled process-control tool
+inside a new `exec` to poll that operation. Its `sessionId` is not a code-mode
+run ID.
+
 Code mode changes the model-facing orchestration surface only. It does not
 replace tools, plugin tools, MCP tools, auth, approval policy, channel
 behavior, or model selection.
@@ -93,8 +105,11 @@ the QuickJS-WASI guest.
 
 ### Enable code mode
 
-To engage code mode only for models whose catalog marks them as preferred
-code-mode performers, use the `"auto"` tier:
+The recommended path is **Settings → Agents & Tools → Labs → Code Mode**. The
+switch takes effect for future agent runs without restarting the Gateway and
+selects the `"auto"` tier.
+
+To enable the same tier without the Control UI, set it in config:
 
 ```json5
 {
@@ -180,6 +195,12 @@ try {
   return { status: "unavailable", error: error.message };
 }
 ```
+
+Await every tool call or handle its rejection explicitly. OpenClaw drains
+dispatched calls before completing a cell; an unhandled rejection, including
+one from an unawaited call or timer callback, fails the cell instead of silently
+reporting success. Handlers attached after a suspension still handle their
+original promises.
 
 JavaScript syntax errors, TypeScript transform errors, and tool failures proven
 to occur before execution become failed `exec` results that the model can read
@@ -925,7 +946,9 @@ type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: un
 ```
 
 Rules: output order matches guest calls. Nested tool results, cumulative guest
-output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
+output, and the final value or failure diagnostic share the `maxOutputBytes`
+serialized UTF-8 budget. Oversized errors retain their leading cause and end
+with `[error truncated]`; truncation does not turn a failure into success.
 Catalog search rejects when its callable-name array cannot fit this budget;
 narrow the query or lower `limit` and retry. For other successful results that
 exceed the budget, OpenClaw returns a bounded value

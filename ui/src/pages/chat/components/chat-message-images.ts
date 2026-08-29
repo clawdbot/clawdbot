@@ -36,6 +36,7 @@ import {
 
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
+const MIN_CHAT_IMAGE_PREVIEW_WIDTH = 160;
 type ManagedImageVariant = "full" | "thumbnail";
 
 class ManagedImageResourceDirective extends AsyncDirective {
@@ -205,6 +206,12 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
     const managed = isManagedOutgoingImageSource(img.displayUrl);
+    // Upscale genuinely tiny sources enough to read and operate without
+    // stretching every transcript image into a fixed-size tile.
+    const imageClass =
+      img.width !== undefined && img.width < MIN_CHAT_IMAGE_PREVIEW_WIDTH
+        ? "chat-message-image chat-message-image--small"
+        : "chat-message-image";
     return html`
       <span class="chat-image-frame ${managed ? "chat-image-frame--managed" : ""}">
         <button
@@ -219,14 +226,12 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
           <img
             src=${previewUrl}
             alt=${title}
-            class="chat-message-image"
+            class=${imageClass}
             width=${img.width ?? nothing}
             height=${img.height ?? nothing}
           />
         </button>
-        ${managed
-          ? renderManagedImageActions(img, opts, () => openImage(img, previewUrl))
-          : nothing}
+        ${managed ? renderManagedImageActions(img, opts) : nothing}
       </span>
     `;
   };
@@ -238,7 +243,15 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     return renderManagedImageResource(img, opts, renderImageElement);
   };
 
-  return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;
+  const layoutClasses = [
+    "chat-message-images",
+    images.length === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
+    images.length === 2 || images.length === 4 ? "chat-message-images--two-column" : "",
+    images.length === 5 ? "chat-message-images--five" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return html` <div class=${layoutClasses}>${images.map((img) => renderImage(img))}</div> `;
 }
 
 function isManagedOutgoingImageSource(source: string): boolean {
@@ -500,7 +513,6 @@ async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
 function renderManagedImageActions(
   image: RenderableImageBlock,
   opts: ImageRenderOptions | undefined,
-  onOpen: () => void,
 ) {
   const title = image.alt?.trim() || t("chat.imageLightbox.untitled");
   const download = async () => {
@@ -528,15 +540,6 @@ function renderManagedImageActions(
   };
   return html`
     <span class="chat-image-actions">
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.open", { title })}
-        aria-label=${t("chat.imageLightbox.open", { title })}
-        @click=${onOpen}
-      >
-        ${icons.externalLink}
-      </button>
       <button
         type="button"
         class="chat-image-action"

@@ -279,7 +279,7 @@ struct GatewayProcessManagerTests {
                 !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
             }
             let stale = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
+                await manager._testEnableLaunchAgentIfNeededInstalled(
                     bundlePath: "/Applications/OpenClaw.app",
                     port: stalePort)
             }
@@ -293,7 +293,7 @@ struct GatewayProcessManagerTests {
                     port: newestPort)
             }
             #expect(await current.value == nil)
-            #expect(await stale.value == nil)
+            #expect(await stale.value == false)
             #expect(await newest.value == nil)
 
             let finalInstallPorts = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -424,12 +424,7 @@ struct GatewayProcessManagerTests {
         let port = 19099
         let url = try #require(URL(string: "ws://example.invalid"))
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                })
+            self.gatewayTask(healthSucceedsAfter: 0)
         }
         let descriptor = self.gatewayDescriptor(pid: 4242)
 
@@ -817,12 +812,7 @@ struct GatewayProcessManagerTests {
     @Test func `routine readiness preserves an attached gateway and control channel`() async throws {
         let url = try #require(URL(string: "ws://127.0.0.1:9"))
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                })
+            self.gatewayTask(healthSucceedsAfter: 0)
         }
         manager.setTestingDesiredActive(true)
         manager.setTestingLastFailureReason("health failed")
@@ -857,12 +847,7 @@ struct GatewayProcessManagerTests {
         let port = try self.availableGatewayPort()
         let url = try #require(URL(string: "ws://example.invalid"))
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                })
+            self.gatewayTask(healthSucceedsAfter: 0)
         }
 
         try await self.withLaunchAgentEnvironment(
@@ -943,12 +928,7 @@ struct GatewayProcessManagerTests {
         let port = GatewayEnvironment.gatewayPort()
         let url = try #require(URL(string: "ws://127.0.0.1:9"))
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                })
+            self.gatewayTask(healthSucceedsAfter: 0)
         }
         let descriptor = self.gatewayDescriptor(pid: 4242)
 

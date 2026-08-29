@@ -170,7 +170,7 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFi
         `Config: ${configParts.join(", ")}`,
         `Host: ${hostParts.join(", ")}`,
         `Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
-        "Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
+        "Headless runs like isolated cron cannot answer approval prompts; align both files, or keep the Control UI or a macOS/iOS/Android app connected so gateway automation runs can raise approval cards.",
         `Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
       ].join("\n"),
     });

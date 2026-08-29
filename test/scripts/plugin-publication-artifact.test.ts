@@ -749,22 +749,25 @@ describe("plugin publication artifact", () => {
     ).toThrow("producer job did not complete successfully");
   });
 
-  it("accepts an environment-waiting current producer attempt", () => {
-    const fixture = createFixture();
-    const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
-    workflowRun.status = "waiting";
-    workflowRun.conclusion = null;
-    writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+  it.each(["waiting", "queued", "pending", "requested"])(
+    "accepts a null-conclusion %s current producer attempt",
+    (status) => {
+      const fixture = createFixture();
+      const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
+      workflowRun.status = status;
+      workflowRun.conclusion = null;
+      writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
 
-    expect(
-      verifyFixture(fixture, {
-        consumerRunAttempt: RUN_ATTEMPT,
-        producerJobName: PRODUCER_JOB_NAME,
-        runStatePolicy: "same-run-producer-success",
-        workflowJobsMetadataPath: fixture.workflowJobsPath,
-      }),
-    ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
-  });
+      expect(
+        verifyFixture(fixture, {
+          consumerRunAttempt: RUN_ATTEMPT,
+          producerJobName: PRODUCER_JOB_NAME,
+          runStatePolicy: "same-run-producer-success",
+          workflowJobsMetadataPath: fixture.workflowJobsPath,
+        }),
+      ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+    },
+  );
 
   it("accepts a failed current attempt only when its exact producer job succeeded", () => {
     const fixture = createFixture();

@@ -815,29 +815,75 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(providers.map((provider) => provider.id)).toEqual(["anthropic"]);
   });
 
-  it("keeps manifest catalogs and loads only scoped plugins that have no entry", () => {
-    const dynamicProvider = createProvider({ id: "minimax", mode: "catalog" });
-    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["minimax", "openai"]);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      index: { plugins: [] },
-      manifestRegistry: {
-        plugins: [
-          createManifestPluginWithoutDiscovery({ id: "minimax" }),
-          createManifestPluginWithModelCatalog("openai"),
-        ],
-        diagnostics: [],
-      },
-    });
-    mocks.resolvePluginProvidersCore.mockReturnValue([dynamicProvider]);
+  it.each(["static", "runtime", "refreshable"] as const)(
+    "keeps scoped providers without entries beside a %s manifest catalog",
+    (discovery) => {
+      const dynamicProvider = createProvider({ id: "minimax", mode: "catalog" });
+      mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["minimax", "openai"]);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        index: { plugins: [] },
+        manifestRegistry: {
+          plugins: [
+            createManifestPluginWithoutDiscovery({ id: "minimax" }),
+            createManifestPluginWithModelCatalog("openai", discovery),
+          ],
+          diagnostics: [],
+        },
+      });
+      mocks.resolvePluginProvidersCore.mockImplementation(
+        ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
+          [dynamicProvider, createProvider({ id: "openai", mode: "catalog" })].filter((provider) =>
+            onlyPluginIds.includes(provider.id),
+          ),
+      );
 
-    const providers = resolvePluginDiscoveryProvidersRuntime({
-      onlyPluginIds: ["minimax", "openai"],
-    });
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        onlyPluginIds: ["minimax", "openai"],
+      });
 
-    expect(providers.map((provider) => provider.id)).toEqual(["openai", "minimax"]);
-    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
-    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["minimax"]);
-  });
+      expect(providers.map((provider) => provider.id).toSorted()).toEqual(["minimax", "openai"]);
+      expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
+      expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(
+        discovery === "static" ? ["minimax"] : ["minimax", "openai"],
+      );
+    },
+  );
+
+  it.each([
+    { discovery: "runtime" as const, credential: true },
+    { discovery: "runtime" as const, credential: false },
+    { discovery: "refreshable" as const, credential: true },
+    { discovery: "refreshable" as const, credential: false },
+  ])(
+    "bounds unscoped $discovery discovery with missing-entry credential=$credential",
+    ({ discovery, credential }) => {
+      mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["router", "manifest"]);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        index: { plugins: [] },
+        manifestRegistry: {
+          plugins: [
+            createManifestPluginWithoutDiscovery({
+              id: "router",
+              setupProviders: [{ id: "router", envVars: ["ROUTER_API_KEY"] }],
+            }),
+            createManifestPluginWithModelCatalog("manifest", discovery),
+          ],
+          diagnostics: [],
+        },
+      });
+      mocks.resolvePluginProvidersCore.mockImplementation(
+        ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
+          onlyPluginIds.map((id) => createProvider({ id, mode: "catalog" })),
+      );
+
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        env: credential ? { ROUTER_API_KEY: "catalog-test-key" } : {},
+      });
+      expect(providers.map((provider) => provider.id)).toEqual(
+        credential ? ["manifest", "router"] : ["manifest"],
+      );
+    },
+  );
 
   it("does not fall back to full plugin loading when discovery entries are requested only", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({

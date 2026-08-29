@@ -390,16 +390,31 @@ struct UpdateOrchestrationTests {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         let available = TestUpdater(isAvailable: true)
-        let enabled = DashboardWindowController(url: url, auth: auth, updater: available)
+        let enabled = DashboardWindowController(
+            url: url,
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            updater: available,
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { enabled.closeDashboard() }
         let disabled = DashboardWindowController(
             url: url,
             auth: auth,
-            updater: TestUpdater(isAvailable: false))
+            websiteDataStore: .nonPersistent(),
+            updater: TestUpdater(isAvailable: false),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { disabled.closeDashboard() }
         let remote = DashboardWindowController(
             url: url,
             auth: auth,
+            websiteDataStore: .nonPersistent(),
             updater: available,
-            updateBridgeEnabled: false)
+            updateBridgeEnabled: false,
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { remote.closeDashboard() }
 
         #expect(enabled._testUpdateBridgeAvailable)
         #expect(!disabled._testUpdateBridgeAvailable)
@@ -589,13 +604,14 @@ struct UpdateOrchestrationTests {
             launchAgentWriteDisabled: false))
     }
 
-    @Test func `pending managed restart marker round trips`() {
-        CLIInstallPrompter.clearPendingManagedRestart()
-        #expect(!CLIInstallPrompter.hasPendingManagedRestart())
-        CLIInstallPrompter.setPendingManagedRestart()
-        #expect(CLIInstallPrompter.hasPendingManagedRestart())
-        CLIInstallPrompter.clearPendingManagedRestart()
-        #expect(!CLIInstallPrompter.hasPendingManagedRestart())
+    @Test func `pending managed restart marker round trips`() async {
+        await TestIsolation.withUserDefaultsValues([cliManagedRestartPendingKey: nil]) {
+            #expect(!CLIInstallPrompter.hasPendingManagedRestart())
+            CLIInstallPrompter.setPendingManagedRestart()
+            #expect(CLIInstallPrompter.hasPendingManagedRestart())
+            CLIInstallPrompter.clearPendingManagedRestart()
+            #expect(!CLIInstallPrompter.hasPendingManagedRestart())
+        }
     }
 
     @Test func `managed Gateway restart requires a new running process`() {

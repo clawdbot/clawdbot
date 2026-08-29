@@ -171,7 +171,6 @@ final class GatewayProcessManager {
     private var launchAgentEnableTask: Task<[UInt64: LaunchAgentEnableResult], Never>?
     private var launchAgentEnableCurrentRequest: LaunchAgentEnableRequest?
     private var launchAgentEnablePendingRequest: LaunchAgentEnableRequest?
-    private var launchAgentEnableSupersededInvocationIDs: Set<UInt64> = []
     private var launchAgentEnableNextInvocationID: UInt64 = 0
     private var launchAgentDisableTask: Task<Void, Never>?
     private var launchAgentDisableGeneration: UInt64?
@@ -278,9 +277,6 @@ final class GatewayProcessManager {
                 // older queued change so A -> B -> A cannot finish on B.
                 current.invocationIDs.append(invocationID)
                 self.launchAgentEnableCurrentRequest = current
-                if let pending = self.launchAgentEnablePendingRequest {
-                    self.launchAgentEnableSupersededInvocationIDs.formUnion(pending.invocationIDs)
-                }
                 self.launchAgentEnablePendingRequest = nil
             } else if var pending = self.launchAgentEnablePendingRequest,
                       pending.hasSameConfiguration(as: request)
@@ -288,16 +284,12 @@ final class GatewayProcessManager {
                 pending.invocationIDs.append(invocationID)
                 self.launchAgentEnablePendingRequest = pending
             } else {
-                if let pending = self.launchAgentEnablePendingRequest {
-                    self.launchAgentEnableSupersededInvocationIDs.formUnion(pending.invocationIDs)
-                }
                 self.launchAgentEnablePendingRequest = request
             }
             let results = await task.value
             return results[invocationID] ?? .skipped
         }
 
-        self.launchAgentEnableSupersededInvocationIDs.removeAll(keepingCapacity: true)
         self.launchAgentEnablePendingRequest = request
         let task = Task { @MainActor in
             await self.drainLaunchAgentEnableRequests()
@@ -321,7 +313,6 @@ final class GatewayProcessManager {
         var results: [UInt64: LaunchAgentEnableResult] = [:]
         while let request = self.launchAgentEnablePendingRequest {
             self.launchAgentEnablePendingRequest = nil
-            self.launchAgentEnableSupersededInvocationIDs.subtract(request.invocationIDs)
             self.launchAgentEnableCurrentRequest = request
             let result = await self.performLaunchAgentEnable(request)
             let completedRequest = self.launchAgentEnableCurrentRequest ?? request
@@ -330,11 +321,6 @@ final class GatewayProcessManager {
             }
             self.launchAgentEnableCurrentRequest = nil
         }
-        for invocationID in self.launchAgentEnableSupersededInvocationIDs {
-            guard results[invocationID] == nil else { continue }
-            results[invocationID] = .skipped
-        }
-        self.launchAgentEnableSupersededInvocationIDs.removeAll(keepingCapacity: true)
         // Clear the task before returning. A later caller then starts a fresh drain instead of
         // joining a completed task after the final pending-request check.
         self.launchAgentEnableTask = nil
@@ -965,11 +951,7 @@ extension GatewayProcessManager {
 
     private func probeFailureDisposition(_ error: Error) -> GatewayProbeFailureDisposition {
         if self.probeFailureIsCancellation(error) { return .retryWithoutRepair }
-        if let response = error as? GatewayResponseError,
-           response.code.uppercased() == "UNAVAILABLE"
-        {
-            return .retryWithoutRepair
-        }
+        if self.probeFailureShowsStartupProgress(error) { return .retryWithoutRepair }
         if error is GatewayHealthProbeTimeout { return .retryWithRepair }
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else { return .fail }

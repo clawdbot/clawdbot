@@ -343,11 +343,15 @@ describe("prepared model runtime snapshots", () => {
           {
             id: "selected",
             model: { primary: "anthropic/claude-sonnet-5" },
+            models: {
+              "anthropic/claude-sonnet-5": { agentRuntime: { id: "selected-runtime" } },
+            },
             modelPolicy: { allow: ["vllm/*"] },
           },
           {
             id: "sibling",
             model: { primary: "ollama/sibling" },
+            models: { "ollama/sibling": { agentRuntime: { id: "sibling-runtime" } } },
             modelPolicy: { allow: ["sibling-only/*"] },
           },
         ],
@@ -359,6 +363,7 @@ describe("prepared model runtime snapshots", () => {
         },
       },
     } as OpenClawConfig;
+    mocks.runtimeSyntheticAuthProviderRefs = ["selected-runtime", "sibling-runtime"];
 
     await publishPreparedModelRuntimeSnapshot({
       agentId: "selected",
@@ -370,8 +375,11 @@ describe("prepared model runtime snapshots", () => {
       config,
       "/tmp/prepared-model-runtime-selected-provider-scope",
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "vllm"],
+        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "selected-runtime", "vllm"],
       }),
+    );
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ syntheticAuthProviderRefs: ["selected-runtime"] }),
     );
   });
 

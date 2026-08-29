@@ -214,7 +214,6 @@ export function createOpenAIResponsesAssistantOutput(
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
-  supportsDeveloperRole?: boolean;
   replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
@@ -305,10 +304,8 @@ function convertResponsesMessagesWithStyle(
     messages.push(
       buildResponsesInputMessage(
         model.reasoning &&
-          (providerStyle
-            ? (model.compat as { supportsDeveloperRole?: boolean } | undefined)
-                ?.supportsDeveloperRole !== false
-            : options?.supportsDeveloperRole !== false)
+          (model.compat as { supportsDeveloperRole?: boolean } | undefined)
+            ?.supportsDeveloperRole !== false
           ? "developer"
           : "system",
         [

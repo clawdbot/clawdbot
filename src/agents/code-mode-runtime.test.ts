@@ -59,6 +59,60 @@ describe("Code Mode output bounding", () => {
       truncated: false,
     });
   });
+
+  it("preserves failure text and output at their exact serialized byte limit", () => {
+    const output = [{ type: "text", text: "before failure" }];
+    const error = "Error: café 😀";
+    const maxOutputBytes =
+      Buffer.byteLength(JSON.stringify(output), "utf8") +
+      Buffer.byteLength(JSON.stringify(error), "utf8");
+
+    expect(boundCodeModeResult({ output, error, maxOutputBytes })).toEqual({
+      output,
+      error,
+      truncated: false,
+    });
+  });
+
+  it.each([
+    { name: "plain error", errorText: "failure ", output: [], returned: {} },
+    { name: "Unicode error", errorText: "😀 café ", output: [], returned: {} },
+    { name: "escaped error", errorText: '\\"\n\t', output: [], returned: {} },
+    {
+      name: "error and output",
+      errorText: "😀 failure ",
+      output: [{ type: "text", text: "output ".repeat(1_000) }],
+      returned: {},
+    },
+    {
+      name: "error, output, and value",
+      errorText: "😀 failure ",
+      output: [{ type: "text", text: "output ".repeat(1_000) }],
+      returned: { value: "value ".repeat(1_000) },
+    },
+  ])(
+    "bounds $name without losing the cause or splitting Unicode",
+    ({ errorText, output, returned }) => {
+      const maxOutputBytes = 1_024;
+      const bounded = boundCodeModeResult({
+        output,
+        error: `Error: ${errorText.repeat(1_000)}`,
+        ...returned,
+        maxOutputBytes,
+      });
+
+      expect(bounded.truncated).toBe(true);
+      expect(bounded.error).toMatch(/^Error: .*\[error truncated\]$/s);
+      expect(bounded.error).not.toContain("�");
+      const serializedBytes =
+        Buffer.byteLength(JSON.stringify(bounded.error), "utf8") +
+        (bounded.output.length ? Buffer.byteLength(JSON.stringify(bounded.output), "utf8") : 0) +
+        (Object.hasOwn(returned, "value")
+          ? Buffer.byteLength(JSON.stringify(bounded.value), "utf8")
+          : 0);
+      expect(serializedBytes).toBeLessThanOrEqual(maxOutputBytes);
+    },
+  );
 });
 
 describe("Code Mode master switch resolution", () => {

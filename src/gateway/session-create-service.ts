@@ -13,12 +13,15 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
+import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -126,6 +129,7 @@ export function resolveSessionCreateModelSelection(
   // remains the sole live-catalog availability validator.
   const resolved = resolveSessionPatchModelSelection({
     cfg,
+    agentId,
     catalog: [],
     raw: model,
     defaultProvider: defaults.provider,
@@ -191,6 +195,7 @@ async function existingModelSelectionWouldChange(params: {
   const catalog = await params.loadGatewayModelCatalog();
   const resolved = resolveSessionPatchModelSelection({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog,
     raw: requestedModel,
     defaultProvider: params.defaultProvider,
@@ -209,6 +214,7 @@ async function existingModelSelectionWouldChange(params: {
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
       cfg: params.cfg,
+      agentId: params.agentId,
       catalog,
       raw: params.subagentModelHint,
       defaultProvider: params.defaultProvider,
@@ -1269,6 +1275,33 @@ export async function createGatewaySession(params: {
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
           };
         }
+        const childModel = resolveSessionModelRef(params.cfg, entry, target.agentId);
+        const childCatalog = params.loadGatewayModelCatalog
+          ? await params.loadGatewayModelCatalog()
+          : [];
+        const childCatalogEntry = findModelCatalogEntry(childCatalog, {
+          provider: childModel.provider,
+          modelId: childModel.model,
+        });
+        const childContextWindow = resolveModelContextWindowProfile({
+          catalogEntry: childCatalogEntry,
+          selected: entry.contextWindow,
+        });
+        const resolvedForkMaxTokens = resolveContextTokensForModel({
+          cfg: params.cfg,
+          provider: childModel.provider,
+          model: childModel.model,
+          modelContextTokens: childCatalogEntry?.contextTokens,
+          modelContextWindow: childContextWindow.contextTokens,
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        });
+        const forkMaxTokens = childContextWindow.contextTokens
+          ? Math.min(
+              resolvedForkMaxTokens ?? childContextWindow.contextTokens,
+              childContextWindow.contextTokens,
+            )
+          : resolvedForkMaxTokens;
         // The storage owner selects one source for both size admission and copying,
         // so an active tail cannot make a smaller stable prefix fail the cap.
         const forkResult = await forkSessionFromParentWithDecision({
@@ -1278,6 +1311,7 @@ export async function createGatewaySession(params: {
           parentSessionKey: forkParentSessionKey,
           sessionKey: target.canonicalKey,
           storePath: parentSessionTarget.storePath,
+          ...(forkMaxTokens ? { maxTokens: forkMaxTokens } : {}),
           // Keep the fork transcript owned by the child store across agent boundaries.
           targetStorePath: target.storePath,
           ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),

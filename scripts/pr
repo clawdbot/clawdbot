@@ -211,8 +211,9 @@ Usage:
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
-    --auto-merge enables pinned squash auto-merge for a verified BEHIND head.
+    --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
+    Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -322,7 +323,8 @@ main() {
 
   require_cmds
 
-  if is_main_only_pr_command "$cmd"; then
+  # merge-run reconciles retained outcomes before reading disposable artifacts or base guards.
+  if [ "$cmd" != merge-run ] && is_main_only_pr_command "$cmd"; then
     require_main_target_pr "${1-}"
   fi
 

@@ -123,7 +123,10 @@ suite.define(() => {
       sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
     });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
-    await currentPage.getByText(reply.content, { exact: true }).waitFor();
+    const replyBody = currentPage
+      .locator(".chat-group.assistant")
+      .getByText(reply.content, { exact: true });
+    await replyBody.waitFor();
     const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     await elapsedLabel.waitFor();
     expect.soft(await elapsedLabel.textContent()).toBe("Worked for 13s");
@@ -131,7 +134,7 @@ suite.define(() => {
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
-    await currentPage.getByText(reply.content, { exact: true }).waitFor();
+    await replyBody.waitFor();
     await elapsedLabel.waitFor();
     expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);

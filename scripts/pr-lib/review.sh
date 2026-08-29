@@ -99,7 +99,7 @@ review_checkout_pr() {
 
 review_guard() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   require_artifact .local/review-mode.env
   require_artifact .local/pr-meta.env
 
@@ -244,13 +244,11 @@ review_validate_artifacts() {
   local pr="$1"
   # Callers use an OR-list to keep pre-mutation failures reversible; Bash disables
   # errexit within that context, so every artifact and exact-head guard must propagate.
-  enter_worktree "$pr" false || return 1
+  review_guard "$pr" || return 1
   require_artifact .local/review.md || return 1
   require_artifact .local/review.json || return 1
-  require_artifact .local/pr-meta.env || return 1
   require_artifact .local/pr-meta.json || return 1
 
-  review_guard "$pr" || return 1
   if [ "${REVIEW_MODE:-}" != "pr" ]; then
     echo "Review artifact validation requires the reviewed PR head, not main-baseline mode."
     return 1
@@ -270,8 +268,7 @@ review_tests() {
     exit 2
   fi
 
-  enter_worktree "$pr" false
-  review_guard "$pr"
+  review_guard "$pr" || return 1
 
   local target
   for target in "$@"; do

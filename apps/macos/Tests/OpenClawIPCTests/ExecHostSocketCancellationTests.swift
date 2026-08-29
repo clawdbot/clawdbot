@@ -1,5 +1,6 @@
 import CryptoKit
 import Darwin
+import Dispatch
 import Foundation
 import OpenClawKit
 import Testing
@@ -12,18 +13,10 @@ struct ExecHostSocketCancellationTests {
         case serverStop
     }
 
-    private static let socketTimeoutSeconds = 5
-
-    private enum CommandEvent: Sendable {
-        case ready
-        case finished(ExecHostResponse)
-    }
-
     @Test
     func `normal request half-close still receives native execution result`() async throws {
-        try await self.withServer { server, root in
-            let client = try self.connect(root)
-            defer { close(client) }
+        try await self.withServer { server, root, fixture in
+            let client = fixture.client
             try self.send(command: ["/usr/bin/printf", "half-close-ok"], root: root, client: client)
             #expect(shutdown(client, SHUT_WR) == 0)
             let response = try await Task.detached {
@@ -40,92 +33,86 @@ struct ExecHostSocketCancellationTests {
     func `closed caller or server stops native command and its descendant`(
         _ cancellation: Cancellation, withTimeout: Bool) async throws
     {
-        let (events, continuation) = AsyncStream<CommandEvent>.makeStream()
-        defer { continuation.finish() }
-        try await self.withServer(onExecFinished: { response in
-            continuation.yield(.finished(response))
-            continuation.finish()
-        }) { server, root in
-            var client = try self.connect(root)
-            defer { if client >= 0 { close(client) } }
-            let parentFile = root.appendingPathComponent("parent.pid")
-            let childFile = root.appendingPathComponent("child.pid")
-            let sentinel = root.appendingPathComponent("sentinel")
-            let readyURL = root.appendingPathComponent("ready")
-            let releaseURL = root.appendingPathComponent("release")
-            let ready = try self.makeFIFO(readyURL)
-            defer { try? ready.close() }
-            let release = try self.makeFIFO(releaseURL)
-            defer { try? release.close() }
-            defer { TestProcessSupport.killLeakedProcesses(in: [parentFile, childFile]) }
-            ready.readabilityHandler = { handle in
-                handle.readabilityHandler = nil
-                continuation.yield(.ready)
-                continuation.finish()
+        // Exercise a valid startup slower than the old one-second assumption through the real callback.
+        let admissionDelay: Duration = cancellation == .serverStop && withTimeout ? .milliseconds(1200) : .zero
+        try await self.withServer(admissionDelay: admissionDelay) { server, root, fixture in
+            let sentAt = ContinuousClock.now
+            try self.send(
+                command: fixture.command, root: root, client: fixture.client, timeoutMs: withTimeout ? 10000 : nil)
+            #expect(shutdown(fixture.client, SHUT_WR) == 0)
+            let (parent, child) = try await fixture.waitForStart()
+            try #require(kill(parent, 0) == 0 && kill(child, 0) == 0, "\(fixture.diagnostics)")
+            try #require(fixture.response == nil, "\(fixture.diagnostics)")
+            #expect(ContinuousClock.now - sentAt >= admissionDelay)
+            #expect(!FileManager.default.fileExists(atPath: fixture.file("sentinel").path))
+            print("native ready after \(ContinuousClock.now - sentAt): \(fixture.diagnostics)")
+            switch cancellation {
+            case .disconnect:
+                fixture.closeClient()
+            case .serverStop:
+                server.stop()
             }
-            defer { ready.readabilityHandler = nil }
-            // Use the socket's existing watchdog, not a separate startup SLA across MainActor policy work.
-            let watchdog = DispatchWorkItem { continuation.finish() }
-            DispatchQueue.global().asyncAfter(
-                deadline: .now() + .seconds(Self.socketTimeoutSeconds), execute: watchdog)
-            defer { watchdog.cancel() }
-            // Ready is published only after both PID writes and opening the child's release gate.
-            let command = [
-                "/bin/sh", "-c",
-                """
-                printf '%s' "$$" > '\(parentFile.path)'
-                /bin/sh -c '
-                  trap "" TERM
-                  printf "%s" "$$" > "\(childFile.path)"
-                  exec 3< "\(releaseURL.path)"
-                  printf ready > "\(readyURL.path)"
-                  IFS= read -r _ <&3 || exit 1
-                  /usr/bin/touch "\(sentinel.path)"
-                ' &
-                wait
-                """,
-            ]
+            #expect(await self.waitUntil {
+                TestProcessSupport.processIsGone(parent) && TestProcessSupport.processIsGone(child)
+            }, "\(fixture.diagnostics)")
+            // A surviving child must be released so broken cancellation exposes its side effect.
+            try fixture.releaseCommand()
+            await server.stop().value
+            #expect(!FileManager.default.fileExists(atPath: fixture.file("sentinel").path))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `native failure wakes readiness without a PID marker`(missingExecutable: Bool) async throws {
+        try await self.withServer { _, root, fixture in
+            let command = missingExecutable ? [root.appendingPathComponent("missing-executable").path] : []
+            try self.send(command: command, root: root, client: fixture.client)
             do {
-                try self.send(command: command, root: root, client: client, timeoutMs: withTimeout ? 10000 : nil)
-                #expect(shutdown(client, SHUT_WR) == 0)
-                var iterator = events.makeAsyncIterator()
-                let event = try #require(
-                    await iterator.next(),
-                    "native command did not become ready before socket watchdog")
-                watchdog.cancel()
-                switch event {
-                case .ready:
-                    break
-                case let .finished(response):
-                    let reason = response.error?.reason ?? "none"
-                    Issue.record("execution ended before readiness: ok=\(response.ok), reason=\(reason)")
-                    throw POSIXError(.ECHILD)
+                _ = try await fixture.waitForStart()
+                Issue.record("Early native failure must not count as readiness")
+            } catch let CancellationFixture.StartupFailure.terminal(diagnostics) {
+                #expect(diagnostics.contains("child.pid=<missing>"))
+                if missingExecutable {
+                    #expect(fixture.response?.payload?.success == false)
+                    #expect(fixture.response?.payload?.exitCode == 127)
+                } else {
+                    #expect(fixture.response?.error?.message == "command required")
                 }
-                let parent = try self.readPID(parentFile)
-                let child = try self.readPID(childFile)
-                switch cancellation {
-                case .disconnect:
-                    close(client)
-                    client = -1
-                case .serverStop:
-                    server.stop()
-                }
-                #expect(await self.waitUntil { self.isGone(parent) && self.isGone(child) })
-                // A surviving child must be released so broken cancellation exposes its side effect.
-                try release.write(contentsOf: Data("go\n".utf8))
-                await server.stop().value
-                #expect(!FileManager.default.fileExists(atPath: sentinel.path))
-            } catch {
-                try? release.write(contentsOf: Data("go\n".utf8))
-                await server.stop().value
-                throw error
+                print("native early failure: \(diagnostics)")
             }
         }
     }
 
     @Test
+    func `readiness watchdog drains an unpublished child before removing its root`() async throws {
+        var fixtureRoot: URL?
+        var witnessed: [pid_t] = []
+        do {
+            try await self.withServer { _, root, fixture in
+                fixtureRoot = root
+                try Data().write(to: fixture.file("hold-publication"))
+                try self.send(command: fixture.command, root: root, client: fixture.client, timeoutMs: nil)
+                try await fixture.wait(for: fixture.partialPublication)
+                witnessed = try ["parent.pid", "child.pid.tmp"].map {
+                    try #require(TestProcessSupport.pollPID(in: fixture.file($0)))
+                }
+                try #require(witnessed.allSatisfy { kill($0, 0) == 0 })
+                _ = try await fixture.waitForStart(watchdog: .milliseconds(50))
+                Issue.record("Unpublished child must not count as readiness")
+            }
+        } catch let CancellationFixture.StartupFailure.watchdog(diagnostics) {
+            #expect(diagnostics.contains("child.pid=<missing>"))
+            #expect(try diagnostics.contains("child.pid.tmp=\(#require(witnessed.last))"))
+            print("native publication watchdog: \(diagnostics)")
+        }
+        #expect(witnessed.count == 2)
+        #expect(witnessed.allSatisfy { TestProcessSupport.processIsGone($0) })
+        #expect(try !FileManager.default.fileExists(atPath: #require(fixtureRoot).path))
+    }
+
+    @Test
     func `cancelled native executor never starts a command`() async throws {
-        let root = try self.makeRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try self.seed(root)
         let sentinel = root.appendingPathComponent("unexpected")
@@ -141,47 +128,36 @@ struct ExecHostSocketCancellationTests {
     }
 
     private func withServer(
-        onExecFinished: @escaping @Sendable (ExecHostResponse) -> Void = { _ in },
-        _ body: (ExecApprovalsSocketServer, URL) async throws -> Void) async throws
+        admissionDelay: Duration = .zero,
+        _ body: (ExecApprovalsSocketServer, URL, CancellationFixture) async throws -> Void) async throws
     {
-        let root = try self.makeRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try self.seed(root)
+        let fixture = try CancellationFixture(root: root)
         let server = ExecApprovalsSocketServer(
             socketPath: root.appendingPathComponent("exec.sock").path,
             token: "test-token",
             onPrompt: { _ in .deny },
             onExec: { request in
+                if admissionDelay > .zero { try? await Task.sleep(for: admissionDelay) }
                 let response = await ExecApprovalsStore.withStateDirectory(root) {
                     await ExecHostExecutor.handle(request)
                 }
-                onExecFinished(response)
+                fixture.record(response)
                 return response
             },
             onUnexpectedStop: { _ in })
         do {
             try #require(await server.start())
-            try await body(server, root)
+            fixture.client = try self.connect(root)
+            try await body(server, root, fixture)
         } catch {
-            await server.stop().value
+            print("native fixture failure: \(fixture.diagnostics)")
+            await fixture.cleanUp(server: server)
             throw error
         }
-        await server.stop().value
-    }
-
-    private func makeFIFO(_ url: URL) throws -> FileHandle {
-        try #require(mkfifo(url.path, 0o600) == 0)
-        // Keep both ends open so setup and failure cleanup never block on a missing child.
-        let fd = open(url.path, O_RDWR | O_NONBLOCK | O_CLOEXEC)
-        try #require(fd >= 0)
-        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-    }
-
-    private func makeRoot() throws -> URL {
-        let root = URL(fileURLWithPath: "/tmp/oehc-\(UUID().uuidString.prefix(12))", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        return root.resolvingSymlinksInPath()
+        await fixture.cleanUp(server: server)
     }
 
     private func seed(_ root: URL) throws {
@@ -212,7 +188,7 @@ struct ExecHostSocketCancellationTests {
             close(fd)
             throw POSIXError(.ECONNREFUSED)
         }
-        var timeout = timeval(tv_sec: Self.socketTimeoutSeconds, tv_usec: 0)
+        var timeout = timeval(tv_sec: CancellationFixture.socketTimeoutSeconds, tv_usec: 0)
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         return fd
     }
@@ -246,15 +222,6 @@ struct ExecHostSocketCancellationTests {
         return try JSONDecoder().decode(ExecHostResponse.self, from: data)
     }
 
-    private func readPID(_ url: URL) throws -> pid_t {
-        try #require(pid_t(String(contentsOf: url, encoding: .utf8)))
-    }
-
-    private func isGone(_ pid: pid_t) -> Bool {
-        errno = 0
-        return kill(pid, 0) == -1 && errno == ESRCH
-    }
-
     private func waitUntil(_ condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(1)
         while ContinuousClock.now < deadline {
@@ -262,5 +229,177 @@ struct ExecHostSocketCancellationTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return condition()
+    }
+}
+
+/// Owns the child's causal handshake and terminal observation, never native execution.
+private final class CancellationFixture: @unchecked Sendable {
+    enum StartupFailure: Error {
+        case watchdog(String)
+        case terminal(String)
+    }
+
+    static let socketTimeoutSeconds = 5
+    let root: URL
+    let partialPublication = AsyncTestGate()
+    private let startup = AsyncTestGate()
+    private let ready: FileHandle
+    private let release: FileHandle
+    private let partialReady: FileHandle
+    private let lock = NSLock()
+    private var terminalResponse: ExecHostResponse?
+    var client: Int32 = -1
+
+    init(root: URL) throws {
+        self.root = root
+        let ready = try Self.makeFIFO(root.appendingPathComponent("ready"))
+        do {
+            let release = try Self.makeFIFO(root.appendingPathComponent("release"))
+            do {
+                self.partialReady = try Self.makeFIFO(root.appendingPathComponent("partial-ready"))
+            } catch {
+                try? release.close()
+                throw error
+            }
+            self.release = release
+        } catch {
+            try? ready.close()
+            throw error
+        }
+        self.ready = ready
+        self.ready.readabilityHandler = { [startup] handle in
+            handle.readabilityHandler = nil
+            startup.open()
+        }
+        self.partialReady.readabilityHandler = { [partialPublication] handle in
+            handle.readabilityHandler = nil
+            partialPublication.open()
+        }
+    }
+
+    private static func makeFIFO(_ url: URL) throws -> FileHandle {
+        try #require(mkfifo(url.path, 0o600) == 0)
+        // Keep both ends open so setup and failure cleanup never block on a missing child.
+        let fd = open(url.path, O_RDWR | O_NONBLOCK | O_CLOEXEC)
+        try #require(fd >= 0)
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    func file(_ name: String) -> URL {
+        self.root.appendingPathComponent(name)
+    }
+
+    var response: ExecHostResponse? {
+        self.lock.withLock { self.terminalResponse }
+    }
+
+    func record(_ response: ExecHostResponse) {
+        self.lock.withLock { self.terminalResponse = response }
+        self.startup.open()
+    }
+
+    private func pid(_ name: String) -> pid_t? {
+        guard let pid = TestProcessSupport.pollPID(in: self.file(name)), pid > 1 else { return nil }
+        return pid
+    }
+
+    var diagnostics: String {
+        let markers = ["parent.pid", "child.pid", "child.pid.tmp", "hold-publication", "sentinel"]
+            .map { name -> String in
+                let value = (try? String(contentsOf: self.file(name), encoding: .utf8)) ?? "<missing>"
+                return "\(name)=\(value)"
+            }.joined(separator: ", ")
+        let response = self.response.flatMap { try? JSONEncoder().encode($0) }
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "<pending>"
+        return "\(self.root.lastPathComponent): \(markers); response=\(response)"
+    }
+
+    func wait(
+        for gate: AsyncTestGate,
+        watchdog: Duration = .seconds(CancellationFixture.socketTimeoutSeconds)) async throws
+    {
+        // Reuse the socket watchdog; this is not a startup SLA across MainActor policy work.
+        // Both race losers join on cancellation.
+        let signalled = try await withThrowingTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await gate.wait()
+                return true
+            }
+            group.addTask {
+                try await Task.sleep(for: watchdog)
+                return false
+            }
+            defer { group.cancelAll() }
+            return try await group.next() ?? false
+        }
+        try Task.checkCancellation()
+        guard signalled else { throw StartupFailure.watchdog(self.diagnostics) }
+    }
+
+    func waitForStart(
+        watchdog: Duration = .seconds(CancellationFixture.socketTimeoutSeconds)) async throws
+        -> (parent: pid_t, child: pid_t)
+    {
+        try await self.wait(for: self.startup, watchdog: watchdog)
+        guard self.response == nil, let parent = self.pid("parent.pid"), let child = self.pid("child.pid") else {
+            throw StartupFailure.terminal(self.diagnostics)
+        }
+        return (parent, child)
+    }
+
+    /// Ready is published only after both PID writes and opening the child's release gate.
+    var command: [String] {
+        [
+            "/bin/sh", "-c",
+            """
+            printf '%s' "$$" > '\(self.file("parent.pid").path)'
+            /bin/sh -c '
+              trap "" TERM
+              printf "%s" "$$" > "\(self.file("child.pid.tmp").path)"
+              exec 3< "\(self.file("release").path)"
+              if [ -f "\(self.file("hold-publication").path)" ]; then
+                printf partial > "\(self.file("partial-ready").path)"
+                IFS= read -r _ <&3
+                exit 0
+              fi
+              /bin/mv "\(self.file("child.pid.tmp").path)" "\(self.file("child.pid").path)"
+              printf ready > "\(self.file("ready").path)"
+              IFS= read -r _ <&3 || exit 1
+              /usr/bin/touch "\(self.file("sentinel").path)"
+            ' &
+            wait
+            """,
+        ]
+    }
+
+    func releaseCommand() throws {
+        try self.release.write(contentsOf: Data("go\n".utf8))
+    }
+
+    func closeClient() {
+        if self.client >= 0 {
+            close(self.client)
+            self.client = -1
+        }
+    }
+
+    func cleanUp(server: ExecApprovalsSocketServer) async {
+        self.closeClient()
+        let stopped = server.stop()
+        // Release even on failed readiness, then join before removing the fixture's root.
+        try? self.releaseCommand()
+        await stopped.value
+        let pidFiles = ["parent.pid", "child.pid", "child.pid.tmp"].map(self.file)
+        TestProcessSupport.killLeakedProcesses(in: pidFiles)
+        for handle in [self.ready, self.release, self.partialReady] {
+            handle.readabilityHandler = nil
+            try? handle.close()
+        }
+        for file in pidFiles {
+            if let pid = TestProcessSupport.pollPID(in: file) {
+                #expect(TestProcessSupport.processIsGone(pid), "\(self.diagnostics)")
+            }
+        }
+        #expect(!FileManager.default.fileExists(atPath: self.file("exec.sock").path))
     }
 }

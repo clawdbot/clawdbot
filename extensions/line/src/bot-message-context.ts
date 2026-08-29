@@ -29,6 +29,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { resolveLineMentionStrippedText } from "./mentions.js";
+import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 type EventSource = webhook.Source | undefined;
@@ -36,10 +38,7 @@ type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 type StickerEventMessage = webhook.StickerMessageContent;
 
-interface MediaRef {
-  path: string;
-  contentType?: string;
-}
+type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
 interface BuildLineMessageContextParams {
   event: MessageEvent;
@@ -264,6 +263,7 @@ async function finalizeLineInboundContext(params: {
   source: LineSourceInfoWithPeerId;
   rawBody: string;
   agentBody?: string;
+  commandBody?: string;
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
@@ -275,13 +275,33 @@ async function finalizeLineInboundContext(params: {
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
-  const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
+  const clientOpts = {
+    cfg: params.cfg,
+    accountId: params.account.accountId,
+    channelAccessToken: params.account.channelAccessToken,
+  };
+  // A LINE webhook carries no display name and no group name, so both are
+  // separate lookups. They are cached, they run in parallel, and either one
+  // failing degrades to the raw id rather than failing the turn.
+  const [senderName, groupName] = await Promise.all([
+    params.source.userId
+      ? getUserProfile(params.source.userId, {
+          ...clientOpts,
+          groupId: params.source.groupId,
+          roomId: params.source.roomId,
+        }).then((profile) => profile?.displayName)
+      : undefined,
+    params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
+  ]);
+  const senderLabel =
+    senderName ?? (params.source.userId ? `user:${params.source.userId}` : "unknown");
   const conversationLabel = params.source.isGroup
-    ? params.source.groupId
-      ? `group:${params.source.groupId}`
-      : params.source.roomId
-        ? `room:${params.source.roomId}`
-        : "unknown-group"
+    ? (groupName ??
+      (params.source.groupId
+        ? `group:${params.source.groupId}`
+        : params.source.roomId
+          ? `room:${params.source.roomId}`
+          : "unknown-group"))
     : senderLabel;
   const address = params.source.groupId
     ? `line:group:${params.source.groupId}`
@@ -306,6 +326,7 @@ async function finalizeLineInboundContext(params: {
     chatType: params.source.isGroup ? "group" : "direct",
     sender: {
       id: senderId,
+      name: senderName,
     },
     previousTimestamp,
     envelope: envelopeOptions,
@@ -318,7 +339,7 @@ async function finalizeLineInboundContext(params: {
     messageId: params.messageSid,
     timestamp: params.timestamp,
     from: address,
-    sender: { id: senderId },
+    sender: { id: senderId, name: senderName },
     conversation: {
       kind: params.source.isGroup ? "group" : "direct",
       id: params.source.peerId,
@@ -335,7 +356,7 @@ async function finalizeLineInboundContext(params: {
       body,
       bodyForAgent: agentBody,
       rawBody: params.rawBody,
-      commandBody: params.rawBody,
+      commandBody: params.commandBody ?? params.rawBody,
       inboundHistory: params.inboundHistory,
     },
     access: { commands: { authorized: params.commandAuthorized } },
@@ -343,7 +364,7 @@ async function finalizeLineInboundContext(params: {
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
-        ? (params.source.groupId ?? params.source.roomId)
+        ? (groupName ?? params.source.groupId ?? params.source.roomId)
         : undefined,
       GroupSystemPrompt: params.source.isGroup
         ? normalizeOptionalString(
@@ -475,6 +496,9 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     source: { userId, groupId, roomId, isGroup, peerId },
     rawBody,
     agentBody,
+    // The agent still reads the message as sent; only command parsing drops the
+    // mention, which LINE requires before a group message reaches the bot.
+    commandBody: resolveLineMentionStrippedText(message) || rawBody,
     timestamp,
     messageSid: messageId,
     commandAuthorized,
@@ -529,16 +553,26 @@ export async function buildLinePostbackContext(params: {
   });
 
   const timestamp = event.timestamp;
-  const rawData = event.postback?.data?.trim() ?? "";
-  if (!rawData) {
+  const rawBody = event.postback?.data?.trim() ?? "";
+  if (!rawBody) {
     return null;
   }
-  let rawBody = rawData;
-  if (rawData.includes("line.action=")) {
-    const searchParams = new URLSearchParams(rawData);
+  let agentBody = rawBody;
+  if (rawBody.includes("line.action=")) {
+    const searchParams = new URLSearchParams(rawBody);
     const action = searchParams.get("line.action") ?? "";
     const device = searchParams.get("line.device");
-    rawBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
+    agentBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
+  }
+  // LINE returns picker and rich-menu choices separately from callback data.
+  // Sort them for stable prompt bytes, but keep rawBody unchanged for command auth.
+  for (const [key, value] of Object.entries(event.postback.params ?? {}).toSorted(
+    ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+  )) {
+    const picked = normalizeOptionalString(value);
+    if (picked) {
+      agentBody += ` ${key}=${picked}`;
+    }
   }
 
   const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
@@ -549,6 +583,7 @@ export async function buildLinePostbackContext(params: {
     route,
     source: { userId, groupId, roomId, isGroup, peerId },
     rawBody,
+    agentBody,
     timestamp,
     messageSid,
     commandAuthorized,

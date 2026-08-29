@@ -21,6 +21,7 @@ import type {
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
+import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeSession } from "./node-registry.js";
 import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
@@ -499,7 +500,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         "Gateway node pairing, capability, and plugin policy gates allowed transport dispatch.",
     });
     nodeGateDecisionRecorded = true;
-    const res = await params.context.nodeRegistry.invoke({
+    const res = await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
       ...(params.nodeSession.pairingGeneration
