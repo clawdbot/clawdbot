@@ -512,9 +512,9 @@ describe("LINE webhook spool", () => {
         runtime: runtime(),
         queue,
         deliver: async (delivered, _destination, control) => {
-          for (const event of delivered) {
-            if (event.type === "message" && event.message.type === "text") {
-              deliveredText.push(event.message.text);
+          for (const delivery of delivered) {
+            if (delivery.type === "message" && delivery.message.type === "text") {
+              deliveredText.push(delivery.message.text);
             }
           }
           await control.turnAdoptionLifecycle.onAdopted();
@@ -799,7 +799,9 @@ describe("LINE webhook spool", () => {
             // The real handler fetches every part's media before its turn exists.
             // The lane has to stay held across that work, not just until the set
             // is taken, or the later message wins the race to the agent.
-            await new Promise((resolve) => setTimeout(resolve, 200));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 200);
+            });
           }
           order.push(kind);
           await control.turnAdoptionLifecycle.onAdopted();

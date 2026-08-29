@@ -125,6 +125,9 @@ describe("createLineImageSetIngressBuffer", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     const set = await held;
+    if (!set) {
+      throw new Error("the first part should hold the set");
+    }
     // Taking the set is not enough: the holder still has to deliver it.
     expect(laneFree).toBe(false);
 
