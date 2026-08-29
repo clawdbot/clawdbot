@@ -42,6 +42,12 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src/gateway",
   },
+  {
+    file: "src/gateway/gateway-terminal-cancellation.test.ts",
+    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
 ] as const;
 
 function includesRuntimeConfig(configs: readonly string[] | undefined, config: string) {

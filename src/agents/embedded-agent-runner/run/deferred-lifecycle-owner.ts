@@ -1,8 +1,6 @@
+import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import {
-  createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
-} from "../../run-termination.js";
+import { createAgentRunCancellationReason } from "../../run-termination.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../run-state.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../runs.js";
@@ -90,6 +88,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
   sessionKey?: string;
   sessionFile?: string;
   abortSignal?: AbortSignal;
+  replyOperation?: ReplyOperation;
 }): DeferredEmbeddedRunLifecycleManager {
   const controller = new AbortController();
   const signal = params.abortSignal
@@ -97,16 +96,19 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
     : controller.signal;
   let current: DeferredEmbeddedRunLifecycleOwner | undefined;
   const abort = (reason?: "user_abort" | "restart" | "superseded") => {
-    if (controller.signal.aborted) {
+    if (signal.aborted) {
       return;
     }
-    controller.abort(
-      reason === "restart"
-        ? createAgentRunRestartAbortError()
-        : reason === "superseded"
-          ? createAgentRunSupersededAbortError()
-          : undefined,
-    );
+    // Record the reply owner's reason before its derived signal aborts native work.
+    // Its methods preserve terminal/frozen state and close over the exact operation.
+    if (reason === "restart") {
+      params.replyOperation?.abortForRestart();
+    } else if (reason === "superseded") {
+      params.replyOperation?.supersede();
+    } else {
+      params.replyOperation?.abortByUser();
+    }
+    controller.abort(createAgentRunCancellationReason(reason));
   };
   const cliOwner: EmbeddedAgentQueueHandle = {
     kind: "embedded",

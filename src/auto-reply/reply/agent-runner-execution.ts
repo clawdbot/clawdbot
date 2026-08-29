@@ -553,6 +553,7 @@ async function executeAgentTurnInternal(
     sessionKey: params.sessionKey,
     sessionFile: params.followupRun.run.sessionFile,
     abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+    replyOperation: params.replyOperation,
   });
   try {
     return await executeAgentTurnInternalWithRetryState(

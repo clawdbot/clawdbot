@@ -46,6 +46,16 @@ const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
   "src/plugins/npm-install-security-scan.release.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
+const gatewayRuntimeTargets = [
+  "src/gateway/gateway-active-memory.test.ts",
+  "src/gateway/gateway-concurrent-streams.test.ts",
+  "src/gateway/gateway-terminal-cancellation.test.ts",
+];
+const runtimeTargets = [
+  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+  ...gatewayRuntimeTargets,
+];
+
 function listTestFiles(rootDir: string): string[] {
   const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
   expect(gitFiles).not.toBeNull();
@@ -875,11 +885,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
-    const runtimeTargets = [
-      "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
-      "src/gateway/gateway-active-memory.test.ts",
-      "src/gateway/gateway-concurrent-streams.test.ts",
-    ];
     for (const shards of [
       createNodeTestShards(),
       createNodeTestShardBundles({ compact: true, compactMode: "pull-request" }),
@@ -1587,10 +1592,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         checkName: "checks-node-agentic-gateway-core-runtime",
         shardName: "agentic-gateway-core-runtime",
         configs: gatewayCoreConfigs,
-        includePatterns: [
-          "src/gateway/gateway-active-memory.test.ts",
-          "src/gateway/gateway-concurrent-streams.test.ts",
-        ],
+        includePatterns: gatewayRuntimeTargets,
         pretestBuildMode: "runtime",
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,

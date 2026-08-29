@@ -37,8 +37,7 @@ import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-ques
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
+  createAgentRunCancellationReason,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -483,13 +482,7 @@ export function prepareEmbeddedAttemptStream(input: {
     input.markExternalAbort();
     attempt.onDeferredLifecycleAbort?.(reason);
     attempt.onAttemptAbort?.();
-    const abortReason =
-      reason === "restart"
-        ? createAgentRunRestartAbortError()
-        : reason === "superseded"
-          ? createAgentRunSupersededAbortError()
-          : undefined;
-    input.abortRun(false, abortReason);
+    input.abortRun(false, createAgentRunCancellationReason(reason));
   };
   const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
     const canInject = () =>

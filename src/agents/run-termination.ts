@@ -53,6 +53,16 @@ export function createAgentRunSupersededAbortError(): Error {
   return error;
 }
 
+export function createAgentRunCancellationReason(
+  reason?: "user_abort" | "restart" | "superseded",
+): Error | undefined {
+  return reason === "restart"
+    ? createAgentRunRestartAbortError()
+    : reason === "superseded"
+      ? createAgentRunSupersededAbortError()
+      : undefined;
+}
+
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
   try {
     return (
