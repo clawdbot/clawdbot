@@ -2767,20 +2767,26 @@ describe("steerControlledSubagentRun", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    const calls = { owner: { agent: 0 }, replacement: { agent: 0 } };
+    const calls = { owner: { agent: 0, wait: 0 }, replacement: { agent: 0, wait: 0 } };
     const ownerRuntime = {
       dispatchAgent: async <T = unknown>() => {
         calls.owner.agent += 1;
         return { runId: "run-steer-owner-new" } as T;
       },
-      waitForAgent: async <T = unknown>() => ({}) as T,
+      waitForAgent: async <T = unknown>() => {
+        calls.owner.wait += 1;
+        return {} as T;
+      },
     } as unknown as GatewayRecoveryRuntime;
     const replacementRuntime = {
       dispatchAgent: async <T = unknown>() => {
         calls.replacement.agent += 1;
         return { runId: "run-steer-replacement-new" } as T;
       },
-      waitForAgent: async <T = unknown>() => ({}) as T,
+      waitForAgent: async <T = unknown>() => {
+        calls.replacement.wait += 1;
+        return {} as T;
+      },
     } as unknown as GatewayRecoveryRuntime;
 
     const releaseOwner = registerGatewayRecoveryRuntime(ownerRuntime);
@@ -2818,6 +2824,10 @@ describe("steerControlledSubagentRun", () => {
       expect(result.status).toBe("accepted");
       expect(calls.owner.agent).toBe(1);
       expect(calls.replacement.agent).toBe(0);
+      // The pre-dispatch agent.wait and the registry's completion wait for the
+      // steered run must also stay off the replacement Gateway.
+      expect(calls.owner.wait).toBeGreaterThanOrEqual(1);
+      expect(calls.replacement.wait).toBe(0);
     } finally {
       releaseReplacement();
       releaseOwner();
