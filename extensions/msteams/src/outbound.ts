@@ -34,7 +34,7 @@ type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
 type MSTeamsMediaSendOptions = Pick<
   Parameters<typeof sendMessageMSTeams>[0],
-  "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+  "mediaUrl" | "audioAsVoice" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
 >;
 type MSTeamsTextSendFn = (to: string, text: string) => Promise<MSTeamsSendResult>;
 type MSTeamsMediaSendFn = (
@@ -129,6 +129,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    audioAsVoice,
     payload,
     deps,
     onDeliveryResult,
@@ -168,6 +169,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
           await send(deliveryTarget, textLocal, {
             mediaUrl: mediaUrlLocal,
+            ...((payload.audioAsVoice ?? audioAsVoice) ? { audioAsVoice: true } : {}),
             mediaAccess,
             mediaLocalRoots,
             mediaReadFile,
@@ -209,6 +211,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
+      audioAsVoice,
       deps,
       threadId,
     }) => {
@@ -216,6 +219,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       return toMSTeamsOutboundResult(
         await send(resolveMSTeamsThreadTarget(to, threadId), text, {
           mediaUrl,
+          ...(audioAsVoice ? { audioAsVoice: true } : {}),
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,

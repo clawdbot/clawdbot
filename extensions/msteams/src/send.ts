@@ -32,6 +32,7 @@ import {
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
+import { buildMSTeamsVoiceActivity } from "./voice-message.js";
 
 type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
@@ -42,6 +43,8 @@ type SendMSTeamsMessageParams = {
   text: string;
   /** Optional media URL */
   mediaUrl?: string;
+  /** Send audio media as a Microsoft voice activity instead of a file attachment. */
+  audioAsVoice?: boolean;
   /** Optional filename override for uploaded media/files */
   filename?: string;
   mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
@@ -187,7 +190,17 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaAccess, mediaLocalRoots, mediaReadFile } = params;
+  const {
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    filename,
+    audioAsVoice,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -225,6 +238,26 @@ export async function sendMessageMSTeams(
       isImage,
       conversationType,
     });
+
+    if (audioAsVoice) {
+      const contentType = media.contentType ?? "application/octet-stream";
+      const activity = buildMSTeamsVoiceActivity({
+        contentType,
+        contentUrl: `data:${contentType};base64,${media.buffer.toString("base64")}`,
+        transcription: messageText,
+      });
+      const messageId = await sendProactiveActivity({
+        ctx,
+        activity,
+        errorPrefix: "msteams voice message send",
+      });
+      log.info("sent voice activity", { conversationId, messageId });
+      return createMSTeamsSendResult({
+        messageId,
+        conversationId,
+        kind: "media",
+      });
+    }
 
     // Personal chats: base64 only works for images; use FileConsentCard for large files or non-images
     if (

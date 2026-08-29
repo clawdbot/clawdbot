@@ -35,6 +35,7 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
+import { buildMSTeamsVoiceActivity } from "./voice-message.js";
 
 /**
  * MSTeams-specific media size limit (100MB).
@@ -85,6 +86,7 @@ type MSTeamsReplyRenderOptions = {
 export type MSTeamsRenderedMessage = {
   text?: string;
   mediaUrl?: string;
+  audioAsVoice?: boolean;
 };
 
 type MSTeamsSendRetryOptions = {
@@ -246,11 +248,18 @@ export function renderReplyPayloadsToMessages(
       // For inline mode, combine text with first media as attachment
       const firstMedia = reply.mediaUrls[0];
       if (firstMedia) {
-        out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
+        out.push({
+          text: reply.text || undefined,
+          mediaUrl: firstMedia,
+          ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
+        });
         // Additional media URLs as separate messages
         for (let i = 1; i < reply.mediaUrls.length; i++) {
           if (reply.mediaUrls[i]) {
-            out.push({ mediaUrl: reply.mediaUrls[i] });
+            out.push({
+              mediaUrl: reply.mediaUrls[i],
+              ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
+            });
           }
         }
       } else {
@@ -265,7 +274,7 @@ export function renderReplyPayloadsToMessages(
       if (!mediaUrl) {
         continue;
       }
-      out.push({ mediaUrl });
+      out.push({ mediaUrl, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) });
     }
   }
 
@@ -316,6 +325,14 @@ async function buildActivity(
       );
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
+
+      if (msg.audioAsVoice) {
+        return buildMSTeamsVoiceActivity({
+          contentType,
+          contentUrl: `data:${contentType};base64,${media.buffer.toString("base64")}`,
+          transcription: msg.text,
+        });
+      }
 
       if (
         requiresFileConsent({
@@ -375,6 +392,14 @@ async function buildActivity(
       // Image (any chat): use base64 (works for images in all conversation types)
       const base64 = media.buffer.toString("base64");
       contentUrl = `data:${media.contentType};base64,${base64}`;
+    }
+
+    if (msg.audioAsVoice) {
+      return buildMSTeamsVoiceActivity({
+        contentType,
+        contentUrl,
+        transcription: msg.text,
+      });
     }
 
     activity.attachments = [

@@ -317,6 +317,63 @@ describe("sendMessageMSTeams", () => {
     expect(result.receipt?.parts[1]?.kind).toBe("media");
   });
 
+  it("sends audioAsVoice media as a Microsoft voice activity", async () => {
+    const mediaBuffer = Buffer.from("voice-audio");
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: mediaBuffer,
+      contentType: "audio/mpeg",
+      fileName: "reply.mp3",
+      kind: "audio",
+    });
+
+    const result = await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "Spoken reply",
+      mediaUrl: "file:///tmp/reply.mp3",
+      audioAsVoice: true,
+    });
+
+    expect(mockState.sendMSTeamsActivityWithReference).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      {
+        type: "message",
+        valueType: "application/vnd.microsoft.activity.voice+json",
+        value: {
+          contentType: "audio/mpeg",
+          contentUrl: `data:audio/mpeg;base64,${mediaBuffer.toString("base64")}`,
+          transcription: "Spoken reply",
+        },
+      },
+      expect.anything(),
+    );
+    expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("message-1");
+  });
+
+  it("rejects audioAsVoice for non-audio media before platform dispatch", async () => {
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("not audio"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        text: "Wrong media",
+        mediaUrl: "file:///tmp/report.pdf",
+        audioAsVoice: true,
+      }),
+    ).rejects.toThrow("MS Teams voice messages require audio media");
+
+    expect(mockState.sendMSTeamsActivityWithReference).not.toHaveBeenCalled();
+    expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "trusted host reader", hostReader: true },
     { name: "reader-free gateway authority", hostReader: false },

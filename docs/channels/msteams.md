@@ -836,6 +836,7 @@ When `replyStyle: "top-level"` is in effect, channel-thread inbounds are intenti
 - **DMs:** images and file attachments work via Teams bot file APIs.
 - **Channels/groups:** attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
 - For explicit file-first sends, use `action=upload-file` with `media` / `filePath` / `path`; optional `message` becomes the accompanying text/comment, and `filename` (or `title`) overrides the uploaded name.
+- Audio with the shared `asVoice` / `audioAsVoice` intent is sent as a Microsoft voice activity instead of a SharePoint file card. The activity carries the audio MIME type, audio data, and reply text as an accessibility transcription. Audio without that intent keeps the normal file-attachment behavior.
 
 Without Graph permissions, channel messages with images arrive as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).

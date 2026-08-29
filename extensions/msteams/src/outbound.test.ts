@@ -243,6 +243,24 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("forwards the native voice-note intent for audio media sends", async () => {
+    await requireSendMedia()({
+      cfg,
+      to: "conversation:abc",
+      text: "voice reply",
+      mediaUrl: "file:///tmp/reply.mp3",
+      audioAsVoice: true,
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:abc",
+      text: "voice reply",
+      mediaUrl: "file:///tmp/reply.mp3",
+      audioAsVoice: true,
+    });
+  });
+
   it("preserves host-owned workspace media access for direct attachments", async () => {
     const readFile = vi.fn(async () => Buffer.from("approved attachment"));
     const mediaAccess = {
