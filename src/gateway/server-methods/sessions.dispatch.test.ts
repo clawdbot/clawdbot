@@ -683,72 +683,83 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("allows an explicitly reclaimed session to dispatch again", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
-    const dispatchedPlacement: WorkerSessionPlacementRecord = {
-      sessionId,
-      agentId: "main",
-      sessionKey,
-      executionMode: "worker-turn",
-      state: "active",
-      environmentId: "environment-2",
-      generation: 5,
-      activeOwnerEpoch: 2,
-      workspaceBaseManifestRef: "manifest-2",
-      remoteWorkspaceDir: "/worker/session-cloud-test",
-      workerBundleHash: "d".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-      createdAtMs: 1,
-      updatedAtMs: 3,
-      stateChangedAtMs: 3,
-    };
-    const dispatch = vi.fn().mockResolvedValue(dispatchedPlacement);
-    const respond = await invoke(
-      makeContext({
+  it.each([undefined, 2, 3])(
+    "redispatches a reclaimed session with correlated identity (environment epoch: %s)",
+    async (ownerEpoch) => {
+      mocks.resolveTarget.mockReturnValue(
+        targetWithEntry({
+          sessionId,
+          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+        }),
+      );
+      mocks.findLiveByOwner.mockReturnValue({
+        id: "worktree-1",
+        ownerKind: "session",
+        ownerId: sessionKey,
+      });
+      const dispatchedPlacement: WorkerSessionPlacementRecord = {
+        ...activePlacementRecord(),
+        environmentId: "environment-2",
+        generation: 5,
+        activeOwnerEpoch: 2,
+      };
+      const dispatch = vi.fn().mockResolvedValue(dispatchedPlacement);
+      const context = makeContext({
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: {
           getMany: () => new Map([[sessionId, reclaimedPlacementRecord()]]),
         },
-      }),
-    );
+      });
+      vi.spyOn(context.workerEnvironmentService!, "get").mockReturnValue(
+        ownerEpoch === undefined
+          ? undefined
+          : {
+              environmentId: "environment-2",
+              providerId: "fake",
+              profileId: "test",
+              leaseId: "lease-2",
+              sharedHost: false,
+              state: "attached",
+              ownerEpoch,
+              createdAtMs: 1,
+              idleSinceAtMs: null,
+              attachedSessionIds: [sessionId],
+              desktopAvailable: false,
+              desktopApps: [],
+              tunnelStatus: "stopped",
+            },
+      );
+      const respond = await invoke(context);
 
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId,
-        sessionKey,
-        agentId: "main",
-        profileId: "test",
-      }),
-      expect.any(Function),
-      undefined,
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        placement: expect.objectContaining({
-          state: "active",
-          environmentId: "environment-2",
-          generation: 5,
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId,
+          sessionKey,
+          agentId: "main",
+          profileId: "test",
         }),
-      }),
-      undefined,
-    );
-  });
+        expect.any(Function),
+        undefined,
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          placement: expect.objectContaining({
+            state: "active",
+            environmentId: "environment-2",
+            generation: 5,
+            ...(ownerEpoch === 2 ? { providerId: "fake", profileId: "test" } : {}),
+          }),
+        }),
+        undefined,
+      );
+      if (ownerEpoch !== 2) {
+        const payload = vi.mocked(respond).mock.calls[0]?.[1];
+        expect(payload).not.toHaveProperty("placement.providerId");
+        expect(payload).not.toHaveProperty("placement.profileId");
+      }
+    },
+  );
 
   it("allows a failed placement to redispatch after its environment is proven gone", async () => {
     mocks.resolveTarget.mockReturnValue(

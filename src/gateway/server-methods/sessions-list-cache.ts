@@ -35,6 +35,7 @@ type SessionListFence = {
   sessionsMutationVersion: number;
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
+  workerEnvironmentInventoryVersion: number;
   workerPlacementDiskSpaceVersion: number;
   workerPlacementRunnerAvailabilityVersion: number;
 };
@@ -100,6 +101,7 @@ function readSessionListFence(
     // write without a session mutation must still invalidate reuse.
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    workerEnvironmentInventoryVersion: context.workerEnvironmentService?.inventoryVersion() ?? 0,
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
     workerPlacementRunnerAvailabilityVersion:
       context.workerPlacementRunnerAvailabilityReader?.version() ?? 0,
@@ -120,6 +122,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.workerEnvironmentInventoryVersion === fence.workerEnvironmentInventoryVersion &&
     value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion &&
     value.workerPlacementRunnerAvailabilityVersion ===
       fence.workerPlacementRunnerAvailabilityVersion

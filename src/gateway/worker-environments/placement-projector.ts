@@ -24,6 +24,28 @@ export type WorkerPlacementRunnerAvailabilityReader = {
   version(): number;
 };
 
+export function readWorkerPlacementIdentity(
+  record: WorkerSessionPlacementRecord,
+  environments: Pick<WorkerEnvironmentServiceContract, "get"> | undefined,
+): { providerId: string; profileId: string } | undefined {
+  const environment = record.environmentId ? environments?.get(record.environmentId) : undefined;
+  if (!environment) {
+    return undefined;
+  }
+  // Epochs correlate instances even when an environment id is reused. Matching terminal
+  // environments retain accurate runner provenance; only pre-epoch dispatch states may
+  // expose identity without an epoch, never terminal placements that retained none.
+  const correlated =
+    record.activeOwnerEpoch !== null
+      ? environment.ownerEpoch === record.activeOwnerEpoch
+      : record.state === "provisioning" ||
+        record.state === "syncing" ||
+        record.state === "starting";
+  return correlated
+    ? { providerId: environment.providerId, profileId: environment.profileId }
+    : undefined;
+}
+
 export function createWorkerPlacementRunnerAvailabilityReader(params: {
   environments: Pick<WorkerEnvironmentServiceContract, "get">;
   hasCurrentDeviceRunner: (deviceId: string) => boolean;

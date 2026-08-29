@@ -56,9 +56,13 @@ test("sessions.list omits placement when the worker placement service is disable
   expect(result.payload?.sessions.every((session) => session.placement === undefined)).toBe(true);
 });
 
-test.each([true, false])(
-  "sessions.list batch-projects durable worker placement (environment exists: %s)",
-  async (environmentExists) => {
+test.each([
+  { name: "matching owner epoch", ownerEpoch: 12, expectedIdentity: true },
+  { name: "missing environment", ownerEpoch: undefined, expectedIdentity: false },
+  { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
+])(
+  "sessions.list batch-projects durable worker placement: $name",
+  async ({ ownerEpoch, expectedIdentity }) => {
     await seedSessionRows();
     const placement = activePlacementRecord();
     const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
@@ -73,7 +77,9 @@ test.each([true, false])(
     };
     const identity = { providerId: "machine0", profileId: "team" };
     const getEnvironment = vi.fn((environmentId: string) =>
-      environmentExists && environmentId === placement.environmentId ? identity : undefined,
+      ownerEpoch !== undefined && environmentId === placement.environmentId
+        ? { ...identity, ownerEpoch, state: "attached" }
+        : undefined,
     );
     const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
       "sessions.list",
@@ -81,7 +87,7 @@ test.each([true, false])(
       {
         context: {
           workerSessionPlacementService: { getMany },
-          workerEnvironmentService: { get: getEnvironment },
+          workerEnvironmentService: { get: getEnvironment, inventoryVersion: () => 0 },
           workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
           workerPlacementRunnerAvailabilityReader: {
             read: () => ({ kind: "device", status: "offline" }),
@@ -110,9 +116,62 @@ test.each([true, false])(
       stateChangedAtMs: 200,
       diskSpace,
       runner: { kind: "device", status: "offline" },
-      ...(environmentExists ? identity : {}),
+      ...(expectedIdentity ? identity : {}),
     });
     expect(other?.placement).toBeUndefined();
+  },
+);
+
+test.each(["provisioning", "syncing", "starting"] as const)(
+  "sessions.describe preserves pre-epoch identity during %s",
+  async (state) => {
+    await seedSessionRows();
+    const starting = {
+      ...activePlacementRecord(),
+      state: "starting" as const,
+      activeOwnerEpoch: null,
+      turnClaim: null,
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+    } satisfies WorkerSessionPlacementRecord;
+    const syncing = {
+      ...starting,
+      state: "syncing" as const,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+    } satisfies WorkerSessionPlacementRecord;
+    const placement: WorkerSessionPlacementRecord =
+      state === "starting"
+        ? starting
+        : state === "syncing"
+          ? syncing
+          : { ...syncing, state, workerBundleHash: null };
+    const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: {
+          workerSessionPlacementService: {
+            getMany: () => new Map([[placement.sessionId, placement]]),
+          },
+          workerEnvironmentService: {
+            get: () => ({
+              providerId: "machine0",
+              profileId: "team",
+              ownerEpoch: 0,
+              state: "provisioning",
+            }),
+            inventoryVersion: () => 0,
+          },
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.payload?.session?.placement).toMatchObject({
+      state,
+      providerId: "machine0",
+      profileId: "team",
+    });
   },
 );
 
@@ -206,31 +265,79 @@ test("sessions.describe projects durable worker placement", async () => {
   });
 });
 
-test("sessions.describe projects a durable per-session terminal reason without environment lookup", async () => {
-  await seedSessionRows();
-  const active = activePlacementRecord();
-  const placement = {
-    ...active,
-    state: "failed" as const,
-    turnClaim: null,
-    recoveryError: "cloud worker disappeared: provider reported lease destroyed",
-    terminalReason: "cloud worker disappeared: provider reported lease destroyed",
-    terminalAtMs: 400,
-  } satisfies WorkerSessionPlacementRecord;
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-    () => new Map([[placement.sessionId, placement]]),
-  );
+test.each([
+  { name: "without an environment", ownerEpoch: undefined, activeOwnerEpoch: 12, identity: false },
+  {
+    name: "with matching terminal environment provenance",
+    ownerEpoch: 12,
+    activeOwnerEpoch: 12,
+    identity: true,
+  },
+  {
+    name: "without identity from a reused environment",
+    ownerEpoch: 13,
+    activeOwnerEpoch: 12,
+    identity: false,
+  },
+  {
+    name: "without identity when no owner epoch was retained",
+    ownerEpoch: 12,
+    activeOwnerEpoch: null,
+    identity: false,
+  },
+])(
+  "sessions.describe projects a durable terminal reason $name",
+  async ({ ownerEpoch, activeOwnerEpoch, identity }) => {
+    await seedSessionRows();
+    const active = activePlacementRecord();
+    const placement = {
+      ...active,
+      state: "failed" as const,
+      activeOwnerEpoch,
+      turnClaim: null,
+      recoveryError: "cloud worker disappeared: provider reported lease destroyed",
+      terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+      terminalAtMs: 400,
+    } satisfies WorkerSessionPlacementRecord;
+    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
+      () => new Map([[placement.sessionId, placement]]),
+    );
 
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key: "main" },
-    { context: { workerSessionPlacementService: { getMany } } },
-  );
+    const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: {
+          workerSessionPlacementService: { getMany },
+          workerEnvironmentService: {
+            get: () =>
+              ownerEpoch === undefined
+                ? undefined
+                : {
+                    providerId: "machine0",
+                    profileId: "team",
+                    ownerEpoch,
+                    state: "destroyed",
+                  },
+            inventoryVersion: () => 0,
+          },
+        },
+      },
+    );
 
-  expect(result.ok).toBe(true);
-  expect(result.payload?.session?.placement).toMatchObject({
-    state: "failed",
-    terminalReason: "cloud worker disappeared: provider reported lease destroyed",
-    terminalAtMs: 400,
-  });
-});
+    expect(result.ok).toBe(true);
+    expect(result.payload?.session?.placement).toMatchObject({
+      state: "failed",
+      terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+      terminalAtMs: 400,
+    });
+    const projected = result.payload?.session?.placement;
+    expect(projected).toBeDefined();
+    if (identity) {
+      expect(projected).toMatchObject({ providerId: "machine0", profileId: "team" });
+    } else {
+      expect(projected).not.toHaveProperty("providerId");
+      expect(projected).not.toHaveProperty("profileId");
+    }
+  },
+);

@@ -67,6 +67,7 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
+  inventoryVersion(): number;
   supportsExecutionMode?(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   create(

@@ -17,7 +17,10 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
-import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import {
+  projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
+} from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
   resolveWorkerPlacementCapabilities,
@@ -185,12 +188,6 @@ function respondWorkerPlacement(params: {
   context: GatewayRequestContext;
   placement: Parameters<typeof projectWorkerSessionPlacement>[0];
 }): void {
-  const environment = params.placement.environmentId
-    ? params.context.workerEnvironmentService?.get(params.placement.environmentId)
-    : undefined;
-  const identity = environment
-    ? { providerId: environment.providerId, profileId: environment.profileId }
-    : undefined;
   params.respond(
     true,
     {
@@ -203,7 +200,7 @@ function respondWorkerPlacement(params: {
         // Canonical fenced runner reader; a node lost after durable provision
         // must project offline here exactly as sessions.list would.
         params.context.workerPlacementRunnerAvailabilityReader?.read(params.placement),
-        identity,
+        readWorkerPlacementIdentity(params.placement, params.context.workerEnvironmentService),
       ),
     },
     undefined,

@@ -128,6 +128,7 @@ export function makeDispatchTestContext(
 ): GatewayRequestContext {
   const workerEnvironmentService = overrides.workerEnvironmentService ?? {
     get: () => undefined,
+    inventoryVersion: () => 0,
     supportsExecutionMode: () => true,
   };
   if (!overrides.workerEnvironmentService) {
