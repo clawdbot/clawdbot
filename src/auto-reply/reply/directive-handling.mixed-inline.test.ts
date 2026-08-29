@@ -1,7 +1,9 @@
 // Tests mixed directives through the real reply admission and transaction boundary.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -20,6 +22,10 @@ type PersistenceResult =
   | { status: "model-selection-locked"; entry: SessionEntry }
   | { status: "lifecycle-invalidated"; error: string; entry?: SessionEntry };
 
+vi.mock("../../agents/model-catalog.runtime.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+}));
+
 const persistenceMocks = vi.hoisted(() => ({
   persist: vi.fn<(params: { entry: SessionEntry }) => Promise<PersistenceResult>>(),
 }));
@@ -27,6 +33,7 @@ const persistenceMocks = vi.hoisted(() => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: vi.fn(() => []),
   resolveAgentConfig: vi.fn(() => ({})),
+  resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveSessionAgentIds: vi.fn(() => ({ requestedAgentId: "main", sessionAgentId: "main" })),
   resolveSessionAgentId: vi.fn(() => "main"),
@@ -99,6 +106,13 @@ async function applyMixedDirectives(params: {
     provider,
     model,
     requestedRouteResolution: "resolved",
+    modelPolicy: createModelVisibilityPolicy({
+      cfg,
+      catalog: allowedModels,
+      defaultProvider: params.defaultProvider ?? provider,
+      defaultModel: params.defaultModel ?? model,
+      agentId: "main",
+    }),
     allowedModelKeys: new Set(allowedModels.map((entry) => `${entry.provider}/${entry.id}`)),
     allowedModelCatalog: allowedModels,
     policyAliasIndex: aliasIndex,
@@ -173,11 +187,109 @@ async function applyMixedDirectives(params: {
 describe("mixed inline directives", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
     vi.mocked(persistStickyModelSelectionBestEffort).mockReturnValue("requested");
     persistenceMocks.persist.mockImplementation(async ({ entry }) => ({
       status: "current",
       entry: { ...entry },
     }));
+  });
+
+  it("continues mixed content with the selected route's context and thinking metadata", async () => {
+    const selected: ModelCatalogEntry = {
+      provider: "fixture-route",
+      id: "reasoner",
+      name: "Reasoner",
+      api: "openai-responses",
+      contextWindow: 48_000,
+      contextTokens: 24_000,
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    };
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([selected]);
+    const { result, sessionEntry } = await applyMixedDirectives({
+      body: "please reply /model fixture-route/reasoner -s",
+      cfg: {
+        models: {
+          providers: {
+            "fixture-route": {
+              api: "openai-responses",
+              baseUrl: "https://fixture.invalid/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      allowedModels: [
+        { provider: "anthropic", id: "claude-opus-4-6", name: "Opus", reasoning: false },
+      ],
+      sessionEntry: createSessionEntry({ thinkingLevel: "max" }),
+    });
+    expect(result).toMatchObject({
+      kind: "continue",
+      provider: selected.provider,
+      model: selected.id,
+      contextTokens: 24_000,
+    });
+    expect(sessionEntry.thinkingLevel).toBe("max");
+    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextThinking: expect.objectContaining({
+          level: "max",
+          catalog: expect.arrayContaining([selected]),
+        }),
+      }),
+    );
+  });
+
+  it.each(["", "please reply "])(
+    "rejects a restricted explicit model with prefix %j without persistence",
+    async (prefix) => {
+      const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
+      const initial = { ...sessionEntry };
+      const { result } = await applyMixedDirectives({
+        body: `${prefix}/model openai/gpt-5.6-luna -s`,
+        cfg: { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } },
+        sessionEntry,
+        allowedModels: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Opus" }],
+      });
+      expect(result).toMatchObject({
+        kind: "reply",
+        reply: { isError: true, text: expect.stringContaining("is not allowed") },
+      });
+      expect(sessionEntry).toEqual(initial);
+      expect(persistenceMocks.persist).not.toHaveBeenCalled();
+      expect(triggerSessionPatchHook).not.toHaveBeenCalled();
+      expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+    },
+  );
+
+  describe.each(["", "please reply "])("off-catalog selection with prefix %j", (prefix) => {
+    it.each([undefined, {}, { allow: [] }])(
+      "uses policy %j independently of inventory",
+      async (modelPolicy) => {
+        const { result, sessionEntry } = await applyMixedDirectives({
+          body: `${prefix}/model openai/gpt-5.6-luna -s`,
+          cfg: { agents: { defaults: { modelPolicy } } },
+          allowedModels: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Opus" }],
+          sessionEntry: createSessionEntry({ thinkingLevel: "high" }),
+        });
+        expect(result).toMatchObject(
+          prefix
+            ? { kind: "continue", provider: "openai", model: "gpt-5.6-luna" }
+            : {
+                kind: "reply",
+                reply: { text: expect.stringContaining("Model set to openai/gpt-5.6-luna") },
+              },
+        );
+        expect(sessionEntry).toMatchObject({
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+          thinkingLevel: "high",
+        });
+        expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe.each(["", "please reply "])("model scope with prefix %j", (prefix) => {

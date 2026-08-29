@@ -45,7 +45,7 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
 - Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Every automation run creates a [background task](/automation/tasks) record.
-- One-shot jobs (`--at`) auto-delete only when run `completionStatus` is `succeeded`; pass `--keep-after-run` to keep successful jobs. A required-delivery failure or unknown completion keeps the job disabled for inspection and restart recovery without replaying the payload.
+- One-shot jobs (`--at`) auto-delete after successful completion: delivery is confirmed, not requested, intentionally suppressed, or explicitly best-effort. Failed or unknown required delivery retains the job disabled for inspection without replaying the payload. Pass `--keep-after-run` to keep successful jobs too.
 - Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by the scheduler's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled instead of replayed immediately, keeping model/tool bootstrap work out of the channel-connect window. Startup catch-up delays survive label or payload-content reconciliation and another restart; changing the schedule starts a new scheduling decision.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; `--local` runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
@@ -64,7 +64,7 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
   <Accordion title="Task reconciliation">
     Automation task reconciliation is runtime-owned first, durable-history-backed second: an active automation task stays live while the automations runtime still tracks that job as running, even if an old child session row still exists. Once the runtime stops owning the job and a 5-minute grace window expires, maintenance checks persisted run logs and job state for the matching `cron:<jobId>:<startedAt>` run. A terminal result there finalizes the task ledger; otherwise Gateway-owned maintenance can mark the task `lost`. Offline CLI audit can recover from durable history, but its own empty in-process active-job set is not proof a Gateway-owned run is gone.
 
-    Restart recovery matches finalized results to the run identity, never just a coincident start time. A verified live process keeps its run receipt. If a foreign process exists but its start identity cannot be verified, its receipt becomes recoverable after more than two hours from the queued or running start. Recovery revokes that receipt before admitting another run; it cannot undo external side effects already in flight. An interrupted one-shot remains disabled for inspection unless the operator already rescheduled it.
+    Restart recovery matches finalized results to the run identity, never just a coincident start time. A verified live process keeps its run receipt. If a foreign process exists but its start identity cannot be verified, its receipt becomes recoverable after more than two hours from the queued or running start. Recovery revokes that receipt before admitting another run; it cannot undo external side effects already in flight. On Gateway startup, an enabled one-shot interrupted before a terminal task result recovers through normal missed-job catch-up, regardless of how overdue it is. Reclaiming a dead running owner during normal operation records the interruption without replaying the consumed one-shot; a separately rescheduled occurrence remains eligible. Catch-up limits and delays pace recovery; they do not expire it. Pending recovery survives another restart, including during agent-turn deferral. A terminal result is restored without replaying that run, and `deleteAfterRun` deletes the job only when completion is `succeeded`.
 
   </Accordion>
 </AccordionGroup>
@@ -298,6 +298,8 @@ Before an isolated run starts, OpenClaw checks reachable local endpoints for con
 Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
 
 <Note>
+When an agent-turn automation's exec needs approval, the card is delivered to connected approval surfaces and the run waits for the decision; answering **Always allow** mints a scoped standing grant so later occurrences run without prompting. See [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations) for lifetime, listing, and revocation.
+
 Command payloads are an operator-admin Gateway automation surface, not an agent `tools.exec` call. Creating, updating, removing, or manually running automation jobs requires `operator.admin`; scheduled command runs later execute inside the Gateway process as that admin-authored automation. Agent exec policy (`tools.exec.mode`, approval prompts, per-agent tool allowlists) governs model-visible exec tools, not command payloads.
 </Note>
 
@@ -397,6 +399,8 @@ Agent-turn jobs default to the creating conversation when the create request car
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
+A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
@@ -407,6 +411,8 @@ For a `current` job using `announce` (the default), the final assistant result i
 WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
 
 If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
+
+When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. If the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
@@ -463,7 +469,7 @@ Failure notification routes resolve in this order:
 - `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
-A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. The scheduler may notify immediately only through a resolved alternate failure destination; it never retries the already-failed primary route.
+A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. All such alerts, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear the cooldown; successful completion does. The scheduler never retries the already-failed primary route for an alert.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
 Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
@@ -589,7 +595,9 @@ Archiving a session (Control UI, or `sessions.patch { key, archived: true, expec
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 
-Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Delivery is required only when the admitted job explicitly sets `delivery.bestEffort: false`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`.
+Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Requested delivery is required unless the admitted job explicitly sets `delivery.bestEffort: true`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`. An adapter send without a delivery identity stays `unknown`, without an automatic resend that could duplicate the message.
+
+Intentional silence (`NO_REPLY`), intentionally empty output, heartbeat acknowledgments, and channel reply transforms record `deliverySuppressionReason` without claiming delivery or triggering delivery-failure alerts. These successful non-outcomes and successful executions with explicit `delivery.bestEffort: true` delete one-shots normally. A transport hook veto instead records a delivery error without an intentional-suppression reason. Active descendants without a final reply, stale interim output, and output emptied by TTS instead record a delivery error. Retained one-shot jobs do not automatically rerun; inspect their history and delivery outcome before retrying or removing them.
 
 Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
 
@@ -727,7 +735,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` with `{ "ok": true, "mode": "now" }` means the event was enqueued and a wake was requested, not that a heartbeat completed. Use `mode: "next-heartbeat"` to enqueue without requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
 
     A supplied `agentId` must name a configured agent. Supply it explicitly when the fleet has no implicit or retained legacy owner. A caller-selected `sessionKey` requires `mode: "now"`, `hooks.allowRequestSessionKey: true`, and the configured prefix policy; deferred wakes use the main session.
 
@@ -749,7 +757,7 @@ limits, routing policy, and error responses.
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 
-    `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery, and mapped wake actions are not deduplicated. The reference covers batch caps and response shapes.
+    `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery; mapped wake actions have no replay identity, and the queue may coalesce repeated wakes. The reference covers batch caps and response shapes.
 
   </Accordion>
 </AccordionGroup>

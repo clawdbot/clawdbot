@@ -19,13 +19,14 @@ import {
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
-import "./chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
   HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
+import "./chat-header-session-menu.ts";
+import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
 import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
@@ -69,6 +70,7 @@ async function mountMenu(
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
     statusActions?: HeaderMenuStatusAction[];
+    sharing?: ChatSessionSharingProps | null;
     ownerOptions?: SessionOwnerOption[];
     selfOwner?: SessionOwnerOption | null;
     currentOwnerId?: string | null;
@@ -107,6 +109,7 @@ async function mountMenu(
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
       .statusActions=${options.statusActions ?? []}
+      .sharing=${options.sharing ?? null}
       .groups=${["Projects"]}
       .ownerOptions=${options.ownerOptions ?? []}
       .selfOwner=${options.selfOwner ?? null}
@@ -563,6 +566,57 @@ describe("chat header session menu", () => {
       kind: "assign-owner",
       owner: { type: "human", id: "profile-ada" },
     });
+  });
+
+  it("drills into session sharing only from the compact menu", async () => {
+    const onOpen = vi.fn();
+    const onVisibilityChange = vi.fn();
+    const sharing = {
+      session: {
+        key: "agent:main:shared",
+        kind: "direct",
+        updatedAt: 1,
+        visibility: "draft",
+        sharingRole: "owner",
+      },
+      state: {
+        loading: false,
+        result: {
+          sessionKey: "agent:main:shared",
+          owner: { type: "human", id: "owner", label: "Owner" },
+          members: [],
+          identities: [{ type: "human", id: "vyctor", label: "Vyctor" }],
+          role: "owner",
+          allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
+        },
+      },
+      onOpen,
+      onVisibilityChange,
+      onMemberChange: vi.fn(),
+    } satisfies ChatSessionSharingProps;
+
+    const desktop = await mountMenu({ sharing });
+    expect(desktop.textContent).not.toContain("Session sharing");
+
+    const compact = await mountMenu({ compact: true, sharing });
+    select(compact, "compact:open-sharing");
+    await compact.updateComplete;
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(
+      compact
+        .querySelector("wa-dropdown")
+        ?.classList.contains("chat-header-session-menu--compact-sharing"),
+    ).toBe(true);
+    expect(
+      Array.from(
+        compact.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual(["Back", "Publish draft", "Read-only", "Suggest", "Draft", "Vyctor"]);
+    expect(
+      compact.querySelector(".chat-pane__publish-draft")?.classList.contains("session-menu__item"),
+    ).toBe(true);
+    select(compact, "visibility:read-only");
+    expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });
 
   it("pins and disables onboarding view preferences", async () => {

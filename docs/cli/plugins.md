@@ -183,7 +183,7 @@ third-party packages, and non-npm sources are not rewritten.
   <Accordion title="Config includes and invalid-config repair">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
     When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
@@ -406,6 +406,8 @@ For runtime hook debugging:
 ### Plugin index
 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `config_machine_state` value keyed by `plugins.installedIndex` stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
+
+An unreadable index is not invalid data. Permission, lock, and other read errors stop fallback, migration, and refresh with the original error. Restore database access, then rerun `openclaw plugins registry` to inspect the state before attempting repair. Do not delete the `plugins.installedIndex` row unless inspection succeeds and confirms invalid install records; a failed read alone does not justify deletion.
 
 `plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite machine-state plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 

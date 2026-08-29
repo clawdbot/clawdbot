@@ -635,15 +635,15 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ vercel: "59.1.4" });
+    expect(packageJson.dependencies).toEqual({ vercel: "59.3.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-oLctNaFB5bptskV4gioZQ6Ac4E0fDbKKU/q/JX1H+lz7IWgsTgKafwxvfJHJiCANEH5syl7a9H1IxxGN7Dp8dg==",
-      version: "59.1.4",
+        "sha512-Bj/SN1qln/9guMcIz4gEGn+Ij+amGtkT2kqxwUAFgrLU2Hr0zYk4kX4QfxmZEs6WhheAaMlblVw2VUF2JFP5fA==",
+      version: "59.3.0",
     });
     expect(materialize).toContain(
-      'expected_lock_sha256="7a1aaa3017353437cd8908c50034d6c1f54899c9c9d92f289b06ccb26532848a"',
+      'expected_lock_sha256="4cea63abc4e89d659902aae28dd3e88973fdff9cdd2d2f5e234315d3a3bb680e"',
     );
     expect(materialize).toContain("npm ci \\\n");
     expect(materialize).toContain("--ignore-scripts");

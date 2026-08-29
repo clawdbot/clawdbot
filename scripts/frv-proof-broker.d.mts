@@ -1,7 +1,7 @@
 export type BrokerContext = {
   actor: string;
   correlation: string;
-  headSha: string;
+  landedSha: string;
   prNumber: number;
   repository: "openclaw/openclaw";
   runId: number;
@@ -27,7 +27,7 @@ export type ProofReceipt = {
   correlation: string;
   fixtureRunAttempt: 2;
   fixtureRunId: number;
-  headSha: string;
+  landedSha: string;
   operation: "noop";
   prNumber: number;
   repository: "openclaw/openclaw";

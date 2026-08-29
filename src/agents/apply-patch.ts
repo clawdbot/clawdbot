@@ -15,6 +15,7 @@ import {
   resolvePatchFileOps,
   type SandboxApplyPatchConfig,
 } from "./apply-patch-file-ops.js";
+import { resolveApplyPatchInputPath } from "./apply-patch-paths.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
@@ -91,6 +92,7 @@ function normalizeUpdateComparison(content: string): string {
 
 type ApplyPatchOptions = ApplyPatchFileOptions & {
   signal?: AbortSignal;
+  patchInputPaths?: ReadonlyMap<string, string>;
 };
 
 const applyPatchSchema = Type.Object({
@@ -169,6 +171,11 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     throw new Error("No files were modified.");
   }
 
+  const patchOptions = {
+    ...options,
+    patchInputPaths: await resolvePatchInputPaths(parsed.hunks, options),
+  };
+
   const summary: ApplyPatchSummary = {
     added: [],
     modified: [],
@@ -180,20 +187,20 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     deleted: new Set<string>(),
   };
   const noOpPaths = new Set<string>();
-  const fileOps = resolvePatchFileOps(options);
+  const fileOps = resolvePatchFileOps(patchOptions);
 
   for (const hunk of parsed.hunks) {
-    if (options.signal?.aborted) {
+    if (patchOptions.signal?.aborted) {
       throw createAbortError("Aborted");
     }
 
     if (hunk.kind === "add") {
-      const targetResolution = resolvePatchPath(hunk.path, options);
+      const targetResolution = resolvePatchPath(hunk.path, patchOptions);
       await withFileMutationQueueKeyResolution(
         targetResolution.then((target) => target.queueKey),
         async () => {
           const target = await targetResolution;
-          await assertPatchParentPath(hunk.path, options);
+          await assertPatchParentPath(hunk.path, patchOptions);
           await ensureDir(target.resolved, fileOps);
           await createPatchTarget({
             target,
@@ -211,7 +218,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     if (hunk.kind === "delete") {
       const targetResolution = resolvePatchPath(
         hunk.path,
-        options,
+        patchOptions,
         PATH_ALIAS_POLICIES.unlinkTarget,
       );
       await withFileMutationQueueKeyResolution(
@@ -226,9 +233,9 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       continue;
     }
 
-    const targetResolution = resolvePatchPath(hunk.path, options);
+    const targetResolution = resolvePatchPath(hunk.path, patchOptions);
     const moveTargetResolution = hunk.movePath
-      ? resolvePatchPath(hunk.movePath, options)
+      ? resolvePatchPath(hunk.movePath, patchOptions)
       : undefined;
     await withFileMutationQueueKeysResolution(
       Promise.all([
@@ -245,7 +252,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         });
 
         if (hunk.movePath && moveTarget) {
-          await assertPatchParentPath(hunk.movePath, options);
+          await assertPatchParentPath(hunk.movePath, patchOptions);
           await ensureDir(moveTarget.resolved, fileOps);
           const moveResolvesToSource =
             path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
@@ -297,6 +304,31 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
   };
 }
 
+async function resolvePatchInputPaths(
+  hunks: Hunk[],
+  options: ApplyPatchOptions,
+): Promise<Map<string, string>> {
+  const rawPaths = new Set<string>();
+  for (const hunk of hunks) {
+    rawPaths.add(hunk.path);
+    if (hunk.kind === "update" && hunk.movePath) {
+      rawPaths.add(hunk.movePath);
+    }
+  }
+  const resolved = new Map<string, string>();
+  for (const rawPath of rawPaths) {
+    // Literal-@ meaning belongs to the patch's initial filesystem snapshot.
+    // Resolving after an earlier hunk mutates state can silently retarget later hunks.
+    resolved.set(
+      rawPath,
+      options.sandbox
+        ? await resolveApplyPatchInputPath(rawPath, options)
+        : preserveAtPrefixedRelativePath(rawPath, options.cwd),
+    );
+  }
+  return resolved;
+}
+
 function recordSummary(
   summary: ApplyPatchSummary,
   seen: {
@@ -345,13 +377,13 @@ async function assertPatchParentPath(rawFilePath: string, options: ApplyPatchOpt
   if (!parent || parent === ".") {
     return;
   }
-  await assertSandboxPath({
+  const checked = await assertSandboxPath({
     filePath: parent,
     cwd: options.cwd,
     root: options.root ?? options.cwd,
   });
   await assertNoExistingParentAliases({
-    parentPath: resolvePathFromInput(parent, options.cwd),
+    parentPath: checked.resolved,
     rootPath: options.root ?? options.cwd,
   });
 }
@@ -391,11 +423,9 @@ async function resolvePatchPath(
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; queueKey: string; display: string }> {
   if (options.sandbox) {
-    const filePath = await preserveAtPrefixedRelativePath(
-      rawFilePath,
-      options.cwd,
-      options.sandbox.bridge,
-    );
+    const filePath =
+      options.patchInputPaths?.get(rawFilePath) ??
+      (await resolveApplyPatchInputPath(rawFilePath, options));
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
@@ -422,7 +452,9 @@ async function resolvePatchPath(
     };
   }
 
-  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
+  const filePath =
+    options.patchInputPaths?.get(rawFilePath) ??
+    preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
   const workspaceOnly = options.workspaceOnly !== false;
   const resolved = workspaceOnly
     ? (

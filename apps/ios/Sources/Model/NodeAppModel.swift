@@ -542,7 +542,7 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageFlushInFlight = false
     @ObservationIgnored var watchMessageRetryAttempts: [String: Int] = [:]
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
-    @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
+    @ObservationIgnored private let appleReviewDemoChatTransport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
     @ObservationIgnored private var clientDatabases: OpenClawClientDatabases?
     @ObservationIgnored private var chatTranscriptCachesByGatewayID:
         [GatewayStableIdentifier.Key: OpenClawChatSQLiteTranscriptCache] = [:]
@@ -618,7 +618,7 @@ final class NodeAppModel {
             return LocalFixtureChatTransport(fixture: .appScreenshots)
         }
         if self.isAppleReviewDemoModeEnabled {
-            return AppleReviewDemoChatTransport()
+            return LocalFixtureChatTransport(fixture: .appleReviewDemo)
         }
         let mediaArtifactLoader = IOSMediaArtifactLoader { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
@@ -650,13 +650,12 @@ final class NodeAppModel {
         return stableID
     }
 
-    /// Recreation key for the chat view model. Includes the cache gateway
-    /// identity: switching paired gateways while the transport mode stays
-    /// "operator" must rebuild the view model so transcripts are never read
-    /// from or written under another gateway's cache scope.
+    /// Session-list refresh identity. Gateway and agent changes must restart
+    /// requests so no roster or cached projection crosses either owner.
     var chatViewModelIdentityID: String {
         let gatewayID = self.chatTranscriptCacheGatewayIdentityComponent
-        return "\(self.chatTransportModeID)|\(gatewayID)|\(self.chatTranscriptCacheGeneration)"
+        let agentID = self.chatDeliveryAgentId ?? ""
+        return "\(self.chatTransportModeID)|\(gatewayID)|\(agentID)|\(self.chatTranscriptCacheGeneration)"
     }
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
@@ -732,14 +731,37 @@ final class NodeAppModel {
         self.synchronizeTalkSessionKey()
     }
 
-    func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
-        guard let cache = self.makeChatOfflineStore() else { return [] }
-        return await cache.loadSessions()
+    func loadCachedChatSessions(
+        gatewayID: String?,
+        agentID: String?) async -> [OpenClawChatSessionEntry]
+    {
+        guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, gatewayID),
+              let cache = self.makeChatOfflineStore(),
+              GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
+        else { return [] }
+        let sessions = await cache.loadSessions(agentID: agentID)
+        guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, gatewayID),
+              self.chatDeliveryAgentId == agentID
+        else { return [] }
+        return sessions.filter {
+            ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                key: $0.key,
+                agentID: $0.agentId,
+                activeAgentID: agentID)
+        }
     }
 
-    func storeCachedChatSessions(_ sessions: [OpenClawChatSessionEntry]) async {
-        guard let cache = self.makeChatOfflineStore() else { return }
-        await cache.storeSessions(sessions)
+    func storeCachedChatSessions(
+        _ sessions: [OpenClawChatSessionEntry],
+        gatewayID: String?,
+        agentID: String?) async
+    {
+        guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, gatewayID),
+              self.chatDeliveryAgentId == agentID,
+              let cache = self.makeChatOfflineStore(),
+              GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
+        else { return }
+        await cache.storeSessions(sessions, agentID: agentID)
     }
 
     /// Delete one forgotten gateway's cache and durable state, or both
@@ -1649,7 +1671,9 @@ final class NodeAppModel {
                 self.applyMainSessionKey(decoded.mainkey)
 
                 let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !selected.isEmpty, !decoded.agents.contains(where: { $0.id == selected }) {
+                if !selected.isEmpty,
+                   !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
+                {
                     self.selectedAgentId = nil
                     self.focusedChatSessionKey = nil
                 }
@@ -1691,6 +1715,8 @@ final class NodeAppModel {
         }
         if selectedAgentChanged {
             self.focusedChatSessionKey = nil
+            self.shareDeliveryChannel = nil
+            self.shareDeliveryTo = nil
         }
         self.synchronizeTalkSessionKey()
         if let relay = ShareGatewayRelaySettings.loadConfig() {
@@ -1703,6 +1729,13 @@ final class NodeAppModel {
                     sessionKey: mainSessionKey,
                     deliveryChannel: self.shareDeliveryChannel,
                     deliveryTo: self.shareDeliveryTo))
+        }
+        if selectedAgentChanged {
+            // Delivery metadata belongs to the selected agent. Rehydrate it
+            // after the selection commit; request-time identity fences stale replies.
+            Task { [weak self] in
+                await self?.refreshShareRouteFromGateway()
+            }
         }
     }
 
@@ -5118,13 +5151,13 @@ extension NodeAppModel {
         self.nodeStatusText = "Connected"
     }
 
-    private func configureLocalGatewayFixtureSession(agents: [AgentSummary]) {
+    private func configureLocalGatewayFixtureSession(_ fixture: LocalChatFixture) {
         self.mainSessionBaseKey = "main"
         self.gatewaySessionScope = "per-sender"
         self.gatewayAccentColorHex = nil
         self.selectedAgentId = nil
-        self.gatewayDefaultAgentId = "main"
-        self.gatewayAgents = agents
+        self.gatewayDefaultAgentId = fixture.defaultAgentID
+        self.gatewayAgents = fixture.agents
         self.focusedChatSessionKey = nil
         self.synchronizeTalkSessionKey()
     }
@@ -5142,7 +5175,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"
-        self.configureLocalGatewayFixtureSession(agents: AppleReviewDemoMode.agents)
+        self.configureLocalGatewayFixtureSession(.appleReviewDemo)
     }
 
     func enterScreenshotFixtureMode() {
@@ -5154,7 +5187,7 @@ extension NodeAppModel {
         self.gatewayConnected = true
         self.setOperatorConnected(true)
         self.hasOperatorAdminScope = true
-        self.configureLocalGatewayFixtureSession(agents: ScreenshotFixtureMode.agents)
+        self.configureLocalGatewayFixtureSession(.appScreenshots)
         self.talkMode.enterScreenshotFixtureMode()
     }
 }
@@ -5193,23 +5226,32 @@ extension NodeAppModel {
         }
 
         do {
+            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+                  let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
+            else { return }
+            let sourceAgentID = self.chatDeliveryAgentId
+            let sourceMainSessionKey = self.mainSessionKey
             let request = OpenClawChatGatewayRequests.sessionsList(
                 limit: 80,
                 search: nil,
                 archived: false,
+                agentID: sourceAgentID,
                 timeoutMs: 10000)
-            let response = try await operatorGateway.request(request)
+            let response = try await operatorGateway.request(request, ifCurrentRoute: sourceRoute)
             let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
-            let currentKey = self.mainSessionKey
             let sorted = decoded.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
             let exactMatch = sorted.first { row in
-                row.key == currentKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
+                row.key == sourceMainSessionKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
             }
             let selected = exactMatch
             let channel = normalize(selected?.lastChannel)
             let to = normalize(selected?.lastTo)
 
-            guard shouldApply() else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                  self.chatDeliveryAgentId == sourceAgentID,
+                  self.mainSessionKey == sourceMainSessionKey
+            else { return }
             await MainActor.run {
                 self.shareDeliveryChannel = channel
                 self.shareDeliveryTo = to

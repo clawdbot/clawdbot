@@ -65,6 +65,7 @@ import {
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
   createModelRoutingTestAdmission,
@@ -4148,7 +4149,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("serves only the openclaw MCP server for ring-zero runs", async () => {
-    const { dir, sessionFile } = fixture.session;
+    const { dir, sessionFile, sessionTarget } = fixture.session;
     const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
     const resolveExecutionArgs = vi.fn(
       (context: {
@@ -4186,6 +4187,7 @@ describe("prepareCliRunContext", () => {
       admittedRunContext: createTestAdmittedRunContext("run-test-openclaw-mcp"),
       sessionId: "session-test",
       sessionFile,
+      sessionTarget,
       workspaceDir: dir,
       prompt: "latest ask",
       provider: "claude-cli",
@@ -4952,18 +4954,22 @@ describe("prepareCliRunContext", () => {
       expectsTruncation: true,
     },
   ])("$name", async (testCase) => {
-    const { sessionFile } = fixture.session;
+    const { dir, sessionTarget } = fixture.session;
     if (testCase.provider === "claude-cli") {
       setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
     }
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "compaction",
-        summary: `${testCase.marker} ${"x".repeat(testCase.padding)}`,
-      })}\n`,
-      "utf-8",
+    const manager = SessionManager.open(sessionTarget, dir);
+    const firstKeptEntryId = manager.appendMessage({
+      role: "user",
+      content: "RESEED_RETAINED_PREFIX",
+      timestamp: 1,
+    });
+    manager.appendCompaction(
+      `${testCase.marker} ${"x".repeat(testCase.padding)}`,
+      firstKeptEntryId,
+      100_000,
     );
+    manager.flushPendingPersistence();
 
     const context = await fixture.prepare({
       provider: testCase.provider,
@@ -4971,6 +4977,7 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.openClawHistoryPrompt).toBeDefined();
+    expect(context.openClawHistoryPrompt).toContain("RESEED_RETAINED_PREFIX");
     if (testCase.expectsTruncation) {
       expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
     } else {

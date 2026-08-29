@@ -334,6 +334,37 @@ describe("amazon-bedrock provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const provider = await registerWithConfig();
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [
+                {
+                  id: NON_ANTHROPIC_MODEL,
+                  input: ["text", "image"],
+                },
+              ],
+            },
+          },
+        },
+      },
+      env: { AWS_PROFILE: "default", AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
+    expect(result.provider.models[0]).toMatchObject({
+      id: NON_ANTHROPIC_MODEL,
+      input: ["text"],
+    });
+  });
+
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 

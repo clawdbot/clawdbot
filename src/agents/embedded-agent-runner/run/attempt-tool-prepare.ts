@@ -45,7 +45,6 @@ import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
-  mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
@@ -80,14 +79,15 @@ export function prepareEmbeddedAttemptToolBase(params: {
     attempt.forceCodeModeReconciliationTools === true
       ? false
       : messageToolOwnsVisibleReply(attempt);
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...attempt,
+    forceMessageTool: forceDirectMessageTool,
+    trace: params.runTrace,
+  });
   const toolsAllowWithForcedRuntimeTools =
     attempt.forceCodeModeReconciliationTools === true
       ? ["read"]
-      : mergeForcedEmbeddedAttemptToolsAllow(attempt.toolsAllow, {
-          forceMessageTool: forceDirectMessageTool,
-          forceToolNames:
-            attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
-        });
+      : toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
@@ -107,6 +107,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sessionKey: params.sandboxSessionKey,
     forceDirectMessageTool,
     model: attempt.model,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
+    codeModeOverride: attempt.codeModeOverride,
     toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,
@@ -246,7 +249,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     : (() => {
         const allTools = createOpenClawCodingTools({
           agentId: params.sessionAgentId,
-          ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
+          ...toolRunContext,
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
           toolBindings: attempt.toolBindings,
@@ -349,8 +352,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
           taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
           inboundEventKind: attempt.currentInboundEventKind,
           disableMessageTool: attempt.disableMessageTool,
-          swarmCollector: attempt.swarmCollector,
-          swarmOutputSchema: attempt.swarmOutputSchema,
           forceMessageTool: attempt.forceMessageTool,
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,

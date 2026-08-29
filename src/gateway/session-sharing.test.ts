@@ -175,6 +175,7 @@ describe("session sharing policy", () => {
       for (const [method, requestParams] of [
         ["agent", { sessionKey }],
         ["chat.send", { sessionKey }],
+        ["sessions.goal.update", { sessionKey, action: "resume" }],
         ["message.action", { sessionKey }],
         ["send", { sessionKey }],
         ["sessions.dispatch", { key: sessionKey }],
@@ -191,14 +192,17 @@ describe("session sharing policy", () => {
           method,
         ).toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("main") });
       }
-      expect(
-        resolveSessionMutationAuthorization({
-          client: writer,
-          method: "sessions.patch",
-          requestParams: { key: sessionKey },
-          context,
-        }).error,
-      ).toBeNull();
+      for (const [method, requestParams] of [
+        ["sessions.patch", { key: sessionKey }],
+        ["sessions.goal.update", { sessionKey, action: "pause" }],
+        ["sessions.goal.clear", { sessionKey }],
+      ] as const) {
+        expect(
+          resolveSessionMutationAuthorization({ client: writer, method, requestParams, context })
+            .error,
+          method,
+        ).toBeNull();
+      }
     });
   });
 

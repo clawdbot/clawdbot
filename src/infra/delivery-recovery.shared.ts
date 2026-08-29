@@ -7,6 +7,7 @@ import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
 import {
+  isOutboundDeliveryError,
   isPlatformMessageNotDispatchedError,
   isPlatformMessageRejectedError,
   type PlatformMessageNotDispatchedError,
@@ -131,6 +132,10 @@ function nestedErrorCandidates(current: Record<string, unknown>): unknown[] {
 export function isProvenDeliveryNotSentError(err: unknown): boolean {
   let foundNotSentProof = false;
   for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+    // A cause describes its attempt, not earlier sends in the enclosing batch.
+    if (isOutboundDeliveryError(candidate) && candidate.sentBeforeError) {
+      return false;
+    }
     const code = extractErrorCode(candidate)?.trim().toUpperCase();
     if (isPlatformMessageNotDispatchedError(candidate) || isProvenPreConnectCandidate(candidate)) {
       foundNotSentProof = true;

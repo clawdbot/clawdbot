@@ -176,6 +176,7 @@ impl QuickChatWidgetState {
         Ok((true, true))
     }
 
+    #[cfg(test)]
     fn session_snapshot(
         &self,
         session_id: &str,

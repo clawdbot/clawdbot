@@ -122,8 +122,8 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
         'source "$2"',
         'source "$3"',
         'fixture_root="$4"',
-        'repo_root() { printf "%s\\n" "$fixture_root"; }',
-        "ensure_gh_api_auth() { :; }",
+        'script_parent_dir="$fixture_root"',
+        "gh_plain() { :; }",
         "mark_pr_operation_side_effects_started() { :; }",
         'pr_meta_json() { local head; head=$(git rev-parse refs/pull/42/head); jq -cn --arg head "$head" \'{number:42,title:"fixture",url:"https://example.invalid/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
         ...commands,
@@ -143,7 +143,186 @@ function expectCanonicalCheckoutUnchanged(fixture: Fixture) {
   expect(git(fixture.root, "rev-parse", "HEAD")).toBe(fixture.siblingSha);
 }
 
+function traceEntryCommands(failure: string, code = 73) {
+  return [
+    "trace_command() {",
+    '  printf "%s\\n" "$*" >> "$fixture_root/commands.log"',
+    `  if ${failure}; then`,
+    '    printf "FAIL %s\\n" "$*" >> "$fixture_root/commands.log"',
+    '    if [ "$1" = pwd ]; then command "$@"; fi',
+    `    return ${code}`,
+    "  fi",
+    "}",
+    ...["git", "cd", "pwd", "mkdir", "rm", "mv", "trash"].map(
+      (name) => `${name}() { trace_command ${name} "$@" || return $?; command ${name} "$@"; }`,
+    ),
+    'gh_plain() { trace_command gh_plain "$@"; }',
+  ];
+}
+
+function expectEntryStopped(fixture: Fixture, result: ReturnType<typeof runShell>) {
+  const commands = readFileSync(join(fixture.root, "commands.log"), "utf8").trim().split("\n");
+  const failure = commands.findIndex((command) => command.startsWith("FAIL "));
+  expect(failure, commands.join("\n")).toBeGreaterThanOrEqual(0);
+  expect.soft(commands.slice(failure + 1), commands.join("\n")).toEqual([]);
+  expect.soft(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
+  expectCanonicalCheckoutUnchanged(fixture);
+}
+
+function reviewState(worktree: string) {
+  return {
+    head: git(worktree, "rev-parse", "HEAD"),
+    branch: git(worktree, "branch", "--show-current"),
+    index: git(worktree, "write-tree"),
+    status: git(worktree, "status", "--porcelain=v1"),
+    diff: git(worktree, "diff", "HEAD"),
+    journal: existsSync(join(worktree, ".local", "review-transition.json"))
+      ? readFileSync(join(worktree, ".local", "review-transition.json"), "utf8")
+      : null,
+  };
+}
+
 describePosix("scripts/pr worktree containment", () => {
+  for (const caller of ["enter_worktree 42 true || exit $?", "review_init 42"] as const) {
+    it.each([
+      {
+        name: "private fetch interrupted",
+        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+        code: 130,
+      },
+      {
+        name: "private fetch Git error",
+        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+        code: 128,
+      },
+      { name: "GitHub auth failure", failure: '[ "$1" = gh_plain ]', code: 1 },
+    ])(`stops on $name without replaying a pending transition (${caller})`, ({ failure, code }) => {
+      const fixture = createReviewFixture();
+      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const setup = runShell(fixture, [
+        "review_init 42",
+        "review_checkout_pr 42",
+        "git checkout -B temp/pr-42",
+        `write_review_transition_journal 42 ${fixture.prASha} ${fixture.mainSha} branch temp/pr-42`,
+        `git restore --source=${fixture.mainSha} --staged --worktree -- transition-a.txt`,
+      ]);
+      expect(setup.status, `${setup.stdout}\n${setup.stderr}`).toBe(0);
+      const before = reviewState(worktree);
+      const result = runShell(fixture, [...traceEntryCommands(failure, code), caller]);
+
+      expectEntryStopped(fixture, result);
+      expect(reviewState(worktree)).toEqual(before);
+      if (failure.includes("gh_plain")) {
+        expect(result.stderr).toContain("GitHub CLI auth is not usable");
+      }
+    });
+  }
+
+  it.each([
+    {
+      name: "first fetch",
+      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root" ]',
+      provisioned: false,
+    },
+    {
+      name: "second fetch",
+      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+      provisioned: true,
+    },
+    { name: "auth", failure: '[ "$1" = gh_plain ]', provisioned: false },
+  ])(
+    "stops cold entry on $name failure, retaining only completed provisioning",
+    ({ failure, provisioned }) => {
+      const fixture = createFixture();
+      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const result = runShell(fixture, [
+        ...traceEntryCommands(failure, 130),
+        "enter_worktree 42 true || exit $?",
+      ]);
+      expectEntryStopped(fixture, result);
+      expect(existsSync(worktree)).toBe(provisioned);
+      expect(existsSync(join(worktree, ".local"))).toBe(false);
+      if (provisioned) {
+        expect(git(worktree, "rev-parse", "HEAD")).toBe(fixture.mainSha);
+        expect(git(worktree, "branch", "--show-current")).toBe("temp/pr-42");
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "root resolution",
+      failure: '[ "$*" = "pwd" ] && [ "$PWD" = "$fixture_root" ]',
+      setup: [],
+    },
+    {
+      name: "canonical cd",
+      failure: '[ "$*" = "cd $fixture_root" ] && [ "$BASH_SUBSHELL" = 0 ]',
+      setup: [],
+    },
+    {
+      name: "stale registration prune",
+      failure: '[ "$*" = "git -C $fixture_root worktree prune" ]',
+      setup: [
+        "git worktree add .worktrees/pr-42 -b temp/pr-42 origin/main",
+        "rm -rf .worktrees/pr-42",
+      ],
+    },
+    {
+      name: "worktree add",
+      failure: '[[ "$*" == "git -C $fixture_root worktree add "* ]]',
+      setup: [],
+    },
+    {
+      name: "post-add parent resolution",
+      failure: '[ "$*" = "pwd -P" ] && [ "$PWD" = "$fixture_root/.worktrees" ]',
+      setup: [],
+    },
+    {
+      name: "worktree cd",
+      failure: '[ "$*" = "cd $fixture_root/.worktrees/pr-42" ] && [ "$BASH_SUBSHELL" = 0 ]',
+      setup: [],
+    },
+    {
+      name: "sparse conversion",
+      failure: '[ "$*" = "git sparse-checkout disable" ]',
+      setup: [
+        "git sparse-checkout init --no-cone",
+        "git sparse-checkout set --no-cone fixture.txt",
+      ],
+    },
+    {
+      name: "sparse config read",
+      failure: '[ "$*" = "git config --bool core.sparseCheckout" ]',
+      setup: [],
+    },
+    { name: "artifact directory", failure: '[ "$*" = "mkdir -p .local" ]', setup: [] },
+  ])("stops required entry steps on $name failure in an OR list", ({ failure, setup }) => {
+    const fixture = createFixture();
+    const result = runShell(fixture, [
+      ...setup,
+      ...traceEntryCommands(failure),
+      "enter_worktree 42 false || exit $?",
+    ]);
+    expectEntryStopped(fixture, result);
+    expect(existsSync(join(fixture.root, ".worktrees", "pr-42", ".local"))).toBe(false);
+  });
+
+  it("refuses provisioning when best-effort cleanup leaves the stale directory", () => {
+    const fixture = createFixture();
+    makeStaleWorktreeDir(fixture);
+    const marker = join(fixture.root, ".worktrees", "pr-42", "foreign-note");
+    writeFileSync(marker, "preserve me\n");
+    const result = runShell(fixture, [
+      ...traceEntryCommands('[ "$1" = trash ]'),
+      "enter_worktree 42 true || exit $?",
+    ]);
+    expectEntryStopped(fixture, result);
+    expect(result.stdout).toContain("failed to trash orphaned worktree dir");
+    expect(result.stderr).toContain("could not be cleared");
+    expect(readFileSync(marker, "utf8")).toBe("preserve me\n");
+  });
+
   it("stale .worktrees/pr-<N> directory does not clobber the canonical checkout", () => {
     const fixture = createFixture();
     makeStaleWorktreeDir(fixture);
@@ -204,13 +383,15 @@ describePosix("scripts/pr worktree containment", () => {
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
-  it("reuses a properly registered PR worktree", () => {
+  it.each(["cold", "warm"])("enters a %s PR worktree and fetches in its Git context", (state) => {
     const fixture = createFixture();
     const expectedWorktree = join(fixture.root, ".worktrees", "pr-42");
-    git(fixture.root, "worktree", "add", expectedWorktree, "-b", "temp/pr-42", "origin/main");
+    if (state === "warm") {
+      git(fixture.root, "worktree", "add", expectedWorktree, "-b", "temp/pr-42", "origin/main");
+    }
 
     const result = runShell(fixture, [
-      "enter_worktree 42 false",
+      "enter_worktree 42 false || exit $?",
       'printf "cwd=%s\\n" "$PWD"',
       'printf "branch=%s\\n" "$(git branch --show-current)"',
       'printf "head=%s\\n" "$(git rev-parse HEAD)"',
@@ -220,6 +401,17 @@ describePosix("scripts/pr worktree containment", () => {
     expect(result.stdout).toContain(`cwd=${realpathSync(expectedWorktree)}`);
     expect(result.stdout).toContain("branch=temp/pr-42");
     expect(result.stdout).toContain(`head=${fixture.mainSha}`);
+    const fetchHead = git(
+      expectedWorktree,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "FETCH_HEAD",
+    );
+    expect(fetchHead).not.toBe(
+      git(fixture.root, "rev-parse", "--path-format=absolute", "--git-path", "FETCH_HEAD"),
+    );
+    expect(readFileSync(fetchHead, "utf8")).toContain(fixture.mainSha);
     expectCanonicalCheckoutUnchanged(fixture);
   });
 

@@ -2,7 +2,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { FastMode, GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -10,15 +10,15 @@ import {
   revalidateChatMetadata,
   subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
-  buildQualifiedChatModelValue,
-  normalizeChatModelProviderId,
-  resolvePreferredServerChatModelValue,
-} from "../../lib/chat/model-ref.ts";
-import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+  isChatFastModeProviderSupported,
+  normalizeChatFastModeInput,
+  resolveChatModelUnavailableReason,
+} from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
   renderChatModelControls,
@@ -26,6 +26,7 @@ import {
 } from "../chat/components/chat-model-controls.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
 import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+import { resolveDraftModelTarget } from "./model-target.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -61,46 +62,6 @@ type ReconciledNewSessionSelection = {
   repaired: boolean;
 };
 
-type DraftModelTarget = {
-  entry?: ModelCatalogEntry;
-  model: string;
-  provider: string | null;
-};
-
-function resolveDraftModelTarget(
-  model: string | null | undefined,
-  provider: string | null | undefined,
-  catalog: ModelCatalogEntry[],
-): DraftModelTarget | null {
-  const value = resolvePreferredServerChatModelValue(model, provider, catalog);
-  if (!value) {
-    return null;
-  }
-  const normalized = value.toLowerCase();
-  const entry = catalog.find(
-    (candidate) =>
-      buildQualifiedChatModelValue(candidate.id, candidate.provider).toLowerCase() === normalized,
-  );
-  if (entry) {
-    return {
-      entry,
-      model: entry.id,
-      provider: normalizeChatModelProviderId(entry.provider) || null,
-    };
-  }
-  const separator = value.indexOf("/");
-  if (separator > 0) {
-    return {
-      model: value.slice(separator + 1),
-      provider: normalizeChatModelProviderId(value.slice(0, separator)) || null,
-    };
-  }
-  return {
-    model: value,
-    provider: normalizeChatModelProviderId(provider ?? "") || null,
-  };
-}
-
 export class NewSessionModelControl {
   private selectionGeneration = 0;
   private agentId = "";
@@ -129,6 +90,7 @@ export class NewSessionModelControl {
   selected = "";
   contextWindow = "";
   thinkingLevel = "";
+  fastMode: FastMode | undefined;
 
   constructor(
     private readonly notify: () => void,
@@ -339,7 +301,7 @@ export class NewSessionModelControl {
       this.agentId
     ) {
       const agentId = this.agentId;
-      void loadModels(metadataClient, {
+      void loadModelCatalog(metadataClient, {
         agentId,
         refreshIfDue: true,
         rejectOnFailure: true,
@@ -392,6 +354,7 @@ export class NewSessionModelControl {
       this.selected = "";
       this.contextWindow = "";
       this.thinkingLevel = "";
+      this.fastMode = undefined;
       this.updateMetadataState({
         catalog: [],
         hasSnapshot: false,
@@ -428,6 +391,7 @@ export class NewSessionModelControl {
       this.selected = "";
       this.contextWindow = "";
       this.thinkingLevel = "";
+      this.fastMode = undefined;
       this.metadataState = {
         catalog: [],
         hasSnapshot: false,
@@ -480,12 +444,16 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
-  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
-    return (
-      this.metadataState.hasSnapshot &&
-      this.metadataState.status === "ready" &&
-      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
-    );
+  modelUnavailableReason(
+    agent: GatewayAgentRow | undefined,
+  ): ModelCatalogEntry["unavailableReason"] {
+    return this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+      ? resolveChatModelUnavailableReason(
+          this.selected || agent?.model?.primary,
+          undefined,
+          this.catalog,
+        )
+      : undefined;
   }
 
   private restorePreference(
@@ -677,13 +645,19 @@ export class NewSessionModelControl {
               ...(contextWindowDefault ? { contextWindowDefault } : {}),
             }
           : undefined,
+      fastModeTarget: {
+        model: selectedTarget?.model ?? defaultTarget?.model,
+        modelProvider: selectedTarget?.provider ?? defaultTarget?.provider ?? undefined,
+        fastMode: this.fastMode,
+        effectiveFastMode:
+          this.fastMode ?? (selectedTarget?.entry ?? defaultTarget?.entry)?.effectiveFastMode,
+      },
       modelOverrides: { [sessionKey]: this.selected },
       modelPickerTargetGroups: this.catalogTargetGroups(),
       modelSwitching: false,
       sending: options.sending,
       sessionKey,
       sessionsResult: sourceResult,
-      showFastMode: false,
       stream: null,
       thinkingDefaults,
       thinkingSession: thinkingTarget,
@@ -694,6 +668,12 @@ export class NewSessionModelControl {
         this.selected = selection.model;
         this.contextWindow = "";
         this.thinkingLevel = selection.thinkingLevel;
+        this.fastMode = isChatFastModeProviderSupported(
+          (resolveDraftModelTarget(selection.model, undefined, this.catalog) ?? defaultTarget)
+            ?.provider,
+        )
+          ? this.fastMode
+          : undefined;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
       onModelPickerTargetSelect: (groupId, catalogId) => {
@@ -711,6 +691,12 @@ export class NewSessionModelControl {
         this.restoringPreference = false;
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
+      },
+      onFastModeSelect: (value) => {
+        this.selectionGeneration += 1;
+        this.restoringPreference = false;
+        this.fastMode = normalizeChatFastModeInput(value);
+        this.notify();
       },
       onContextWindowSelect: (value) => {
         this.selectionGeneration += 1;

@@ -1,11 +1,13 @@
 // Profiles Vitest main or runner processes and writes CPU/heap artifacts.
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import type { SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
+import { installVitestProcessGroupCleanup } from "./vitest-process-group.mts";
 
 function readOutputDirValue(argv: string[], index: number): string {
   const value = argv[index + 1];
@@ -58,7 +60,7 @@ type VitestProfileOptions = Pick<ReturnType<typeof parseArgs>, "mode" | "outputD
 type VitestProfileSpawnSpec = {
   args: string[];
   command: string;
-  options: SpawnSyncOptions;
+  options: SpawnOptions;
 };
 
 /**
@@ -141,11 +143,11 @@ export function buildVitestProfileSpawnSpec(
     options: {
       env: process.env,
       stdio: "inherit",
-    } satisfies SpawnSyncOptions,
+    } satisfies SpawnOptions,
   };
 }
 
-function main() {
+async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const outputDir = resolveVitestProfileDir(parsed);
   fs.mkdirSync(outputDir, { recursive: true });
@@ -159,12 +161,22 @@ function main() {
   console.log(`[run-vitest-profile] writing ${parsed.mode} profiles to ${outputDir}`);
 
   const spawnSpec = buildVitestProfileSpawnSpec(plan);
-  const result = spawnSync(spawnSpec.command, spawnSpec.args, spawnSpec.options);
-
-  if (result.error) {
-    throw result.error;
+  const { child, completion } = spawnOwnedVitestProcess(spawnSpec);
+  let forwardedSignal: NodeJS.Signals | undefined;
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
+    onSignal: (signal) => {
+      forwardedSignal ??= signal;
+    },
+  });
+  const result = await completion.finally(teardown);
+  if (forwardedSignal) {
+    process.kill(process.pid, forwardedSignal);
+    return;
   }
-  process.exit(result.status ?? 1);
+  process.exitCode = result.code ?? 1;
 }
 
 const isMain =
@@ -174,7 +186,7 @@ const isMain =
 
 if (isMain) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(formatErrorMessage(error));
     process.exit(1);

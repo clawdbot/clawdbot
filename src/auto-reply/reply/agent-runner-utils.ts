@@ -277,6 +277,7 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
     agentAccountId: sessionCtx.AccountId,
+    conversationRoutePeerId: params.run.conversationRoutePeerId,
     messageTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
     chatId:

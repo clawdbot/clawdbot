@@ -42,6 +42,7 @@ import {
 } from "./memory-entry-origins.js";
 import { applyMemoryFileRewrite } from "./memory-forget-atomic-write.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
+import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
@@ -86,38 +87,6 @@ type ForgetIndexPlan = {
   vectorRows: number;
   embeddingCacheRows: number;
   hasVectorTable: boolean;
-};
-
-export type MemoryForgetReport = {
-  agentId: string;
-  dryRun: boolean;
-  sessionIds: string[];
-  sessionResolutions: Array<{
-    sessionId: string;
-    sessionKey?: string;
-    source: "live" | "archived" | "unresolved";
-  }>;
-  entryKeys: string[];
-  mixedLineageEntryKeys: string[];
-  untargetableEntryKeys: string[];
-  curatedWrites: Array<{ relativePath: string; observedAt: number }>;
-  artifacts: {
-    memoryFiles: number;
-    memoryEntries: number;
-    memoryLines: number;
-    sessionCorpusFiles: number;
-    sessionCorpusLines: number;
-    indexChunks: number;
-    indexSources: number;
-    ftsRows: number;
-    vectorRows: number;
-    embeddingCacheRows: number;
-    shortTermEntries: number;
-    seenHashScopes: number;
-    backups: number;
-    originRows: number;
-  };
-  refusals: string[];
 };
 
 const PROMOTION_MARKER = /^\s*<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->\s*$/u;
@@ -590,6 +559,7 @@ async function forgetWorkspaceMemory(
     agentId: params.agentId,
     dryRun: params.dryRun === true,
     sessionIds: [...sessionIds].toSorted(),
+    participantMatches: summarizeParticipantMatches(targets, params.participants),
     sessionResolutions: targets
       .map(({ sessionId, sessionKey, resolution }) =>
         sessionKey

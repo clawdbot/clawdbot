@@ -22,8 +22,8 @@ describe("SessionRowSchema", () => {
         assignedAt: 42,
       },
       participants: [
-        { type: "human", id: "profile-bob", label: "Bob" },
-        { type: "agent", id: "research", label: "Research" },
+        { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+        { identity: { type: "agent", id: "research" }, label: "Research" },
       ],
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
@@ -45,8 +45,7 @@ describe("SessionRowSchema", () => {
       Value.Check(SessionRowSchema, {
         ...roundTripped,
         participants: Array.from({ length: 5 }, (_, index) => ({
-          type: "human",
-          id: `profile-${index}`,
+          identity: { type: "profile", id: `profile-${index}` },
         })),
       }),
     ).toBe(false);

@@ -2,6 +2,7 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   type FastMode,
@@ -25,6 +26,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
+  type TranscriptMessageAppendResult,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -54,6 +56,7 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -77,6 +80,7 @@ import {
 } from "../cli-session.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
+import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { appendGitCoauthorContext } from "../git-coauthor-attribution.js";
@@ -120,7 +124,7 @@ import type { AgentCommandOpts } from "./types.js";
 
 export {
   createAcpVisibleTextAccumulator,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -203,6 +207,9 @@ type PersistTextTurnTranscriptParams = {
   body: string;
   transcriptBody?: string;
   userMessage?: PersistedUserTurnMessage;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  assistantIdempotencyKey?: string;
+  expectedSessionId?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -224,7 +231,11 @@ type PersistTextTurnTranscriptParams = {
 };
 
 type PersistTextTurnTranscriptResult =
-  | { kind: "persisted"; sessionEntry: SessionEntry | undefined }
+  | {
+      kind: "persisted";
+      sessionEntry: SessionEntry | undefined;
+      assistantTranscript?: TranscriptMessageAppendResult<unknown>;
+    }
   | { kind: "session-rebound"; sessionEntry: undefined };
 
 type HarnessAuthProfileSelection = {
@@ -337,6 +348,7 @@ async function persistTextTurnTranscript(
   const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
   const userMessage =
     params.userMessage ??
+    (await params.userTurnTranscriptRecorder?.resolveMessage()) ??
     (promptText
       ? ({
           role: "user",
@@ -364,8 +376,12 @@ async function persistTextTurnTranscript(
 
   if (replyText) {
     messages.push({
+      idempotencyLookup: "scan-assistant" as const,
       message: {
         role: "assistant",
+        ...(params.assistantIdempotencyKey
+          ? { idempotencyKey: params.assistantIdempotencyKey }
+          : {}),
         content: [{ type: "text", text: replyText }],
         api: params.assistant.api,
         provider: params.assistant.provider,
@@ -395,13 +411,32 @@ async function persistTextTurnTranscript(
       publishWhen: "always",
       touchSessionEntry: true,
       updateMode: "file-only",
-      ...(params.sessionStore && params.storePath ? { expectedSessionId: params.sessionId } : {}),
+      expectedSessionId:
+        params.expectedSessionId ??
+        (params.sessionStore && params.storePath ? params.sessionId : undefined),
     },
   );
   if (turn.rejectedReason === "session-rebound") {
     return { kind: "session-rebound", sessionEntry: undefined };
   }
-  return { kind: "persisted", sessionEntry: turn.sessionEntry };
+  const persistedUser = turn.messages.find(
+    (entry) => asOptionalRecord(entry.message)?.role === "user",
+  );
+  if (persistedUser) {
+    params.userTurnTranscriptRecorder?.markRuntimePersisted(
+      // SAFETY: The typed user-write hook above is the only producer of this batch's user row.
+      persistedUser.message as PersistedUserTurnMessage,
+      persistedUser.anchor,
+    );
+  }
+  const assistantTranscript = turn.messages.find(
+    (entry) => asOptionalRecord(entry.message)?.role === "assistant",
+  );
+  return {
+    kind: "persisted",
+    sessionEntry: turn.sessionEntry,
+    ...(assistantTranscript ? { assistantTranscript } : {}),
+  };
 }
 
 export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -425,6 +460,9 @@ export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
   userInput?: UserTurnInput;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  assistantIdempotencyKey?: string;
+  expectedSessionId?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -531,8 +569,9 @@ export function runAgentAttempt(params: {
     stream: string;
     data?: Record<string, unknown>;
     sessionKey?: string;
-  }) => void;
+  }) => void | Promise<void>;
   deferTerminalLifecycle?: boolean;
+  deferredLifecycle?: DeferredEmbeddedRunLifecycleManager;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -554,6 +593,13 @@ export function runAgentAttempt(params: {
     authProfileIdSource?: "auto" | "user";
   }) => void;
 }) {
+  const onRuntimeActivity = (info: { phase: string }) => {
+    // CLI preparation and child launch do not prove a native turn. Parsed
+    // assistant/tool activity does, even when the backend omits lifecycle events.
+    if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
+      void params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+    }
+  };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
   const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
@@ -802,6 +848,7 @@ export function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    params.deferredLifecycle?.handoffToCli();
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
@@ -951,7 +998,9 @@ export function runAgentAttempt(params: {
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             lifecycleGeneration: params.lifecycleGeneration,
+            abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
             onExecutionStarted: params.opts.onExecutionStarted,
+            onExecutionPhase: onRuntimeActivity,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
@@ -1248,6 +1297,7 @@ export function runAgentAttempt(params: {
     swarmOutputSchema: params.opts.swarmOutputSchema,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
     forceCodeModeTools: params.opts.forceCodeModeTools,
+    codeModeOverride: params.opts.codeModeOverride,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
@@ -1259,7 +1309,10 @@ export function runAgentAttempt(params: {
     disableTools,
     allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
+    onExecutionPhase: onRuntimeActivity,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
+    onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
+    onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
@@ -1326,6 +1379,7 @@ export function emitAcpLifecycleStart(params: {
   agentId?: string;
   lifecycleGeneration?: string;
   auditOnly?: boolean;
+  completionSource?: "reply-dispatch";
 }) {
   const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
   emit({
@@ -1336,6 +1390,7 @@ export function emitAcpLifecycleStart(params: {
     stream: "lifecycle",
     data: {
       phase: "start",
+      ...(params.completionSource ? { completionSource: params.completionSource } : {}),
       startedAt: params.startedAt,
     },
   });
@@ -1668,6 +1723,37 @@ export function emitAcpRuntimeEvent(params: {
   }
 }
 
+function emitAcpTerminalLifecycle(
+  params: {
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+    lifecycleGeneration?: string;
+    auditOnly?: boolean;
+    completionSource?: "reply-dispatch";
+  },
+  terminal: Record<string, unknown> & { phase: "end" | "error"; endedAt: number },
+) {
+  const data = {
+    ...terminal,
+    ...(params.completionSource ? { completionSource: params.completionSource } : {}),
+  };
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
+    runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+    stream: "lifecycle",
+    data,
+  });
+  return buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: terminal.phase,
+    data,
+    endedAt: terminal.endedAt,
+  });
+}
+
 export function emitAcpLifecycleEnd(params: {
   runId: string;
   toolTracker: AcpToolLifecycleTracker;
@@ -1679,6 +1765,7 @@ export function emitAcpLifecycleEnd(params: {
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
   terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
+  completionSource?: "reply-dispatch";
 }) {
   finalizeAcpToolsForRun(
     params.toolTracker,
@@ -1690,19 +1777,11 @@ export function emitAcpLifecycleEnd(params: {
       params.resultStatus,
     ),
   );
-  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
-  emit({
-    runId: params.runId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      endedAt: Date.now(),
-      ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
-      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
-    },
+  return emitAcpTerminalLifecycle(params, {
+    phase: "end",
+    endedAt: Date.now(),
+    ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+    ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
   });
 }
 
@@ -1716,6 +1795,7 @@ export function emitAcpLifecycleError(params: {
   abortSignal?: AbortSignal;
   terminalOutcome?: "blocked";
   auditOnly?: boolean;
+  completionSource?: "reply-dispatch";
 }) {
   const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
   finalizeAcpToolsForRun(params.toolTracker, params.runId, terminalReason);
@@ -1725,19 +1805,11 @@ export function emitAcpLifecycleError(params: {
       : terminalReason === "timed_out"
         ? ({ aborted: true, stopReason: "timeout", status: "timed_out" } as const)
         : resolveAgentRunAbortLifecycleFields(params.abortSignal);
-  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
-  emit({
-    runId: params.runId,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    data: {
-      phase: "error",
-      ...(!params.auditOnly ? { error: formatAcpErrorChain(params.error) } : {}),
-      endedAt: Date.now(),
-      ...lifecycleFields,
-    },
+  return emitAcpTerminalLifecycle(params, {
+    phase: "error",
+    ...(!params.auditOnly ? { error: formatAcpErrorChain(params.error) } : {}),
+    endedAt: Date.now(),
+    ...lifecycleFields,
   });
 }
 

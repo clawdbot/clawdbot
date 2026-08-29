@@ -112,6 +112,7 @@ describe("sessions_spawn tool", () => {
     acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
@@ -679,7 +680,7 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it.each([{ category: undefined }, { category: "" }])(
+  it.each([{ category: undefined }, { category: "" }, { category: " \t\n " }])(
     "keeps a visible session ungrouped when category is $category",
     async ({ category }) => {
       const callGateway = vi.fn(async () => ({
@@ -849,22 +850,67 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("requires visible sessions for worktree options", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+  describe.each([
+    {
+      runtime: "subagent",
+      spawn: hoisted.spawnSubagentDirectMock,
+      other: hoisted.spawnAcpDirectMock,
+    },
+    { runtime: "acp", spawn: hoisted.spawnAcpDirectMock, other: hoisted.spawnSubagentDirectMock },
+  ])("$runtime category preflight", ({ runtime, spawn, other }) => {
+    beforeEach(() => registerAcpBackendForTest());
 
-    await expect(
-      tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
-    ).rejects.toThrow("Parameters require visible=true: worktree");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
+    it.each([undefined, "", " \t\n "])("dispatches once with category %j", async (category) => {
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
+      const request = {
+        task: "inspect",
+        runtime,
+        model: "openai/gpt-5.6-luna",
+        thinking: "ultra",
+        sandbox: "require",
+        mode: "run",
+      };
 
-  it.each(["Projects", ""])("rejects category %j without visible mode", async (category) => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+      const result = await tool.execute("hidden-category", {
+        ...request,
+        visible: false,
+        ...(category !== undefined ? { category } : {}),
+      });
 
-    await expect(tool.execute("hidden-category", { task: "inspect", category })).rejects.toThrow(
-      "Parameters require visible=true: category",
-    );
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(result.details).toMatchObject({ status: "accepted", runId: `run-${runtime}` });
+      expect(spawn).toHaveBeenCalledOnce();
+      const { runtime: _runtime, ...forwarded } = request;
+      expect(spawn).toHaveBeenCalledWith(expect.objectContaining(forwarded), expect.any(Object));
+      expect(other).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { category: "Projects" },
+      { worktree: true },
+      { worktreeName: "repair" },
+      { worktreeBaseRef: "main" },
+    ])("rejects visible-only options %j with actionable recovery", async (options) => {
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
+
+      await expect(
+        tool.execute("hidden-visible-options", {
+          task: "inspect",
+          runtime,
+          mode: "run",
+          ...options,
+        }),
+      ).rejects.toThrow(
+        `Parameters require visible=true: ${Object.keys(options).join(", ")}. ` +
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+      );
+      expect(spawn).not.toHaveBeenCalled();
+      expect(other).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    });
   });
 
   it("applies a per-run timeout to visible dashboard sessions", async () => {
@@ -1523,14 +1569,14 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("hides thread-bound spawn fields when current channel disables spawnSessions", () => {
+  it.each([false, true])("describes context policy with spawnSessions=%s", (threadAvailable) => {
     const tool = createSessionsSpawnTool({
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
         session: {
           threadBindings: {
-            spawnSessions: false,
+            spawnSessions: threadAvailable,
           },
         },
       },
@@ -1542,35 +1588,33 @@ describe("sessions_spawn tool", () => {
       >;
     };
 
-    expect(schema.properties?.thread).toBeUndefined();
-    expect(schema.properties?.mode?.enum).toEqual(["run"]);
-    expect(tool.description).not.toContain("thread-bound");
-    expect(tool.description).not.toContain("session-mode output stays in thread");
-  });
-
-  it("shows thread-bound spawn fields when current channel allows spawnSessions", () => {
-    const tool = createSessionsSpawnTool({
-      agentChannel: "discord",
-      agentAccountId: "default",
-      config: {
-        session: {
-          threadBindings: {
-            spawnSessions: true,
-          },
-        },
-      },
-    });
-    const schema = tool.parameters as {
-      properties?: Record<
-        string,
-        { description?: string; enum?: string[]; type?: string } | undefined
-      >;
-    };
-
-    const thread = requireSchemaProperty(schema.properties, "thread");
-    expect(thread.type).toBe("boolean");
-    expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
-    expect(tool.description).toContain("thread-bound");
+    if (threadAvailable) {
+      expect(requireSchemaProperty(schema.properties, "thread").type).toBe("boolean");
+      expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
+      expect(tool.description).toContain("thread-bound");
+    } else {
+      expect(schema.properties?.thread).toBeUndefined();
+      expect(schema.properties?.mode?.enum).toEqual(["run"]);
+      expect(tool.description).not.toContain("thread-bound");
+      expect(tool.description).not.toContain("session-mode output stays in thread");
+    }
+    const context = requireSchemaProperty(schema.properties, "context");
+    expect(context.enum).toEqual(["isolated", "fork"]);
+    for (const description of [tool.description, context.description]) {
+      expect(description).toMatch(/isolated.{0,60}(?:clean|empty)|(?:clean|empty).{0,60}isolated/i);
+      expect(description).toMatch(/fork[^.;]*same[- ](?:target )?agent/i);
+      expect(description).not.toMatch(
+        /visible fork requires same agent|else omit\/isolated|omit\/isolated clean/i,
+      );
+      if (threadAvailable) {
+        expect(description).toMatch(/omit[^.;]*(?:policy|threadBindings\.defaultSpawnContext)/i);
+        expect(description).toMatch(/fork[^.;]*default|default[^.;]*fork/i);
+      } else {
+        expect(description).toMatch(/omit[^.;]*isolated/i);
+        expect(description).not.toContain("defaultSpawnContext");
+      }
+    }
+    expect(tool.description).not.toContain("Spawn clean child");
   });
 
   it("uses subagent runtime by default", async () => {

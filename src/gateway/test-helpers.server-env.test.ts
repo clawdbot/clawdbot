@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resetConfigRuntimeState } from "../config/config.js";
+import { drainSystemEvents, enqueueSystemEvent } from "../infra/system-events.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createGatewayConfigModuleMock } from "./test-helpers.config-runtime.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   installGatewayTestHooks,
+  waitForSystemEvent,
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.server.js";
@@ -34,6 +37,25 @@ describe("Gateway test environment lifecycle", () => {
       OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
     }).toEqual(envBeforeSuite);
   });
+
+  it.each([
+    { scope: "per-sender", sessionKey: "agent:ops:work" },
+    { scope: "global", sessionKey: "global" },
+  ])(
+    "reads $scope system events from the fixture's configured owner",
+    async ({ scope, sessionKey }) => {
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
+      testState.agentConfig = { systemAgent: { agentId: "ops" } };
+      testState.sessionConfig = { scope, mainKey: "work" };
+      resetConfigRuntimeState();
+      enqueueSystemEvent("fixture system event", { sessionKey });
+      try {
+        await expect(waitForSystemEvent()).resolves.toEqual(["fixture system event"]);
+      } finally {
+        drainSystemEvents(sessionKey);
+      }
+    },
+  );
 
   it.each(["session store", "config mock"])(
     "keeps config readable while the %s fixture publishes an update",

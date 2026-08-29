@@ -14,6 +14,7 @@ import type {
   SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionParticipant } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -94,7 +95,7 @@ export type GatewaySessionRow = {
   createdVia?: SessionEntry["createdVia"];
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
-  participants?: SessionCreatedActor[];
+  participants?: SessionParticipant[];
   participantCount?: number;
   createdAt?: SessionEntry["createdAt"];
   forkSource?: SessionEntry["forkSource"];

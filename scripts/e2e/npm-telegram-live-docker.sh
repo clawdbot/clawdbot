@@ -484,6 +484,7 @@ dump_hotpath_logs() {
   echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
     /tmp/openclaw-npm-telegram-onboard.json \
+    /tmp/openclaw-npm-telegram-codex-install.log \
     /tmp/openclaw-npm-telegram-channel-add.log \
     /tmp/openclaw-npm-telegram-doctor-fix.log \
     /tmp/openclaw-npm-telegram-doctor-check.log \
@@ -564,6 +565,10 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     hotpath_model_value="$OPENAI_API_KEY"
   fi
   hotpath_channel_value="$(printf '%s:%s' 123456 "$hotpath_placeholder")"
+  # Non-interactive onboarding cannot approve plugin capabilities. This release
+  # harness explicitly accepts the staged Codex artifact before testing setup.
+  openclaw_e2e_run_command "$sut_command" plugins install @openclaw/codex \
+    --accept-capabilities >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
   OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard \
     --non-interactive --accept-risk \
     --mode local \

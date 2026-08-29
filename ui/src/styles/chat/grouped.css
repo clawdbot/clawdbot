@@ -371,8 +371,6 @@
   min-height: 24px;
   border-radius: var(--radius-md);
   color: var(--muted);
-  opacity: var(--chat-footer-disclosure-opacity, 0);
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition:
     opacity 120ms ease-out,
     color 120ms ease-out,
@@ -382,10 +380,31 @@
   justify-content: center;
 }
 
+.chat-group-footer-actions button,
+.chat-group-footer .chat-send-status__retry {
+  opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+}
+
+/* Inline rows belong to earlier messages in a group, so the latest footer's
+   resting disclosure must not reveal them before hover or touch. */
+.chat-message-actions-row button {
+  opacity: var(--chat-message-action-opacity, 0);
+  pointer-events: var(--chat-message-action-pointer-events, none);
+}
+
 .chat-group:hover .chat-group-footer-actions button,
 .chat-group:hover .chat-message-actions-row button {
   opacity: 0.6;
   pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .chat-group--latest-assistant {
+    --chat-footer-action-opacity: 0.6;
+    --chat-footer-disclosure-opacity: 1;
+    --chat-footer-disclosure-pointer-events: auto;
+  }
 }
 
 .chat-group:hover .chat-group-footer-actions button:disabled,
@@ -844,6 +863,8 @@ img.chat-avatar.chat-avatar--logo {
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
+    --chat-message-action-opacity: var(--chat-footer-disclosure-opacity, 0);
+    --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events, none);
     padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
     margin-bottom: var(--chat-touch-row-margin);
   }
@@ -1029,6 +1050,42 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
   color: hsl(var(--chat-sender-hue) 60% 36%);
+}
+
+/* Keep sent media outside the text surface: the image gallery remains bare,
+   while the following text retains the normal right-aligned user bubble. */
+.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images:hover {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-group.user:not(.chat-group--peer)
+  .chat-bubble--with-images
+  > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+}
+
+:root[data-theme-mode="light"]
+  .chat-group.user:not(.chat-group--peer)
+  .chat-bubble--with-images
+  > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  color: var(--text-strong);
 }
 
 /* ── Message metadata (tokens, cost, model, context %) ── */

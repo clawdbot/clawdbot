@@ -8,10 +8,10 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listOpenClawRegisteredAgentDatabases } from "../src/state/openclaw-agent-db-registry-listing.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { captureFullEnv, setTestEnvValue, withPathResolutionEnv } from "../src/test-utils/env.js";

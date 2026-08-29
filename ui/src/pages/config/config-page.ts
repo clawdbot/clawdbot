@@ -10,7 +10,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -47,7 +47,7 @@ import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -196,7 +196,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
     case "updates":
       return t("updates.page.intro");
     default:
-      return undefined;
+      return subtitleForRoute(pageId);
   }
 }
 
@@ -808,8 +808,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
       this.context.agentSelection.state.selectedId === agentId;
-    const promise = loadModels(client, { agentId, preparedOnly: true })
-      .then((models) => {
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
+      .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
           this.sessionObserverModelsClient = client;
@@ -1218,7 +1218,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? localePref.resetValue
         : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
-      resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
       setAccent: (accent) =>
@@ -1299,7 +1298,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatSendShortcutResetValue:
         chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
-      resetChatSendShortcut: () => this.resetSyncedAppearancePref("chatSendShortcut"),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
       chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
@@ -1336,6 +1334,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
+      showSectionDocs: this.pageId !== "communications",
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable
           ? renderBrowserLinkPreferencesRow({
@@ -1422,7 +1421,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["browser", "enabled"], false);
         },
-        onBrowserEnabledReset: () => runtimeConfig.removeFormValue(["browser", "enabled"]),
         onToolProfileChange: (profile) => {
           if (profile === "full") {
             runtimeConfig.removeFormValue(["tools", "profile"]);
@@ -1430,7 +1428,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["tools", "profile"], profile);
         },
-        onToolProfileReset: () => runtimeConfig.removeFormValue(["tools", "profile"]),
         editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }

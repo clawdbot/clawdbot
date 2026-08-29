@@ -94,12 +94,14 @@ describe("config snapshot plugin metadata", () => {
     const plainSnapshot = await readConfigFileSnapshotFromContext(context);
 
     expect(plainSnapshot).toMatchObject({ exists: false, valid: true });
-    expect(loader).not.toHaveBeenCalled();
+    expect(loader.mock.results.every(({ value }) => value.getSnapshot() === undefined)).toBe(true);
 
     const result = await readConfigFileSnapshotWithPluginMetadataFromContext(context);
 
     expect(result.snapshot).toMatchObject({ exists: false, valid: true });
-    expect(loader).toHaveBeenCalledOnce();
+    expect(structuredClone(result.pluginMetadataSnapshot?.manifestRegistry)).toEqual(
+      result.pluginMetadataSnapshot?.manifestRegistry,
+    );
     expect(result.pluginMetadataSnapshot?.configFingerprint).toMatch(/^[a-f0-9]{64}$/u);
     expect(result.pluginMetadataSnapshot?.index).toMatchObject({
       version: 1,

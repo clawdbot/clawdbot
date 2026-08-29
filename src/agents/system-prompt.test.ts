@@ -389,6 +389,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("omits tool guidance from tool-free minimal prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      extraSystemPrompt: "Write only the requested prose.",
+    });
+
+    expect(prompt).not.toContain("## Tooling");
+    expect(prompt).not.toContain("## Tool Call Style");
+    expect(prompt).toContain("## Subagent Context\nWrite only the requested prose.");
+  });
+
   it("avoids the Claude subscription classifier wording in reply tag guidance", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -902,7 +914,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Native Codex app-server plugin is available");
     expect(prompt).not.toContain("ACP needs agentId");
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn isolated subagent");
+    expect(prompt).toContain('- sessions_spawn: Spawn subagent; clean context: context="isolated"');
     expect(prompt).toContain("- agents_list: List allowed subagent ids");
   });
 
@@ -1526,12 +1538,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
     );
     expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
   });
@@ -1924,6 +1936,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         agentId: "work",
+        agentName: "Runt",
         sessionKey: "agent:main:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         sessionUrl: "https://gateway.example/control/chat/main",
@@ -1935,7 +1948,7 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("Runtime: name=Runt | agent=work | session=agent:main:main");
     expect(prompt).toContain("session=agent:main:main");
     expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
     expect(prompt).toContain("sessionUrl=https://gateway.example/control/chat/main");
@@ -2215,7 +2228,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders depth-1 orchestrator guidance, labels, and recovery notes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: true,
@@ -2248,26 +2260,25 @@ describe("buildSubagentSystemPrompt", () => {
     );
   });
 
-  it("keeps delegated task text out of the system prompt", () => {
-    const task = "line one\n  line two\n  line three";
+  it("selects the current child's task instead of inherited envelopes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task,
-      childDepth: 1,
-      maxSpawnDepth: 1,
+      requesterSessionKey: "agent:main:subagent:parent",
+      childDepth: 2,
+      maxSpawnDepth: 2,
     });
 
     expect(prompt).toContain("## Your Role");
-    expect(prompt).toContain("First visible `[Subagent Task]`");
-    expect(prompt).not.toContain("line one");
-    expect(prompt).not.toContain("  line two");
-    expect(prompt).not.toContain("  line three");
+    expect(prompt).not.toContain("First visible `[Subagent Task]`");
+    expect(prompt).toMatch(
+      /\[Subagent Task\].*(?:current|your|this) (?:child )?session|(?:current|your|this) (?:child )?session.*\[Subagent Task\]/i,
+    );
+    expect(prompt).toMatch(/inherited[^.\n]*(?:task|envelope)[^.\n]*(?:background|reference)/i);
   });
 
   it("omits ACP spawning guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: false,
@@ -2281,7 +2292,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders subagent-scoped native command guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: false,
@@ -2295,7 +2305,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("omits ACP spawning guidance by default", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
     });
@@ -2307,7 +2316,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("prefers native Codex commands over Codex ACP when available", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       nativeCommandGuidanceLines: [
@@ -2323,7 +2331,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders depth-2 leaf guidance with parent orchestrator labels", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc:subagent:def",
-      task: "leaf task",
       childDepth: 2,
       maxSpawnDepth: 2,
     });
@@ -2341,7 +2348,6 @@ describe("buildSubagentSystemPrompt", () => {
         name: "explicit maxSpawnDepth 1",
         input: {
           childSessionKey: "agent:main:subagent:abc",
-          task: "research task",
           childDepth: 1,
           maxSpawnDepth: 1,
         },
@@ -2351,7 +2357,6 @@ describe("buildSubagentSystemPrompt", () => {
         name: "implicit default depth/maxSpawnDepth",
         input: {
           childSessionKey: "agent:main:subagent:abc",
-          task: "basic task",
         },
         expectMainAgentLabel: true,
       },

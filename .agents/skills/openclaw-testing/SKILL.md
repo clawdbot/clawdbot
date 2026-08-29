@@ -173,7 +173,7 @@ isolation proof.
 
 ```bash
 pnpm changed:lanes --json
-pnpm check:changed       # local changed typecheck/lint/guard plan; no Vitest
+pnpm check:changed       # changed checks; may include targeted Vitest owner tests
 pnpm test:changed        # cheap smart changed Vitest targets
 pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
@@ -181,9 +181,11 @@ pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
-Do not run independent `pnpm test`/Vitest commands concurrently in one
-worktree; the Vitest cache races with `ENOTEMPTY`. Group one command or use
-distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values.
+Independent `pnpm test`/Vitest runs and checks that schedule Vitest (including
+`pnpm check:changed`) must not share a cache when run concurrently in one
+worktree; cache races can fail with `ENOTEMPTY`. Group tests into one command,
+serialize test/check runs, or give each concurrent command a distinct
+`OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` value.
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
 Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
@@ -231,8 +233,13 @@ official trust.
 
 ## Command Semantics
 
-- `pnpm check` and `pnpm check:changed` do not run Vitest tests. They are for
-  typecheck, lint, and guard proof.
+- `pnpm check` runs the aggregate formatting, typecheck, lint, and guard graph.
+- `pnpm check:changed` runs changed-scope checks and can also run targeted Vitest
+  owner tests via `pnpm test:serial`. Non-test plugin modules or manifests trigger
+  the doctor-contract declaration and closure-guard tests; prompt-snapshot,
+  runtime-sidecar, and appcast changes also have owner-test branches. Inspect the
+  actual plan with `node scripts/check-changed.mjs --dry-run -- <paths...>`.
+  This is targeted owner coverage, not the full Vitest suite.
 - `pnpm test` and `pnpm test:changed` run Vitest tests.
 - `pnpm verify` runs `pnpm check`, then `pnpm test`, with Crabbox phase markers
   so remote summaries show which half failed.

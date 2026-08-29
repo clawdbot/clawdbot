@@ -23,6 +23,7 @@ import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.j
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -31,7 +32,7 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
-type InternalRunParams = RunEmbeddedAgentParams & {
+type InternalRunParams = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
   systemAgentTool?: SystemAgentToolOptions;
 };
@@ -290,6 +291,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
+    conversationRoutePeerId: params.conversationRoutePeerId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
     conversationToolPolicy: params.conversationToolPolicy,
@@ -463,6 +465,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAgentEvent: control.onAgentEvent,
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+    onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
+    onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -499,6 +503,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceCodeModeReconciliationTools: params.forceCodeModeReconciliationTools,
     forceCodeModeTools: params.forceCodeModeTools,
+    codeModeOverride: params.codeModeOverride,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,

@@ -139,6 +139,7 @@ function prepareAgentFacts(
           credentials,
           catalogMode === "live",
           rawConfiguredModelRefs,
+          input.agentId,
         ),
         ...parseConfiguredModelVisibilityEntries({
           cfg: input.config,
@@ -248,8 +249,14 @@ export async function prepareWorkspaceBuildGroup(
     };
     const configuredProviderIds = [
       ...new Set([
-        ...collectPreparedModelRuntimeProviderIds(input.config, {}, false),
         ...inputs.flatMap(({ config, agentId }) => [
+          ...collectPreparedModelRuntimeProviderIds(
+            config,
+            {},
+            false,
+            collectPreparedModelRuntimeConfiguredRefs(config, agentId),
+            agentId,
+          ),
           ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
         ]),
         ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),

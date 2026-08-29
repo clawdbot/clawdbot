@@ -57,11 +57,29 @@ openclaw transcripts path <session> --json
 | `path <session> --transcript` | Materialize and print `transcript.jsonl`.            |
 | `--json`                      | Print machine-readable output (any subcommand).      |
 
-`<session>` accepts either a bare session id or a date-qualified selector
-(`YYYY-MM-DD/<session>`). Use the qualified form when the same session id
-occurs on more than one day, for example `openclaw transcripts show
-2026-05-22/standup`. Default session ids include a timestamp and random
-suffix; give a session a fixed id only when that id is unique within the day.
+Use the selector printed by `list` to address an exact capture. An existing
+canonical selector takes priority over a raw session ID with the same text.
+Otherwise, `show` and `path` accept `YYYY-MM-DD/<raw-session-id>`, keeping the
+entire suffix literal, including punctuation and slashes. For example:
+
+```bash
+openclaw transcripts show '2026-05-22/notes: room/one'
+```
+
+If neither qualified form finds a capture, the complete input is matched as a
+literal raw session ID or export slug, case-sensitively. A date-like prefix in
+a raw ID does not prevent this lookup. Multiple matches require a dated
+selector; no raw ID is sanitized to choose a capture. Default session IDs
+include a timestamp and random suffix; give a session a fixed ID only when
+that ID is unique within the day.
+
+If the filesystem-safe export name exceeds 255 bytes, OpenClaw shortens it
+to a prefix plus a deterministic SHA-256 hash of the complete original session
+ID. Only the derived export name and its selector change; the raw session ID,
+provider stop handle, and stored notes stay intact. Names that already fit
+remain unchanged. Use the selector printed by `list` for the shortened name.
+For existing sessions with oversized stored names, run `openclaw doctor --fix`
+to repair their derived selectors without changing stored notes.
 
 ## Output
 
@@ -73,6 +91,41 @@ summary path.
 ```
 
 The selector is the safest value to pass back to `show` or `path`.
+
+## Tool selectors
+
+The `transcripts` tool returns both the unchanged raw `sessionId` and a canonical
+`selector` from start, import, stop, and summarize. Authorized `status` results
+include selectors for active captures and entries awaiting finalization. Its
+model-facing text shows up to three complete selectors, prioritizing captures
+awaiting finalization and reporting any omitted count. Structured status details
+retain the full authorized list. Prefer `selector` for subsequent stop or
+summarize calls:
+
+```json validate=false
+{ "action": "summarize", "selector": "2026-05-22/notes-room-one" }
+```
+
+Stop and summarize require exactly one of `selector` or `sessionId`. Other
+actions reject `selector`; start and import continue to accept raw IDs through
+`sessionId`. Explicit `selector` input accepts canonical selectors and the
+historical date/raw-ID form above, but never falls back to the whole input as a
+raw ID.
+
+Legacy `sessionId` input considers qualified and raw/slug meanings together. If
+they identify different captures, the tool reports ambiguity without listing
+candidate details. This stays ambiguous after a capture ends. Use a selector
+returned by start, import, or authorized status, or inspect `openclaw transcripts
+list` locally and pass the desired value in the `selector` field. Both sides of
+a raw-ID/selector collision remain addressable by their own canonical selector.
+
+Without a conflicting qualified meaning or a different raw-ID/slug candidate,
+legacy `sessionId` selects the current exact raw-ID capture for both stop and
+summarize, even when historical captures reuse that ID. With no current capture,
+repeated historical IDs require a dated selector. An explicit selector for an
+older capture does not stop its newer same-ID sibling.
+
+## JSON output
 
 `list --json` returns objects with `sessionId`, `selector`, `date`, `title`,
 `startedAt`, `stoppedAt`, `source`, `path`, `summaryPath`, `hasSummary`.
@@ -103,11 +156,23 @@ when it will not repeat on the same date.
 
 ## Missing summaries
 
-Live sessions save summaries when capture stops; imported transcripts do so
-immediately after import. Tool-driven stops, configured auto-start shutdown, and
-imports also attempt to materialize `summary.md`. A session can appear in `list`
-without a summary while capture is still active, if a provider failed during stop,
-or if metadata was stored before any utterances arrived.
+The tool's `status` action lists active capture subscriptions, not historical
+notes. When a provider ends or replaces a subscription, OpenClaw records
+`stoppedAt` and stores its summary; the transcript remains available to `list`,
+`show`, and the tool's `summarize` action. A temporary transport disconnect does
+not end a subscription. Stopping historical notes does not stop a newer capture
+or change the recorded stop time.
+
+Provider-driven completion stores the summary without exporting files. Explicit
+tool stop, import, summarize, and configured auto-start shutdown also attempt to
+materialize `summary.md`.
+If terminal persistence fails, `status` reports the ended capture under
+`pendingFinalization`, separately from active captures. Use the tool's `stop`
+action for that session to retry persistence without stopping the provider again.
+
+A session can appear in `list` without a summary while capture is still active,
+if a provider failed during stop, or if metadata was stored before any utterances
+arrived.
 
 Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown

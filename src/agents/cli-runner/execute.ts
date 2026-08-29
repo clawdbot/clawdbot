@@ -14,6 +14,7 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
+import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
@@ -48,6 +49,7 @@ import { createCliToolTracking } from "./execute-tool-tracking.js";
 import {
   buildCliArgs,
   enqueueCliRun,
+  isClaudeCliBackendId,
   prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
   resolveCliRunQueueKey,
@@ -176,6 +178,9 @@ export async function executePreparedCliRun(
   ) {
     throw new Error("paired-node Claude CLI sessions do not support attachments or images");
   }
+  const imageTurnEntryId = isClaudeCliBackendId(context.backendResolved.id)
+    ? params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId
+    : undefined;
   const imagePayload = nodePlacement
     ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
     : await prepareCliPromptImagePayload({
@@ -188,6 +193,7 @@ export async function executePreparedCliRun(
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         media: params.media,
+        ...(imageTurnEntryId ? { imageTurnKey: hashCliImageTurnEntryId(imageTurnEntryId) } : {}),
       });
   prompt = imagePayload.prompt;
   const promptInputBackend =

@@ -38,6 +38,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "worktree",
   "projectId",
   "pendingProjectGitUrl",
+  "pendingWorktree",
   "parentSessionKey",
   "parentSessionId",
   "createdVia",

@@ -79,6 +79,34 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 - Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner authored or explicitly requested the change, or is already reviewing it with you. For governance changes to ownership/review policy itself, explicit direction from an organization owner is also sufficient only when live GitHub organization membership shows `state: active` and `role: admin`; repository `ADMIN`, `viewerCanAdminister`, or bypass permission alone never qualifies. Neither route waives a GitHub-enforced approval rule. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
 
+## Local commit hook
+
+The normal `pnpm install` setup automatically enables the repository's pre-commit
+formatting hook. Its optional content guard reads a private UTF-8 file selected by
+the native Git setting `hooks.blockedLiteralsFile`. Keep one literal per nonempty
+line in a file outside the checkout, such as
+`~/.config/openclaw/blocked-literals.txt`, then configure this checkout:
+
+```bash
+git config --local hooks.blockedLiteralsFile "$HOME/.config/openclaw/blocked-literals.txt"
+```
+
+Git metadata is another safe untracked location for the private file. Never put
+private rule contents in tracked files or PRs. With no setting, the content guard
+is disabled and formatting runs normally; a configured empty path or missing,
+unreadable, empty, or invalid file blocks the commit.
+
+When configured, the guard checks case-sensitive literal substrings before
+formatting and again after formatting restages files. Each scan checks the full
+staged contents of added, modified, and type-changed files, including rename
+destinations and unchanged lines within modified files. Docs, tests, generated
+files, and binary files are included; no tracked file is exempt.
+
+If the hook blocks a commit, remove the matching content and restage the reported
+files. Unchanged historical files and deletions are not scanned. Submodule contents
+and symlink targets are not searched. This is a local safeguard, not CI or server
+enforcement: bypassing or disabling hooks also bypasses this check.
+
 ## Review Conversations Are Author-Owned
 
 After your PR receives Barnacle, ClawSweeper, or maintainer feedback, read the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) for how to interpret rank-up moves, proof guidance, re-review requests, and review conversation follow-up.

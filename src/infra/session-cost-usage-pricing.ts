@@ -14,7 +14,7 @@ import type {
 const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
   value === "provider-billed" ? value : undefined;
 
-export const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
+const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
   }
@@ -39,7 +39,7 @@ export const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown
   };
 };
 
-export const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
+const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   const message = entry.message as Record<string, unknown> | undefined;
   const messageTimestamp = asFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
@@ -189,7 +189,7 @@ const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined
       costBreakdown.cacheWrite,
     ].some((value) => value !== undefined && value !== 0));
 
-export const shouldRecomputeRecordedZeroCost = (params: {
+const shouldRecomputeRecordedZeroCost = (params: {
   cost: ReturnType<typeof resolveModelCostConfig>;
   costBreakdown: CostBreakdown | undefined;
   costTotal: number | undefined;

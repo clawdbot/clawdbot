@@ -199,7 +199,7 @@ function makePreparePushHeadDriftRepo(): {
 
 function prepareSyncHeadStubs(): string[] {
   return [
-    "enter_worktree() { :; }",
+    "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
     "hosted_sha=$(cat .local/hosted-sha)",
     'gh() { printf "%s\\n" "$hosted_sha"; }',
     "verify_pr_head_branch_matches_expected() { :; }",
@@ -221,6 +221,7 @@ describe("resolve_pr_gates_remote_mode", () => {
     { value: undefined, expected: "local" },
     { value: "", expected: "local" },
     { value: "testbox", expected: "testbox" },
+    { value: "crabbox-aws", expected: "crabbox-aws" },
   ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
     const env: NodeJS.ProcessEnv = {};
     if (value !== undefined) {
@@ -246,6 +247,112 @@ describe("resolve_pr_gates_remote_mode", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
   });
+
+  it("rejects the Crabbox AWS hosted-gates conflict before touching the worktree", () => {
+    const result = runGatesBash("prepare_gates 424242", {
+      env: { OPENCLAW_PR_GATES_REMOTE: "crabbox-aws", OPENCLAW_TESTBOX: "1" },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("OPENCLAW_PR_GATES_REMOTE=crabbox-aws conflicts");
+  });
+});
+
+describe("remote Crabbox AWS gate contract", () => {
+  it("builds the canonical deterministic proof command", () => {
+    const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        baseSha: "a".repeat(40),
+        changedPaths: [{ path: "scripts/pr-lib/gates.sh", status: "M" }],
+        headSha: "b".repeat(40),
+        targets: ["test/scripts/pr-prepare-gates.test.ts"],
+        version: 1,
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(repoRoot, "scripts/pr-crabbox-gate-publisher.mjs"),
+        "--print-command",
+        planPath,
+        "c".repeat(64),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("umask 022");
+    expect(result.stdout).toContain("pnpm build");
+    expect(result.stdout).toContain("pnpm check");
+    expect(result.stdout).toContain("test/scripts/pr-prepare-gates.test.ts");
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${"a".repeat(40)}`);
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${"b".repeat(40)}`);
+    expect(result.stdout).not.toContain("OPENCLAW_CRABBOX_GATE_WORKFLOW=");
+    expect(result.stdout).not.toContain("test/scripts/pr-wrappers.test.ts");
+    expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
+    expect(result.stdout).not.toContain("pnpm test");
+    expect(result.stdout).not.toContain("pnpm check:changed");
+  });
+
+  it("records only trusted publisher metadata after synchronous success", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-publisher-");
+    const workDir = join(dir, "work");
+    mkdirSync(workDir);
+    mkdirSync(join(workDir, ".local"));
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
+
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${base}'; }`,
+        "ci_dispatch() {",
+        `  printf '%s\\n' '${JSON.stringify({
+          actionsRunUrl: runUrl,
+          backend: "crabbox",
+          baseSha: base,
+          headSha: head,
+          leaseId: "cbx_stub",
+          provider: "aws",
+          runId: "run_stub",
+          target: "linux",
+        })}'`,
+        "}",
+        `finalize_remote_crabbox_aws_gate 424242 '${head}'`,
+        "cat .local/gates.env",
+      ].join("\n"),
+      { cwd: workDir },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("GATES_MODE=remote_crabbox_aws");
+    expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${head}`);
+    expect(result.stdout).toContain("REMOTE_GATES_PROVIDER=aws");
+    expect(result.stdout).toContain("REMOTE_GATES_RUN_ID=run_stub");
+    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=cbx_stub");
+    expect(result.stdout).toContain(`REMOTE_GATES_RUN_URL=${runUrl}`);
+  });
+
+  it("keeps pending evidence when the protected publisher fails", () => {
+    const workDir = join(tempDirs.make("openclaw-pr-gates-aws-failure-"), "work");
+    mkdirSync(workDir, { recursive: true });
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(join(workDir, ".local/gates.env"), "GATES_MODE=remote_crabbox_aws_pending\n");
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
+        "ci_dispatch() { return 1; }",
+        `finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'`,
+      ].join("\n"),
+      { cwd: workDir },
+    );
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(join(workDir, ".local/gates.env"), "utf8")).toBe(
+      "GATES_MODE=remote_crabbox_aws_pending\n",
+    );
+  });
 });
 
 describe("prepare gate changed-file plan", () => {
@@ -267,6 +374,7 @@ describe("prepare gate changed-file plan", () => {
     const result = runGatesBash(
       [
         gitStub,
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\t%s\\t%s\\t%s\\n" "$PREPARE_GATE_CHANGED_FILES" "$PREPARE_GATE_DOCS_ONLY" "$PREPARE_GATE_CHANGELOG_ONLY" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -282,6 +390,7 @@ describe("prepare gate changed-file plan", () => {
       [
         "git() { printf 'src/index.ts\\n'; }",
         "changelog_required_for_changed_files() { return 0; }",
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\n" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -550,7 +659,8 @@ describe("prepare push head drift", () => {
     const { repoDir, recordedHead, reviewedHead } = makePreparePushHeadDriftRepo();
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "refresh_main_snapshot() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
+        "enter_worktree() { refresh_main_snapshot; }",
         `reviewed_head='${reviewedHead}'`,
         'gh() { printf "%s\\n" "$reviewed_head"; }',
         "verify_pr_head_branch_matches_expected() { :; }",
@@ -761,6 +871,7 @@ describe("prepare gate stamp transitions", () => {
       [
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -781,6 +892,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -800,6 +912,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -837,7 +950,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 0; }",
         "changelog_required_for_changed_files() { return 1; }",
@@ -881,7 +994,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 1; }",
         "changelog_required_for_changed_files() { return 1; }",

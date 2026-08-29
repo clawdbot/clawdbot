@@ -183,19 +183,6 @@
   display: none;
 }
 
-/* Reserve notice space only while the corresponding in-page chrome remains visible. */
-:is(
-    html:not(.openclaw-native-nav, .openclaw-native-web-chrome)
-      .shell:not(.shell--mobile-nav, .shell--settings),
-    html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-      .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
-  )
-  .content
-  > openclaw-update-banner
-  .callout {
-  margin-left: var(--shell-chrome-safe-area-left);
-}
-
 html.openclaw-native-macos .shell-chrome-controls {
   top: 52px;
 }
@@ -296,11 +283,10 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 .shell--settings.shell--mobile-nav {
   --settings-content-block-start-padding: 4px;
-  --settings-content-inline-padding: 4px;
 }
 
 .shell--settings .connection-action-block {
-  margin-inline: calc(0px - var(--settings-content-inline-padding));
+  margin-inline: calc(0px - var(--settings-content-inline-padding, var(--content-inline-padding)));
   border-inline: 0;
   border-radius: 0;
 }
@@ -2130,6 +2116,18 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--session-row-actions-reserve);
 }
 
+/* Trade unread/PR tracks for action space, keeping active state and second-line
+   metadata visible. Collapse empty containers too so their gaps cannot squeeze the title. */
+.sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  :is(
+    .session-unread-dot,
+    .session-row-badge--pull-request,
+    .session-row-aside:has(> .session-row-state > .session-unread-dot:only-child),
+    .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
+  ) {
+  display: none;
+}
+
 .nav-collapse-toggle__icon {
   display: flex;
   align-items: center;
@@ -2590,7 +2588,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   cursor: not-allowed;
 }
 
-.session-menu__item--destructive {
+.session-menu__item--destructive,
+.session-menu__item--destructive .session-menu__icon {
   color: var(--danger);
 }
 
@@ -4038,7 +4037,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content {
   grid-area: content;
-  padding: 16px 20px 32px;
+  --content-inline-padding: 20px;
+  padding: 16px var(--content-inline-padding) 32px;
   display: block;
   min-height: 0;
   overflow-y: auto;
@@ -4125,6 +4125,14 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
+}
+
+.session-route-not-found {
+  width: min(440px, 100%);
+}
+
+.session-route-not-found .lazy-view-error__subtitle {
+  text-wrap: balance;
 }
 
 .content--custodian {
@@ -4362,24 +4370,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   width: 9px;
   height: 9px;
   font-size: 6px;
-}
-
-.sidebar-session-pr-indicator--open {
-  color: var(--ok);
-}
-
-.sidebar-session-pr-indicator--merged {
-  color: var(--pr-merged);
-}
-
-.sidebar-session-pr-indicator svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-recent-session__text {

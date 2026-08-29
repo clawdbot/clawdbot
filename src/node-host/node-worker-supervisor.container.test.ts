@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as processExec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
@@ -15,6 +16,7 @@ import {
   fakeEngineSource,
   stdioWorkerSource,
 } from "./node-worker-supervisor.container.test-support.js";
+import { waitForNodeWorkerTerminal as waitForTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testNodeWorkerEnvironmentIdentity,
@@ -32,6 +34,7 @@ const endpoint: WorkerConnectionEndpoint = {
 const hostLabel = "openclaw.node-worker.host";
 const gatewayLabel = "openclaw.node-worker.gateway";
 const launchLabel = "openclaw.node-worker.launch";
+const DAEMON_TIMER_SCALE = 5;
 
 type FakeContainer = {
   id: string;
@@ -150,17 +153,34 @@ function containerFixture(
   };
 }
 
-async function waitForTerminal(
-  supervisor: ReturnType<typeof createNodeWorkerSupervisor>,
-  launchId: string,
-) {
-  await vi.waitFor(
-    async () => {
-      expect((await supervisor.status(launchId))?.state).not.toMatch(/^(?:pending|running)$/u);
-    },
-    { timeout: 5_000 },
+function delayDaemonRevalidation(fixture: ReturnType<typeof containerFixture>, delayMs: number) {
+  fs.writeFileSync(
+    path.join(fixture.engineRoot, "info-delay-ms"),
+    String(delayMs / DAEMON_TIMER_SCALE),
   );
-  return await supervisor.status(launchId);
+  const requestedTimeouts: number[] = [];
+  const runExec = processExec.runExec;
+  vi.spyOn(processExec, "runExec").mockImplementation((command, args, options) => {
+    if (
+      command === fixture.containerEngine.command &&
+      args.length === 3 &&
+      args[0] === "info" &&
+      args[1] === "--format" &&
+      args[2] === "{{.ID}}" &&
+      typeof options === "object" &&
+      typeof options.timeoutMs === "number"
+    ) {
+      // Scale both sides so the old five-second deadline still loses to the
+      // six-second response. Execa, process signals, and other commands stay real.
+      requestedTimeouts.push(options.timeoutMs);
+      return runExec(command, args, {
+        ...options,
+        timeoutMs: options.timeoutMs / DAEMON_TIMER_SCALE,
+      });
+    }
+    return runExec(command, args, options);
+  });
+  return requestedTimeouts;
 }
 
 async function waitForWorkerStarted(workspaceDir: string): Promise<void> {
@@ -226,7 +246,7 @@ describe("node worker supervisor container isolation", () => {
       });
       const completed = await waitForTerminal(fixture.supervisor, input.launchId);
       expect(completed).toMatchObject({ state: "completed" });
-      expect(JSON.parse(completed?.resultJson ?? "null")).toEqual({
+      expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
         status: "completed",
         transcriptLeafId: "leaf-1",
         transcriptNextSeq: 2,
@@ -297,12 +317,12 @@ describe("node worker supervisor container isolation", () => {
       await fixture.supervisor.launch(input, endpoint);
       const failed = await waitForTerminal(fixture.supervisor, input.launchId);
       expect(failed).toMatchObject({ state: "failed" });
-      expect(failed?.errorText).toContain(
+      expect(failed.errorText).toContain(
         "worker admission deadline exceeded after 9 attempts to gateway.example:443: connect failed: Opening handshake has timed out",
       );
-      expect(failed?.errorText).not.toContain(input.descriptor.admission.credential);
-      expect(Buffer.byteLength(failed?.errorText ?? "", "utf8")).toBeLessThanOrEqual(4_096);
-      expect((await fixture.supervisor.status(input.launchId))?.errorText).toBe(failed?.errorText);
+      expect(failed.errorText).not.toContain(input.descriptor.admission.credential);
+      expect(Buffer.byteLength(failed.errorText ?? "", "utf8")).toBeLessThanOrEqual(4_096);
+      expect((await fixture.supervisor.status(input.launchId))?.errorText).toBe(failed.errorText);
     } finally {
       await fixture.supervisor.close();
     }
@@ -329,7 +349,7 @@ describe("node worker supervisor container isolation", () => {
         fs.readFileSync(path.join(fixture.workspaceDir, `${first.launchId}.fixture.json`), "utf8"),
       ) as { pid: number };
       const worker = requireNodeWorkerProcessIdentity(originalWorker.pid);
-      expect(completed?.state).toBe("completed");
+      expect(completed.state).toBe("completed");
       expect(store.get(first.launchId)).toMatchObject({
         state: "running",
         container: running.container,
@@ -343,7 +363,7 @@ describe("node worker supervisor container isolation", () => {
         worker: running.worker,
         container: running.container,
       });
-      expect((await waitForTerminal(fixture.supervisor, next.launchId))?.state).toBe("completed");
+      expect((await waitForTerminal(fixture.supervisor, next.launchId)).state).toBe("completed");
       expect(
         JSON.parse(
           fs.readFileSync(path.join(fixture.workspaceDir, `${next.launchId}.fixture.json`), "utf8"),
@@ -450,12 +470,12 @@ describe("node worker supervisor container isolation", () => {
   });
 
   it(
-    "launches after a busy daemon takes six seconds to revalidate",
+    "launches when daemon revalidation outlasts the discovery timeout",
     { timeout: 15_000 },
     async () => {
       const fixture = containerFixture();
       const input = testWorkerLaunchInput(fixture.workspaceDir, "container-busy-daemon");
-      fs.writeFileSync(path.join(fixture.engineRoot, "info-delay-ms"), "6000");
+      const requestedTimeouts = delayDaemonRevalidation(fixture, 6_000);
 
       try {
         expect(await fixture.supervisor.launch(input, endpoint)).toMatchObject({
@@ -464,6 +484,7 @@ describe("node worker supervisor container isolation", () => {
         expect(await waitForTerminal(fixture.supervisor, input.launchId)).toMatchObject({
           state: "completed",
         });
+        expect(requestedTimeouts).toEqual([30_000]);
       } finally {
         await fixture.supervisor.close();
       }
@@ -476,13 +497,16 @@ describe("node worker supervisor container isolation", () => {
     async () => {
       const fixture = containerFixture();
       const input = testWorkerLaunchInput(fixture.workspaceDir, "container-unresponsive-daemon");
-      fs.writeFileSync(path.join(fixture.engineRoot, "info-delay-ms"), "35000");
+      const requestedTimeouts = delayDaemonRevalidation(fixture, 35_000);
 
       try {
         const failed = await fixture.supervisor.launch(input, endpoint);
 
         expect(failed.state).toBe("failed");
-        expect(failed.errorText).toMatch(/Command timed out after \d+ milliseconds:/u);
+        expect(requestedTimeouts).toEqual([30_000]);
+        expect(failed.errorText).toContain(
+          `Command timed out after ${30_000 / DAEMON_TIMER_SCALE} milliseconds:`,
+        );
         expect(failed.errorText).toContain("docker info --format '{{.ID}}'");
         expect(await fixture.supervisor.status(input.launchId)).toMatchObject({
           state: "failed",

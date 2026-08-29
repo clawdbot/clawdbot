@@ -33,7 +33,6 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -49,6 +48,7 @@ import type {
   GatewayHotReloadApplicationStatus,
   GatewayHotReloadStatus,
 } from "./config-reload-status.types.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
 export type { GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
@@ -134,17 +134,6 @@ type PreparedGatewayConfigCandidate = {
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
 
-class GatewayConfigReloadSupersededError extends Error {
-  constructor() {
-    super("config reload superseded by a newer config write");
-    this.name = "GatewayConfigReloadSupersededError";
-  }
-}
-
-function isGatewayConfigReloadSupersededError(error: unknown): boolean {
-  return error instanceof Error && error.name === "GatewayConfigReloadSupersededError";
-}
-
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
     plugins: {
@@ -181,6 +170,8 @@ export function startGatewayConfigReloader(opts: {
   onRuntimeConfigCommitted?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
   /** Publishes the resolved source-config revision accepted by the active runtime. */
   onConfigRevisionApplied?: (hash: string) => void;
+  /** Reads the same restart owner that fences publication of the applied revision. */
+  hasOutstandingGatewayRestart?: () => boolean;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
@@ -217,7 +208,7 @@ export function startGatewayConfigReloader(opts: {
     nextConfig: OpenClawConfig,
     ownership: GatewayConfigReloadTransactionOwnership,
     sourceConfig: OpenClawConfig,
-  ) => Promise<void>;
+  ) => Promise<void | GatewayHotReloadApplicationStatus>;
   onHotReload: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -426,7 +417,7 @@ export function startGatewayConfigReloader(opts: {
       // transaction. Only downstream signal delivery may coalesce.
       await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
     } catch (err) {
-      if (isGatewayConfigReloadSupersededError(err)) {
+      if (err instanceof GatewayConfigReloadSupersededError) {
         opts.log.info(`config restart superseded: ${String(err)}`);
       } else {
         opts.log.error(`config restart failed: ${String(err)}`);
@@ -474,6 +465,12 @@ export function startGatewayConfigReloader(opts: {
     authoredConfig?: unknown,
     application?: RuntimeConfigWriteApplicationClaim,
   ) => {
+    const settleRuntimeApplication = (status: GatewayHotReloadApplicationStatus = "applied") => {
+      // A watcher replay must not turn recovery-owned runtime work into a success receipt.
+      application?.settle(
+        opts.hasOutstandingGatewayRestart?.() ? "applied-restart-required" : status,
+      );
+    };
     // Reprepare against the current accepted env owner. A managed write can
     // finish preflight while another watcher transaction accepts first.
     const preparedCandidate =
@@ -668,10 +665,8 @@ export function startGatewayConfigReloader(opts: {
       }
       notifyCommitted();
     };
-    // A signaled metadata change emptied the process snapshot slot. An
-    // unchanged config diff must still replace the plugin runtime generation so
-    // the slot republishes instead of leaving configless readers cold-scanning
-    // against a registry that diverged from the live runtime owners.
+    // Plugin metadata belongs to Gateway startup. A signal must request a restart
+    // even when config bytes and install records have not changed.
     const pluginMetadataRefreshToken = pluginMetadataRefreshRequests;
     const forcePluginMetadataReload = pluginMetadataRefreshToken !== pluginMetadataRefreshApplied;
     const markPluginMetadataRefreshApplied = () => {
@@ -700,7 +695,7 @@ export function startGatewayConfigReloader(opts: {
         publishedSource?.commit?.();
       }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
-      application?.settle("applied");
+      settleRuntimeApplication();
       return;
     }
 
@@ -718,7 +713,7 @@ export function startGatewayConfigReloader(opts: {
     opts.log.info(
       changedPaths.length > 0
         ? `config change detected; evaluating reload (${changedPaths.join(", ")})`
-        : "plugin metadata changed with identical config; replacing plugin runtime generation",
+        : "plugin metadata changed with identical config; Gateway restart required",
     );
     if (followUp.mode === "none") {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
@@ -731,11 +726,9 @@ export function startGatewayConfigReloader(opts: {
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
     });
-    if (forcePluginMetadataReload && !plan.restartGateway && !plan.reloadPlugins) {
-      // Mirror the `plugins.*` hot rule pairing: a replaced plugin registry
-      // also invalidates MCP runtimes assembled from the previous generation.
-      plan.reloadPlugins = true;
-      plan.disposeMcpRuntimes = true;
+    if (forcePluginMetadataReload && !plan.restartGateway) {
+      plan.restartGateway = true;
+      plan.restartReasons.push("plugin metadata changed");
     }
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
@@ -747,11 +740,22 @@ export function startGatewayConfigReloader(opts: {
       await opts.onConfigChange?.(plan, nextConfig);
       // No-op plans still change the runtime config snapshot. Commit before
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
-      await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextSourceConfig);
+      let applicationStatus: void | GatewayHotReloadApplicationStatus;
+      try {
+        applicationStatus = await opts.onNoopConfigCommit(
+          plan,
+          nextConfig,
+          ownership,
+          nextSourceConfig,
+        );
+      } catch (error) {
+        ownership.rollbackRuntimeEnv();
+        throw error;
+      }
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
-      application?.settle("applied");
+      settleRuntimeApplication(applicationStatus ?? "applied");
       return;
     }
     if (followUp.requiresRestart) {
@@ -788,11 +792,7 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
-    application?.settle(applicationStatus);
-    if (plan.reloadPlugins) {
-      // The committed reload republished the metadata snapshot generation.
-      markPluginMetadataRefreshApplied();
-    }
+    settleRuntimeApplication(applicationStatus);
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -1106,7 +1106,7 @@ export function startGatewayConfigReloader(opts: {
       });
       await acceptWatchedPaths(snapshot.includedPaths ?? []);
     } catch (err) {
-      const superseded = isGatewayConfigReloadSupersededError(err);
+      const superseded = err instanceof GatewayConfigReloadSupersededError;
       const transferredToWatcher =
         superseded && attemptedCandidate !== null && watcherIntentCandidate === attemptedCandidate;
       if (!transferredToWatcher) {
@@ -1356,11 +1356,10 @@ export function startGatewayConfigReloader(opts: {
 
   return {
     notifyPluginMetadataChanged: () => {
-      // The signal carries a metadata change while config bytes stay identical.
-      // Clear both metadata and config-echo caches before scheduling the shared diff path.
+      // Keep the running inventory intact; only the next Gateway startup may
+      // discover changed plugin artifacts. Refresh install records for restart planning.
       pluginMetadataRefreshRequests += 1;
       clearLoadInstalledPluginIndexInstallRecordsCache();
-      clearPluginMetadataLifecycleCaches();
       startupInternalWriteHash = null;
       lastAppliedWriteHash = null;
       scheduleExternalRefresh();

@@ -5,7 +5,7 @@ import {
   buildChannelConfigSchema,
   buildChannelExecApprovalsSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
@@ -199,14 +199,15 @@ const DiscordVoiceSchema = z
   .strict()
   .optional();
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["groupAllowFrom"],
+  allowFrom: DiscordIdListSchema.optional(),
+  streaming: DiscordPreviewStreamingConfigSchema.optional(),
+});
+
 const DiscordAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      omit: ["groupAllowFrom"],
-      groupPolicyDefault: true,
-      allowFrom: DiscordIdListSchema.optional(),
-      streaming: DiscordPreviewStreamingConfigSchema.optional(),
-    }),
+    ...accountShape,
     joinIntro: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     token: registerSensitiveConfigSchema(SecretInputSchema.optional()),
@@ -401,7 +402,8 @@ const DiscordAccountSchema = z.preprocess(
   DiscordAccountSchemaBase,
 );
 
-const DiscordConfigSchemaBase = DiscordAccountSchemaBase.extend({
+const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
+  ...rootPolicyShape,
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {

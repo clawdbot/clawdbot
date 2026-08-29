@@ -30,6 +30,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   discardStateStagedAttachments,
@@ -543,9 +544,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
     chatState.addCleanup(this.context.gateway.subscribe((next) => this.applyGatewaySnapshot(next)));
     chatState.addCleanup(
-      this.context.agentSelection.subscribe((next) =>
-        applySelectedChatAgent(this.state, next.selectedId),
-      ),
+      this.context.agentSelection.subscribe((next) => {
+        applySelectedChatAgent(this.state, next.selectedId);
+        if (this.state) {
+          void syncSelectedSessionMessageSubscription(this.state);
+        }
+      }),
     );
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
     chatState.addCleanup(

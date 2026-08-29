@@ -410,15 +410,11 @@ public enum GatewayTLSStore {
 
     @discardableResult
     public static func clearAllFingerprints() -> Bool {
-        self.clearAllFingerprints(clearLegacy: { self.clearAllLegacyFingerprints() })
-    }
-
-    static func clearAllFingerprints(clearLegacy: () -> Void) -> Bool {
         let removedKeychain = self.keychainOperations.delete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.keychainService,
         ] as CFDictionary)
-        clearLegacy()
+        self.clearAllLegacyFingerprints()
         let removed = removedKeychain == errSecSuccess || removedKeychain == errSecItemNotFound
         if removed {
             self.firstUseClaims.clearAll()

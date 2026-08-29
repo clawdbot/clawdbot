@@ -93,6 +93,7 @@ export async function finalizeCodexAttempt(
     notifyUserMessagePersisted,
   } = activeTurn;
   await completion;
+  await state.abortCleanup;
   // Include projection work already queued when timeout completion wins.
   await drainNotificationQueue();
   const hasQuiescentCompletedAssistant =

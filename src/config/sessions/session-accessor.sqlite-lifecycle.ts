@@ -640,6 +640,7 @@ function shouldDeleteSqliteSessionEntryLifecycle(
   entry: SessionEntry | undefined,
   params: DeleteSessionEntryLifecycleParams,
 ): entry is SessionEntry {
+  params.commitGuard?.();
   if (!entry) {
     return false;
   }

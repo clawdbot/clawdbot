@@ -298,10 +298,25 @@ describe("Signal host-owned outbound media access", () => {
   });
 
   it.each([
-    { name: "sensitive log", filename: "secret.log", contents: "sensitive host data" },
-    { name: "forged PDF", filename: "forged.pdf", contents: "not a real PDF" },
-    { name: "untrusted HTML", filename: "untrusted.html", contents: "<html>private</html>" },
-  ])("rejects a $name before contacting Signal", async ({ filename, contents }) => {
+    {
+      name: "sensitive log",
+      filename: "secret.log",
+      contents: "sensitive host data",
+      expectedCode: "path-not-allowed",
+    },
+    {
+      name: "forged PDF",
+      filename: "forged.pdf",
+      contents: "not a real PDF",
+      expectedCode: "path-not-allowed",
+    },
+    {
+      name: "untrusted HTML",
+      filename: "untrusted.html",
+      contents: "<html>private</html>",
+      expectedCode: "path-not-allowed",
+    },
+  ])("rejects a $name before contacting Signal", async ({ filename, contents, expectedCode }) => {
     await fs.writeFile(path.join(state.workspaceDir, filename), contents);
 
     await expect(
@@ -315,7 +330,7 @@ describe("Signal host-owned outbound media access", () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+    ).rejects.toMatchObject({ code: expectedCode });
 
     expect(requests).toHaveLength(0);
   });

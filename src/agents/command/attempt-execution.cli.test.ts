@@ -38,6 +38,7 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
+import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
@@ -828,6 +829,7 @@ describe("CLI attempt execution", () => {
     runId: string;
     cwd?: string;
     onExecutionStarted?: () => void;
+    onAgentEvent?: RunAgentAttemptParams["onAgentEvent"];
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -839,31 +841,53 @@ describe("CLI attempt execution", () => {
       body: params.body,
       runId: params.runId,
       opts: { onExecutionStarted: params.onExecutionStarted },
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       agentDir,
       sessionStore: params.sessionStore,
       storePath,
     });
   }
 
-  it("forwards execution admission callbacks to the CLI runtime", async () => {
-    const sessionKey = "agent:main:direct:cli-execution-started";
-    const sessionEntry = makeSessionEntry("session-cli-execution-started");
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    const onExecutionStarted = vi.fn();
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
+  it.each(["assistant_output_started", "tool_execution_started"] as const)(
+    "keeps CLI admission separate from observed %s",
+    async (phase) => {
+      const sessionKey = "agent:main:direct:cli-execution-started";
+      const sessionEntry = makeSessionEntry("session-cli-execution-started");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      const onExecutionStarted = vi.fn();
+      const onRuntimeTurnStarted = vi.fn();
+      const callbacks = createAgentAttemptLifecycleCallbacks(
+        {
+          currentTurnUserMessagePersisted: false,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+        onRuntimeTurnStarted,
+      );
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
 
-    await runClaudeCliAttempt({
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      body: "start",
-      runId: "run-cli-execution-started",
-      onExecutionStarted,
-    });
+      await runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "start",
+        runId: "run-cli-execution-started",
+        onExecutionStarted,
+        onAgentEvent: callbacks.onAgentEvent,
+      });
 
-    expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
-  });
+      expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
+      const observePhase = firstRunCliAgentArg().onExecutionPhase;
+      if (typeof observePhase !== "function") {
+        throw new Error("CLI execution phase observer is missing");
+      }
+      observePhase({ phase: "process_spawned" });
+      expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
+      observePhase({ phase });
+      expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
+    },
+  );
 
   it("forwards authoritative group type to CLI runs with opaque session keys", async () => {
     const sessionKey = "agent:main:opaque:binding";
@@ -2934,6 +2958,51 @@ describe("CLI attempt execution", () => {
     expect(fallbackArg.images).toEqual(images);
   });
 
+  it("publishes logical cancellation before an embedded-to-CLI fallback starts", async () => {
+    const sessionKey = "agent:main:direct:cli-lifecycle-handoff";
+    const sessionEntry = makeSessionEntry("openclaw-session-cli-lifecycle-handoff");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("fallback complete"));
+    const controller = new AbortController();
+    const handoffToCli = vi.fn();
+    const deferredLifecycle: NonNullable<RunAgentAttemptParams["deferredLifecycle"]> = {
+      signal: controller.signal,
+      abort: vi.fn(),
+      adopt: vi.fn(),
+      handoffToCli,
+      complete: vi.fn(async () => undefined),
+    };
+
+    await runStoredAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionKey,
+      body: "continue after overload",
+      isFallbackRetry: true,
+      runId: "run-cli-lifecycle-handoff",
+      messageChannel: "telegram",
+      sessionStore,
+      deferredLifecycle,
+    });
+
+    expect(handoffToCli).toHaveBeenCalledOnce();
+    expect(handoffToCli.mock.invocationCallOrder[0]).toBeLessThan(
+      runCliAgentMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expectMockArgFields(runCliAgentMock, { abortSignal: controller.signal });
+  });
+
   it("routes provider-qualified Anthropic shorthand through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:shorthand-claude-cli";
     const sessionEntry = makeSessionEntry("openclaw-session-shorthand-cli");
@@ -3892,7 +3961,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("forwards runtime toolsAllow into embedded attempts", async () => {
+  it("forwards invocation tool restrictions into embedded attempts", async () => {
     const sessionEntry = makeSessionEntry("tools-allow-session");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
@@ -3902,10 +3971,13 @@ describe("embedded attempt harness pinning", () => {
       sessionEntry,
       body: "read only",
       runId: "run-tools-allow",
-      opts: { toolsAllow: ["read", "web_search"] },
+      opts: { toolsAllow: ["read", "web_search"], codeModeOverride: false },
     });
 
-    expectMockArgFields(runEmbeddedAgentMock, { toolsAllow: ["read", "web_search"] });
+    expectMockArgFields(runEmbeddedAgentMock, {
+      toolsAllow: ["read", "web_search"],
+      codeModeOverride: false,
+    });
   });
 
   it("lets provider/model runtime policy choose Codex without storing a session harness pin", async () => {

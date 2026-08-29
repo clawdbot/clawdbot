@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
@@ -191,12 +192,16 @@ function resolveHttpProfile(profileId: string, updatedAt: number, cfg: OpenClawC
   };
 }
 
-function applyHttpOperatorRoleScopeCeiling(
-  scopes: string[],
+export function applyHttpOperatorRoleScopeCeiling<Scope extends string>(
+  scopes: Scope[],
   auth: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy"> | undefined,
-): string[] {
-  const allowedScopes: readonly string[] | undefined = auth?.operatorRolePolicy?.scopes;
-  return allowedScopes ? scopes.filter((scope) => allowedScopes.includes(scope)) : scopes;
+): Scope[] {
+  const allowedScopes = auth?.operatorRolePolicy?.scopes;
+  return allowedScopes
+    ? scopes.filter((scope) =>
+        roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes }),
+      )
+    : scopes;
 }
 
 function shouldTrustDeclaredHttpOperatorScopes(
@@ -519,18 +524,13 @@ export function authorizeControlUiPluginCookieRequest(
       return null;
     }
   }
-  const authorizedGrants = authenticatedProfile.operatorRolePolicy
-    ? grants.map((grant) => ({
-        ...grant,
-        scopes: grant.scopes.filter((scope) =>
-          authenticatedProfile.operatorRolePolicy?.scopes.includes(scope),
-        ),
-      }))
-    : grants;
+  for (const grant of grants) {
+    grant.scopes = applyHttpOperatorRoleScopeCeiling(grant.scopes, authenticatedProfile);
+  }
   return {
     requestAuth: {
       trustDeclaredOperatorScopes: false,
-      controlUiPluginGrants: authorizedGrants,
+      controlUiPluginGrants: grants,
       ...authenticatedProfile,
     },
     // Route dispatch selects the candidate that owns the first matched gateway

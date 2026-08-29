@@ -130,7 +130,7 @@ extension OnboardingAISetupModel {
         case detecting
         case ready
         case testing
-        case connected
+        case connected(OnboardingDashboardHandoff)
     }
 
     enum PendingVerificationOutcome: Equatable {
@@ -218,7 +218,8 @@ extension OnboardingAISetupModel {
     }
 
     var connected: Bool {
-        self.phase == .connected
+        if case .connected = self.phase { return true }
+        return false
     }
 
     var isBusy: Bool {
@@ -254,7 +255,7 @@ extension OnboardingAISetupModel {
     /// activating a new one. The custodian first-run handoff belongs only to
     /// fresh activations; verified reopens land on the normal dashboard.
     var verifiedExistingInference: Bool {
-        self.connected && self.selectedKind == "existing-model"
+        self.phase == .connected(.dashboard)
     }
 
     /// Once setup starts changing inference, its successful result belongs to
@@ -331,9 +332,9 @@ extension OnboardingAISetupModel {
         if let response = error as? GatewayResponseError {
             let code = response.code.uppercased()
             let message = response.message.lowercased()
-            // These responses are emitted before the activation handler runs.
-            // Handler failures are UNAVAILABLE and can arrive after mutation.
-            return code == "UNKNOWN_METHOD" ||
+            // Only confirmed non-admission or pre-handler validation proves no mutation.
+            // Generic UNAVAILABLE failures can arrive after mutation.
+            return Self.setupAdmissionIsBusy(response) || code == "UNKNOWN_METHOD" ||
                 (code == "INVALID_REQUEST" &&
                     (message.contains("unknown method") ||
                         message.contains("invalid openclaw.setup.activate params")))
@@ -343,11 +344,15 @@ extension OnboardingAISetupModel {
             error is OpenClawChatTransportSendError
     }
 
-    static func activationAdmissionIsBusy(_ error: Error) -> Bool {
+    static func setupAdmissionIsBusy(_ error: Error) -> Bool {
         guard let response = error as? GatewayResponseError else { return false }
-        return response.method == "openclaw.setup.activate" &&
+        return [
+            "openclaw.setup.activate",
+            "openclaw.setup.auth.start",
+            "openclaw.setup.prepare.start",
+        ].contains(response.method) &&
             response.code.uppercased() == "UNAVAILABLE" &&
-            response.details["retryable"]?.value as? Bool == true
+            response.details["code"]?.value as? String == "SETUP_ADMISSION_BUSY"
     }
 
     static func activationParams(

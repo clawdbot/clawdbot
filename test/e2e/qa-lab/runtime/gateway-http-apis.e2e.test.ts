@@ -266,7 +266,11 @@ describe("Gateway HTTP API product proof", () => {
         body: JSON.stringify({ text: "Gateway HTTP QA wake", mode: "next-heartbeat" }),
       });
       expect(authenticatedWake.response.status).toBe(200);
-      expect(authenticatedWake.body).toEqual({ ok: true, mode: "next-heartbeat" });
+      expect(authenticatedWake.body).toEqual({
+        ok: true,
+        mode: "next-heartbeat",
+        eventOutcome: "queued",
+      });
       expect(peekSystemEventEntries(mainSessionKey).map((event) => event.text)).toEqual([
         "Gateway HTTP QA wake",
       ]);

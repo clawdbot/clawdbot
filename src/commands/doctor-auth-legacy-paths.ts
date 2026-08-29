@@ -17,20 +17,6 @@ export type AuthProfileRepairCandidate = {
   authPath: string;
 };
 
-function addCandidate(
-  candidates: Map<string, AuthProfileRepairCandidate>,
-  agentDir: string | undefined,
-): void {
-  const authPath = resolveLegacyAuthProfilesPath(agentDir);
-  const key = path.resolve(authPath);
-  const existing = candidates.get(key);
-  // The shared-main store (undefined agentDir) owns its path: an agent-scoped
-  // alias resolving to the same file must not demote it to a per-agent import.
-  if (!existing || agentDir === undefined) {
-    candidates.set(key, { agentDir, authPath });
-  }
-}
-
 function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
   const root = path.join(resolveStateDir(env), "agents");
   let entries: fs.Dirent[];
@@ -64,20 +50,32 @@ export function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
+  const addCandidate = (agentDir: string | undefined): void => {
+    // Retain the selected home's expanded directory for later SQLite writes too.
+    const resolvedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
+    const authPath = resolveLegacyAuthProfilesPath(
+      resolvedAgentDir ?? resolveSharedMainAuthAgentDir(env),
+    );
+    const existing = candidates.get(authPath);
+    // Shared-main owns aliases of its source; do not demote it to a per-agent import.
+    if (!existing || agentDir === undefined) {
+      candidates.set(authPath, { agentDir: resolvedAgentDir, authPath });
+    }
+  };
   // The shared-main default store (undefined agentDir) must stay first so the
   // canonical location wins the per-path dedupe over agent-scoped aliases.
-  addCandidate(candidates, undefined);
-  addCandidate(candidates, resolveLegacyInheritedAuthAgentDir(cfg, env));
+  addCandidate(undefined);
+  addCandidate(resolveLegacyInheritedAuthAgentDir(cfg, env));
   const envAgentDir =
     readNonBlankString(env.OPENCLAW_AGENT_DIR) ?? readNonBlankString(env.PI_CODING_AGENT_DIR);
   if (envAgentDir) {
-    addCandidate(candidates, envAgentDir);
+    addCandidate(envAgentDir);
   }
   for (const agentId of listAgentIds(cfg)) {
-    addCandidate(candidates, resolveAgentDir(cfg, agentId, env));
+    addCandidate(resolveAgentDir(cfg, agentId, env));
   }
   for (const agentDir of listExistingAgentDirsFromState(env)) {
-    addCandidate(candidates, agentDir);
+    addCandidate(agentDir);
   }
   return [...candidates.values()];
 }

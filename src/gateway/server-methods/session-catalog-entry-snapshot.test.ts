@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
+} from "../../config/sessions/session-entry-provenance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
@@ -6,7 +10,7 @@ import {
   listSessionCatalogEntries,
   type SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import type { CurrentUserProfileDisplayResolver } from "../current-user-profile-display.js";
+import * as userProfiles from "../../state/user-profiles.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
@@ -15,7 +19,6 @@ type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
-  resolveCurrentUserProfileDisplay: vi.fn<CurrentUserProfileDisplayResolver>(),
   listSessionEntriesReadOnly: vi.fn<
     (scope?: { agentId?: string; clone?: boolean; projection?: "full" | "list" }) => Array<{
       sessionKey: string;
@@ -35,9 +38,6 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
-vi.mock("../current-user-profile-display.js", () => ({
-  resolveCurrentUserProfileDisplay: hoisted.resolveCurrentUserProfileDisplay,
-}));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 
@@ -78,19 +78,21 @@ function provider(id: string, sessionKey: string): SessionCatalogProvider {
 }
 
 describe("session catalog entry snapshots", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     hoisted.listSessionEntriesReadOnly.mockReset();
-    hoisted.resolveCurrentUserProfileDisplay.mockReset();
   });
 
   it("shares resolved and missing human profiles across hosts without retaining them across requests", () => {
     let label = "Before rename";
-    hoisted.resolveCurrentUserProfileDisplay.mockImplementation((id) =>
-      id === "person"
-        ? { kind: "resolved", profileId: id, label, avatarUrl: "/avatar", hasUploadedAvatar: true }
-        : { kind: "unresolved" },
-    );
+    const display = vi.spyOn(userProfiles, "getUserProfileDisplay").mockImplementation((id) => {
+      if (id !== "person") {
+        throw new Error("Missing fixture profile");
+      }
+      return { id: "current-person", displayName: label, avatarRevision: "1", hasAvatar: true };
+    });
     const hosts = ["alpha", "beta"].map((id) => ({
       hostId: `gateway:${id}`,
       label: id,
@@ -110,6 +112,7 @@ describe("session catalog entry snapshots", () => {
         host.sessions.map((session, index) => ({
           sessionKey: session.sessionKey,
           entry: {
+            createdVia: "operator",
             createdActor: { type: "human" as const, id: index === 0 ? "person" : "missing" },
           },
         })),
@@ -125,16 +128,22 @@ describe("session catalog entry snapshots", () => {
       );
     };
     const expectedActors = () => [
-      { type: "human", id: "person", label, avatarUrl: "/avatar" },
-      { type: "human", id: "missing" },
+      {
+        type: "human",
+        id: "person",
+        identity: { type: "profile", id: "current-person" },
+        label,
+        avatarUrl: "/api/users/current-person/avatar?v=1",
+      },
+      { type: "human", id: "missing", identity: { type: "profile", id: "missing" } },
     ];
 
     expect(project()).toEqual([expectedActors(), expectedActors()]);
-    expect(hoisted.resolveCurrentUserProfileDisplay).toHaveBeenCalledTimes(2);
+    expect(display).toHaveBeenCalledTimes(2);
 
     label = "After rename";
     expect(project()).toEqual([expectedActors(), expectedActors()]);
-    expect(hoisted.resolveCurrentUserProfileDisplay).toHaveBeenCalledTimes(4);
+    expect(display).toHaveBeenCalledTimes(4);
   });
 
   it("shares one flattened entry snapshot across catalogs and creator projection", async () => {
@@ -198,7 +207,11 @@ describe("session catalog entry snapshots", () => {
                   sessionKey: "agent:main:alpha-adopted",
                   canContinue: true,
                   canArchive: false,
-                  createdActor: { type: "agent", id: "worker-alpha" },
+                  createdActor: {
+                    type: "agent",
+                    id: "worker-alpha",
+                    identity: { type: "agent", id: "worker-alpha" },
+                  },
                 },
               ],
             },
@@ -222,7 +235,16 @@ describe("session catalog entry snapshots", () => {
                   sessionKey: "agent:main:zeta-adopted",
                   canContinue: true,
                   canArchive: false,
-                  createdActor: { type: "system", id: "scheduler" },
+                  createdActor: {
+                    type: "system",
+                    id: "scheduler",
+                    identity: {
+                      type: "legacy",
+                      actorType: "system",
+                      id: "scheduler",
+                      source: null,
+                    },
+                  },
                 },
               ],
             },
@@ -230,5 +252,60 @@ describe("session catalog entry snapshots", () => {
         },
       ],
     });
+  });
+
+  it("projects inherited profile creators from stored provenance, not provider metadata", () => {
+    const display = vi.spyOn(userProfiles, "getUserProfileDisplay").mockReturnValue({
+      id: "current",
+      displayName: "Current",
+      avatarRevision: "1",
+      hasAvatar: false,
+    });
+    const creation = buildSessionCreationStamp({
+      via: "spawn",
+      ...inheritSessionCreationPolicy(
+        { createdActor: { type: "human", id: "former" }, sandbox: "required" },
+        { type: "agent", id: "research" },
+      ),
+      now: 1,
+    });
+    const entries = [
+      { sessionKey: "agent:main:child", entry: { ...creation, updatedAt: 1 } },
+      {
+        sessionKey: "agent:main:channel",
+        entry: { ...creation, createdVia: "channel", updatedAt: 1 },
+      },
+    ];
+    hoisted.listSessionEntriesReadOnly.mockReturnValue(entries);
+    const snapshot = createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main" });
+    const projected = snapshot.projectHostCreatedActors({
+      hostId: "gateway:fixture",
+      label: "Fixture",
+      kind: "gateway",
+      connected: true,
+      sessions: entries.map(({ sessionKey }) => ({
+        sessionKey,
+        threadId: sessionKey,
+        status: "stored",
+        archived: false,
+        canContinue: true,
+        canArchive: false,
+        createdActor: { type: "human", id: "provider-spoof" },
+      })),
+    });
+    expect(projected.sessions.map((session) => session.createdActor)).toEqual([
+      {
+        type: "human",
+        id: "former",
+        identity: { type: "profile", id: "current" },
+        label: "Current",
+      },
+      {
+        type: "human",
+        id: "former",
+        identity: { type: "legacy", actorType: "human", source: null, id: "former" },
+      },
+    ]);
+    expect(display).toHaveBeenCalledExactlyOnceWith("former");
   });
 });

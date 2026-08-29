@@ -483,3 +483,34 @@ describe("hasMarkdownToConvert", () => {
     expect(hasMarkdownToConvert("Just plain text.")).toBe(false);
   });
 });
+
+describe("empty code fences", () => {
+  // LINE rejects the whole push when a Flex text is blank, so a fence with no
+  // code has to drop out rather than cost the reply it was part of.
+  it.each([
+    ["no language", "Here:\n\n```\n```\n\ndone"],
+    ["with a language", "Here:\n\n```js\n```\n\ndone"],
+    ["whitespace only", "Here:\n\n```\n   \n```\n\ndone"],
+  ])("renders no card for a fence with %s, keeping the surrounding text", (_label, markdown) => {
+    const processed = processLineMessage(markdown);
+
+    expect(processed.flexMessages).toEqual([]);
+    expect(processed.text).toContain("Here:");
+    expect(processed.text).toContain("done");
+  });
+
+  it("still renders a card for a fence that has code", () => {
+    const processed = processLineMessage("Here:\n\n```js\nconst a = 1;\n```\n\ndone");
+
+    expect(processed.flexMessages).toHaveLength(1);
+  });
+
+  it("keeps the surviving card when one fence of two is empty", () => {
+    const processed = processLineMessage("A\n\n```js\nx\n```\n\nB\n\n```\n```\n\nC");
+
+    expect(processed.flexMessages).toHaveLength(1);
+    expect(processed.text).toContain("A");
+    expect(processed.text).toContain("B");
+    expect(processed.text).toContain("C");
+  });
+});

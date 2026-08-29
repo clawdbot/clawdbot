@@ -112,7 +112,7 @@ type AttemptSpawnWorkspaceHoisted = {
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
   getHistoryLimitFromSessionKeyMock: Mock<
-    (sessionKey: string | undefined, config: unknown) => number | undefined
+    (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
@@ -225,7 +225,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     skippedCount: 0,
   }));
   const getHistoryLimitFromSessionKeyMock = vi.fn<
-    (sessionKey: string | undefined, config: unknown) => number | undefined
+    (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
   >(() => undefined);
   const limitHistoryTurnsMock = vi.fn<<T>(messages: T, limit: number | undefined) => T>(
     (messages) => messages,
@@ -297,19 +297,21 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
+const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: emptyPluginIndex,
+  registryIndex: emptyPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],
@@ -838,8 +840,13 @@ vi.mock("../compaction-safety-timeout.js", () => ({
 }));
 
 vi.mock("../history.js", () => ({
-  getHistoryLimitFromSessionKey: (sessionKey: string | undefined, config: unknown) =>
-    hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config),
+  // Forward the account id too: dropping it here would hide whether the prompt
+  // path actually scopes the limit to the routed account.
+  getHistoryLimitFromSessionKey: (
+    sessionKey: string | undefined,
+    config: unknown,
+    route?: unknown,
+  ) => hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config, route),
   limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
     hoisted.limitHistoryTurnsMock(messages, limit),
 }));

@@ -95,9 +95,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.list": {
           cases: [
-            { match: { view: "configured" }, response: { models: [] } },
             {
-              match: { view: "all", agentId: "main", refresh: true },
+              match: { view: "configured", agentId: "main", preparedOnly: true },
+              response: { models: [] },
+            },
+            {
+              match: { view: "configured", agentId: "main", refresh: true },
               response: {
                 models: [],
                 providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
@@ -185,7 +188,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         (await gateway.getRequests("models.list")).filter(
           (request) => (request.params as { view?: string } | undefined)?.view === "all",
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
       await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");

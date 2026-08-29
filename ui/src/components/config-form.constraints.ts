@@ -266,11 +266,29 @@ function objectRepairIssueCount(schema: JsonSchema, value: Record<string, unknow
   return issues;
 }
 
+export function isObjectPropertyNameValid(schema: JsonSchema, key: string): boolean {
+  return collectAllOfSchemas(schema).every(
+    ({ propertyNames }) =>
+      propertyNames === undefined ||
+      propertyNames === true ||
+      (propertyNames !== false && isSupportedConfigValueValid(propertyNames, key)),
+  );
+}
+
 export function canApplyObjectCandidate(
   schema: JsonSchema,
   current: Record<string, unknown>,
   candidate: Record<string, unknown>,
 ): boolean {
+  // Repairing an unrelated invalid value must not authorize a newly invalid
+  // key. Existing keys remain editable so operators can repair their values.
+  if (
+    Object.keys(candidate).some(
+      (key) => !Object.hasOwn(current, key) && !isObjectPropertyNameValid(schema, key),
+    )
+  ) {
+    return false;
+  }
   if (isSupportedConfigValueValid(schema, candidate)) {
     return true;
   }

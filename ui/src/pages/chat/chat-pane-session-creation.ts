@@ -283,6 +283,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
       attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
       draft: state.chatMessage,
+      ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
     });
     return true;
   };

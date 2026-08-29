@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completeEmbeddedAttemptResult, createMcpAttemptCarryover } from "./attempt-result.js";
+import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -227,7 +227,7 @@ describe("attempt result projection", () => {
   });
 
   it("carries the newest MCP presentation state across retry attempts", () => {
-    const carryover = createMcpAttemptCarryover();
+    const carryover = createAttemptCarryover();
     const first = {
       latestMcpAppChannelView: { viewId: "view-first" },
       latestMcpConnectAction: {

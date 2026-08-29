@@ -6,10 +6,8 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -186,36 +184,38 @@ function createVideoProviderSnapshot(params: {
             [params.id]: { referenceAudioInputs: params.referenceAudioInputs },
           },
   };
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: params.id,
+        manifestPath: plugin.manifestPath,
+        manifestHash: "test",
+        source: plugin.source,
+        rootDir: plugin.rootDir,
+        origin: params.origin,
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
   return {
     policyHash,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: params.id,
-          manifestPath: plugin.manifestPath,
-          manifestHash: "test",
-          source: plugin.source,
-          rootDir: plugin.rootDir,
-          origin: params.origin,
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-        },
-      ],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
     plugins: [plugin],

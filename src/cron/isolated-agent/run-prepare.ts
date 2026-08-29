@@ -97,6 +97,7 @@ export type PreparedCronRunContext = {
   agentDir: string;
   agentSessionKey: string;
   sourceSessionKey?: string;
+  sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
   runSessionId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
@@ -226,6 +227,10 @@ export async function prepareCronRunContext(params: {
     forceNew: usesDetachedRunSession,
     hookExternalContentSource,
   });
+  const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
+  const sourceSessionGeneration = sourceEntry
+    ? { sessionId: sourceEntry.sessionId, lifecycleRevision: sourceEntry.lifecycleRevision }
+    : undefined;
   const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
   if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
     throw new Error(
@@ -484,16 +489,12 @@ export async function prepareCronRunContext(params: {
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     const originalMessage = resolveCronAgentTurnMessage(input);
-    const sourceSessionEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
     const currentConversationContext =
-      input.job.sessionTarget === "current" &&
-      agentPayload &&
-      sourceSessionKey &&
-      sourceSessionEntry
+      input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
         ? await buildCurrentConversationContextBlock({
             agentId,
-            sourceSessionEntry,
+            sourceSessionEntry: sourceEntry,
             sourceSessionKey,
             storePath: cronSession.storePath,
           })
@@ -623,6 +624,8 @@ export async function prepareCronRunContext(params: {
             owner: input.job.owner,
           }),
           scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
+          toolsAllowExecTarget: input.job.toolsAllowExecTarget,
+          toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
@@ -642,6 +645,7 @@ export async function prepareCronRunContext(params: {
         agentDir,
         agentSessionKey,
         sourceSessionKey,
+        sourceSessionGeneration,
         runSessionId,
         currentRunSessionId,
         runSessionKey,

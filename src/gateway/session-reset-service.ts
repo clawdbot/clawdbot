@@ -2,9 +2,13 @@
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
@@ -99,6 +103,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
@@ -949,6 +954,8 @@ export async function performGatewaySessionReset(params: {
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Existing-row changes stay admin-gated across reset preparation and commit. */
+  fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -992,6 +999,7 @@ export async function performGatewaySessionReset(params: {
       agentId: string;
       storePath: string;
       incognitoDeleted: true;
+      deletedSessionId?: string;
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
@@ -1063,6 +1071,19 @@ export async function performGatewaySessionReset(params: {
   });
   if (initialOwnershipError) {
     return { ok: false, error: initialOwnershipError };
+  }
+  const resolveFastModeSelectionError = (entry: SessionEntry | undefined) => {
+    const selection = params.fastModeSelection;
+    return entry &&
+      selection &&
+      selection.value !== entry.fastMode &&
+      !selection.allowExistingChange
+      ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
+      : undefined;
+  };
+  const initialFastModeSelectionError = resolveFastModeSelectionError(initialResetEntry);
+  if (initialFastModeSelectionError) {
+    return { ok: false, error: initialFastModeSelectionError };
   }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
     resetTarget.target.canonicalKey,
@@ -1149,6 +1170,10 @@ export async function performGatewaySessionReset(params: {
           return;
         }
       }
+      resetPreparationError = resolveFastModeSelectionError(currentEntry);
+      if (resetPreparationError) {
+        return;
+      }
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
       resetPreparationError = resolvePluginSessionOwnershipError({
@@ -1181,7 +1206,9 @@ export async function performGatewaySessionReset(params: {
         resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
         return;
       }
+      // Reset drains pending preparation before replacing the session.
       const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry, {
+        allowPendingWorkspace: true,
         allowRestartTombstoneReplacement:
           currentEntry !== undefined &&
           currentEntry.archivedAt === undefined &&
@@ -1256,6 +1283,12 @@ export async function performGatewaySessionReset(params: {
           ),
         };
       }
+      // Admitted directives can finish persisting while reset drains them.
+      // Recheck their final selection before retiring placement or running cleanup.
+      const currentFastModeSelectionError = resolveFastModeSelectionError(entry);
+      if (currentFastModeSelectionError) {
+        return { ok: false, error: currentFastModeSelectionError };
+      }
       const currentOwnershipError = resolvePluginSessionOwnershipError({
         action: "reset",
         entry,
@@ -1278,6 +1311,7 @@ export async function performGatewaySessionReset(params: {
         };
       }
       const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+        allowPendingWorkspace: true,
         allowRestartTombstoneReplacement:
           entry !== undefined &&
           entry.archivedAt === undefined &&
@@ -1475,6 +1509,7 @@ export async function performGatewaySessionReset(params: {
           agentId: target.agentId,
           storePath,
           incognitoDeleted: true,
+          deletedSessionId: deleted.deletedSessionId,
         };
       }
 
@@ -1491,6 +1526,7 @@ export async function performGatewaySessionReset(params: {
       let resetBoundaryAppended = false;
       let resetSkipped = false;
       let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
+      let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
@@ -1521,6 +1557,10 @@ export async function performGatewaySessionReset(params: {
             }
           }
           createdNewEntry = currentEntry === undefined;
+          fastModeSelectionError = resolveFastModeSelectionError(currentEntry);
+          if (fastModeSelectionError) {
+            throw new Error(fastModeSelectionError.message);
+          }
           if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
             if (currentEntry) {
               resetSkipped = true;
@@ -1575,7 +1615,7 @@ export async function performGatewaySessionReset(params: {
             abortedLastRun: false,
             contextWindow: currentEntry?.contextWindow,
             thinkingLevel: currentEntry?.thinkingLevel,
-            fastMode: currentEntry?.fastMode,
+            fastMode: params.fastModeSelection?.value ?? currentEntry?.fastMode,
             toolOverrides: currentEntry?.toolOverrides,
             verboseLevel: currentEntry?.verboseLevel,
             traceLevel: currentEntry?.traceLevel,
@@ -1752,6 +1792,9 @@ export async function performGatewaySessionReset(params: {
       try {
         lifecycle = await lifecyclePromise;
       } catch (error) {
+        if (fastModeSelectionError) {
+          return { ok: false, error: fastModeSelectionError };
+        }
         if (creationAuthorizationError) {
           return { ok: false, error: creationAuthorizationError };
         }

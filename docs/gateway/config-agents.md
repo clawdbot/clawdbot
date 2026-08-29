@@ -427,6 +427,7 @@ date context. Falls back to the host timezone.
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `anthropicServerCompaction`, `anthropicCompactThreshold`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
+  - Add `codeMode: true` or `codeMode: false` to an exact `provider/model` entry to override OpenClaw Code Mode activation. Omit it to inherit the global `tools.codeMode` default, including `"auto"`; agent-specific activation settings take precedence. This changes neither runtime selection nor Codex native Code Mode. The Control UI model editor offers **Default**, **On**, and **Off** alongside runtime settings. See [per-model Code Mode](/tools/code-mode#override-one-model) for precedence and an example.
   - Safe metadata edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing entries unless you pass `--replace`.
 - `modelPolicy.allow`: explicit override allowlist. Accepts aliases, exact `provider/model` refs, and trailing prefix wildcards such as `openai/*` or `clawrouter/anthropic/*`. Omit it or use `[]` to allow any model. `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent; an explicit empty list opts that agent into allow-any.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
@@ -774,7 +775,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | daytona | openshell | podman | ssh
+        backend: "docker", // docker (default) | openshell | podman | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -868,7 +869,6 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 **Backend:**
 
-- `daytona`: Daytona-managed cloud runtime
 - `docker`: local Docker runtime (default)
 - `openshell`: OpenShell-managed local or remote runtime
 - `podman`: local Podman runtime using Docker-compatible settings
@@ -876,7 +876,6 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 Plugin-managed backends keep runtime-specific settings under their plugin entries:
 
-- Daytona: `plugins.entries.daytona.config`; see [Daytona](/gateway/daytona)
 - OpenShell: `plugins.entries.openshell.config`; see [OpenShell](/gateway/openshell)
 
 **SSH backend config:**
@@ -1083,7 +1082,7 @@ for provider examples and precedence.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.
-- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
+- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions. `models["provider/model"].codeMode` accepts `true` or `false` and takes precedence over the agent's `tools.codeMode` activation, the shared model override, and the global default. Omit it to inherit; it does not affect Codex native Code Mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - Local workspace-relative `identity.avatar` image files are limited to 2 MB. `http(s)` URLs and `data:` URIs are not checked against the local file-size limit.

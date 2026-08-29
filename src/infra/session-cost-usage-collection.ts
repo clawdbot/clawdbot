@@ -343,7 +343,11 @@ export function resolveExistingUsageSessionFile(params: {
   );
   const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const matchingEntryMarker =
-    entryMarker && (!sessionId || entryMarker.sessionId === sessionId) ? entryMarker : undefined;
+    entryMarker &&
+    entryMarker.agentId === params.agentId &&
+    (!sessionId || entryMarker.sessionId === sessionId)
+      ? entryMarker
+      : undefined;
   const matchingExplicitMarker =
     explicitMarker &&
     explicitMarker.agentId === params.agentId &&

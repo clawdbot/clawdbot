@@ -10,7 +10,7 @@
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -19,7 +19,8 @@
 }
 
 .plugins-hub-header + .settings-workspace {
-  margin-top: var(--space-2);
+  /* The settings page already contributes the lower half of the tab rhythm. */
+  margin-top: 0;
 }
 
 @media (max-width: 400px) {

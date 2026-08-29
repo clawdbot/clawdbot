@@ -154,6 +154,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async runSync(params?: MemorySyncParams) {
+    try {
+      await this.runSyncPass(params);
+    } finally {
+      // Run after every sync path and after any shadow reindex scope has ended,
+      // so the cap is enforced once against the published live database.
+      this.pruneEmbeddingCacheIfNeeded?.();
+    }
+  }
+
+  private async runSyncPass(params?: MemorySyncParams) {
     // Guard: if an embedding provider is configured but currently unavailable,
     // abort sync to prevent silently degrading an existing semantic vector index
     // to fts-only and wiping existing semantic vectors.
@@ -568,10 +578,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           if (!shouldSyncMemory) {
             this.clearMemoryRetryState();
           }
-          const vectorIndexComplete = this.vector.available === true;
           const syncProvider = this.syncProviderGeneration
             ? this.syncProviderGeneration.provider
             : this.provider;
+          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
           const nextMeta: MemoryIndexMeta = {
             model: syncProvider?.model ?? "fts-only",
             provider: syncProvider?.id ?? "none",
@@ -599,7 +609,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
 
           this.writeMeta(nextMeta);
-          this.pruneEmbeddingCacheIfNeeded?.();
           return { nextMeta, vectorIndexComplete };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.

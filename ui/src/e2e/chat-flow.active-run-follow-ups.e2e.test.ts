@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -272,10 +274,20 @@ suite.define(() => {
       await streamingRow.waitFor();
       expect(await streamingRow.getAttribute("data-virtual-row-key")).not.toBe(workingRowKey);
       const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
-      const [steerBounds, streamingBounds] = await Promise.all([
-        steerBubble.boundingBox(),
-        streamingBubble.boundingBox(),
-      ]);
+      const steerElement = await steerBubble.elementHandle();
+      // Scrolling between separate protocol reads can make adjacent rows appear to overlap.
+      const [steerBounds, streamingBounds] = await streamingBubble.evaluate(
+        (streaming, steer) =>
+          [steer, streaming].map((element) => {
+            if (!element?.isConnected || element.getClientRects().length === 0) {
+              return null;
+            }
+            const { y, height } = element.getBoundingClientRect();
+            return { y, height };
+          }),
+        steerElement,
+      );
+      await steerElement?.dispose();
       expect(steerBounds).not.toBeNull();
       expect(streamingBounds).not.toBeNull();
       expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
@@ -357,6 +369,249 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-work-group", { hasText: "used process" }).count())
         .toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it.each(["before", "after"] as const)(
+    "keeps cumulative stream text ordered when history resolves %s the live steer event",
+    async (historyOrder) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const runId = "run-steer-order";
+      const steerRunId = "steer-order";
+      const startedAt = Date.now() - 3_000;
+      const initialText = "Explain the long running operation.";
+      const beforeText = "This explanation streamed before the steering message.";
+      const steerText = "Now focus on the remaining work.";
+      const afterText = "This continuation streamed after the steering message.";
+      const userMessage = {
+        role: "user",
+        content: initialText,
+        timestamp: startedAt - 1_000,
+        __openclaw: { id: "order-user", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const steerMessage = {
+        role: "user",
+        content: steerText,
+        timestamp: startedAt + 1_000,
+        __openclaw: {
+          id: "order-steer",
+          idempotencyKey: `${steerRunId}:user`,
+          seq: 2,
+          steerTargetRunId: runId,
+        },
+      };
+      const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "main" };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [userMessage],
+        inFlightRun: { runId, startedAt, text: "" },
+        sessionInfo,
+      });
+      const emitSteer = () =>
+        gateway.emitGatewayEvent("session.message", {
+          ...sessionInfo,
+          clientRunId: steerRunId,
+          message: steerMessage,
+          messageId: "order-steer",
+          messageSeq: 2,
+          sessionKey: "main",
+        });
+      const emitDelta = (text: string) =>
+        gateway.emitGatewayEvent("chat", {
+          message: { role: "assistant", content: [{ type: "text", text }] },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const transcript = page.locator(".chat-thread-inner");
+        await transcript.getByText(initialText, { exact: true }).waitFor();
+        await emitDelta(beforeText);
+        await transcript.getByText(beforeText, { exact: true }).waitFor();
+        if (historyOrder === "after") {
+          await emitSteer();
+          await transcript.getByText(steerText, { exact: true }).waitFor();
+        }
+
+        await gateway.setMethodResponse("chat.history", {
+          messages: [userMessage, steerMessage],
+          inFlightRun: { runId, startedAt, text: beforeText },
+          sessionInfo,
+        });
+        const startupsBefore = (await gateway.getRequests("chat.startup")).length;
+        await gateway.deferNext("chat.startup");
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        await gateway.setOnline(true);
+        await gateway.waitForRequest("chat.startup", { after: startupsBefore });
+        await gateway.resolveDeferred("chat.startup");
+        await transcript.getByText(steerText, { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        if (historyOrder === "before") {
+          await emitSteer();
+        }
+        await emitDelta(`${beforeText}\n\n${afterText}`);
+
+        try {
+          await expect
+            .poll(() =>
+              transcript
+                .locator(".chat-bubble .chat-text")
+                .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim())),
+            )
+            .toEqual([initialText, beforeText, steerText, afterText]);
+        } finally {
+          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          if (artifactDir) {
+            await mkdir(artifactDir, { recursive: true });
+            await page.screenshot({
+              fullPage: true,
+              path: path.join(artifactDir, `steer-history-${historyOrder}-live-event.png`),
+            });
+          }
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it("replaces a retained cumulative steer prefix with split history around keyed commentary", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runId = "run-steer-split";
+    const steerRunId = "steer-split";
+    const startedAt = Date.now() - 5_000;
+    const initialText = "Explain the long running operation.";
+    const beforeText = "A B";
+    const commentaryText = "Checking the intermediate result.";
+    const steerText = "Now focus on the remaining work.";
+    const afterText = "The remaining work continues after steering.";
+    const userMessage = {
+      role: "user",
+      content: initialText,
+      timestamp: startedAt - 1_000,
+      __openclaw: { id: "split-user", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const steerMessage = {
+      role: "user",
+      content: steerText,
+      timestamp: startedAt + 3_000,
+      __openclaw: {
+        id: "split-steer",
+        idempotencyKey: `${steerRunId}:user`,
+        seq: 5,
+        steerTargetRunId: runId,
+      },
+    };
+    const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "main" };
+    const gateway = await installMockGateway(page, {
+      historyMessages: [userMessage],
+      inFlightRun: { runId, startedAt, text: "" },
+      sessionInfo,
+    });
+    const emitDelta = (text: string) =>
+      gateway.emitGatewayEvent("chat", {
+        message: { role: "assistant", content: [{ type: "text", text }] },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+    const capture = async (name: string) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, `steer-split-commentary-${name}.png`),
+        });
+      }
+    };
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const transcript = page.locator(".chat-thread-inner");
+      const bubbleTexts = () =>
+        transcript
+          .locator(".chat-bubble .chat-text")
+          .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim()));
+      await transcript.getByText(initialText, { exact: true }).waitFor();
+      await emitDelta(beforeText);
+      await transcript.getByText(beforeText, { exact: true }).waitFor();
+      // The live steer closes one combined segment before split history replaces it.
+      await gateway.emitGatewayEvent("session.message", {
+        ...sessionInfo,
+        clientRunId: steerRunId,
+        message: steerMessage,
+        messageId: "split-steer",
+        messageSeq: 5,
+        sessionKey: "main",
+      });
+      await expect.poll(bubbleTexts).toEqual([initialText, beforeText, steerText]);
+      await capture("retained-prefix");
+
+      await gateway.setMethodResponse("chat.history", {
+        messages: [
+          userMessage,
+          {
+            role: "assistant",
+            content: "A",
+            timestamp: startedAt,
+            __openclaw: { id: "split-a", idempotencyKey: runId, seq: 2 },
+          },
+          {
+            role: "assistant",
+            content: commentaryText,
+            timestamp: startedAt + 1_000,
+            __openclaw: { id: "split-commentary", idempotencyKey: runId, seq: 3 },
+            openclawStreamFallback: {
+              itemId: "split-commentary-item",
+              source: "segment",
+              replacementText: commentaryText,
+              runId,
+            },
+          },
+          {
+            role: "assistant",
+            content: "B",
+            timestamp: startedAt + 2_000,
+            __openclaw: { id: "split-b", idempotencyKey: runId, seq: 4 },
+          },
+          steerMessage,
+        ],
+        inFlightRun: { runId, startedAt, text: beforeText },
+        sessionInfo,
+      });
+      const startupsBefore = (await gateway.getRequests("chat.startup")).length;
+      await gateway.deferNext("chat.startup");
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: startupsBefore });
+      await gateway.resolveDeferred("chat.startup");
+      await transcript.getByText(commentaryText, { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await emitDelta(`${beforeText} ${afterText}`);
+
+      try {
+        await expect
+          .poll(bubbleTexts)
+          .toEqual([initialText, "A", commentaryText, "B", steerText, afterText]);
+      } finally {
+        await capture("recovered-continuation");
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

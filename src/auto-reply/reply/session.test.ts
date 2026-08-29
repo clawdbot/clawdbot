@@ -41,6 +41,7 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
@@ -1852,19 +1853,9 @@ describe("initSessionState RawBody", () => {
               actorId: "profile-ada",
             }),
           );
-          await vi.waitFor(() =>
-            expect(
-              listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
-            ).toEqual([
-              {
-                actor: { type: "human", id: "profile-ada" },
-                contributionCount: 1,
-                firstPromptedAt: expect.any(Number),
-                lastPromptedAt: expect.any(Number),
-                source: "profile",
-              },
-            ]),
-          );
+          expect(
+            listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
+          ).toBeUndefined();
           expect(
             loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })?.sandbox,
           ).toBe(sandbox);
@@ -1887,6 +1878,9 @@ describe("initSessionState RawBody", () => {
             createdAt: initialized.sessionEntry.createdAt,
           });
           expect(persisted?.sandbox).toBe(sandbox);
+          expect(
+            listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
+          ).toBeUndefined();
           return initialized;
         },
       );
@@ -1899,10 +1893,19 @@ describe("initSessionState RawBody", () => {
     },
   );
 
-  it("keeps channel and agent participant sources distinct", async () => {
+  it("records accepted inputs once and keeps creation hints separate from participation", async () => {
     const root = await makeCaseDir("openclaw-session-participant-admission-");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const profileContext = {
+      RawBody: "authenticated input",
+      ChatType: "direct" as const,
+      SessionKey: "agent:main:profile-participant",
+    };
+    prepareSessionParticipantInput(profileContext, { type: "profile", id: "current-profile" }, 42);
+    await initSessionState({ ctx: profileContext, cfg });
+    await initSessionState({ ctx: { ...profileContext }, cfg });
 
     await initSessionState({
       ctx: {
@@ -1952,48 +1955,111 @@ describe("initSessionState RawBody", () => {
 
     await vi.waitFor(() => {
       const participants = listSessionParticipantsReadOnly({ agentId: "main", storePath });
+      expect(participants.get("agent:main:profile-participant")).toEqual([
+        {
+          identity: { type: "profile", id: "current-profile" },
+          contributionCount: 1,
+          firstPromptedAt: 42,
+          lastPromptedAt: 42,
+        },
+      ]);
       expect(participants.get("agent:main:channel-participant")).toEqual([
         {
-          actor: { type: "human", id: "channel-sender" },
+          identity: {
+            type: "observation",
+            id: "channel-sender",
+            pluginId: null,
+            accountId: null,
+            senderKind: "unknown",
+          },
           contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
-          source: "channel",
         },
       ]);
       expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
       expect(participants.get("agent:main:channel-created-participant")).toEqual([
         {
-          actor: { type: "human", id: "channel-created-sender" },
+          identity: {
+            type: "observation",
+            id: "channel-created-sender",
+            pluginId: null,
+            accountId: null,
+            senderKind: "unknown",
+          },
           contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
-          source: "channel",
         },
       ]);
       expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
-      expect(participants.get("agent:main:delegated-agent-participant")).toEqual([
-        {
-          actor: { type: "agent", id: "research" },
-          contributionCount: 1,
-          firstPromptedAt: expect.any(Number),
-          lastPromptedAt: expect.any(Number),
-          source: "agent",
-        },
-      ]);
+      expect(participants.get("agent:main:delegated-agent-participant")).toBeUndefined();
     });
   });
 
-  it("preserves session lineage across an implicit daily stale rollover (#90119)", async () => {
+  it.each([
+    {
+      name: "ordinary top-level session",
+      sessionKey: "agent:main:main",
+      spawnedBy: "agent:main:subagent:stale-parent",
+      createdVia: "run" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: false,
+    },
+    {
+      name: "ordinary ACP session with a stale role",
+      sessionKey: "agent:main:acp:ordinary-stale-role",
+      spawnedBy: "agent:main:main",
+      createdVia: "run" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: undefined,
+      preservesSpawnLineage: true,
+    },
+    {
+      name: "ordinary ACP session with a stale control scope",
+      sessionKey: "agent:main:acp:ordinary-stale-control-scope",
+      spawnedBy: "agent:main:main",
+      createdVia: "run" as const,
+      subagentRole: undefined,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: true,
+    },
+    {
+      name: "real subagent",
+      sessionKey: "agent:main:subagent:daily-rollover-lineage",
+      spawnedBy: "agent:main:main",
+      createdVia: "spawn" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: true,
+    },
+    {
+      name: "real ACP child",
+      sessionKey: "agent:main:acp:daily-rollover-lineage",
+      spawnedBy: "agent:main:subagent:parent",
+      createdVia: "spawn" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
+      preservesSpawnLineage: true,
+    },
+  ])("keeps spawned-run lineage only for a $name rollover", async (testCase) => {
     const root = await makeCaseDir("openclaw-daily-rollover-lineage-");
     const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:subagent:daily-rollover-lineage";
+    const sessionKey = testCase.sessionKey;
     const existingSessionId = "session-before-daily-reset-lineage";
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-    const lineage = {
-      spawnedBy: "agent:main:main",
+    const spawnLineage = {
+      spawnedBy: testCase.spawnedBy,
       spawnedWorkspaceDir: "/tmp/child-workspace",
       spawnedCwd: "/tmp/task-repo",
+      spawnDepth: 1,
+      ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
+      ...(testCase.subagentControlScope
+        ? { subagentControlScope: testCase.subagentControlScope }
+        : {}),
+    };
+    const threadProvenance = {
       parentSessionKey: "agent:main:main",
       parentSessionId: "parent-session",
       forkedFromParent: true,
@@ -2001,13 +2067,10 @@ describe("initSessionState RawBody", () => {
         sessionKey: "agent:main:root",
         sessionId: "root-transcript-generation",
       },
-      createdVia: "spawn",
+      createdVia: testCase.createdVia,
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: staleStartedAt - 1_000,
       sandbox: "required",
-      spawnDepth: 1,
-      subagentRole: "leaf",
-      subagentControlScope: "none",
     } as const;
 
     await writeSessionStoreFast(storePath, {
@@ -2016,7 +2079,8 @@ describe("initSessionState RawBody", () => {
         updatedAt: staleStartedAt,
         sessionStartedAt: staleStartedAt,
         lastInteractionAt: staleStartedAt,
-        ...lineage,
+        ...threadProvenance,
+        ...spawnLineage,
       },
     });
 
@@ -2033,9 +2097,15 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.previousSessionId).toBeUndefined();
-    expectEntryFields(result.sessionEntry, lineage);
+    expectEntryFields(result.sessionEntry, threadProvenance);
+    if (testCase.preservesSpawnLineage) {
+      expectEntryFields(result.sessionEntry, spawnLineage);
+    } else {
+      for (const field of Object.keys(spawnLineage)) {
+        expect(result.sessionEntry).not.toHaveProperty(field);
+      }
+    }
   });
 
   it.each([
@@ -2571,6 +2641,7 @@ describe("initSessionState RawBody", () => {
       cfg: { session: { store: storePath } } as OpenClawConfig,
       expectedExistingSessionId: sourceSessionId,
       pinExpectedExistingSession: true,
+      newlyCreatedSessionId: sourceSessionId,
     });
 
     expect(result.sessionKey).toBe(boundSessionKey);

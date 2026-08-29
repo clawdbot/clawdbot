@@ -15,7 +15,10 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
-import { hasAssistantVisibleReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import {
+  hasAssistantVisibleReply,
+  resolveManagedStreamMediaUrls,
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   buildAssistantStreamData,
   emitAssistantMessageStart,
@@ -248,6 +251,7 @@ export function handleMessageEnd(
   const parsedText = trimmedText ? parseReplyDirectives(trimmedText) : null;
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
@@ -306,6 +310,7 @@ export function handleMessageEnd(
       delta: finalStreamDelta,
       replace: shouldReplaceFinalStream,
       mediaUrls,
+      managedMediaUrls,
       phase: assistantPhase,
     });
     ctx.emitAssistantStreamData(data);

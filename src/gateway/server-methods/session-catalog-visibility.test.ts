@@ -352,7 +352,16 @@ describe("session catalog caller visibility", () => {
                 sessions: [
                   expect.objectContaining({
                     threadId: "owned-thread",
-                    createdActor: { type: "human", id: "profile-owner" },
+                    createdActor: {
+                      type: "human",
+                      id: "profile-owner",
+                      identity: {
+                        type: "legacy",
+                        actorType: "human",
+                        id: "profile-owner",
+                        source: null,
+                      },
+                    },
                   }),
                 ],
               }),

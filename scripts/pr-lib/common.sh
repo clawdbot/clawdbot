@@ -328,6 +328,20 @@ is_repo_pr_worktree_dir() {
   return 1
 }
 
+require_worktree_cleanup_evidence() (
+  local path="$1" pr
+  [ -e "$path/.local/merge-output.log" ] || [ -L "$path/.local/merge-output.log" ] || return 0
+  # Keep loader state separate from an uninterrupted merge's live outcome owner.
+  # Even an empty capture can be the only evidence of an earlier dispatch.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
+  if pr=$(pr_number_from_worktree_dir "$path") &&
+    merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
+    return 0
+  fi
+  echo "Preserving $path: .local/merge-output.log has no valid retained merge outcome. Keep the worktree, metadata, and local branches; reconcile the earlier request manually before cleanup." >&2
+  return 1
+)
+
 remove_worktree_if_present() {
   local path="$1"
   local registered_path=""
@@ -353,6 +367,8 @@ remove_worktree_if_present() {
     echo "Warning: refusing to remove non-canonical PR-worktree path $path"
     return 0
   fi
+
+  require_worktree_cleanup_evidence "$path" || return 1
 
   if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
     local remove_error
@@ -419,4 +435,17 @@ delete_local_branch_if_safe() {
 
   echo "Warning: failed to delete local branch $branch"
   return 0
+}
+
+cleanup_pr_worktree() {
+  local path="$1" pr branch complete=true
+  pr=$(pr_number_from_worktree_dir "$path") || return 1
+  remove_worktree_if_present "$path" || return 1
+  # Refusal or incomplete removal preserves the branches with the worktree.
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+  for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
+    delete_local_branch_if_safe "$branch" || return 1
+    if git show-ref --verify --quiet "refs/heads/$branch"; then complete=false; fi
+  done
+  [ "$complete" = true ]
 }

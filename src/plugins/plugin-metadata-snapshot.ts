@@ -4,6 +4,7 @@ import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
@@ -16,7 +17,18 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  type PluginManifestRecord,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import {
@@ -47,6 +59,7 @@ const PLUGIN_METADATA_ENV_KEYS = [
   "USERPROFILE",
   "XDG_CONFIG_HOME",
 ] as const;
+const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
 export type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
@@ -126,23 +139,14 @@ function indexesMatch(
 export function restorePluginMetadataSnapshot(
   snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
 ): PluginMetadataSnapshot {
-  return freezeSnapshotValue({
+  const restored = freezeSnapshotValue({
     ...snapshot,
     normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, {
       manifestRegistry: snapshot.manifestRegistry,
     }),
   });
-}
-
-function resolvePluginMetadataSnapshotPluginIds(params: {
-  index: InstalledPluginIndex;
-  params: LoadPluginMetadataSnapshotParams;
-}): string[] | undefined {
-  const direct = normalizePluginIdScope(params.params.pluginIds);
-  if (direct !== undefined) {
-    return direct;
-  }
-  return normalizePluginIdScope(params.params.pluginIdScope?.resolve({ index: params.index }));
+  bindPluginMetadataSnapshotCache(restored);
+  return restored;
 }
 
 export function isPluginMetadataSnapshotCompatible(params: {
@@ -158,6 +162,9 @@ export function isPluginMetadataSnapshotCompatible(params: {
   index?: InstalledPluginIndex;
 }): boolean {
   const env = params.env ?? process.env;
+  if (isCurrentPluginMetadataSnapshotRuntimeGeneration(params.snapshot)) {
+    return true;
+  }
   const requestedPluginIds = normalizePluginIdScope(params.pluginIds);
   const snapshotPluginIds = normalizePluginIdScope(params.snapshot.pluginIds);
   const scopeMatches =
@@ -285,7 +292,7 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
   const plugins = manifestRegistry.plugins;
-  return {
+  const rebased = {
     ...snapshot,
     manifestRegistry,
     plugins,
@@ -299,11 +306,109 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
       ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
       : {}),
   };
+  // Rebuilt views retain the original generation even when consumed in another scope.
+  bindPluginMetadataSnapshotCache(rebased, getPluginMetadataSnapshotCache(snapshot));
+  return rebased;
+}
+
+export function projectPluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+  pluginIds: readonly string[] | undefined,
+): PluginMetadataSnapshot {
+  const selectedIds = normalizePluginIdScope(pluginIds);
+  if (selectedIds === undefined) {
+    return snapshot;
+  }
+  const key = serializePluginIdScope(selectedIds);
+  if (key === serializePluginIdScope(snapshot.pluginIds)) {
+    return snapshot;
+  }
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  let selections = cache.metadata.projections.get(snapshot);
+  if (!selections) {
+    selections = new Map();
+    cache.metadata.projections.set(snapshot, selections);
+  }
+  const cached = selections.get(key);
+  if (cached) {
+    return cached;
+  }
+  const selected = new Set(selectedIds);
+  const projected = freezeSnapshotValue({
+    ...rebasePluginMetadataSnapshotManifestRegistry(snapshot, {
+      plugins: snapshot.plugins.filter((plugin) => selected.has(plugin.id)),
+      diagnostics: snapshot.manifestRegistry.diagnostics,
+    }),
+    pluginIds: selectedIds,
+  });
+  bindPluginMetadataSnapshotCache(projected, cache);
+  cache.metadata.projectionSources.set(projected, snapshot);
+  selections.set(key, projected);
+  // Request-specific selections may be unbounded; evicting a view never discards package facts.
+  pruneMapToMaxSize(selections, MAX_PLUGIN_METADATA_PROJECTIONS);
+  return projected;
+}
+
+/** Uses semantic inputs only: checking freshness here would defeat first-access reuse. */
+export function resolvePluginMetadataSnapshotCacheKey(
+  params: LoadPluginMetadataSnapshotParams,
+): string {
+  return hashJson({
+    env: resolvePluginMetadataEnvFingerprint(params.env ?? process.env),
+    policy: resolveInstalledPluginIndexPolicyHash(params.config),
+    loadPaths: params.config?.plugins?.load?.paths,
+    workspaceDir: params.workspaceDir,
+    stateDir: params.stateDir,
+    index: params.index
+      ? resolveInstalledManifestRegistryIndexFingerprint(params.index)
+      : undefined,
+    preferPersisted: params.preferPersisted !== false,
+  });
 }
 
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
+  if (params.allowCurrent === false && getPluginCache().kind !== "operation") {
+    return withPluginCache(createPluginCache(), () => loadPluginMetadataSnapshot(params));
+  }
+  if (
+    params.allowCurrent !== false &&
+    params.stateDir === undefined &&
+    params.preferPersisted !== false
+  ) {
+    const current = getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
+    });
+    if (
+      current &&
+      (isCurrentPluginMetadataSnapshotRuntimeGeneration(current) ||
+        isPluginMetadataSnapshotCompatible({
+          snapshot: current,
+          config: params.config,
+          env: params.env,
+          workspaceDir: params.workspaceDir,
+          index: params.index,
+        }))
+    ) {
+      return projectPluginMetadataSnapshot(
+        current,
+        params.pluginIds ?? params.pluginIdScope?.resolve({ index: current.index }),
+      );
+    }
+  }
+  const cache = getPluginCache();
+  const key = resolvePluginMetadataSnapshotCacheKey(params);
+  const cached = cache.metadata.snapshots.get(key);
+  if (cached) {
+    return projectPluginMetadataSnapshot(
+      cached,
+      params.pluginIds ?? params.pluginIdScope?.resolve({ index: cached.index }),
+    );
+  }
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   const snapshot = measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.scan",
@@ -318,7 +423,7 @@ export function loadPluginMetadataSnapshot(
       },
     },
   );
-  return measureDiagnosticsTimelineSpanSync(
+  const frozen = measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.freeze",
     () => restorePluginMetadataSnapshot(snapshot),
     {
@@ -331,6 +436,11 @@ export function loadPluginMetadataSnapshot(
       },
     },
   );
+  cache.metadata.snapshots.set(key, frozen);
+  return projectPluginMetadataSnapshot(
+    frozen,
+    params.pluginIds ?? params.pluginIdScope?.resolve({ index: frozen.index }),
+  );
 }
 
 /** Promotes a planning-scoped graph to the complete process-lifecycle metadata snapshot. */
@@ -340,23 +450,62 @@ export function completePluginMetadataSnapshot(params: {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }): PluginMetadataSnapshot | undefined {
-  if (!params.snapshot || params.snapshot.pluginIds === undefined) {
+  if (
+    !params.snapshot ||
+    (params.snapshot.pluginIds === undefined && params.snapshot.bundledManifestRegistry)
+  ) {
     return params.snapshot;
   }
+  const snapshot = params.snapshot;
+  const cache = getPluginMetadataSnapshotCache(snapshot);
+  const cached = cache.metadata.completions.get(snapshot);
+  if (cached) {
+    return cached;
+  }
+  const source = cache.metadata.projectionSources.get(snapshot);
+  if (source) {
+    const completed = completePluginMetadataSnapshot({ ...params, snapshot: source });
+    if (completed) {
+      cache.metadata.completions.set(snapshot, completed);
+    }
+    return completed;
+  }
+  return withPluginCache(cache, () => {
+    const completed = completePluginMetadataSnapshotImpl({ ...params, snapshot });
+    cache.metadata.completions.set(snapshot, completed);
+    return completed;
+  });
+}
+
+function completePluginMetadataSnapshotImpl(params: {
+  snapshot: PluginMetadataSnapshot;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot {
   const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
   const manifestStartedAt = performance.now();
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index: params.snapshot.index,
-    config: params.config,
-    env: params.env ?? process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
-    includeDisabled: true,
-  });
+  const manifestRegistry =
+    params.snapshot.pluginIds === undefined
+      ? params.snapshot.manifestRegistry
+      : loadPluginManifestRegistryForInstalledIndex({
+          index: params.snapshot.index,
+          config: params.config,
+          env: params.env ?? process.env,
+          ...(workspaceDir ? { workspaceDir } : {}),
+          includeDisabled: true,
+        });
+  // Bundled fallback contracts cannot come from a same-id external winner.
+  // Capture their separately validated roots before runtime readers lose discovery access.
+  const bundledManifestRegistry =
+    params.snapshot.bundledManifestRegistry ??
+    loadBundledPluginManifestRegistry({ env: params.env });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
   const { pluginIds: _pluginIds, ...unscoped } = completed;
-  return freezeSnapshotValue({
+  return restorePluginMetadataSnapshot({
     ...unscoped,
+    bundledManifestRegistry,
     configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
@@ -406,7 +555,13 @@ export function resolvePluginMetadataSnapshot(
       }
       return snapshot;
     }
-    if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+    if (isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+      return projectPluginMetadataSnapshot(
+        current,
+        params.pluginIds ?? params.pluginIdScope?.resolve({ index: current.index }),
+      );
+    }
+    if (!params.index) {
       return current;
     }
     if (
@@ -444,7 +599,6 @@ function loadPluginMetadataSnapshotImpl(
   const registrySnapshotMs = performance.now() - registryStartedAt;
   const index = structuredClone(registryResult.snapshot);
   index.diagnostics ??= [];
-  const pluginIds = resolvePluginMetadataSnapshotPluginIds({ params, index });
   const manifestStartedAt = performance.now();
   // Empty installed indexes are authoritative; bootstrap first derives a real
   // index so every manifest and scope follows the same immutable graph.
@@ -456,7 +610,6 @@ function loadPluginMetadataSnapshotImpl(
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    ...(pluginIds !== undefined ? { pluginIds } : {}),
     includeDisabled: true,
   });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
@@ -476,9 +629,9 @@ function loadPluginMetadataSnapshotImpl(
       policyHash: index.policyHash,
       workspaceDir: params.workspaceDir,
     }),
-    ...(pluginIds !== undefined ? { pluginIds } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
+    registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
     manifestRegistry,
     plugins: manifestRegistry.plugins,

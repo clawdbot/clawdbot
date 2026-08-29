@@ -198,6 +198,8 @@ export function createCodexAttemptServerRequestController(
           stream: "tool",
           data: {
             phase: "start",
+            // OpenClaw tool execution stays observable without becoming public channel content.
+            hideFromChannelProgress: true,
             name: call.tool,
             toolCallId: call.callId,
             ...(toolMeta ? { meta: toolMeta } : {}),
@@ -227,7 +229,10 @@ export function createCodexAttemptServerRequestController(
         { include: DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES },
       );
       try {
-        const { execution } = openClawDynamicToolExecutions.claim(call, () => {
+        const { execution } = openClawDynamicToolExecutions.claim(call, async () => {
+          // Publish the execution claim before persistence yields, so a replay
+          // cannot become another owner of this call's progress or result.
+          await projector?.transcriptCheckpoint.flush();
           emitDynamicToolStartedDiagnostic({
             call,
             agentId: sessionAgentId,
@@ -235,7 +240,7 @@ export function createCodexAttemptServerRequestController(
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
           });
-          return handleDynamicToolCallWithTimeout({
+          const response = await handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
             signal,
@@ -259,6 +264,14 @@ export function createCodexAttemptServerRequestController(
               });
             },
           });
+          recordCodexDynamicToolResult(
+            projector,
+            call,
+            response,
+            toCodexDynamicToolProtocolResponse(response),
+          );
+          await projector?.transcriptCheckpoint.flush();
+          return response;
         });
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
@@ -282,7 +295,6 @@ export function createCodexAttemptServerRequestController(
           success: protocolResponse.success,
           contentItems: protocolResponse.contentItems,
         });
-        recordCodexDynamicToolResult(projector, call, response, protocolResponse);
         if (protocolResponse.success && call.tool === "progress_card") {
           const progressCardInput = response.executedArguments ?? call.arguments;
           await projector?.recordDynamicProgressCardUpdate(progressCardInput);
@@ -294,6 +306,7 @@ export function createCodexAttemptServerRequestController(
             stream: "tool",
             data: {
               phase: "result",
+              hideFromChannelProgress: true,
               name: call.tool,
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),

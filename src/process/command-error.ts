@@ -1,17 +1,39 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { SpawnResult } from "./exec-result.js";
 import type { runCommandBuffered } from "./exec.js";
 
-function normalizeDiagnostic(output: string | Buffer): string {
+export function formatCommandOutput(output: string | Buffer, maxChars = 800): string {
   // Progress redraws use CR, not LF. Keep the last frame, including an
   // unfinished redraw, before deciding whether this stream has visible text.
-  return stripAnsi(output.toString())
+  const normalized = stripAnsi(output.toString())
     .replace(/\r\n/g, "\n")
     .split("\n")
     .map((line) => line.replace(/\r+$/, "").split("\r").at(-1) ?? "")
     .join("\n")
     .trim();
+  const tail = normalized.split("\n").slice(-12).join("\n");
+  const omitted = tail.length < normalized.length || tail.length > maxChars;
+  return `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, -maxChars)}`;
+}
+
+/** Use an operation label, never argv that may contain credentials. */
+export function formatCommandResult(command: string, result: SpawnResult): string {
+  const label = truncateUtf16Safe(sanitizeForLog(command.replace(/[\r\n]+/g, " ")), 256);
+  const termination = result.outputLimitExceeded ? "output-limit" : result.termination;
+  const signal = result.signal ? `, signal=${result.signal}` : "";
+  const killed = result.killed ? ", killed=true" : "";
+  const status = result.code === 0 ? "exited" : "failed";
+  const lines = [
+    `${label} ${status} (code=${result.code}, termination=${termination}${signal}${killed})`,
+  ];
+  for (const stream of ["stderr", "stdout"] as const) {
+    const output = formatCommandOutput(result[stream]);
+    if (output) {
+      lines.push(`${stream}: ${output}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function createCommandError(
@@ -19,10 +41,8 @@ export function createCommandError(
   result: SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>,
   options: { timeoutMs: number },
 ): Error {
-  const output = normalizeDiagnostic(result.stderr) || normalizeDiagnostic(result.stdout);
-  const tail = output.split("\n").slice(-12).join("\n");
-  const omitted = tail.length < output.length || tail.length > 2000;
-  const detail = `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, -2000)}`;
+  const detail =
+    formatCommandOutput(result.stderr, 2000) || formatCommandOutput(result.stdout, 2000);
   const reasons: string[] = [];
   if (result.termination === "timeout") {
     reasons.push(`timed out after ${options.timeoutMs / 1000} seconds`);
