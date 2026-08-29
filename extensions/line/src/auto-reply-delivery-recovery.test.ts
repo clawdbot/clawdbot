@@ -3,7 +3,6 @@ import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
-import { runLinePushWithRetries } from "./send-retry.js";
 import {
   baseDeliveryParams,
   createDeps,
@@ -11,6 +10,7 @@ import {
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import { runLinePushWithRetries } from "./send-retry.js";
 
 describe("deliverLineAutoReply HTTP recovery", () => {
   const createHttpError = (status: number) =>
