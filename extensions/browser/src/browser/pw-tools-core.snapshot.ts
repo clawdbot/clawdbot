@@ -345,10 +345,9 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   stats: { lines: number; chars: number; refs: number; interactive: number };
   newElements?: number;
 }> {
-  const snapshot =
-    params.urls && Object.keys(params.built.refs).length > 0
-      ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
-      : params.built.snapshot;
+  const snapshot = params.urls
+    ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
+    : params.built.snapshot;
   if (params.isFrameCurrent) {
     assertSnapshotFrameCurrent(params.isFrameCurrent);
   }
@@ -452,10 +451,10 @@ export async function snapshotRoleViaPlaywright(opts: {
         : selector
           ? page.locator(selector)
           : page.locator(":root");
-      const ariaSnapshot =
-        selector && (await locator.count()) === 0
-          ? ""
-          : await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
+      const selectorMatched = !selector || (await locator.count()) > 0;
+      const ariaSnapshot = selectorMatched
+        ? await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout })
+        : "";
       const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
       return await finalizeRoleSnapshotViaPlaywright({
         page,
@@ -466,7 +465,7 @@ export async function snapshotRoleViaPlaywright(opts: {
         isFrameCurrent,
         built,
         mode: "role",
-        urls: opts.urls,
+        urls: opts.urls && selectorMatched,
         maxChars: opts.maxChars,
         delta: opts.delta,
       });
