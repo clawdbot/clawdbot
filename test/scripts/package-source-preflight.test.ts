@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -325,16 +325,19 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
-  it("accepts aligned source manifests and the explicitly allowed Unreleased section", () => {
-    expect(
-      validatePackageSource({
-        aiManifestContent: aiManifest(),
-        allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
-      }),
-    ).toBe("2026.8.1");
-  });
+  it.each(["2026.8.1", "2026.8.1-beta.4", "2026.9.1"])(
+    "accepts aligned %s source manifests with Unreleased notes",
+    (version) => {
+      expect(
+        validatePackageSource({
+          aiManifestContent: aiManifest({ version }),
+          allowUnreleasedChangelog: true,
+          changelogContent: changelog,
+          rootManifestContent: rootManifest({ version }),
+        }),
+      ).toBe(version);
+    },
+  );
 
   it("uses canonical package changelog validation", () => {
     expect(() =>
@@ -438,16 +441,20 @@ describe("package source preflight", () => {
   });
 
   it("validates the current source ref without modifying the checkout", () => {
+    const committedManifest = JSON.parse(
+      execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),
+    ) as { version: string };
+    const workingManifest = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
     expect(
       validatePackageSourceRef("HEAD", {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(committedManifest.version);
     expect(
       validatePackageSourceDir(process.cwd(), {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(workingManifest.version);
   });
 
   it("normalizes release-check package mode and guards the source resolver", () => {

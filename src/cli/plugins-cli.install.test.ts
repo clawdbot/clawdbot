@@ -46,6 +46,15 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 
+// Default-selector assertions describe a stable build; beta cases set their own identity.
+const coreVersion = vi.hoisted(() => ({ value: "2026.8.1" }));
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  get VERSION() {
+    return coreVersion.value;
+  },
+}));
+
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -624,6 +633,7 @@ describe("plugins cli install", () => {
   });
 
   afterEach(() => {
+    coreVersion.value = "2026.8.1";
     if (ORIGINAL_OPENCLAW_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -1971,16 +1981,22 @@ describe("plugins cli install", () => {
     expect(configWriteMock).toHaveBeenCalledWith(enabledCfg);
   });
 
-  it.each([
-    { label: "plugin id", arg: "brave" },
-    { label: "npm package name", arg: "@openclaw/brave-plugin" },
-  ])(
-    "installs the beta artifact for an official plugin on a beta gateway by $label",
-    async ({ arg }) => {
+  it.each(
+    [
+      { version: "2026.8.1", channel: "beta" },
+      { version: "2026.8.1-beta.4", channel: undefined },
+      { version: "2026.8.1-beta.4", channel: "stable" },
+    ].flatMap(({ version, channel }) =>
+      ["brave", "@openclaw/brave-plugin"].map((arg) => ({ version, channel, arg })),
+    ),
+  )(
+    "installs beta for $arg on core $version with channel $channel",
+    async ({ version, channel, arg }) => {
+      coreVersion.value = version;
       primeSuccessfulPluginPersistence("brave");
       pluginCliConfigMock.mockReturnValue({
         ...createEmptyPluginConfig(),
-        update: { channel: "beta" },
+        ...(channel ? { update: { channel } } : {}),
       } as OpenClawConfig);
       findBundledPluginSourceMock.mockReturnValue(undefined);
       installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("brave"));
@@ -2020,6 +2036,7 @@ describe("plugins cli install", () => {
   });
 
   it("passes third-party external catalog integrity with catalog install trust", async () => {
+    coreVersion.value = "2026.8.1-beta.4";
     primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
     findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpecMock.mockResolvedValue(
@@ -2262,28 +2279,37 @@ describe("plugins cli install", () => {
     expect(runtimeLogsContain("npm:@openclaw/discord@2026.5.20")).toBe(true);
   });
 
-  it("marks catalog npm package installs with alternate selectors as trusted", async () => {
-    primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
-    findBundledPluginSourceMock.mockReturnValue(undefined);
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createNpmPluginInstallResult("wecom-openclaw-plugin"),
-    );
+  it.each([
+    { version: "2026.8.1", selector: "latest", installSelector: "latest" },
+    { version: "2026.8.1-beta.4", selector: "latest", installSelector: "beta" },
+    { version: "2026.8.1-beta.4", selector: "next", installSelector: "next" },
+    { version: "2026.8.1-beta.4", selector: "2026.6.1", installSelector: "2026.6.1" },
+  ])(
+    "trusts catalog npm @$selector on core $version",
+    async ({ version, selector, installSelector }) => {
+      coreVersion.value = version;
+      primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        createNpmPluginInstallResult("wecom-openclaw-plugin"),
+      );
 
-    await runCapabilityAcceptedPluginsInstallCommand([
-      "plugins",
-      "install",
-      "@wecom/wecom-openclaw-plugin@latest",
-    ]);
+      await runCapabilityAcceptedPluginsInstallCommand([
+        "plugins",
+        "install",
+        `@wecom/wecom-openclaw-plugin@${selector}`,
+      ]);
 
-    // Alternate selectors stay trusted by catalog package name, but must not
-    // inherit catalog integrity unless the install spec matches exactly.
-    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@latest");
-    expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
-    expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(npmInstallCall().expectedIntegrity).toBeUndefined();
-    expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
-    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-  });
+      // Alternate selectors stay trusted by catalog package name, but must not
+      // inherit catalog integrity unless the install spec matches exactly.
+      expect(npmInstallCall().spec).toBe(`@wecom/wecom-openclaw-plugin@${installSelector}`);
+      expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
+      expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+      expect(npmInstallCall().expectedIntegrity).toBeUndefined();
+      expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
+      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes the active profile extensions dir to npm installs", async () => {
     const extensionsDir = useProfileExtensionsDir();
