@@ -15,6 +15,8 @@ type PosixProcess = {
   startedAt: string;
 };
 
+export type CodexAppServerProcessIdentity = Pick<PosixProcess, "pid" | "pgid" | "startedAt">;
+
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 const MAX_CONTAINED_PROCESSES = 512;
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
@@ -24,17 +26,71 @@ const PROCESS_INSPECTION_MAX_BYTES = 8 * 1024 * 1024;
 export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
 ): Promise<(() => void) | undefined> {
+  return (await containDescendants(child))?.resume;
+}
+
+/** A durable spawn fact, never a command-line match, selects the orphan root. */
+export async function terminateCodexAppServerOrphan(
+  expected: CodexAppServerProcessIdentity,
+): Promise<boolean> {
+  const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+  const contained = await containDescendants(
+    { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
+    expected,
+    deadline,
+  );
+  let gone = false;
+  try {
+    if (contained) {
+      const current = await readProcess(expected.pid, deadline);
+      if (current && isSameLiveRoot(current, contained.root, true)) {
+        // Keep the verified leader stopped until its whole group is killed;
+        // a QA-owned child may share its parent's group and must use its PID.
+        signalProcess(current.pgid === current.pid ? -current.pid : current.pid, "SIGKILL");
+      }
+    }
+    while (Date.now() < deadline) {
+      const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+      if (!snapshot?.some((row) => row.pid === process.pid)) {
+        return false;
+      }
+      const current = snapshot.find((row) => row.pid === expected.pid);
+      if (!current || !hasSameIdentity(current, expected) || current.state.startsWith("Z")) {
+        gone = true;
+        return true;
+      }
+      if (!contained) {
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
+  } finally {
+    if (contained && !gone) {
+      await signalSameRoot(contained.root, "SIGCONT", Date.now() + MAX_PROCESS_CONTAINMENT_MS);
+    }
+  }
+}
+
+async function containDescendants(
+  child: ContainableTransport,
+  expected?: CodexAppServerProcessIdentity,
+  deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+): Promise<{ root: PosixProcess; resume: () => void } | undefined> {
   const rootPid = child.pid;
   if (process.platform === "win32" || !rootPid || !child.kill || hasExited(child)) {
     return undefined;
   }
-  const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
-  const snapshot = await readProcessSnapshot(deadline);
+  const snapshot = await readCodexAppServerProcessSnapshot(deadline);
   if (!snapshot || Date.now() >= deadline) {
     return undefined;
   }
   const root = snapshot.find((row) => row.pid === rootPid);
-  if (!root || !isSameLiveRoot(root, root)) {
+  if (
+    !root ||
+    !(expected ? isSameLiveProcess(root, expected) : root.ppid === process.pid) ||
+    root.state.startsWith("Z")
+  ) {
     return undefined;
   }
 
@@ -72,21 +128,33 @@ export async function terminateCodexAppServerDescendants(
     }
     resumeRootOnUnwind = false;
     let resumed = false;
-    return () => {
-      if (resumed) {
-        return;
-      }
-      resumed = true;
-      resumeTransportRoot(child, root, false);
+    return {
+      root,
+      resume: () => {
+        if (resumed) {
+          return;
+        }
+        resumed = true;
+        resumeTransportRoot(child, root, false);
+      },
     };
   } finally {
     if (resumeRootOnUnwind) {
-      // Inspection failure cannot also own release. These PIDs were signaled
-      // synchronously in this call and have not crossed an asynchronous boundary.
-      for (const descendant of stoppedDescendants.values()) {
-        signalProcess(descendant.pid, "SIGCONT");
+      if (expected) {
+        // Orphans have no retained child handle. Failed inspection leaves the
+        // registration intact; never release a reused PID while unwinding.
+        const releaseDeadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+        for (const descendant of stoppedDescendants.values()) {
+          await signalSameProcess(descendant, "SIGCONT", releaseDeadline);
+        }
+        await signalSameRoot(root, "SIGCONT", releaseDeadline);
+      } else {
+        // A live parent still owns these stopped children when inspection fails.
+        for (const descendant of stoppedDescendants.values()) {
+          signalProcess(descendant.pid, "SIGCONT");
+        }
+        resumeTransportRoot(child, root, true);
       }
-      resumeTransportRoot(child, root, true);
     }
   }
 }
@@ -103,7 +171,7 @@ async function quiesceDescendants(
     if (Date.now() >= deadline) {
       return undefined;
     }
-    const snapshot = await readProcessSnapshot(deadline);
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline);
     if (!snapshot || Date.now() >= deadline) {
       return undefined;
     }
@@ -188,7 +256,9 @@ async function quiesceDescendants(
   return undefined;
 }
 
-async function readProcessSnapshot(deadline: number): Promise<PosixProcess[] | undefined> {
+export async function readCodexAppServerProcessSnapshot(
+  deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+): Promise<PosixProcess[] | undefined> {
   return await readProcesses(["-axo", PROCESS_COLUMNS], deadline);
 }
 
@@ -219,7 +289,11 @@ async function readProcesses(
     const inspector = execFile(
       "ps",
       args,
-      { encoding: "utf8", maxBuffer: PROCESS_INSPECTION_MAX_BYTES },
+      {
+        encoding: "utf8",
+        maxBuffer: PROCESS_INSPECTION_MAX_BYTES,
+        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      },
       (error, stdout) => {
         settle(error ? undefined : parseProcesses(stdout));
       },
@@ -298,7 +372,10 @@ function isUninterruptibleState(state: string): boolean {
   return state.startsWith("D") || state.startsWith("U");
 }
 
-function isSameLiveProcess(current: PosixProcess, expected: PosixProcess): boolean {
+function isSameLiveProcess(
+  current: PosixProcess,
+  expected: CodexAppServerProcessIdentity,
+): boolean {
   return (
     current.pgid === expected.pgid &&
     !current.state.startsWith("Z") &&
@@ -312,7 +389,7 @@ function isSameLiveRoot(
   requireStopped = false,
 ): boolean {
   return (
-    current.ppid === process.pid &&
+    current.ppid === expected.ppid &&
     (!requireStopped || isQuiescedState(current.state)) &&
     isSameLiveProcess(current, expected)
   );
@@ -362,11 +439,14 @@ async function signalSameProcess(
   );
 }
 
-function hasSameIdentity(left: PosixProcess, right: PosixProcess): boolean {
+function hasSameIdentity(
+  left: CodexAppServerProcessIdentity,
+  right: CodexAppServerProcessIdentity,
+): boolean {
   return identityKey(left) === identityKey(right);
 }
 
-function identityKey(row: PosixProcess): string {
+function identityKey(row: CodexAppServerProcessIdentity): string {
   return `${row.pid}\0${row.startedAt}`;
 }
 

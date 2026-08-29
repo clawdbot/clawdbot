@@ -69,6 +69,34 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+## Recovery after a hard Gateway stop
+
+On POSIX systems, OpenClaw checks for registered orphaned Codex app-server
+processes before spawning each fresh stdio child. This runs when the connection
+is needed, not necessarily at Gateway boot. OpenClaw records the parent and
+child process identities in the current state directory's SQLite plugin store
+before sending Codex `initialize`, so a child cannot start a native turn before
+its registration is durable.
+
+Cleanup only targets a registered child whose original OpenClaw parent is no
+longer running. It checks process IDs, start times, and process groups before
+terminating the orphan and its discoverable descendants. Another live OpenClaw
+instance, processes registered under another state directory, and externally
+managed WebSocket or Unix-socket app-servers are left alone. These portable
+process checks do not provide an atomic operating-system ownership guarantee
+or discover descendants that independently reparented before inspection.
+
+If process inspection or bounded cleanup cannot confirm that the registered
+orphan is gone, the new stdio connection fails instead of spawning another
+child. Follow the reported action: check that `ps` works, or verify and stop
+the reported orphan process, then retry. If the cleanup budget expires, retry
+to finish the remaining registrations.
+
+This recovery requires a spawn-time registration. It does not discover
+unregistered children left by an older OpenClaw version or scan command names
+to infer ownership. Windows does not yet have equivalent orphan registration
+and recovery.
+
 ## Thread bindings and model changes
 
 When an OpenClaw session is attached to an existing Codex thread, the next

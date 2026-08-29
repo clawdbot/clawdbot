@@ -1,8 +1,13 @@
 import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  readCodexAppServerProcessSnapshot,
+  terminateCodexAppServerOrphan,
+} from "./transport-process-containment.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
 type FixtureEvent = {
@@ -86,6 +91,38 @@ async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
 }
 
 describe.skipIf(process.platform === "win32")("Codex app-server process containment", () => {
+  it.each(["startedAt", "pgid"] as const)(
+    "does not signal a registered PID with a changed %s",
+    async (field) => {
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      await once(child, "spawn");
+      try {
+        const identity = (await readCodexAppServerProcessSnapshot())?.find(
+          (row) => row.pid === child.pid,
+        );
+        if (!identity) {
+          throw new Error("Missing test process identity");
+        }
+        const stale =
+          field === "startedAt"
+            ? { ...identity, startedAt: "Mon Jan 1 00:00:00 2001" }
+            : { ...identity, pgid: identity.pgid + 1 };
+        // PID reuse retires a stale row; group drift remains ambiguous and blocks startup.
+        expect(await terminateCodexAppServerOrphan(stale)).toBe(field === "startedAt");
+        expect(child.exitCode).toBeNull();
+        expect(child.signalCode).toBeNull();
+        expect(process.kill(child.pid!, 0)).toBe(true);
+      } finally {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+    },
+  );
+
   it("reaps descendants in independent and root process groups before close returns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transport-process-"));
     const logPath = path.join(tempDir, "processes.jsonl");
