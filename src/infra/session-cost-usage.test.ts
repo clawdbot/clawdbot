@@ -2351,7 +2351,17 @@ describe("session cost usage", () => {
     await fs.mkdir(sessionsDir, { recursive: true });
 
     const activePath = path.join(sessionsDir, "sess-live.jsonl");
-    const archivePath = path.join(sessionsDir, "sess-live.jsonl.deleted.2026-02-12T12-00-00.000Z");
+    const encodedArchive = encodeSessionArchiveContent(
+      transcriptText("sess-live", {
+        type: "message",
+        timestamp: "2026-02-12T10:05:00.000Z",
+        message: { role: "user", content: "archive transcript" },
+      }),
+    );
+    const archivePath = path.join(
+      sessionsDir,
+      `sess-live.jsonl.deleted.2026-02-12T12-00-00.000Z${encodedArchive.suffix}`,
+    );
 
     await fs.writeFile(
       activePath,
@@ -2362,15 +2372,7 @@ describe("session cost usage", () => {
       }),
       "utf-8",
     );
-    await fs.writeFile(
-      archivePath,
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-02-12T10:05:00.000Z",
-        message: { role: "user", content: "archive transcript" },
-      }),
-      "utf-8",
-    );
+    await fs.writeFile(archivePath, encodedArchive.bytes);
 
     const older = Date.UTC(2026, 1, 12, 10, 0, 0) / 1000;
     const newer = Date.UTC(2026, 1, 12, 12, 0, 0) / 1000;
@@ -2486,6 +2488,56 @@ describe("session cost usage", () => {
 
       expect(first?.totalTokens).toBe(10);
       expect(repeat?.totalTokens).toBe(10);
+    });
+  });
+
+  it("preserves compressed archive identity during usage discovery", async () => {
+    const root = await makeSessionCostRoot("discover-compressed-archive");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const encoded = encodeSessionArchiveContent(
+      transcriptText("sess-discovered-compressed", {
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "compressed archive" },
+      }),
+    );
+    if (!encoded.suffix) {
+      return;
+    }
+    const archivePath = path.join(
+      sessionsDir,
+      `sess-discovered-compressed.jsonl.deleted.2026-02-12T11-00-00.000Z${encoded.suffix}`,
+    );
+    await fs.writeFile(archivePath, encoded.bytes);
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions({ includeFirstUserMessage: false });
+
+      expect(sessions).toContainEqual({
+        sessionId: "sess-discovered-compressed",
+        sessionFile: archivePath,
+        mtime: expect.any(Number),
+        firstUserMessage: undefined,
+      });
+
+      const discovered = sessions.find(
+        (session) => session.sessionId === "sess-discovered-compressed",
+      );
+      if (!discovered) {
+        throw new Error("expected compressed archive discovery result");
+      }
+      await refreshSessionCostUsageForTest(discovered.sessionFile);
+      const cached = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: discovered.sessionId, sessionFile: discovered.sessionFile }],
+        requestRefresh: false,
+      });
+      expect(cached.cacheStatus).toMatchObject({
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      });
     });
   });
 
