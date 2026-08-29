@@ -547,6 +547,51 @@ describe("verified OpenClaw inference binding", () => {
     ).resolves.toBeNull();
   });
 
+  it.each(["cli", "embedded"] as const)(
+    "keeps a verified %s owner when first-agent setup materializes the same credential directory",
+    async (runner) => {
+      const baseConfig = config(
+        runner === "cli" ? "claude-cli/claude-opus-5" : "openai/gpt-5.5@openai:verified",
+      );
+      baseConfig.agents = { ...baseConfig.agents, entries: { main: {} } };
+      const deps = {
+        ...authDeps(),
+        ...pluginArtifactDeps(),
+        ...cliRuntimeArtifactDeps(),
+        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
+      };
+      const binding =
+        runner === "cli"
+          ? await createBinding(
+              await requireRoute(baseConfig, "cli"),
+              {
+                runtimeOwnerFingerprint: "opaque-cli-owner",
+                runtimeOwnerKind: "cli-runtime",
+                runtimeOwnerId: "claude-cli",
+                ...cliRuntimeArtifactAuth,
+              },
+              deps,
+            )
+          : await bindingFor(baseConfig, deps);
+      const materialized = structuredClone(baseConfig);
+      materialized.agents!.entries!.main = {
+        name: "main",
+        workspace: "/tmp/first-run-workspace",
+        agentDir: binding.execution.agentDir,
+      };
+
+      await expect(revalidate(binding, materialized, deps)).resolves.toBe(binding.execution);
+
+      const moved = structuredClone(materialized);
+      moved.agents!.entries!.main.agentDir = path.join(binding.execution.agentDir, "replacement");
+      await expect(revalidate(binding, moved, deps)).resolves.toBeNull();
+
+      deps.resolveCliRuntimeArtifactFingerprint.mockResolvedValue("replacement-cli-artifact");
+      harnessRuntimeArtifactState.fingerprint = "replacement-harness-artifact";
+      await expect(revalidate(binding, materialized, deps)).resolves.toBeNull();
+    },
+  );
+
   it("invalidates a strict CLI binding when its forwarded SecretRef changes", async () => {
     const profileId = "claude-cli:work";
     const cliConfig = {
