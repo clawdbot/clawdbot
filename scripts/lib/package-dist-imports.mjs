@@ -94,29 +94,3 @@ export function collectPackageDistImports(params) {
 
   return imports;
 }
-
-/** Expand seed dist files to include all reachable relative dist imports. */
-export function expandPackageDistImportClosure(params) {
-  const files = [...new Set(params.files.map(normalizePackagePath))];
-  const fileSet = new Set(files);
-  const expectedSet = new Set(params.seedFiles.map(normalizePackagePath));
-  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
-  const importsByImporter = new Map();
-  for (const { importerPath, importedPath } of imports) {
-    const importerImports = importsByImporter.get(importerPath) ?? [];
-    importerImports.push(importedPath);
-    importsByImporter.set(importerPath, importerImports);
-  }
-
-  const queue = [...expectedSet].filter((file) => fileSet.has(file));
-  for (const importerPath of queue) {
-    for (const importedPath of importsByImporter.get(importerPath) ?? []) {
-      if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
-        expectedSet.add(importedPath);
-        queue.push(importedPath);
-      }
-    }
-  }
-
-  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
-}
