@@ -78,9 +78,6 @@ const workloadOption = isWorkloadRoutedCommand(args)
   ? extractWrapperValueOption(args, "--workload")
   : undefined;
 const userArgStart = args[0] === "actions" && args[1] === "hydrate" ? 2 : 1;
-if (args[userArgStart] === "--") {
-  args.splice(userArgStart, 1);
-}
 
 function extractWrapperValueOption(commandArgs: string[], name: string) {
   const equalsPrefix = `${name}=`;
@@ -3840,8 +3837,8 @@ if (
   process.exit(2);
 }
 
-// Help must not acquire provider state or materialize a sparse checkout. Only
-// run's parsed option prefix counts; remote arguments and flag values stay gated.
+// Classify help before removing the wrapper separator or preparing execution.
+// Only run's option prefix counts; remote arguments and flag values stay gated.
 // Upstream's `help <command> ...` alias appends --help, so extra payload is not safe.
 const helpFlags = new Set(["--help", "-h"]);
 const runOptions = args[0] === "run" ? parseRunInvocation(help.text, args).options : null;
@@ -3863,6 +3860,10 @@ if (
     console.error(`[crabbox] ${result.error.message}`);
   }
   process.exit(result.status ?? 1);
+}
+
+if (args[userArgStart] === "--") {
+  args.splice(userArgStart, 1);
 }
 
 const providerSelection = selectedProvider(args, providers, version.text);

@@ -3252,11 +3252,14 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it.each([
-    ["--label", "--help", "--", "echo ok"],
-    ["--", "--help"],
-    ["node", "--help"],
-  ])("keeps provider gates when help belongs to the run payload: %j", (...payload) => {
-    const result = runDefaultWrapper(["run", "--provider", "aws", ...payload], {
+    ["run", "--provider", "aws", "--label", "--help", "--", "echo ok"],
+    ["run", "--provider", "aws", "--", "--help"],
+    ["run", "--provider", "aws", "node", "--help"],
+    ["run", "--", "--help"],
+    ["warmup", "--", "--help"],
+    ["actions", "hydrate", "--", "--help"],
+  ])("keeps provider gates when help belongs to a payload: %j", (...args) => {
+    const result = runDefaultWrapper(args, {
       configJson: directBrokerConfig("aws"),
       env: { OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "aws" },
     });
