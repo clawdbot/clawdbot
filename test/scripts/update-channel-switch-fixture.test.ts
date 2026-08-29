@@ -16,12 +16,12 @@ it("builds the package-derived Git fixture with its own checkout identity", asyn
     join(root, "package.json"),
     JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
   );
-  writeFileSync(join(root, ".gitignore"), "dist/\n");
   writeFileSync(join(root, "dist/entry.js"), runtimeEntry);
   writeFileSync(
     join(root, "dist/build-info.json"),
     JSON.stringify({ commit: packageCommit, version: "2026.8.1" }),
   );
+  execFileSync(process.execPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
   execFileSync(process.execPath, [
     "scripts/e2e/lib/update-channel-switch/assertions.mjs",
     "prepare-git-fixture",
