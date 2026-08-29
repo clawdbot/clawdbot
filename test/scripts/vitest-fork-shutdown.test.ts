@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const fixture = path.resolve(import.meta.dirname, "../fixtures/vitest-fork-shutdown.mjs");
+const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
 
 it.each([
   { scenario: "slow-exit", setup: "shared", fail: false },
