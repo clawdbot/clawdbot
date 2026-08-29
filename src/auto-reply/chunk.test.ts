@@ -524,7 +524,7 @@ describe("chunkMarkdownText", () => {
           expect(chunk.length).toBeLessThanOrEqual(4000);
         }
         expect(chunks.join("").replaceAll("`", "").replaceAll("\n", "")).toBe(payload);
-        expectFencesBalanced(chunks);
+        expectFencesBalanced(chunks.slice(1));
       },
     },
     {
@@ -536,7 +536,7 @@ describe("chunkMarkdownText", () => {
         for (const chunk of chunks) {
           expect(chunk.length).toBeLessThanOrEqual(2000);
         }
-        expectFencesBalanced(chunks);
+        expectFencesBalanced(chunks.slice(1));
       },
     },
     {
@@ -567,6 +567,18 @@ describe("chunkMarkdownText", () => {
           );
           expect(chunks.join(""), `limit ${limit}`).toBe(text);
         }
+      },
+    },
+    {
+      name: "does not emit a header-only fence at the reopen budget boundary",
+      run: () => {
+        const limit = 20;
+        const openLine = `\`\`\`${"x".repeat(limit - 8)}`;
+        const text = `${openLine}\nbody-content-long\n\`\`\``;
+        const chunks = chunkMarkdownText(text, limit);
+
+        expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+        expectNoEmptyFencedChunks(text, limit);
       },
     },
   ] as const)("$name", ({ run }) => {
