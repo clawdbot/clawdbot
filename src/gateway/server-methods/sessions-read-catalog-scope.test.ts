@@ -255,13 +255,13 @@ describe("sessions.list catalog scoping", () => {
       });
       const mainRegistry = thinkingRegistry("dynamic-router", () => profile("ultra"));
       const workRegistry = thinkingRegistry("dynamic-router", () => profile("low"));
-      let completed: ModelCatalogSnapshot | undefined;
+      const completed: { catalog?: ModelCatalogSnapshot } = {};
       const mainOwner = preparedOwner({
         config,
         agentId: "main",
         entries,
         pluginRegistry: mainRegistry,
-        readFullModelCatalog: () => completed,
+        readFullModelCatalog: () => completed.catalog,
       });
       const owners = new Map([
         ["main", mainOwner],
@@ -314,7 +314,7 @@ describe("sessions.list catalog scoping", () => {
         "low",
       ]);
 
-      completed = { entries: [{ ...entries[0]!, reasoning: false }], routeVariants: [] };
+      completed.catalog = { entries: [{ ...entries[0]!, reasoning: false }], routeVariants: [] };
       const promoted = await listSessions(request);
       expect(promoted).not.toBe(replaced);
       expect(promoted.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual([
