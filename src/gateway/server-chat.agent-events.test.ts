@@ -98,6 +98,7 @@ import {
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
+import { broadcastChatError } from "./server-methods/chat-broadcast.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -4529,6 +4530,62 @@ describe("agent event handler", () => {
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
+
+  it.each([false, true])(
+    "preserves reply-dispatch completion ownership through error grace (settled=%s)",
+    async (settled) => {
+      vi.useFakeTimers();
+      const settleTrackedTerminal = vi.fn();
+      const harness = createHarness({
+        resolveSessionKeyForRun: () => "session-reply-dispatch",
+        settleTrackedTerminal,
+      });
+      const { broadcast, chatRunState, clearAgentRunContext, agentRunSeq, handler } = harness;
+      const runId = "run-reply-dispatch";
+      registerChatRun(chatRunState, runId, "session-reply-dispatch", runId);
+      registerAgentRunContext(runId, { sessionKey: "session-reply-dispatch" });
+      chatRunState.getOrCreate(runId).buffer = "pending delivered reply";
+
+      emitAgentEvent(handler, runId, "lifecycle", {
+        phase: "error",
+        error: "ACP turn failed",
+        completionSource: "reply-dispatch",
+      });
+      expect.soft(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
+      expect(agentRunSeq.get(runId)).toBe(1);
+      if (settled) {
+        broadcastChatError({
+          context: harness,
+          runId,
+          sessionKey: "session-reply-dispatch",
+          errorMessage: "ACP turn failed",
+        });
+        chatRunState.clearRun(runId);
+        chatRunState.registry.remove(runId, runId);
+      }
+
+      // Run the production grace timer, even after the dispatch owner settled.
+      await vi.runAllTimersAsync();
+
+      const terminals = chatBroadcastCalls(broadcast);
+      expect(terminals).toHaveLength(settled ? 1 : 0);
+      if (settled) {
+        expectPayloadFields(terminals[0]?.[1], { state: "error", seq: 2 });
+        expect(agentRunSeq.has(runId)).toBe(false);
+      } else {
+        expect(chatRunState.runs.get(runId)?.buffer).toBe("pending delivered reply");
+        expect(chatRunState.registry.peek(runId)?.clientRunId).toBe(runId);
+        expect(agentRunSeq.get(runId)).toBe(1);
+      }
+      expect(clearAgentRunContext).not.toHaveBeenCalled();
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledOnce();
+      expect(settleTrackedTerminal).toHaveBeenCalledWith({
+        runId,
+        clientRunId: runId,
+        sessionKey: "session-reply-dispatch",
+      });
+    },
+  );
 
   it("suppresses live client events but persists lifecycle for non-control-UI-visible runs", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({

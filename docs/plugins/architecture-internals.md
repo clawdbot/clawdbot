@@ -148,6 +148,20 @@ execution. Consent checks use a fresh inspection after an awaited approval so
 changed artifacts cannot inherit approval for older capabilities. Failed module
 evaluation remains retryable; a successful import is shared across consumers.
 
+The CLI invocation owns one operation cache across config reads, output metadata,
+command ownership, nested registration, and actions. Standalone registration uses
+its caller's active generation. Config validation covers every
+workspace; execution uses the original selected workspace snapshot, or shared
+roots when no workspace owner is proven. Exact config/source identities and
+revision checks fence retained registrars. Preparation closes before Commander
+actions, while its cache scope lasts through action completion for late imports.
+Changed package files require a new operation; changing activation inputs does
+not retire compatible package facts. SDK alias maps are prepared on first alias
+or transformer demand under their captured host and permission scope. State
+registration uses a light facade that the full runtime later adopts; only the
+registry proxy grants store access. Config reads import the writer only when an
+actual write begins.
+
 Registered services, hooks, tools, session MCP overlays, generated skill-link
 publication, and activation state remain runtime-owned.
 An active registry pins its chosen artifact binding so source and built modules

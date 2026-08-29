@@ -11,6 +11,7 @@ import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runt
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
@@ -314,11 +315,18 @@ function createPublicModelsListProjector(params: {
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
             });
+      const fastModeState = resolveFastModeState({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        provider: entry.provider,
+        model: entry.id,
+      });
       preparedEntry = {
         ...buildPublicModelProjection(publicEntry),
         ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
         ...(agentRuntime ? { agentRuntime } : {}),
         ...thinkingProfile,
+        ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,

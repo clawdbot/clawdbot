@@ -74,9 +74,7 @@ suite.define(() => {
         await composer.press("Control+Enter");
 
         if (followUpMode === "steer") {
-          const queuedRow = page
-            .locator(".chat-group.user", { hasText: followUpText })
-            .locator(".chat-queue__item");
+          const queuedRow = page.locator(".chat-queue__item", { hasText: followUpText });
           await queuedRow.waitFor();
           await expectRequestCountStable(gateway, "chat.send", 1);
           await gateway.setMethodResponse("chat.history", {

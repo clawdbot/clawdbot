@@ -13,6 +13,7 @@ type PendingChatAttachmentHandoff = {
   attachments: ChatAttachment[];
   fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
+  preparedAt: number;
 };
 
 export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff {
@@ -73,6 +74,7 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       }
       pending.set(key, {
         owner,
+        preparedAt: Date.now(),
         paneId,
         scopeKey,
         attachments: [...attachments],
@@ -106,6 +108,15 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       }
       releaseHandoff(match);
       return null;
+    },
+    retireScope: (scopeKey, beforeRevision) => {
+      // Optimistic navigation may unmount the pane before deletion confirms.
+      // Retire that package without touching a later edit or another session.
+      for (const [key, handoff] of pending) {
+        if (handoff.scopeKey === scopeKey && handoff.preparedAt < beforeRevision) {
+          releaseHandoff(take(key));
+        }
+      }
     },
     clearPane: (paneId) => {
       for (const [key, handoff] of pending) {

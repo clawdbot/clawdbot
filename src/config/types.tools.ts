@@ -182,7 +182,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: false. "auto" engages only models whose catalog flags `codeMode: "preferred"`. */
+      /** OpenClaw Code Mode default, overridden by per-model codeMode. Default: false; "auto" engages catalog-preferred models. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
@@ -541,7 +541,7 @@ export type ToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
   toolSearch?: ToolSearchConfig;
-  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  /** Global Code Mode defaults and limits; agent/model settings can override activation. */
   codeMode?: CodeModeConfig;
   /** Collector-mode subagents and wait controls. */
   swarm?: SwarmConfig;

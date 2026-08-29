@@ -77,6 +77,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot {
   return {
+    catalogOwner: undefined,
     ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     agentDir: input.agentDir,
     ...(input.inheritedAuthDir !== undefined ? { inheritedAuthDir: input.inheritedAuthDir } : {}),

@@ -1079,19 +1079,25 @@ describe("dispatchReplyFromConfig", () => {
   it("bounds Slack bypass lease cleanup when dispatcher idle never settles", async () => {
     const { activeOperation, createCtx, sessionId, sessionKey } = createActiveSlackThread("U4");
     const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
     dispatcher.waitForIdle = vi.fn(async () => await new Promise<void>(() => {}));
     dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy = () => ({
       maxTimeoutMs: 25,
       shouldExtend: () => false,
     });
 
+    vi.useFakeTimers();
     try {
-      const result = await dispatchReplyFromConfig({
+      const dispatch = dispatchReplyFromConfig({
         ctx: createCtx({ BodyForAgent: "hung delivery barrier" }),
         cfg: emptyConfig,
         dispatcher,
-        replyResolver: async () => undefined,
+        replyResolver,
       });
+      await vi.waitFor(() => expect(replyResolver).toHaveBeenCalled());
+      // Advance settlement only; the cleanup assertion must still reject an overlong lease.
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await dispatch;
 
       // An unsettled custom dispatcher has no receipt, so the turn cannot claim delivery.
       expect(result.queuedFinal).toBe(false);
@@ -1106,6 +1112,7 @@ describe("dispatchReplyFromConfig", () => {
       );
     } finally {
       activeOperation.complete();
+      vi.useRealTimers();
     }
   });
 

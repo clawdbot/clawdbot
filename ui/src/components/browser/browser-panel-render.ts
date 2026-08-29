@@ -89,6 +89,13 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   const hasView = Boolean(controller.view);
   return html`
     <div class="bp-toolbar">
+      ${controller.operations.route
+        ? html`<span
+            class="bp-profile"
+            title=${t("browser.profile", { profile: controller.operations.route.profile })}
+            >${controller.operations.route.profile}</span
+          >`
+        : nothing}
       ${embedded
         ? html`<button
             class="bp-icon"
@@ -273,6 +280,9 @@ function renderViewportContent(controller: BrowserPanelController) {
         </button>
       `,
     });
+  }
+  if (!controller.view && controller.unavailableTabText) {
+    return html`<div class="bp-status" role="status">${controller.unavailableTabText}</div>`;
   }
   if (!controller.view) {
     return controller.loading

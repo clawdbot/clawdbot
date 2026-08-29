@@ -78,7 +78,7 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+OpenClaw only accepts configurations that fully match the schema. Gateway startup first applies safe legacy-key migrations to eligible single-file configs. Unknown keys, malformed types, or invalid values that remain cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
 `openclaw config schema` prints the canonical JSON Schema used by Control UI
@@ -94,7 +94,9 @@ settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
 paths with no declared ancestor default to advanced. This affects presentation
 only, not validation, defaults, reload behavior, or whether the key can be set.
 
-When validation fails:
+Startup migration uses the same deterministic, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
+
+When validation still fails:
 
 - The Gateway does not boot
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
@@ -103,9 +105,10 @@ When validation fails:
 
 The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
-does. If `openclaw.json` fails validation (including plugin-local validation), Gateway
-startup fails or the reload is skipped and the current runtime keeps the last accepted
-config. A rejected write is also saved as `<path>.rejected.<timestamp>` for inspection.
+does. If `openclaw.json` remains invalid after eligible startup migrations (including
+plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
+the current runtime keeps the last accepted config. A rejected write is also saved as
+`<path>.rejected.<timestamp>` for inspection.
 The Gateway blocks writes that look like accidental clobbers - dropping `gateway.mode`,
 losing the `meta` block, or shrinking the file by more than half - unless the write
 explicitly allows destructive changes. Promotion to last-known-good is skipped when a

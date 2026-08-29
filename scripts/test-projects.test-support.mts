@@ -2110,12 +2110,8 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
-  [".github/workflows/ci.yml", ["ci-platform-checkout"]],
-  ["test/scripts/fixtures/ci-platform-checkout.mjs", ["ci-platform-checkout"]],
-  [
-    ".github/workflows/mantis-telegram-live.yml",
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
-  ],
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git"]],
+  ["test/scripts/fixtures/ci-platform-checkout.mjs", ["ci-platform-checkout", "ci-linux-git"]],
   [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
@@ -2257,7 +2253,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
-  [/^scripts\/pr$/u, ["pr-merge", "pr-operation-lock", "pr-wrappers"]],
+  [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
     ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
@@ -2266,7 +2262,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/pr-lib\/crabbox-gate-plan\.mts$/u,
     ["pr-crabbox-gate-plan", "pr-crabbox-gate-publisher", "pr-prepare-gates"],
   ],
-  [/^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u, ["pr-crabbox-merge-bypass", "pr-merge"]],
+  [
+    /^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u,
+    ["pr-crabbox-merge-bypass", "pr-merge", "pr-merge-outcome"],
+  ],
   [/^scripts\/lib\/windows-taskkill\.mjs$/u, ["managed-child-process", "run-with-env"]],
   [
     /^scripts\/lib\/config-boundary-guard\.mts$/u,
@@ -2373,10 +2372,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, workflowGuards],
   ],
   [
-    /^\.github\/workflows\/mantis-telegram-desktop-proof\.yml$/u,
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
-  ],
-  [
     /^\.github\/workflows\/mantis-web-ui-chat-proof\.yml$/u,
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
@@ -2405,7 +2400,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/run-node\.(?:mjs|mts)$/u, [runNode]],
   [/^scripts\/ios-write-swift-filelist\.m[jt]s$/u, ["ios-run"]],
-  [/^scripts\/pr-lib\/merge\.sh$/u, ["pr-merge"]],
+  [/^scripts\/pr-lib\/merge(?:-outcome)?\.sh$/u, ["pr-merge", "pr-merge-outcome"]],
   [/^scripts\/plugin-clawhub-publish\.sh$/u, ["test/plugin-clawhub-release.test.ts"]],
   [/^scripts\/openclaw-npm-postpublish-verify\.ts$/u, [npmPostpublish]],
   [

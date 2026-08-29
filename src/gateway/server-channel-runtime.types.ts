@@ -11,6 +11,8 @@ export type ChannelRuntimeSnapshot = {
 export type StartChannelOptions = {
   preserveRestartAttempts?: boolean;
   preserveManualStop?: boolean;
+  /** Reload leaves snapshot-cold accounts stopped without bypassing credential-file reinspection. */
+  skipUnavailableAccounts?: boolean;
   deferAccountStartUntil?: Promise<void>;
   manual?: boolean;
 };

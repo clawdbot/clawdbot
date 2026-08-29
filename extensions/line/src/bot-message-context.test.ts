@@ -154,6 +154,182 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
   });
 
+  const stickerEvent = (sticker: Partial<Record<string, unknown>>) =>
+    createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: {
+        id: "m-sticker",
+        type: "sticker",
+        packageId: "6136",
+        stickerId: "10979904",
+        stickerResourceType: "STATIC",
+        quoteToken: "quote-token",
+        ...sticker,
+      },
+    } as Partial<MessageEvent>);
+
+  it("describes a sticker with the keywords LINE sent for it", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // Only LINE's own sticker facts reach the agent; the package id names no
+    // package that a webhook carries.
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Thank you, Thanks, Grateful]");
+  });
+
+  it("projects a sticker webhook LINE actually sent", async () => {
+    // Observed payload from a real LINE sticker message (tokens redacted).
+    // Its package id is one the deleted table claimed to know, and LINE's own
+    // keywords identify the sticker as a different character than that entry
+    // named — so the shipped shape, not a hand-made one, pins this projection.
+    const context = await buildLineMessageContext({
+      event: stickerEvent({
+        id: "629316390784598646",
+        stickerId: "52002734",
+        packageId: "11537",
+        stickerResourceType: "ANIMATION",
+        keywords: [
+          "amaze",
+          "Congratulations",
+          ":o",
+          "!!",
+          "brown",
+          "Celebrate",
+          "Wow",
+          "Shock",
+          "jolt",
+          "astonish",
+          "OMG",
+          "Yay",
+          "bewildered",
+          "ohyeah",
+          "Surprised",
+        ],
+      }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: amaze, Congratulations, :o]");
+  });
+
+  it("uses the sender's own text for a message sticker", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ text: "See you tomorrow" }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
+  });
+
+  it.each([
+    ["  See you tomorrow  ", "[Sent a sticker:   See you tomorrow  ]"],
+    ["   ", "[Sent a sticker:    ]"],
+  ])("preserves sender-authored sticker whitespace", async (text, expected) => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ text, keywords: ["fallback"] }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe(expected);
+  });
+
+  it("prefers message-sticker text over experimental keywords", async () => {
+    // LINE's official message-sticker webhook example carries both properties.
+    const context = await buildLineMessageContext({
+      event: stickerEvent({
+        stickerId: "738839",
+        packageId: "12287",
+        stickerResourceType: "MESSAGE",
+        keywords: ["Anticipation", "Sparkle", "Straight face", "Staring", "Thinking"],
+        text: "Let's\nhang out\nthis weekend!",
+      }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Let's\nhang out\nthis weekend!]");
+  });
+
+  it("still reports a sticker that carries neither keywords nor text", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({}),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
+  });
+
+  it("drops the bot's own mention from the command body while the agent still reads the message as sent", async () => {
+    // LINE group chats require the mention before a message reaches the bot,
+    // and LINE writes it as the channel display name in plain text.
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" }, {
+      message: {
+        id: "m-mention",
+        type: "text",
+        text: "@openclaw3 /status",
+        quoteToken: "quote-token",
+        mention: {
+          mentionees: [{ type: "user", index: 0, length: 10, userId: "Ubot", isSelf: true }],
+        },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandBody).toBe("/status");
+    expect(context?.ctxPayload.BodyForCommands).toBe("/status");
+    expect(context?.ctxPayload.RawBody).toBe("@openclaw3 /status");
+    expect(context?.ctxPayload.BodyForAgent).toBe("@openclaw3 /status");
+  });
+
+  it("keeps the command body when a message carries only another member's mention", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" }, {
+      message: {
+        id: "m-member-mention",
+        type: "text",
+        text: "@Alice look at /status",
+        quoteToken: "quote-token",
+        mention: {
+          mentionees: [{ type: "user", index: 0, length: 6, userId: "Ualice", isSelf: false }],
+        },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandBody).toBe("@Alice look at /status");
+  });
+
   it("skips media metadata projection for text-only messages", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 

@@ -1237,10 +1237,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
 
       const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const latestUserTurn = extractLatestUserTurn(oracleMessages);
+      const splitUserTurn = preparation.isSplitTurn
+        ? extractLatestUserTurn(turnPrefixMessages)
+        : null;
+      const latestUserTurn = splitUserTurn ?? extractLatestUserTurn(messagesToSummarize);
       const latestUserAsk = latestUserTurn?.ask ?? null;
+      // Preparation sees the retained suffix. Bind that fact only to its user-bearing cut turn,
+      // not an older history ask when the split starts at a custom or bash message.
       const latestUserAskCompleted =
-        preparation.splitTurnCompleted ?? latestUserTurn?.completed ?? false;
+        (splitUserTurn ? preparation.splitTurnCompleted : undefined) ??
+        latestUserTurn?.completed ??
+        false;
+      const splitCompletionInstruction = splitUserTurn
+        ? `The split turn is ${latestUserAskCompleted ? "completed; its terminal response is retained outside this prefix" : "not completed"}. Preserve this status; do not infer it from the prefix alone.\n\n`
+        : "";
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -1307,7 +1317,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ...llmSummaryParams,
               messages: turnPrefixMessages,
               maxChunkTokens,
-              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\nAdditional requirements:\n\n${currentInstructions}`,
+              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\n${splitCompletionInstruction}Additional requirements:\n\n${currentInstructions}`,
               previousSummary: undefined,
             });
             splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {

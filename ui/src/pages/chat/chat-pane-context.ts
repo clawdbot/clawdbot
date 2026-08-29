@@ -18,7 +18,6 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
-  uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
@@ -126,16 +125,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
-    const selectedSessionDeleted = stateValue.deletedSessions.some(({ key, agentId }) =>
-      uiSessionEventMatches(
-        {
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-          sessionKey: state.sessionKey,
-        },
-        key,
-        agentId,
-      ),
+    const selectedSessionDeleted = this.context.sessions.deletionState(
+      state.sessionKey,
+      resolveChatAgentId(state),
     );
     for (const { key, agentId } of stateValue.deletedSessions) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
@@ -172,6 +164,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
             hello: this.context.gateway.snapshot.hello,
           }),
         }),
+        selectedSessionDeleted === "pending",
       );
       return;
     }

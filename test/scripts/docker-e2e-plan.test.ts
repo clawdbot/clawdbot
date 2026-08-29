@@ -348,7 +348,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: true,
     });
@@ -1432,7 +1432,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: false,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
     });
@@ -1488,7 +1488,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.resources).toEqual(["docker", "live", "live:openai", "npm"]);
     expect(lane.stateScenario).toBe("empty");
     expect(plan.needs.bareImage).toBe(true);
-    expect(plan.needs.liveImage).toBe(true);
+    expect(plan.needs.liveImage).toBe(false);
     expect(plan.needs.package).toBe(true);
   });
 
@@ -1567,7 +1567,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: true,
+      liveImage: false,
       package: true,
       prepublishPluginRegistry: false,
     });

@@ -380,6 +380,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     assignOwner,
     patchMany,
+    deletionState: () => undefined,
     delete: deleteSession,
     deleteMany,
     list,

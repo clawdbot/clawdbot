@@ -827,7 +827,7 @@ run_pnpm() {
     local repo_dir="$2"
     shift 2
     if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
-      ensure_pnpm
+      ensure_pnpm "$repo_dir"
     fi
     (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
     return
@@ -1125,39 +1125,6 @@ repo_pnpm_spec() {
   sed -n -E 's/^[[:space:]]*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1
 }
 
-activate_repo_pnpm_version() {
-  local repo_dir="$1"
-  local spec
-  local version
-  local corepack_cmd=""
-
-  spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  if [[ "$spec" != pnpm@* ]]; then
-    return 0
-  fi
-
-  version="${spec#pnpm@}"
-  version="${version%%+*}"
-  if [[ -z "$version" ]]; then
-    return 0
-  fi
-
-  if [[ -x "$(node_dir)/bin/corepack" ]]; then
-    corepack_cmd="$(node_dir)/bin/corepack"
-  elif command -v corepack >/dev/null 2>&1; then
-    corepack_cmd="$(command -v corepack)"
-  fi
-
-  if [[ -n "$corepack_cmd" ]]; then
-    log "Activating repo pnpm ${version}"
-    "$corepack_cmd" prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
-    if [[ "$(cd "$repo_dir" && "$corepack_cmd" pnpm --version 2>/dev/null || true)" == "$version" ]]; then
-      set_pnpm_cmd "$corepack_cmd" pnpm
-      return 0
-    fi
-    detect_pnpm_cmd || true
-  fi
-}
 
 install_node() {
   local os
@@ -1233,38 +1200,44 @@ install_node() {
 }
 
 ensure_pnpm() {
-  if detect_pnpm_cmd && pnpm_cmd_is_ready; then
-    local current_version
-    current_version="$("${PNPM_CMD[@]}" --version 2>/dev/null || true)"
-    if [[ "$current_version" =~ ^11\. ]]; then
+  local repo_dir="${1:-$PWD}"
+  local spec version corepack_cmd=""
+  spec="$(repo_pnpm_spec "$repo_dir" || true)"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.0.0"
+  version="${spec#pnpm@}"
+  version="${version%%+*}"
+
+  if detect_pnpm_cmd && [[ "$(cd "$repo_dir" && "${PNPM_CMD[@]}" --version 2>/dev/null || true)" == "$version" ]]; then
+    return 0
+  fi
+  if [[ -x "$(node_dir)/bin/corepack" ]]; then
+    corepack_cmd="$(node_dir)/bin/corepack"
+  elif command -v corepack >/dev/null 2>&1; then
+    corepack_cmd="$(command -v corepack)"
+  fi
+  if [[ -n "$corepack_cmd" ]]; then
+    emit_json step name pnpm status start method corepack
+    log "Activating repo pnpm ${version} via Corepack..."
+    "$corepack_cmd" enable >/dev/null 2>&1 || true
+    # A stale Corepack signature set must still reach the npm bootstrap.
+    if "$corepack_cmd" prepare "$spec" --activate &&
+      [[ "$(cd "$repo_dir" && "$corepack_cmd" pnpm --version 2>/dev/null || true)" == "$version" ]]; then
+      set_pnpm_cmd "$corepack_cmd" pnpm
+      emit_json step name pnpm status ok
       return 0
     fi
-    log "Found pnpm ${current_version:-unknown}; upgrading to pnpm@11..."
-  fi
-
-  if [[ -x "$(node_dir)/bin/corepack" ]]; then
-    emit_json step name pnpm status start method corepack
-    log "Installing pnpm via Corepack..."
-    "$(node_dir)/bin/corepack" enable >/dev/null 2>&1 || true
-    # Corepack downloads fail hard on npm registry key rotation (its bundled
-    # signature set goes stale); the npm fallback below must stay reachable.
-    if "$(node_dir)/bin/corepack" prepare pnpm@11 --activate; then
-      if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
-        emit_json step name pnpm status ok
-        return 0
-      fi
-    else
-      emit_json step name pnpm status warn reason corepack-failed
-      log "Corepack could not provision pnpm; falling back to npm."
-    fi
+    log "Corepack could not provision pnpm; falling back to npm."
   fi
 
   emit_json step name pnpm status start method npm
-  log "Installing pnpm via npm..."
-  "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
-  detect_pnpm_cmd || true
+  log "Installing pnpm ${version} via npm..."
+  local lifecycle_arg
+  lifecycle_arg="$(npm_lifecycle_allow_arg "$(npm_bin)" "pnpm@${version}" "$repo_dir" "pnpm@${version}")" || return 1
+  "$(npm_bin)" install -g --prefix "$PREFIX" "pnpm@${version}" ${lifecycle_arg:+"$lifecycle_arg"}
+  if ! detect_pnpm_cmd || [[ "$(cd "$repo_dir" && "${PNPM_CMD[@]}" --version 2>/dev/null || true)" != "$version" ]]; then
+    fail "Could not activate pnpm ${version} for ${repo_dir}"
+  fi
   emit_json step name pnpm status ok
-  return 0
 }
 
 fix_npm_prefix_if_needed() {
@@ -1385,14 +1358,14 @@ npm_config_has_raw_key() {
 }
 
 npm_lifecycle_allow_arg() {
-  local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version="" output=""
+  local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" exact_identity="${4:-}" version="" output=""
   if ! version="$("$npm_cmd" --version 2>/dev/null)"; then
     log "ERROR: unable to determine npm version; no package changes were made"
     return 1
   fi
-  output="$("$(node_bin)" - "$version" "$spec" "$npm_cwd" <<'NODE'
+  output="$("$(node_bin)" - "$version" "$spec" "$npm_cwd" "$exact_identity" <<'NODE'
 const path = require("node:path");
-const [versionOutput, spec, cwd] = process.argv.slice(2);
+const [versionOutput, spec, cwd, exactIdentity] = process.argv.slice(2);
 const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
 const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
 const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
@@ -1405,6 +1378,7 @@ let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\
 if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
 const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
 if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (exactIdentity) identity = exactIdentity;
 if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
 process.stdout.write(`--allow-scripts=${identity}\n`);
 NODE
@@ -1642,8 +1616,6 @@ install_openclaw_from_git() {
 
   emit_json step name git-tools status start
   ensure_git
-  ensure_pnpm
-  ensure_pnpm_binary_for_scripts
   emit_json step name git-tools status ok
 
   if [[ -d "$repo_dir/.git" ]] &&
@@ -1701,7 +1673,8 @@ install_openclaw_from_git() {
 
   cleanup_legacy_submodules "$repo_dir"
   ensure_pnpm_git_prepare_allowlist "$repo_dir"
-  activate_repo_pnpm_version "$repo_dir"
+  ensure_pnpm "$repo_dir"
+  ensure_pnpm_binary_for_scripts
 
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"

@@ -606,7 +606,11 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Ref trust needs every branch and tag, but no historical file blobs.
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
 
       - name: Validate selected ref
         id: validate
@@ -1602,6 +1606,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
+      max-parallel: 32
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -1664,7 +1669,7 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -4333,7 +4338,7 @@ jobs:
             profiles: stable
           - suite_id: live-gateway-anthropic-docker-full
             suite_group: live-gateway-anthropic-docker
-            label: Docker live gateway Anthropic
+            label: Docker live gateway Anthropic (full advisory)
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false

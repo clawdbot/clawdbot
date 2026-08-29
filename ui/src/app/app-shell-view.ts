@@ -37,7 +37,9 @@ import {
   isOptionalElementDefined,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
+  MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
+  SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
@@ -58,11 +60,6 @@ import {
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const SIDEBAR_ATTENTION_ELEMENT = {
-  tagName: "openclaw-sidebar-attention",
-  label: t("attention.issues"),
-  loadModule: () => import("../components/sidebar-attention.ts"),
-} satisfies OptionalCustomElement;
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -273,6 +270,10 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
   const mobileNavLayout = isMobileNavLayout();
   const nativeWebChrome = isNativeWebChromeHost();
+  // Native chrome is absent in browsers; the shell owns visible retry if its chunk fails.
+  if (nativeWebChrome && !onboarding) {
+    host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
+  }
   const mergedChatChrome = shouldMergeChatChrome({
     mobileNavLayout,
     routeId: activeRoute,

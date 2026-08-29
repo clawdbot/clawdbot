@@ -23,7 +23,7 @@ export const buzzSetupPlugin: ChannelPlugin<ResolvedBuzzAccount> = {
     order: 56,
   },
   capabilities: { chatTypes: ["group"], threads: true },
-  reload: { configPrefixes: ["channels.buzz"] },
+  reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
   configSchema: BuzzConfigSchema,
   setupContract: buzzSetupContract,
   setupWizard: buzzSetupWizard,

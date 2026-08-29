@@ -23,7 +23,6 @@ import {
   boundOutputToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
-  resolveCodeModeConfig,
   toToolSearchConfig,
   type CodeModeConfig,
   type CodeModeLanguage,
@@ -65,6 +64,7 @@ import { ToolInputError } from "./tools/common.js";
 export async function runCodeModeExec(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
+  config: CodeModeConfig;
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
@@ -74,15 +74,7 @@ export async function runCodeModeExec(params: {
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
-  const config = resolveCodeModeConfig(
-    params.ctx.runtimeConfig ?? params.ctx.config,
-    params.ctx.agentId,
-  );
-  // The exec/wait tools only exist when the run gate engaged code mode, so
-  // "auto" counts as enabled here; only a hard `false` rejects execution.
-  if (config.enabled === false) {
-    throw new ToolInputError("code mode is disabled.");
-  }
+  const { config } = params;
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
     prepareInput: true,
     validateInput: true,
@@ -166,9 +158,14 @@ export async function runCodeModeExec(params: {
     });
   } catch (error) {
     const code = params.signal?.aborted ? ("aborted" as const) : codeModeFailureCode(error);
+    const bounded = boundCodeModeResult({
+      error: params.signal?.aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
+      output: [],
+      maxOutputBytes: config.maxOutputBytes,
+    });
     return {
       status: "failed" as const,
-      error: params.signal?.aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
+      error: bounded.error,
       code,
       failurePhase: bridgeDispatch.started
         ? ("bridge" as const)
@@ -546,10 +543,12 @@ async function settleCodeModeResult(params: {
   const bounded = boundCodeModeResult({
     output,
     ...(result.status === "completed" ? { value: result.value } : {}),
+    ...(result.status === "failed" ? { error: result.error } : {}),
     maxOutputBytes: params.config.maxOutputBytes,
   });
   const finalized = {
     ...result,
+    ...(bounded.error !== undefined ? { error: bounded.error } : {}),
     ...(result.status === "completed" ? { value: bounded.value } : {}),
     ...(result.status === "failed"
       ? {
@@ -557,7 +556,7 @@ async function settleCodeModeResult(params: {
           bridgeDispatchStarted: params.bridgeDispatch.started,
         }
       : {}),
-    output: bounded.output.slice(bounded.truncated ? 0 : deliveredOutputCount),
+    output: bounded.output.slice(bounded.outputTruncated ? 0 : deliveredOutputCount),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
@@ -702,13 +701,18 @@ export async function runWait(params: {
     if (!activeRuns.has(state.runId)) {
       cancelPendingBridgeStates(state.pending);
     }
+    const bounded = boundCodeModeResult({
+      error: codeModeFailureMessage(error),
+      output: takeUndeliveredCodeModeRunOutput(state),
+      maxOutputBytes: state.config.maxOutputBytes,
+    });
     return {
       status: "failed" as const,
-      error: codeModeFailureMessage(error),
+      error: bounded.error,
       code: codeModeFailureCode(error),
       failurePhase: "bridge" as const,
       bridgeDispatchStarted: state.bridgeDispatch.started,
-      output: takeUndeliveredCodeModeRunOutput(state),
+      output: bounded.output,
       replaySafe: state.replaySafe,
       telemetry: telemetry(state.runtime),
     };

@@ -613,9 +613,7 @@ suite.define(() => {
           const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
             hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
-            loading:
-              pane?.querySelector(".chat-history-sentinel openclaw-panel-loading-skeleton") !==
-              null,
+            loading: pane?.querySelector('.chat-history-available[aria-busy="true"]') !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
@@ -878,7 +876,7 @@ suite.define(() => {
       expect(sendEnabled).toBe(true);
       await send.click();
 
-      const queue = page.locator(".chat-group.user:has(.chat-queue__item)", { hasText: prompt });
+      const queue = page.locator(".chat-queue");
       await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });
       await queue.getByText(prompt).waitFor({ timeout: 10_000 });
       const requestsBeforeReconnect = await gateway.getRequests("chat.send");

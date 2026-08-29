@@ -408,6 +408,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
+      conversationRoutePeerId: sessionCtx.ConversationRoutePeerId,
       conversationToolPolicy: sessionCtx.ConversationToolPolicy,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:

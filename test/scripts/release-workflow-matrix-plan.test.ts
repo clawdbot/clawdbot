@@ -29,6 +29,7 @@ type MatrixEntry = {
   advisory?: boolean;
   chunk_id?: string;
   id?: string;
+  label?: string;
   profiles?: string;
   providers?: string;
   suite_group?: string;
@@ -289,6 +290,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       .filter((entry: MatrixEntry) => entry.suite_group === "live-gateway-anthropic-docker")
       .map((entry: MatrixEntry) => ({
         advisory: entry.advisory,
+        label: entry.label,
         profiles: entry.profiles,
         suiteId: entry.suite_id,
       }));
@@ -296,11 +298,13 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(anthropicEntries).toEqual([
       {
         advisory: undefined,
+        label: "Docker live gateway Anthropic",
         profiles: "stable",
         suiteId: "live-gateway-anthropic-docker",
       },
       {
         advisory: true,
+        label: "Docker live gateway Anthropic (full advisory)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },

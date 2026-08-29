@@ -391,7 +391,12 @@ describe("session suggestion handlers", () => {
       await upsertDefaultSuggestionSession();
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
-      mocks.presence = [{ user: { id: "alice" }, watchedSessions: [sessionKey] }];
+      mocks.presence = [
+        {
+          user: { id: "alice", identity: { type: "profile", id: "alice" } },
+          watchedSessions: [sessionKey],
+        },
+      ];
       const solo = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -401,7 +406,10 @@ describe("session suggestion handlers", () => {
       expect(solo.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
       expect(broadcast).not.toHaveBeenCalled();
 
-      mocks.presence.push({ user: { id: "owner" }, watchedSessions: [sessionKey] });
+      mocks.presence.push({
+        user: { id: "owner", identity: { type: "profile", id: "owner" } },
+        watchedSessions: [sessionKey],
+      });
       const collaborative = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -446,8 +454,14 @@ describe("session suggestion handlers", () => {
       );
 
       mocks.presence = [
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
-        { user: { id: "bob" }, watchedSessions: [sessionKey] },
+        {
+          user: { id: "owner", identity: { type: "profile", id: "owner" } },
+          watchedSessions: [sessionKey],
+        },
+        {
+          user: { id: "bob", identity: { type: "profile", id: "bob" } },
+          watchedSessions: [sessionKey],
+        },
       ];
       vi.setSystemTime(4_000);
       const notViewing = await call(
@@ -468,8 +482,14 @@ describe("session suggestion handlers", () => {
         },
       );
       mocks.presence = [
-        { user: { id: "shared-alice" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        {
+          user: { id: "shared-alice", identity: { type: "profile", id: "shared-alice" } },
+          watchedSessions: [sessionKey],
+        },
+        {
+          user: { id: "owner", identity: { type: "profile", id: "owner" } },
+          watchedSessions: [sessionKey],
+        },
       ];
       vi.setSystemTime(5_000);
       const sharedViewer = await call(

@@ -260,6 +260,7 @@ function createFixture() {
       coreReadAuthorized: true,
     },
     preflight: {
+      compactionReplayEnabled: false,
       contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       includeBoundaryTimestamp: false,

@@ -68,6 +68,7 @@
  "node_modules/@awesome.me/webawesome/dist/components/dialog/dialog.js",
  "node_modules/@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
  "node_modules/@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
+ "node_modules/@awesome.me/webawesome/dist/components/popup/popup.js",
  "node_modules/@awesome.me/webawesome/dist/components/radio-group/radio-group.js",
  "node_modules/@awesome.me/webawesome/dist/components/radio/radio.js",
  "node_modules/@awesome.me/webawesome/dist/components/switch/switch.js",
@@ -1209,7 +1210,6 @@
  "ui/src/components/lobster-pet-traffic.ts",
  "ui/src/components/lobster-pet.runtime.ts",
  "ui/src/components/login-gate.ts",
- "ui/src/components/macos-titlebar-controls.ts",
  "ui/src/components/markdown-assistant-transcript.ts",
  "ui/src/components/markdown-code-blocks.ts",
  "ui/src/components/markdown-details.ts",
@@ -1290,7 +1290,6 @@
  "ui/src/components/tooltip-content.ts",
  "ui/src/components/tooltip-title.ts",
  "ui/src/components/tooltip.ts",
- "ui/src/components/update-banner.ts",
  "ui/src/components/viewer-facepile.ts",
  "ui/src/components/web-awesome-tabs.ts",
  "ui/src/components/web-awesome.ts",
@@ -1786,5 +1785,6 @@
  "ui/src/pages/workboard/route-location.ts",
  "ui/src/pages/workboard/route.ts",
  "ui/src/pages/worktrees/route.ts",
+ "ui/src/styles/chat.css",
  "ui/src/styles/lobster-pet.css"
 ]

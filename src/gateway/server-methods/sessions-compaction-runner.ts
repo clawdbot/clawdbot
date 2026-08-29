@@ -9,6 +9,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
 import {
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
@@ -99,6 +100,7 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
+  const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
   return await compactEmbeddedAgentSession({
     contextEngineAgentId: params.agentId,
     sessionId: params.sessionId,
@@ -115,6 +117,14 @@ export async function runGatewaySessionCompaction(
     workspaceDir,
     cwd: normalizeOptionalString(params.entry.spawnedCwd),
     config: params.cfg,
+    // Current delivery owns the account; origin can retain historical identity.
+    // Group session keys do not carry an account themselves.
+    agentAccountId:
+      params.entry.delivery?.kind === "external"
+        ? params.entry.delivery.context?.accountId
+        : undefined,
+    conversationRoutePeerId: primaryConversation?.routeContext?.peerId,
+    chatType: primaryConversation?.kind,
     provider: resolvedModel.provider,
     model: resolvedModel.model,
     authProfileId:

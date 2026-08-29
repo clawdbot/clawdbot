@@ -296,6 +296,7 @@ export async function runEmbeddedAttemptSettledPhase(
       },
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
+        compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
         contextEngineAssemblySucceeded,
         contextEnginePromptAuthority,
         includeBoundaryTimestamp,

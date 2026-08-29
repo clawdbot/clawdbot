@@ -49,6 +49,7 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -344,28 +345,6 @@ async function shouldProcessLineEvent(
     })`,
   );
   return null;
-}
-
-function getLineMentionees(
-  message: MessageEvent["message"],
-): Array<{ type?: string; isSelf?: boolean }> {
-  if (message.type !== "text") {
-    return [];
-  }
-  const mentionees = (
-    message as Record<string, unknown> & {
-      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
-    }
-  ).mention?.mentionees;
-  return Array.isArray(mentionees) ? mentionees : [];
-}
-
-function isLineBotMentioned(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
-}
-
-function hasAnyLineMention(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).length > 0;
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {

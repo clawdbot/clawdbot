@@ -270,24 +270,29 @@ jobs:
           }
 
           try {
-            const {
-              createExtensionTestShards,
-              DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-              splitExtensionTestJobTargets,
-            } = await import(targetPlanPath("extension-test-plan"));
-            const allExtensionShards = createExtensionTestShards({
-              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+            const planner = await import(targetPlanPath("extension-test-plan"));
+            const allExtensionShards = planner.createExtensionTestShards({
+              shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             });
-            const telegramPlanGroup = allExtensionShards
-              .find((shard) => shard.extensionIds.includes("telegram"))
-              ?.planGroups.find((group) => group.extensionIds.includes("telegram"));
-            const genericExtensionIds = allExtensionShards
-              .flatMap((shard) => shard.extensionIds)
-              .filter((extensionId) => extensionId !== "telegram");
-            const batchShards = createExtensionTestShards({
-              extensionIds: genericExtensionIds,
-              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-            }).map((shard) => ({
+            const hasJobSplitter = typeof planner.splitExtensionTestJobTargets === "function";
+            const telegramPlanGroup = hasJobSplitter
+              ? allExtensionShards
+                  .find((shard) => shard.extensionIds.includes("telegram"))
+                  ?.planGroups.find((group) => group.extensionIds.includes("telegram"))
+              : null;
+            const genericExtensionIds = hasJobSplitter
+              ? allExtensionShards
+                  .flatMap((shard) => shard.extensionIds)
+                  .filter((extensionId) => extensionId !== "telegram")
+              : [];
+            const batchShards = (
+              hasJobSplitter
+                ? planner.createExtensionTestShards({
+                    extensionIds: genericExtensionIds,
+                    shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+                  })
+                : allExtensionShards
+            ).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
               vitest_config: "",
@@ -314,18 +319,20 @@ jobs:
                 ? path.relative(telegramTestDir, pattern).replaceAll("\\", "/")
                 : pattern,
             );
-            const telegramTestFiles = globSync(telegramTestConfig.include ?? [], {
-              cwd: telegramTestDir,
-              exclude: telegramTestExclude,
-            })
-              .map((file) =>
-                path
-                  .relative(process.cwd(), path.resolve(telegramTestDir, file))
-                  .replaceAll("\\", "/"),
-              )
-              .sort();
+            const telegramTestFiles = telegramPlanGroup
+              ? globSync(telegramTestConfig.include ?? [], {
+                  cwd: telegramTestDir,
+                  exclude: telegramTestExclude,
+                })
+                  .map((file) =>
+                    path
+                      .relative(process.cwd(), path.resolve(telegramTestDir, file))
+                      .replaceAll("\\", "/"),
+                  )
+                  .sort()
+              : [];
             const telegramJobTargets = telegramPlanGroup
-              ? splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
+              ? planner.splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
               : [];
             const telegramShards = telegramPlanGroup
               ? telegramJobTargets.map((includePatterns, index) => ({
@@ -335,7 +342,7 @@ jobs:
                   vitest_config: telegramPlanGroup.config,
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
-                  shard_index: DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
+                  shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
                   task: "extension-file-shard",
                 }))
               : [];
@@ -496,7 +503,9 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          sparse-checkout: src/plugins/npm-install-security-scan.release.test.ts
+          sparse-checkout: |
+            src/plugins/npm-install-security-scan.release.test.ts
+            scripts/lib/npm-json-output.mts
           sparse-checkout-cone-mode: false
           submodules: false
 
@@ -510,6 +519,9 @@ jobs:
           install -m 0644 \
             "$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts" \
             src/plugins/npm-install-security-scan.release.test.ts
+          install -m 0644 \
+            "$trusted_checkout/scripts/lib/npm-json-output.mts" \
+            scripts/lib/npm-json-output.mts
           rm -rf -- "$trusted_checkout"
           trap - EXIT
 

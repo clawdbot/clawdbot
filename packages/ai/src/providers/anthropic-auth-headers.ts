@@ -1,3 +1,13 @@
+import { getAiTransportHost } from "../host.js";
+
+/** Inspect resolved credential shape for auth routing without exposing its value. */
+export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
+  return (
+    typeof apiKey === "string" &&
+    getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat")
+  );
+}
+
 type AnthropicAuthModel = {
   provider?: string;
   authHeader?: boolean;

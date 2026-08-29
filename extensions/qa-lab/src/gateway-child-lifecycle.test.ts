@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
-import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const boundary = vi.hoisted(() => ({ create: vi.fn() }));
@@ -23,15 +23,17 @@ const groups: number[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   boundary.create.mockReset();
-  for (const owner of owners.splice(0)) {
+  for (const owner of owners) {
     await owner.stop();
   }
-  for (const group of groups.splice(0)) {
+  for (const group of groups) {
     if (isQaPosixProcessGroupAlive(group)) {
-      process.kill(-group, "SIGKILL");
+      expect(signalQaPosixProcessGroup(group, "SIGKILL")).toBeUndefined();
     }
     await vi.waitFor(() => expect(isQaPosixProcessGroupAlive(group)).toBe(false));
   }
+  owners.length = 0;
+  groups.length = 0;
   await dirs.cleanup();
 });
 

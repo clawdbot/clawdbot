@@ -38,7 +38,7 @@ export const PresenceEntrySchema = closedObject({
   instanceId: Type.Optional(NonEmptyString),
   user: Type.Optional(
     closedObject({
-      /** Canonical profile id when resolved, otherwise authenticated identity. Clients group presence by this. */
+      /** Canonical profile id when resolved, otherwise authenticated identity; grouping also uses identity qualification. */
       id: NonEmptyString,
       identity: Type.Optional(SessionPersonSchema.properties.identity),
       email: Type.Optional(NonEmptyString),

@@ -3,6 +3,13 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  REVIEWED_PR,
+  REVIEWED_HEAD,
+  validReview,
+  writeReviewArtifacts,
+  type ReviewArtifactFixtureOptions,
+} from "./pr-review-artifact-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reviewScript = join(process.cwd(), "scripts/pr-lib/review.sh");
@@ -10,8 +17,6 @@ const reviewArtifactsScript = join(process.cwd(), "scripts/pr-lib/review-artifac
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-const REVIEWED_PR = 42;
-const REVIEWED_HEAD = "b".repeat(40);
 const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
 const REVIEW_SHELL_COMMAND_SURFACE = [
   "rg() {",
@@ -24,45 +29,6 @@ const REVIEW_SHELL_COMMAND_SURFACE = [
   "}",
 ].join("\n");
 
-function validReview() {
-  return {
-    pr: { number: REVIEWED_PR, headSha: REVIEWED_HEAD },
-    recommendation: "NEEDS WORK",
-    findings: [] as Array<{
-      id: string;
-      title: string;
-      area: string;
-      fix: string;
-      severity: "BLOCKER" | "IMPORTANT" | "NIT";
-    }>,
-    nitSweep: {
-      performed: true,
-      status: "none",
-      summary: "No optional nits identified.",
-    },
-    behavioralSweep: {
-      performed: true,
-      status: "not_applicable",
-      summary: "No runtime behavior changed.",
-      silentDropRisk: "none",
-      branches: [] as unknown[],
-    },
-    issueValidation: {
-      performed: true,
-      source: "pr_body",
-      status: "unclear",
-      summary: "Review fixture.",
-    },
-    tests: {
-      ran: [],
-      gaps: [],
-      result: "pass",
-    },
-    docs: "not_applicable",
-    changelog: "not_required",
-  };
-}
-
 function validReadyReview() {
   const review = validReview();
   review.recommendation = "READY FOR /prepare-pr";
@@ -72,47 +38,13 @@ function validReadyReview() {
 
 function runValidation(
   review: ReturnType<typeof validReview>,
-  options: {
-    files?: string[];
+  options: ReviewArtifactFixtureOptions & {
     guardFailure?: boolean;
-    markdownIdentityLine?: string;
-    metaEnvPrNumber?: number;
-    mode?: "pr" | "main";
     orList?: boolean;
   } = {},
 ) {
   const fixtureRoot = tempDirs.make("openclaw-pr-review-validation-");
-  const localDir = join(fixtureRoot, ".local");
-  mkdirSync(localDir);
-  writeFileSync(join(localDir, "review.json"), `${JSON.stringify(review)}\n`);
-  writeFileSync(
-    join(localDir, "review.md"),
-    [
-      options.markdownIdentityLine ?? REVIEWED_IDENTITY_LINE,
-      "A)",
-      "B)",
-      "C)",
-      "D)",
-      "E)",
-      "F)",
-      "G)",
-      "H)",
-      "I)",
-      "J)",
-    ].join("\n"),
-  );
-  writeFileSync(
-    join(localDir, "pr-meta.env"),
-    `PR_URL=https://example.invalid/pr/42\nPR_NUMBER=${options.metaEnvPrNumber ?? REVIEWED_PR}\nPR_HEAD_SHA=${REVIEWED_HEAD}\n`,
-  );
-  writeFileSync(
-    join(localDir, "pr-meta.json"),
-    `${JSON.stringify({
-      number: REVIEWED_PR,
-      headRefOid: REVIEWED_HEAD,
-      files: (options.files ?? []).map((path) => ({ path })),
-    })}\n`,
-  );
+  writeReviewArtifacts(fixtureRoot, review, options);
 
   return spawnSync(
     "bash",
@@ -128,7 +60,7 @@ function runValidation(
         'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         options.guardFailure
           ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
-          : `review_guard() { REVIEW_MODE=${options.mode ?? "pr"}; }`,
+          : `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
         "print_review_stdout_summary() { :; }",
         options.orList ? "review_validate_artifacts 42 || exit 1" : "review_validate_artifacts 42",
       ].join("\n"),
@@ -212,11 +144,11 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
         "verify_prep_branch_matches_prepared_head() { :; }",
-        `pr_meta_json() { printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}'; }`,
+        `refresh_main_snapshot() { PR_MAIN_SHA=${"b".repeat(40)}; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         "git() { :; }",
         "node() { :; }",
-        `gh_plain() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *) return 0;; esac; }`,
+        `gh_plain() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
         "merge_verify 42",
       ].join("\n"),
       "pr-merge-verification",

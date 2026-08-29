@@ -243,6 +243,7 @@ const replaySanitizerHelpers = {
   isOpenAIResponsesRoute,
   isPlainTranscriptObject,
   isStructurallyValidOpaqueReplayToken,
+  redactTranscriptStructuredValue,
   redactTranscriptText,
 };
 

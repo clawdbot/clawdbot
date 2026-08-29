@@ -661,18 +661,35 @@ describe("createCopilotToolBridge", () => {
     expect(hiddenExecute).not.toHaveBeenCalled();
   });
 
-  it("reports code mode as disengaged when the config leaves it off", async () => {
-    const result = await createCopilotToolBridge({
-      attemptParams: {
-        config: { tools: { codeMode: false } },
-        runId: "run-no-code-mode",
-        sessionKey: "agent:agent-1:main",
-      } as never,
-      createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
-    });
-
-    expect(result.codeModeEngaged).toBe(false);
-  });
+  it.each([
+    { configured: false, override: undefined },
+    { configured: true, override: false },
+  ])(
+    "keeps the direct surface when configured=$configured, invocation=$override",
+    async ({ configured, override }) => {
+      const result = await createCopilotToolBridge({
+        attemptParams: {
+          config: {
+            tools: { codeMode: configured, toolSearch: false },
+            agents: {
+              entries: { "agent-1": {} },
+              defaults: { models: { "github-copilot/gpt-4o": { codeMode: configured } } },
+            },
+          },
+          codeModeOverride: override,
+          runId: "run-no-code-mode",
+          sessionKey: "agent:agent-1:main",
+        },
+        createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
+      });
+      try {
+        expect(result.codeModeEngaged).toBe(false);
+        expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual(["read"]);
+      } finally {
+        result.cleanup?.();
+      }
+    },
+  );
 
   it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
     const createOpenClawCodingTools = vi.fn(async () => [

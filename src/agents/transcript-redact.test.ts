@@ -451,6 +451,40 @@ describe("redactTranscriptMessage", () => {
   ] as const)(
     "preserves only validated %s OpenAI compaction replay state",
     (_name, type, replayIndex) => {
+      const compactedWindow = {
+        state: "ready",
+        output: JSON.stringify(
+          [
+            {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: "rules" }],
+            },
+            { type: "message", role: "system", content: [{ type: "input_text", text: "context" }] },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "retained request" },
+                {
+                  type: "input_image",
+                  detail: "auto",
+                  image_url: `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`,
+                },
+                { type: "input_file", file_id: "file_document", filename: "document.pdf" },
+              ],
+            },
+            {
+              type: "compaction",
+              id: "cmp_1",
+              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+              created_by: "responses",
+            },
+          ],
+          null,
+          2,
+        ),
+      };
       const msg = castAgentMessage({
         role: "assistant",
         api: "openclaw-openai-responses-transport",
@@ -469,6 +503,7 @@ describe("redactTranscriptMessage", () => {
           baseUrlHash: "ozhevd1smnk8s",
           sessionHash: "171dzdv17gum5g",
           authProfileHash: "oe8bkr3r8947",
+          compactedWindow,
           secret: "sk-abcdef1234567890xyz",
         },
       });
@@ -489,8 +524,83 @@ describe("redactTranscriptMessage", () => {
         baseUrlHash: "ozhevd1smnk8s",
         sessionHash: "171dzdv17gum5g",
         authProfileHash: "oe8bkr3r8947",
+        compactedWindow,
       });
       expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    },
+  );
+
+  it.each([
+    ["plaintext secret", { type: "input_text", text: "sk-abcdef1234567890xyz" }, {}],
+    ["custom text rule", { type: "input_text", text: "retained-private" }, {}],
+    ["structured secret", { type: "input_text", text: "safe", apiKey: "plainsecretvalue123" }, {}],
+    [
+      "file reference",
+      { type: "input_file", file_url: "https://example.com/retained-private" },
+      {},
+    ],
+    [
+      "image normalization",
+      {
+        type: "input_image",
+        detail: "auto",
+        image_url: `data:image/jpeg;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`,
+      },
+      {},
+    ],
+    [
+      "compaction metadata",
+      { type: "input_text", text: "safe" },
+      { created_by: "retained-private" },
+    ],
+    [
+      "mismatched opaque item",
+      { type: "input_text", text: "safe" },
+      { encrypted_content: "other-token" },
+    ],
+    ["malformed content", { type: "input_text", text: 42 }, {}],
+  ])(
+    "invalidates the whole canonical window for %s without erasing its replay barrier",
+    (_name, content, itemOverride) => {
+      const providerReplay = {
+        v: 1,
+        type: "openai-responses-retained-compaction",
+        id: "cmp_1",
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        compactedWindow: {
+          state: "ready",
+          output: JSON.stringify([
+            { type: "message", role: "user", content: [content] },
+            {
+              type: "compaction",
+              id: "cmp_1",
+              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+              ...itemOverride,
+            },
+          ]),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        content: [],
+        providerReplay,
+      });
+      const result = redactTranscriptMessage(message, cfg("tools", ["retained-private"]));
+      expect(result).toHaveProperty("providerReplay", {
+        ...providerReplay,
+        compactedWindow: { state: "refresh-required" },
+      });
+      expect(redactTranscriptMessage(result, cfg("tools"))).toEqual(result);
+      expect(message).toHaveProperty("providerReplay.compactedWindow.state", "ready");
     },
   );
 

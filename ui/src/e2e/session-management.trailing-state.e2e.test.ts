@@ -4,6 +4,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import {
   actionOpacity,
   captureUiProof,
+  controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
@@ -22,16 +23,19 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
     });
     await installMockGateway(page, {
+      mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow("agent:main:main", "Main", baseTime),
           Object.assign(
-            sessionRow("agent:main:two-line", "Two-line session", Date.now() - 1, {
+            sessionRow("agent:main:two-line", "Two-line session", baseTime - 1, {
               pinned: true,
+              pinnedAt: baseTime,
             }),
             { lastMessagePreview: "Finishing repository setup review" },
           ),
@@ -41,7 +45,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:two-line"));
       const row = page.locator('[data-session-key="agent:main:two-line"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const pin = row.getByRole("button", { name: "Unpin session" });

@@ -8,6 +8,11 @@ import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 const loggerInfoMock = vi.hoisted(() => vi.fn());
 
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
     info: loggerInfoMock,
@@ -39,6 +44,7 @@ const braveManifest = JSON.parse(
 };
 
 afterAll(() => {
+  vi.doUnmock("node:dns/promises");
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.resetModules();
 });

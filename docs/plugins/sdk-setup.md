@@ -437,13 +437,16 @@ When a channel upgrades from a single-account top-level config to `channels.<id>
 
 Every channel plugin can extend or narrow that promotion through its setup adapter:
 
+- `configPromotion: "preserve-root"`: keep all root values in place, including common name, policy, and delivery fields; the plugin owns its account layout
 - `singleAccountKeysToMove`: extra top-level keys that should move into the promoted account
 - `namedAccountPromotionKeys`: when named accounts already exist, only these keys move into the promoted account; shared policy/delivery keys stay at the channel root
 - `resolveSingleAccountPromotionTarget(...)`: choose which existing account receives promoted values
 
-The presence of `singleAccountKeysToMove` marks the promotion contract complete. Declare the field even when it is an empty array to opt out of legacy key promotion. Adapters that omit the field retain a reader-backed pre-declaration promotion tier for already-published plugins. The 2026-07-22 registry sweep removed 23 keys with no published dependents and retained six common keys plus the setup-only `rooms` key. Each retained key is deleted as soon as its published readers migrate to declarations; no version boundary is required.
+The presence of `singleAccountKeysToMove` marks the promotion contract complete. Declare the field even when it is an empty array to opt out of legacy key promotion; an empty array does not suppress common fields. Adapters that omit the field retain a reader-backed pre-declaration promotion tier for already-published plugins. The 2026-07-22 registry sweep removed 23 keys with no published dependents and retained six common keys plus the setup-only `rooms` key. Each retained key is deleted as soon as its published readers migrate to declarations; no version boundary is required.
 
 Declare `openclaw.setupFeatures.configPromotion: true` in the plugin package manifest when doctor must load these declarations from the lightweight bundled setup artifact. The setup-only plugin surface and the full channel plugin must expose the same declarations.
+
+For a plugin-owned root layout, also declare `openclaw.setupFeatures.configPromotion: "preserve-root"` in `package.json`. Doctor reads this static declaration for installed and bundled plugins, including disabled plugins, without executing their runtime. Omitting the declaration or using `false` does not opt out of promotion. The runtime declaration belongs on the adapter passed to `defineChannelSetupContract`, and covers shared CLI, declarative wizard, and policy-writer promotion. It does not change helpers that explicitly migrate a base name; use a selected-account writer when the root remains an implicit identity. Buzz is an example of this layout.
 
 When calling `moveSingleAccountChannelSectionToDefaultAccount(...)` with an already resolved plugin, pass its setup adapter as `setupSurface`. Caller-supplied setup surfaces take precedence over loaded and bundled lookup, which keeps scoped or setup-only plugins independent of global registration.
 

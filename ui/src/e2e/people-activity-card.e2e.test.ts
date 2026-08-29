@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -13,10 +14,16 @@ import {
 const suite = createChatFlowE2eSuite();
 const selected = "agent:main:card-selected";
 const watched = "agent:main:card-viewing";
-const proofDirectory = path.resolve(".artifacts/control-ui-e2e/people-activity-cards");
+const proofDirectory = path.resolve(".artifacts/control-ui-e2e/presence-namespaces");
 const recentLabel = "Review the complete cross-platform launch readiness checklist before release";
 const updatedRecentLabel = `${recentLabel} with every regional owner`;
 const focusUpdatedRecentLabel = `${updatedRecentLabel} and final approval`;
+
+const id = "synthetic-shared-id";
+const rawSession = "agent:main:raw-watch";
+const profileSession = "agent:main:profile-watch";
+const profile = { id, identity: { type: "profile" as const, id }, name: "Profile person" };
+const raw = { id, name: "Unqualified sender" };
 
 function scenario(recentSessionLabel = recentLabel) {
   const now = Date.now();
@@ -25,6 +32,7 @@ function scenario(recentSessionLabel = recentLabel) {
     presenceUsers: [
       {
         id: "alice",
+        identity: { type: "profile" as const, id: "alice" },
         name: "Alice",
         onlineSince: now - 2_700_000,
         lastActivityAt: now - 60_000,
@@ -50,7 +58,7 @@ function scenario(recentSessionLabel = recentLabel) {
           kind: "direct",
           label: recentSessionLabel,
           updatedAt: now - 120_000,
-          createdActor: { type: "human", id: "alice" },
+          createdActor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
         },
       ]),
     },
@@ -203,7 +211,7 @@ suite.define(() => {
           presence: [
             {
               ...current,
-              user: { id: "alice", name: "Alice" },
+              user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
               lastInputSeconds: 600,
               ts: Date.now(),
               lastActivityAt: Date.now(),
@@ -269,9 +277,9 @@ suite.define(() => {
         expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
         await person.click();
         await card.waitFor({ state: "visible" });
-        await page.mouse.move(1100, 850);
+        await page.mouse.move(1100, 200);
         expect(await card.count()).toBe(1);
-        await page.mouse.click(1100, 850);
+        await page.mouse.click(1100, 200);
         await expect.poll(() => card.count()).toBe(0);
         await person.click();
         await card.waitFor({ state: "visible" });
@@ -338,4 +346,169 @@ suite.define(() => {
       },
     );
   });
+  it("keeps colliding people, watches, owner exclusion and open cards separate through updates", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1280, height: 900 },
+        colorScheme: "light",
+        locale: "en-US",
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        const actor = { type: "human", id, identity: profile.identity, label: profile.name };
+        const sessions = chatSessionListResponse([
+          {
+            key: selected,
+            kind: "direct",
+            label: "Namespace isolation",
+            updatedAt: 3,
+            owner: { actor },
+            participantCount: 1,
+          },
+          {
+            key: profileSession,
+            kind: "direct",
+            label: "Profile watch",
+            updatedAt: 2,
+            createdActor: actor,
+          },
+          { key: rawSession, kind: "direct", label: "Raw watch", updatedAt: 1 },
+        ]);
+        const gateway = await installMockGateway(page, {
+          sessionKey: selected,
+          presenceUsers: [
+            { self: true, id: "self", identity: { type: "profile", id: "self" }, name: "Self" },
+            { ...profile, watchedSessions: [selected, profileSession] },
+            { ...raw, watchedSessions: [selected, rawSession] },
+          ],
+          methodResponses: { "sessions.list": sessions },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        const profileButton = page.getByRole("button", {
+          name: "Details for Profile person",
+          exact: true,
+        });
+        await profileButton.waitFor({ state: "visible" });
+        if (captureUiProofEnabled) {
+          await mkdir(proofDirectory, { recursive: true });
+          await page.screenshot({
+            path: path.join(proofDirectory, "initial.png"),
+            animations: "disabled",
+          });
+        }
+        expect(await page.locator(".sidebar-online__person").count()).toBe(2);
+        const rawButton = page.getByRole("button", {
+          name: "Details for Unqualified sender",
+          exact: true,
+        });
+        await rawButton.click();
+        const rawCard = page.getByRole("dialog", {
+          name: "Activity for Unqualified sender",
+          exact: true,
+        });
+        await rawCard.waitFor({ state: "visible" });
+        expect(await rawCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ }).count()).toBe(1);
+        expect(await rawCard.getByRole("link", { name: /^Profile watch(?:\s|$)/ }).count()).toBe(0);
+        expect(
+          await rawCard.getByRole("link", { name: "View activity", exact: true }).count(),
+        ).toBe(0);
+        const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
+        await expect.poll(() => headerFaces.getAttribute("aria-label")).toBe(raw.name);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(proofDirectory, "raw-card.png"),
+            animations: "disabled",
+          });
+        }
+        const rawLink = rawCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ });
+        await rawLink.focus();
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            { user: raw, watchedSessions: [rawSession, selected], lastInputSeconds: 600 },
+            { user: profile, watchedSessions: [profileSession, selected], lastInputSeconds: 0 },
+          ],
+        });
+        await expect
+          .poll(() => rawLink.evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        await gateway.emitGatewayEvent("presence", {
+          presence: [{ user: raw, watchedSessions: [rawSession, selected] }],
+        });
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(1);
+        expect(await rawLink.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await rawCard.count()).toBe(1);
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            { user: raw, reason: "disconnect", watchedSessions: [rawSession] },
+            { user: profile, watchedSessions: [profileSession] },
+          ],
+        });
+        await expect.poll(() => rawCard.count()).toBe(0);
+        await profileButton.click();
+        const profileCard = page.getByRole("dialog", {
+          name: "Activity for Profile person",
+          exact: true,
+        });
+        await profileCard.waitFor({ state: "visible" });
+        expect(await profileCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ }).count()).toBe(0);
+        const activity = profileCard.getByRole("link", { name: "View activity", exact: true });
+        expect(await activity.getAttribute("href")).toBe(`/activity?person=${id}`);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(proofDirectory, "profile-card.png"),
+            animations: "disabled",
+          });
+        }
+        expect((await gateway.getRequests("connect")).length).toBeGreaterThan(0);
+        expect((await gateway.getRequests("sessions.list")).length).toBeGreaterThan(0);
+      },
+    );
+  });
+  it.each([true, false])(
+    "keeps a same-ID peer visible and typing enabled for profile self: %s",
+    async (qualified) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+        async ({ page }) => {
+          const self = qualified ? profile : raw;
+          const peer = qualified ? raw : profile;
+          const gateway = await installMockGateway(page, {
+            sessionKey: selected,
+            featureMethods: [...defaultControlUiFeatureMethods, "session.typing"],
+            presenceUsers: [
+              { ...self, self: true, watchedSessions: [selected] },
+              { ...peer, watchedSessions: [selected] },
+            ],
+            methodResponses: {
+              "session.typing": { ok: true, broadcast: true },
+              "sessions.list": chatSessionListResponse([
+                {
+                  key: selected,
+                  kind: "direct",
+                  label: "Namespace isolation",
+                  updatedAt: 1,
+                  sessionId: "namespace-session",
+                },
+              ]),
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+          await page
+            .getByRole("button", { name: `Details for ${peer.name}`, exact: true })
+            .waitFor({ state: "visible" });
+          expect(await page.locator(".sidebar-online__person").count()).toBe(1);
+          await expect
+            .poll(() =>
+              page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),
+            )
+            .toBe(peer.name);
+          await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill("A synthetic typing draft");
+          const typing = await gateway.waitForRequest("session.typing");
+          expect(typing.params).toMatchObject({ sessionKey: selected, typing: true });
+        },
+      );
+    },
+  );
 });

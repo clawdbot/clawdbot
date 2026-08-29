@@ -14,6 +14,7 @@ import {
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
+import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
 import {
@@ -559,7 +560,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const res = await context.nodeRegistry.invoke({
+        const res = await invokeNodeWithReadinessRetry(context.nodeRegistry, {
           nodeId,
           expectedConnId: nodeSession.connId,
           expectedPairingGeneration: generation.key,

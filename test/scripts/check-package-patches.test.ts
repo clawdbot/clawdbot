@@ -133,39 +133,51 @@ patchedDependencies:
     expect(collectPackagePatchViolations(dir)).toEqual([]);
   });
 
-  it("rejects lockfile-only and package-local patch declarations", () => {
-    const dir = makeRepo();
-    writeJsonFile(path.join(dir, "package.json"), {
-      name: "fixture",
-      pnpm: {
-        patchedDependencies: {
-          "nested@1.0.0": "patches/nested.patch",
+  it.each([false, true])(
+    "rejects lockfile and package-local patches with toolchain metadata %s",
+    (withToolchain) => {
+      const dir = makeRepo();
+      writeJsonFile(path.join(dir, "package.json"), {
+        name: "fixture",
+        pnpm: {
+          patchedDependencies: {
+            "nested@1.0.0": "patches/nested.patch",
+          },
         },
-      },
-    });
-    writeFileSync(
-      path.join(dir, "pnpm-lock.yaml"),
-      `lockfileVersion: '9.0'
+      });
+      writeFileSync(
+        path.join(dir, "pnpm-lock.yaml"),
+        `${withToolchain ? "---\nlockfileVersion: '9.0'\npatchedDependencies:\n  toolchain@1.0.0: toolhash\n---\n" : ""}lockfileVersion: '9.0'
 patchedDependencies:
   hidden@1.0.0: abc123
 `,
-      "utf8",
-    );
-    git(dir, ["add", "package.json", "pnpm-lock.yaml"]);
+        "utf8",
+      );
+      git(dir, ["add", "package.json", "pnpm-lock.yaml"]);
 
-    expect(collectPackagePatchViolations(dir)).toEqual([
-      {
-        file: "pnpm-lock.yaml",
-        kind: "patchedDependency",
-        detail: "hidden@1.0.0 -> abc123",
-      },
-      {
-        file: "package.json",
-        kind: "packageJsonPatchedDependency",
-        detail: "nested@1.0.0 -> patches/nested.patch",
-      },
-    ]);
-  });
+      expect(collectPackagePatchViolations(dir)).toEqual([
+        ...(withToolchain
+          ? [
+              {
+                file: "pnpm-lock.yaml",
+                kind: "patchedDependency",
+                detail: "toolchain@1.0.0 -> toolhash",
+              },
+            ]
+          : []),
+        {
+          file: "pnpm-lock.yaml",
+          kind: "patchedDependency",
+          detail: "hidden@1.0.0 -> abc123",
+        },
+        {
+          file: "package.json",
+          kind: "packageJsonPatchedDependency",
+          detail: "nested@1.0.0 -> patches/nested.patch",
+        },
+      ]);
+    },
+  );
 
   it("skips tracked package manifests deleted in the worktree", () => {
     const dir = makeRepo();

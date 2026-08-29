@@ -113,6 +113,7 @@ suite.define(() => {
       await expect(deleteFromRuntime([noOp])).resolves.toMatchObject({ deleted: false });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: retired[3],
+        sessionId: `session:${retired[3]}`,
         agentId: "main",
         reason: "delete",
       });

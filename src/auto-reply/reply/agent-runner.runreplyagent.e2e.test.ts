@@ -265,34 +265,41 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
-  queueEmbeddedAgentMessageWithOutcomeAsync: async (
-    sessionId: string,
-    prompt: string,
-    options: unknown,
-  ) => {
-    const result = state.queueEmbeddedAgentMessageMock(sessionId, prompt, options);
-    if (typeof result === "object") {
-      return result;
-    }
-    return result
-      ? {
-          queued: true,
-          sessionId,
-          target: "embedded_run",
-          gatewayHealth: "live",
-          enqueuedAtMs: Date.now(),
-        }
-      : {
-          queued: false,
-          sessionId,
-          reason: "no_active_run",
-          target: "none",
-          gatewayHealth: "live",
-        };
-  },
-}));
+vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => {
+  const { clearActiveEmbeddedRun, setActiveEmbeddedRun } =
+    await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>();
+  return {
+    // Queue admission is controlled here; logical-turn registration and retirement stay real.
+    clearActiveEmbeddedRun,
+    setActiveEmbeddedRun,
+    formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
+    queueEmbeddedAgentMessageWithOutcomeAsync: async (
+      sessionId: string,
+      prompt: string,
+      options: unknown,
+    ) => {
+      const result = state.queueEmbeddedAgentMessageMock(sessionId, prompt, options);
+      if (typeof result === "object") {
+        return result;
+      }
+      return result
+        ? {
+            queued: true,
+            sessionId,
+            target: "embedded_run",
+            gatewayHealth: "live",
+            enqueuedAtMs: Date.now(),
+          }
+        : {
+            queued: false,
+            sessionId,
+            reason: "no_active_run",
+            target: "none",
+            gatewayHealth: "live",
+          };
+    },
+  };
+});
 
 vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
   materializeMcpAppChannelPresentation: (params: unknown) =>

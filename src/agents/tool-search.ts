@@ -13,12 +13,7 @@ import {
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
-import {
-  appendToolSearchCodeStderrTail,
-  readToolSearchCode,
-  runCodeMode,
-  runCodeModeChild,
-} from "./tool-search-code-mode.js";
+import { readToolSearchCode, runCodeMode, runCodeModeChild } from "./tool-search-code-mode.js";
 import {
   isToolSearchCodeModeSupported,
   resolveToolSearchConfig,
@@ -424,7 +419,6 @@ const testing = {
   setToolSearchMinCodeTimeoutMsForTest,
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
-  appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
 

@@ -740,7 +740,6 @@ type ToolResultBranchEntry = {
   type: string;
   message?: AgentMessage;
   aggregateEligible?: boolean;
-  deferAggregateRecovery?: boolean;
 };
 
 type ToolResultReplacement = {
@@ -872,7 +871,6 @@ function projectToolResultBranch(params: {
     messageEntries.map((entry) => entry.message),
     params.projectionState,
   );
-  const hasFrozenProjectionBaseline = params.projectionState.frozen.size > 0;
   let messageIndex = 0;
   return {
     keys,
@@ -899,10 +897,11 @@ function projectToolResultBranch(params: {
       return {
         ...entry,
         message,
-        aggregateEligible:
-          !key || !frozen || (projected !== undefined && message === entry.message),
-        // Reduce frozen history first so steering cannot make fresh output disappear.
-        deferAggregateRecovery: key !== undefined && hasFrozenProjectionBaseline && !frozen,
+        // Frozen bytes are immutable on dispatch projections; eliding them would
+        // rewrite provider-sent prompt bytes. Recovery projections (frozenOnly)
+        // run after a provider context failure, so the cached prefix is already
+        // forfeit and frozen history must stay reducible.
+        aggregateEligible: params.frozenOnly || !key || !frozen,
       };
     }),
   };
@@ -938,7 +937,6 @@ function buildAggregateToolResultReplacements(params: {
               spillSourceMessage: params.spillSourceBranch?.[index]?.message ?? message,
               textLength: getToolResultTextBudget(message),
               aggregateEligible: entry.aggregateEligible !== false,
-              deferredByFreshProjection: entry.deferAggregateRecovery === true,
               protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
             },
           ]
@@ -964,14 +962,11 @@ function buildAggregateToolResultReplacements(params: {
 
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements = new Map<string, ToolResultReplacement>();
-  // Frozen projections shrink first; stable sorting preserves the original oldest-first order.
-  const recoveryCandidates = candidates
-    .filter((candidate) => !candidate.protectedByTrailingBatch)
-    .toSorted(
-      (left, right) =>
-        Number(left.deferredByFreshProjection) - Number(right.deferredByFreshProjection) ||
-        Number(right.aggregateEligible) - Number(left.aggregateEligible),
-    );
+  // Frozen prompt bytes are immutable. Recover only from unsent tail results;
+  // allow budget overflow when frozen history alone exceeds the aggregate cap.
+  const recoveryCandidates = candidates.filter(
+    (candidate) => candidate.aggregateEligible && !candidate.protectedByTrailingBatch,
+  );
 
   // Trim all older entries before clearing any, so fresh output and spill pointers stay recoverable.
   for (const clear of [false, true]) {
@@ -987,9 +982,14 @@ function buildAggregateToolResultReplacements(params: {
       const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
       let message: AgentMessage;
       if (clear) {
+        // Cleared fresh results keep a visible elision notice on projection
+        // paths; an empty tool result reads as failure and loses rerun guidance.
+        const noticeFloor = params.protectedEntryIds
+          ? estimateToolResultTextChars(spillMarkers?.compact ?? AGGREGATE_ELISION_MARKER)
+          : 0;
         message = clearToolResultText(
           candidate.message,
-          Math.max(0, baseTextLength - remainingReduction),
+          Math.max(noticeFloor, baseTextLength - remainingReduction),
           spillMarkers,
         );
       } else {

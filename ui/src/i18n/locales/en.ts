@@ -188,6 +188,7 @@ export const en: TranslationMap = {
     },
   },
   githubPreview: {
+    coAuthors: "Co-authored by {logins}",
     loading: "Loading GitHub details…",
     unavailable: "GitHub preview unavailable",
     states: {
@@ -1050,7 +1051,8 @@ export const en: TranslationMap = {
     sessionArchived: "Session archived",
     sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm: "Delete {count} archived sessions and their transcripts?",
+    deleteAllArchivedConfirm:
+      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -1224,15 +1226,17 @@ export const en: TranslationMap = {
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionConfirm:
+      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
+    deleteSessionsConfirm:
+      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nThis will delete the session entry and archive its transcript.",
+      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nThis will delete the session entries and archive their transcripts.",
+      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -2058,6 +2062,7 @@ export const en: TranslationMap = {
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
+    requestedBySession: "Approval requested by session {session}",
     pending: "{count} pending",
     otherPending: "Other pending requests",
     reviewRequest: "Review approval from {agent}: {command}",
@@ -2439,6 +2444,10 @@ export const en: TranslationMap = {
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
   },
   browser: {
+    profile: "Browser profile: {profile}",
+    navigationBlocked:
+      "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+    navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
     title: "Browser",
     open: "Open",
     openPanel: "Open browser panel",
@@ -2486,6 +2495,7 @@ export const en: TranslationMap = {
       canvasUnavailable: "Canvas 2D context unavailable.",
     },
     annotatePrompt: {
+      browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never
       // retranslate on source-wording changes, so the provenance-label rewrite
       // required fresh key names to propagate to all locales.
@@ -2743,8 +2753,15 @@ export const en: TranslationMap = {
       action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
+    testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",
     checkAgain: "Check again",
+    recovery: {
+      unknown:
+        "The previous activation is unresolved. You can verify and use the selected model, or check again after the setup attempt has finished. No activation will be repeated automatically.",
+      wait: "The previous setup attempt may still be running. Wait for its bounded setup window to finish, then choose Check again to retry.",
+      useCurrent: "Verify & use selected model",
+    },
     verify: {
       title: "Selected model",
       button: "Check model",
@@ -2769,7 +2786,6 @@ export const en: TranslationMap = {
       testAndUse: "Test & use",
       retry: "Retry test",
       testingButton: "Testing…",
-      testing: "Testing — asking {modelRef} for a quick reply…",
     },
     empty: {
       title: "Recommended installs",
@@ -3488,7 +3504,7 @@ export const en: TranslationMap = {
     codeMode: {
       title: "Code Mode",
       description:
-        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
+        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
     swarm: {
       title: "Swarm",
@@ -5802,7 +5818,6 @@ export const en: TranslationMap = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        queued: "Queued",
         applyingSettings: "Applying chat settings",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",

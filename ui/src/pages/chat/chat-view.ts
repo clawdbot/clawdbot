@@ -49,7 +49,6 @@ import {
 } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
-import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type {
   CapabilityMenuProps,
   ChatComposerDisabledBanner,
@@ -58,7 +57,6 @@ import type {
 } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
-import type { MessageReplyTarget } from "./components/chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
@@ -84,6 +82,12 @@ import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
+type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
+};
 export type ChatProps = ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
@@ -121,6 +125,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
       onShowEarlier: () => void;
     };
     toolMessages: unknown[];
+    browserTabPreviewsActive?: boolean;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     stream: string | null;
@@ -267,9 +272,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     resourceBasePath?: string;
     composerControls?: TemplateResult | typeof nothing;
     permissionPicker?: ChatPermissionPickerProps;
-    replyTarget?: MessageReplyTarget | null;
+    replyTarget?: ChatReplyTarget | null;
     onClearReply?: () => void;
-    onSetReply?: (target: MessageReplyTarget) => void;
+    onSetReply?: (target: ChatReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
     onForkMessage?: (entryId: string) => Promise<void> | void;
@@ -334,9 +339,10 @@ export function renderChat(props: ChatProps) {
       sessionKey: props.sessionKey,
       announceTranscript: props.announceTranscript,
       loading: props.loading && !placementStartup,
-      historyLoading: props.historyPagination?.loading,
+      historySentinel: props.historyPagination !== undefined,
       messages: props.messages,
       toolMessages: props.toolMessages,
+      browserTabPreviewsActive: props.browserTabPreviewsActive,
       guardianNotices: props.guardianNotices,
       streamSegments: props.streamSegments,
       stream: props.stream,
@@ -345,22 +351,6 @@ export function renderChat(props: ChatProps) {
       runOutputTokens: props.runOutputTokens,
       runStatus: props.runStatus,
       queue,
-      queueControls: {
-        queue: props.queue,
-        offline: props.offline,
-        canAbort:
-          Boolean(props.canAbort && props.onAbort) && !hasTerminalRunStatus(props.runStatus),
-        onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
-        onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
-        onQueueMove: props.onQueueMove,
-        onQueueEdit: props.queuedEdit?.onEdit,
-        onQueueEditChange: props.queuedEdit?.onEditChange,
-        onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
-        onQueueEditCancel: props.queuedEdit?.onCancel,
-        editingId: props.queuedEdit?.editingId ?? null,
-        editingText: props.queuedEdit?.editingText,
-        onQueueRemove: props.onQueueRemove,
-      },
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
       persistCommentary: props.persistCommentary,
@@ -436,98 +426,13 @@ export function renderChat(props: ChatProps) {
     },
     props.transcript,
   );
+  // The composer keeps the outbox queue; only the transcript includes the
+  // placement initial turn, whose retry action belongs to startup.
   const chatColumnFooter = renderChatComposer({
-    paneId: props.paneId,
-    sessionKey: props.sessionKey,
-    currentAgentId: props.currentAgentId,
-    connected: props.connected,
-    offline: props.offline,
-    queuedOutboxCount: props.queuedOutboxCount,
-    canSend: props.canSend,
-    disabledReason: props.disabledReason,
-    disabledReasonTone: props.disabledReasonTone,
-    disabledBanner: props.disabledBanner,
-    runError: props.runError,
+    ...props,
     anchoredNotices: renderChatComposerNotices(props),
-    sending: props.sending,
-    canAbort: props.canAbort,
-    runStatus: props.runStatus,
-    waitingApproval: props.waitingApproval,
-    compactionStatus: props.compactionStatus,
-    fallbackStatus: props.fallbackStatus,
-    progressCard: props.progressCard,
-    progressCardHasActiveRun: props.progressCardHasActiveRun,
-    onDismissProgressCard: props.onDismissProgressCard,
-    gatewayQuestionPrompts: props.gatewayQuestionPrompts,
-    messages: props.messages,
-    stream: props.stream,
-    queue: props.queue,
-    draft: props.draft,
-    modelCatalog: props.modelCatalog,
-    modelSwitching: props.modelSwitching,
-    sessions: props.sessions,
-    toolOverrides: props.toolOverrides,
-    capabilityMenu: props.capabilityMenu,
-    providerUsage: props.providerUsage,
-    assistantName: props.assistantName,
-    sendShortcut: props.sendShortcut,
-    followUpMode: props.followUpMode,
-    attachmentLimits: props.attachmentLimits,
-    attachments: props.attachments,
-    getAttachments: props.getAttachments,
-    pendingAttachmentReads: props.pendingAttachmentReads,
-    getPendingAttachmentReads: props.getPendingAttachmentReads,
-    readSignal: props.readSignal,
-    onPendingReadsChange: props.onPendingReadsChange,
-    replyTarget: props.replyTarget,
-    realtimeTalkActive: props.realtimeTalkActive,
-    realtimeTalkStatus: props.realtimeTalkStatus,
-    realtimeTalkDetail: props.realtimeTalkDetail,
-    realtimeTalkInputLevel: props.realtimeTalkInputLevel,
-    realtimeTalkConversation: props.realtimeTalkConversation,
-    realtimeTalkVideoStream: props.realtimeTalkVideoStream,
-    realtimeTalkCameraDevices: props.realtimeTalkCameraDevices,
-    realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
-    realtimeTalkVideoPending: props.realtimeTalkVideoPending,
-    realtimeTalkCameraError: props.realtimeTalkCameraError,
-    gatewayClient: props.gatewayClient,
-    composerHoldToRecord: props.composerHoldToRecord,
-    onComposerHoldToRecordChange: props.onComposerHoldToRecordChange,
-    onOpenTalkSettings: props.onOpenTalkSettings,
-    onOpenDictationSettings: props.onOpenDictationSettings,
-    suggestionComposer: props.suggestionComposer,
-    typingActors: props.typingActors,
-    onTypingChange: props.onTypingChange,
-    composerControls: props.composerControls,
-    permissionPicker: props.permissionPicker,
-    getDraft: props.getDraft,
-    onDraftChange: props.onDraftChange,
     onRequestUpdate: requestUpdate,
-    onHistoryKeydown: props.onHistoryKeydown,
-    onSlashIntent: props.onSlashIntent,
-    onSlashCommand: props.onSlashCommand,
-    onSend: props.onSend,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
-    onToggleRealtimeCamera: props.onToggleRealtimeCamera,
-    onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
-    onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
-    onAbort: props.onAbort,
-    onQueueRemove: props.onQueueRemove,
-    onQueueRetry: props.onQueueRetry,
-    onQueueSteer: props.onQueueSteer,
-    onQueueMove: props.onQueueMove,
-    queuedEdit: props.queuedEdit,
-    onGoalAction: props.onGoalAction,
-    onGoalSubmit: props.onGoalSubmit,
-    goalDraftMode: props.goalDraftMode,
-    onGoalDraftModeChange: props.onGoalDraftModeChange,
-    currentSessionId: props.currentSessionId,
-    onGatewayQuestionChange: props.onGatewayQuestionChange,
-    onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
-    onGatewayQuestionSkip: props.onGatewayQuestionSkip,
-    onClearReply: props.onClearReply,
-    onAttachmentsChange: props.onAttachmentsChange,
-    onRemoveAttachment: props.onRemoveAttachment,
     onOpenImage: openImmediateImage,
   });
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);

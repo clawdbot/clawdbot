@@ -22,7 +22,8 @@ import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-n
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
-  resolvePluginLoaderModuleConfig,
+  preparePluginLoaderAliases,
+  resolvePluginLoaderTryNative,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 
@@ -46,7 +47,8 @@ type ResolvePluginModuleLoaderCacheEntryParams = {
 };
 type PluginModuleLoaderCacheEntry = {
   loaderFilename: string;
-  aliasMap: Record<string, string>;
+  getAliasMap: () => Record<string, string>;
+  resolveAlias: (specifier: string) => string | undefined;
   tryNative: boolean;
   transformOpenClawDependencies: boolean;
   cacheKey: string;
@@ -152,47 +154,27 @@ function toSourceTransformImportPath(specifier: string): string {
   return toSafeImportPath(specifier);
 }
 
-function resolveDefaultPluginModuleLoaderConfig(
-  params: ResolvePluginModuleLoaderCacheEntryParams,
-): ReturnType<typeof resolvePluginLoaderModuleConfig> {
-  return resolvePluginLoaderModuleConfig({
-    modulePath: params.modulePath,
-    argv1: params.argvEntry ?? process.argv[1],
-    moduleUrl: params.importerUrl,
-    devSourceRoot: params.devSourceRoot,
-    ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
-    ...(params.pluginSdkResolution ? { pluginSdkResolution: params.pluginSdkResolution } : {}),
-  });
-}
-
 function resolvePluginModuleLoaderCacheEntry(
   params: ResolvePluginModuleLoaderCacheEntryParams,
 ): PluginModuleLoaderCacheEntry {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
-  const hasAliasOverride = Boolean(params.aliasMap);
-  const hasTryNativeOverride = typeof params.tryNative === "boolean";
-  const defaultConfig =
-    hasAliasOverride || hasTryNativeOverride
-      ? resolveDefaultPluginModuleLoaderConfig(params)
-      : null;
-  const canReuseDefaultCacheKey =
-    defaultConfig !== null &&
-    (!hasAliasOverride || params.aliasMap === defaultConfig.aliasMap) &&
-    (!hasTryNativeOverride || params.tryNative === defaultConfig.tryNative);
-  const resolved = defaultConfig
+  const tryNative = params.tryNative ?? resolvePluginLoaderTryNative(params.modulePath, params);
+  // Explicit maps are content-keyed and captured before a retained loader can escape.
+  const explicit = params.aliasMap ? { ...params.aliasMap } : undefined;
+  const aliases = explicit
     ? {
-        tryNative: params.tryNative ?? defaultConfig.tryNative,
-        aliasMap: params.aliasMap ?? defaultConfig.aliasMap,
-        cacheKey: canReuseDefaultCacheKey ? defaultConfig.cacheKey : undefined,
+        cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
+        getAliasMap: () => explicit,
+        resolveAlias: (specifier: string) => explicit[specifier],
       }
-    : resolveDefaultPluginModuleLoaderConfig(params);
-  const { tryNative, aliasMap } = resolved;
-  const moduleConfigCacheKey =
-    resolved.cacheKey ??
-    createPluginLoaderModuleCacheKey({
-      tryNative,
-      aliasMap,
-    });
+    : preparePluginLoaderAliases({
+        modulePath: params.modulePath,
+        argv1: params.argvEntry ?? process.argv[1],
+        moduleUrl: params.importerUrl,
+        devSourceRoot: params.devSourceRoot,
+        pluginSdkResolution: params.pluginSdkResolution,
+      });
+  const moduleConfigCacheKey = `${tryNative ? "native" : "transform"}\0${aliases.cacheKey}`;
   const transformOpenClawDependencies = params.transformOpenClawDependencies ?? tryNative;
   const cacheKey = `${moduleConfigCacheKey}\0transform-openclaw=${transformOpenClawDependencies ? "1" : "0"}`;
   const scopedCacheKey = `${loaderFilename}::${
@@ -201,7 +183,8 @@ function resolvePluginModuleLoaderCacheEntry(
   }`;
   return {
     loaderFilename,
-    aliasMap,
+    getAliasMap: aliases.getAliasMap,
+    resolveAlias: aliases.resolveAlias,
     tryNative,
     transformOpenClawDependencies,
     cacheKey,
@@ -211,7 +194,8 @@ function resolvePluginModuleLoaderCacheEntry(
 
 function createLazySourceTransformLoader(params: {
   loaderFilename: string;
-  aliasMap: Record<string, string>;
+  getAliasMap: () => Record<string, string>;
+  resolveAlias: (specifier: string) => string | undefined;
   transformOpenClawDependencies: boolean;
   createLoader?: PluginModuleLoaderFactory;
 }): () => PluginModuleLoader {
@@ -220,7 +204,7 @@ function createLazySourceTransformLoader(params: {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
-    const jitiOptions = buildPluginLoaderJitiOptions(params.aliasMap, {
+    const jitiOptions = buildPluginLoaderJitiOptions(params.getAliasMap(), {
       modulePath: params.loaderFilename,
     });
     const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
@@ -240,7 +224,8 @@ function createLazySourceTransformLoader(params: {
 
 function createPluginModuleLoader(params: {
   loaderFilename: string;
-  aliasMap: Record<string, string>;
+  getAliasMap: () => Record<string, string>;
+  resolveAlias: (specifier: string) => string | undefined;
   tryNative: boolean;
   transformOpenClawDependencies: boolean;
   createLoader?: PluginModuleLoaderFactory;
@@ -292,7 +277,7 @@ function createPluginModuleLoader(params: {
       pluginModuleLoaderStats.calls += 1;
       const native = tryNativeRequireJavaScriptModule(target, {
         allowWindows: true,
-        aliasMap: params.aliasMap,
+        aliasMap: params.resolveAlias,
         fallbackOnMissingDependency: true,
       });
       if (native.ok) {
@@ -326,7 +311,8 @@ export function getCachedPluginModuleLoader(
     cacheKey: cacheEntry.scopedCacheKey,
     rootDir: params.rootDir,
     loaderFilename: cacheEntry.loaderFilename,
-    aliasMap: cacheEntry.aliasMap,
+    getAliasMap: cacheEntry.getAliasMap,
+    resolveAlias: cacheEntry.resolveAlias,
     tryNative: cacheEntry.tryNative,
     transformOpenClawDependencies: cacheEntry.transformOpenClawDependencies,
     ...(params.createLoader ? { createLoader: params.createLoader } : {}),

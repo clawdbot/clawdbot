@@ -680,8 +680,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - A direct edit that breaks startup or hot reload makes the Gateway fail closed or skip the reload; it does not rewrite `openclaw.json`.
-    - `openclaw doctor --fix` owns repair, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
+    - Startup can migrate deterministic legacy keys in eligible single-file configs when the whole result validates, keeping the previous config in the `.bak` ring. Other invalid edits make startup fail closed; hot reload skips invalid edits without rewriting `openclaw.json`.
+    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 

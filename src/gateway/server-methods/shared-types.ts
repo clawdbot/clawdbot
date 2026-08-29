@@ -145,6 +145,8 @@ export type GatewayClient = {
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
+    /** Host-attested session provenance for a trusted official plugin node invocation. */
+    nodeInvokeApprovalSessionKey?: string;
     /** Plugin-owned in-process invoke hooks; never accepted from Gateway wire params. */
     nodeInvokeStream?: GatewayNodeInvokeStream;
     agentRunTracking?: GatewayAgentRunTaskOwner;

@@ -1797,6 +1797,7 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "start",
+        hideFromChannelProgress: true,
         name: "python",
         toolCallId: "call-1",
         args: { code: "print('hi')" },
@@ -1806,6 +1807,7 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "result",
+        hideFromChannelProgress: true,
         name: "python",
         toolCallId: "call-1",
         isError: true,
@@ -5198,8 +5200,7 @@ describe("runCodexAppServerAttempt", () => {
       const run = runCodexAppServerAttempt(params);
       await waitForMethod("turn/start");
       abortController.abort("shutdown");
-      const result = await run;
-      expect(readAttemptTerminal(result).aborted).toBe(true);
+      await expect(run).rejects.toThrow("Codex cancellation could not confirm the turn stopped");
       await new Promise((resolve) => {
         setImmediate(resolve);
       });

@@ -885,9 +885,40 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 }
 ```
 
-Resolution: per-DM override → provider default → no limit (all retained).
+Resolution: per-DM override → provider default → no limit (all retained). On a multi-account channel, the account for the current message is checked before the channel root, so `channels.<provider>.accounts.<id>.dmHistoryLimit` overrides `channels.<provider>.dmHistoryLimit` for that account only.
 
-This resolver reads `channels.<provider>.dmHistoryLimit` and `channels.<provider>.dms.<id>.historyLimit` for any channel whose session key follows the standard `provider:direct:<id>` (or legacy `provider:dm:<id>`) shape, so it works across bundled and plugin channels alike, not just a fixed list.
+The `dms` map is the exception: an account that defines `accounts.<id>.dms` replaces the root `dms` map for that account rather than merging entry by entry. A peer listed only at the root therefore falls through to that account's `dmHistoryLimit`, not to the root per-DM value. Repeat any root entries you still want inside the account map.
+
+The embedded OpenClaw runtime applies these limits to recent turns during prompt preparation for channel-scoped DM sessions, including `per-account-channel-peer`. Shared main sessions remain unwindowed by these channel limits. Client-side compaction still summarizes older durable history; the resulting summary is preserved alongside the windowed recent turns. These limits do not delete stored messages. Native runtimes manage their own transcript history.
+
+Provider-side compaction uses the prepared transcript window. Gateway-triggered compaction resolves a linked peer from the current session's recorded primary conversation; missing or stale route facts do not select another peer's override.
+
+Channel-supplied recent-message context is a separate window. For example, Telegram looks up `dms` by native user ID and counts individual messages, while the embedded transcript window looks up the session peer and counts user turns. With `session.identityLinks`, that session peer is the linked ID. Configure both keys when you want both windows limited for a linked identity:
+
+```json5
+{
+  session: {
+    dmScope: "per-channel-peer",
+    identityLinks: { alice: ["telegram:123456789"] },
+  },
+  channels: {
+    telegram: {
+      accounts: {
+        work: {
+          dms: {
+            "123456789": { historyLimit: 2 }, // Telegram supplemental context
+            alice: { historyLimit: 2 }, // Embedded session transcript
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+These existing windows are not one strict whole-prompt cap: supplemental reply context, saved compaction summaries, and the transcript window's batching cushion can add context beyond the configured count.
+
+Session keys alone can be ambiguous when account names or linked peer IDs contain tokens such as `direct`. OpenClaw uses the observed route peer to select the correct per-DM override. When an ambiguous session has no observed peer, or its identity link has changed, the known account/channel DM default applies instead of another peer's override. Unambiguous session keys retain their existing per-DM lookup.
 
 #### Self-chat mode
 

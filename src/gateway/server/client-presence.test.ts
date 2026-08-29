@@ -155,6 +155,110 @@ describe("live person presence timing", () => {
     expect(row("fresh@timing.test")?.lastActivityAt).toBeUndefined();
   });
 
+  it.each(["profile", "raw"] as const)(
+    "separates colliding presence namespaces when %s connects first",
+    async (firstNamespace) => {
+      const id = "synthetic-shared-id";
+      const profile = await connect("profile@namespace.test", id);
+      const raw = await connect(id);
+      delete raw.client.authenticatedUserProfile;
+      const [first, second] =
+        firstNamespace === "profile" ? ([profile, raw] as const) : ([raw, profile] as const);
+      const started = Date.now();
+      first.handler.setClient(first.client);
+      vi.setSystemTime(started + 1_000);
+      second.handler.setClient(second.client);
+      const profileStarted = started + (firstNamespace === "profile" ? 0 : 1_000);
+      const rawStarted = started + (firstNamespace === "raw" ? 0 : 1_000);
+      expect.soft(row("profile@namespace.test")?.onlineSince).toBe(profileStarted);
+      expect.soft(row(id)?.onlineSince).toBe(rawStarted);
+
+      vi.setSystemTime(started + 2_000);
+      expect(recordClientPresenceActivity(clients, raw.client)).toBe(true);
+      expect.soft(row("profile@namespace.test")?.lastActivityAt).toBeUndefined();
+      vi.setSystemTime(started + 3_000);
+      expect(recordClientPresenceActivity(clients, profile.client)).toBe(true);
+      expect.soft(row(id)).toMatchObject({
+        onlineSince: rawStarted,
+        lastActivityAt: started + 2_000,
+      });
+
+      vi.setSystemTime(started + 4_000);
+      const overlap = await connect("overlap@namespace.test", id);
+      overlap.handler.setClient(overlap.client);
+      profile.socket.readyState = 3;
+      profile.socket.emit("close", 1000, Buffer.alloc(0));
+      expect.soft(row("overlap@namespace.test")).toMatchObject({
+        onlineSince: profileStarted,
+        lastActivityAt: started + 3_000,
+      });
+      overlap.socket.readyState = 3;
+      overlap.socket.emit("close", 1000, Buffer.alloc(0));
+
+      vi.setSystemTime(started + 5_000);
+      const reconnected = await connect("reconnected@namespace.test", id);
+      reconnected.handler.setClient(reconnected.client);
+      expect.soft(row("reconnected@namespace.test")?.onlineSince).toBe(started + 5_000);
+      expect.soft(row("reconnected@namespace.test")?.lastActivityAt).toBeUndefined();
+      expect.soft(row(id)).toMatchObject({
+        onlineSince: rawStarted,
+        lastActivityAt: started + 2_000,
+      });
+    },
+  );
+
+  it.each(["profile", "raw"] as const)(
+    "keeps later activity separate after raw tabs qualify (%s acts first)",
+    async (firstNamespace) => {
+      const id = "qualification-shared-id";
+      const raw = await connect(id, id);
+      const qualified = await connect(id, id);
+      const profile = qualified.client.authenticatedUserProfile;
+      delete raw.client.authenticatedUserProfile;
+      delete qualified.client.authenticatedUserProfile;
+      const started = Date.now();
+      raw.handler.setClient(raw.client);
+      vi.setSystemTime(started + 1_000);
+      qualified.handler.setClient(qualified.client);
+      vi.setSystemTime(started + 2_000);
+      recordClientPresenceActivity(clients, raw.client);
+      const liveRows = (isProfile: boolean) =>
+        listSystemPresence().filter(
+          (entry) =>
+            entry.reason !== "disconnect" &&
+            entry.user?.id === id &&
+            Boolean(entry.user.identity) === isProfile,
+        );
+      expect(liveRows(false)).toHaveLength(2);
+      for (const entry of liveRows(false)) {
+        expect(entry).toMatchObject({ onlineSince: started, lastActivityAt: started + 2_000 });
+      }
+
+      qualified.client.authenticatedUserProfile = profile;
+      const [first, second] =
+        firstNamespace === "profile" ? ([qualified, raw] as const) : ([raw, qualified] as const);
+      vi.setSystemTime(started + 3_000);
+      // Activity can be the first presence operation after the profile snapshot changes.
+      recordClientPresenceActivity(clients, first.client);
+      refreshClientPresence(clients, second.client);
+      expect.soft(liveRows(firstNamespace !== "profile")[0]).toMatchObject({
+        onlineSince: started,
+        lastActivityAt: started + 2_000,
+      });
+      vi.setSystemTime(started + 4_000);
+      recordClientPresenceActivity(clients, second.client);
+      refreshClientPresence(clients, first.client);
+      expect.soft(liveRows(firstNamespace === "profile")[0]).toMatchObject({
+        onlineSince: started,
+        lastActivityAt: started + 3_000,
+      });
+      expect.soft(liveRows(firstNamespace !== "profile")[0]).toMatchObject({
+        onlineSince: started,
+        lastActivityAt: started + 4_000,
+      });
+    },
+  );
+
   it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
     const first = await connect("heartbeat@timing.test", "heartbeat-person");
     const started = Date.now();

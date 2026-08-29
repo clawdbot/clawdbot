@@ -199,12 +199,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       for (const environment of [effectiveServiceEnv, installEnv]) {
         const capability = await service
           .readDefinitionMutationCapability?.({ env: process.env, environment })
-          .catch(() => ({ kind: "unknown" as const, detail: "" }));
-        if (capability && capability.kind !== "writable") {
-          assertServiceDefinitionWritable({
-            kind: capability.kind,
-            detail: "Service definition cannot be safely modified.",
-          });
+          .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+        if (capability) {
+          assertServiceDefinitionWritable(capability);
         }
       }
       return true;

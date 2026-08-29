@@ -34,6 +34,7 @@ function createOwner(
     ),
   };
   const owner: PreparedModelRuntimeSnapshot = {
+    catalogOwner: { agentId: "main", workspaceDir: `/tmp/${id}/workspace` },
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
     workspaceDir: `/tmp/${id}/workspace`,

@@ -17,7 +17,11 @@ import { listAssignableSessionOwners } from "../../components/session-owner-chip
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
+import {
+  projectPresenceViewers,
+  presenceMatchesProfile,
+  projectPresencePayload,
+} from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
@@ -391,8 +395,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       row,
     });
     const key = this.state?.sessionKey ?? "";
-    const selfId = sharingSnapshot.selfUser?.id;
-    const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
     const knownGroups = collectKnownSessionGroups(
       this.context.sessions?.state?.groups ?? [],
@@ -400,10 +402,19 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     );
     const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
     const personActivity = this.personActivityRouting();
-    const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
-    const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
-    const ownerViewing = presence.users.some(
-      (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
+    const renderedOwnerIdentity = showOwnerChip ? row?.owner?.actor.identity : undefined;
+    const viewers = catalog
+      ? undefined
+      : projectPresenceViewers(
+          this.presencePayload,
+          sharingSnapshot.selfUser,
+          sharingSnapshot.client?.instanceId,
+          key,
+          renderedOwnerIdentity,
+        );
+    const ownerViewing = projectPresencePayload(this.presencePayload).users.some(
+      (user) =>
+        presenceMatchesProfile(user, renderedOwnerIdentity) && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
       facet: result?.owners,
@@ -445,21 +456,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       backgroundTasksAction: nothing,
       sessionRailAction: nothing,
       workspaceAction: nothing,
-      presence:
-        !catalog &&
-        hasSessionPresenceViewers(this.presencePayload, selfId, instanceId, key, renderedOwnerId)
-          ? html`<openclaw-viewer-facepile
-              class="chat-pane__presence"
-              .presencePayload=${this.presencePayload}
-              .selfUserId=${selfId}
-              .selfInstanceId=${instanceId}
-              .sessionKey=${key}
-              .excludeUserId=${renderedOwnerId}
-              .maxVisible=${4}
-              .personActivity=${personActivity}
-              variant="session"
-            ></openclaw-viewer-facepile>`
-          : nothing,
+      presence: viewers?.length
+        ? html`<openclaw-viewer-facepile
+            class="chat-pane__presence"
+            .staticUsers=${viewers}
+            .maxVisible=${4}
+            .personActivity=${personActivity}
+            variant="session"
+          ></openclaw-viewer-facepile>`
+        : nothing,
       faceControl: renderBoardViewSwitch({
         hasBoard: board.hasBoard,
         face: board.face,

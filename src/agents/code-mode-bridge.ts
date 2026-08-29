@@ -10,7 +10,7 @@ import type { NodeListNode } from "../shared/node-list-types.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { boundCodeModeValue } from "./code-mode-json.js";
+import { boundCodeModeResult, boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
@@ -603,10 +603,15 @@ export async function runBridgeRequest(params: {
     const settled: SettledBridgeRequest = { id: params.request.id, ok: true, value };
     return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
   } catch (error) {
+    const bounded = boundCodeModeResult({
+      error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+      output: [],
+      maxOutputBytes: params.maxOutputBytes,
+    });
     const settled: SettledBridgeRequest = {
       id: params.request.id,
       ok: false,
-      error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+      error: bounded.error,
     };
     const trustedNoStart = consumeTrustedToolNoStartError(error);
     if (trustedNoStart) {

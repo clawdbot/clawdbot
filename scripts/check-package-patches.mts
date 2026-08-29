@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
@@ -68,10 +69,19 @@ function collectWorkspacePatchViolations(cwd: string, violations: PackagePatchVi
 }
 
 function collectLockfilePatchViolations(cwd: string, violations: PackagePatchViolation[]) {
-  const lockfile = readRecordFile(cwd, "pnpm-lock.yaml", YAML.parse);
-  collectPatchedDependencyViolations("pnpm-lock.yaml", lockfile.patchedDependencies, violations, {
-    allowAnyValueForLegacy: true,
-  });
+  const filePath = path.join(cwd, "pnpm-lock.yaml");
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+  for (const document of Object.values(pnpmLockfileDocuments(fs.readFileSync(filePath, "utf8")))) {
+    if (document === null) {
+      continue;
+    }
+    const lockfile = asRecord(YAML.parse(document));
+    collectPatchedDependencyViolations("pnpm-lock.yaml", lockfile.patchedDependencies, violations, {
+      allowAnyValueForLegacy: true,
+    });
+  }
 }
 
 function collectPackageJsonPatchViolations(cwd: string, violations: PackagePatchViolation[]) {

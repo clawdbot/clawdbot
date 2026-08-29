@@ -104,9 +104,6 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   if (defaultAgentId && !seen.has(defaultAgentId)) {
     ordered.unshift({ id: defaultAgentId });
   }
-  if (ordered.length === 0 && defaultAgentId) {
-    ordered.push({ id: defaultAgentId });
-  }
 
   return { defaultAgentId, ordered };
 }
@@ -506,14 +503,10 @@ export async function collectGatewayHealthSnapshot(params: {
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
-  const sessionCache = new Map<string, HealthSummary["sessions"]>();
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id });
-    const sessionCacheKey = `${storePath}\0${entry.id}`;
-    const sessions =
-      sessionCache.get(sessionCacheKey) ?? (await buildHealthSessionSummary(storePath, entry.id));
-    sessionCache.set(sessionCacheKey, sessions);
+    const sessions = await buildHealthSessionSummary(storePath, entry.id);
     agents.push({
       agentId: entry.id,
       name: entry.name,

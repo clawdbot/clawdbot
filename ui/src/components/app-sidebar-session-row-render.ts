@@ -18,7 +18,7 @@ import {
   stopHoverMarqueeFromEvent,
 } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { projectPresencePayload } from "../lib/presence-users.ts";
+import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
@@ -194,14 +194,19 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.owner?.actor
     : undefined;
-  const ownerId = ownerActor?.id?.trim();
-  const ownerViewing = ownerId
-    ? projectPresencePayload(
-        host.sessionData.presencePayload,
-        host.sessionDataContext?.gateway.snapshot.selfUser?.id,
-        host.sessionData.presenceInstanceId,
-      ).users.some((user) => user.id === ownerId && user.watchedSessions.includes(session.key))
-    : undefined;
+  const ownerViewing =
+    ownerActor?.identity?.type === "profile"
+      ? projectPresencePayload(host.sessionData.presencePayload).users.some(
+          (user) =>
+            presenceMatchesProfile(user, ownerActor.identity) &&
+            user.watchedSessions.includes(session.key),
+        )
+      : undefined;
+  // Person sections already own durable attribution. Restore the row avatar
+  // only for live presence; pinned and archive-attribution rows have no matching header.
+  const ownerRepeatedBySection =
+    host.sessionsGrouping === "person" && !session.pinned && ownerAttribution !== "archived";
+  const leadingOwner = ownerRepeatedBySection && ownerViewing !== true ? undefined : ownerActor;
   const gateway = host.sessionDataContext?.gateway;
   const channelAvatarAuth = {
     authTokens: gateway
@@ -218,10 +223,10 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
+  const { running, leadingIndicator, trailingIndicator, renderedOwnerIdentity } =
     renderSessionLeadingState(
       session,
-      ownerActor,
+      leadingOwner,
       ownerAttribution,
       ownerViewing,
       session.participants,
@@ -369,10 +374,10 @@ export function renderRecentSession(params: {
                 : nothing}
               <openclaw-viewer-facepile
                 .presencePayload=${host.sessionData.presencePayload}
-                .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
+                .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
                 .selfInstanceId=${host.sessionData.presenceInstanceId}
                 .sessionKey=${session.key}
-                .excludeUserId=${renderedOwnerId}
+                .excludeIdentity=${renderedOwnerIdentity}
                 .maxVisible=${3}
                 variant="session"
               ></openclaw-viewer-facepile>

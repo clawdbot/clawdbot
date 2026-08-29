@@ -729,11 +729,11 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
   };
 
   return {
-    resolveSingleAccountKeysToMove: resolveKeys,
     resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
     }) => ({
+      kind: "promote",
       keysToMove: resolveKeys(params),
       shouldDeferPromotion:
         !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&

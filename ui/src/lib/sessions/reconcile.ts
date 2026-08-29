@@ -73,6 +73,8 @@ export function appendSessionResults(
 
 type SessionChangedEventInfo = {
   key: string;
+  reason: string | null;
+  sessionId?: string;
   updatedAt: number | null;
   thinkingLevel?: string | null;
   agentId: string | null;
@@ -322,6 +324,8 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
   return [
     {
       key,
+      reason,
+      sessionId: stringValue(recordValue(source, "sessionId")),
       updatedAt: typeof updatedAt === "number" ? updatedAt : null,
       thinkingLevel:
         typeof thinkingLevel === "string"
@@ -404,20 +408,12 @@ export function reconcileSessionChanged(
   ) {
     return { applied: false, key, agentId: null, result };
   }
-  if (reason === "delete" && !result) {
-    return {
-      applied: true,
-      key,
-      agentId: info.agentId,
-      deletedKey: key,
-      result,
-    };
-  }
-  if (!result) {
-    return { applied: false, result };
+  // Key-only notifications cannot identify which generation disappeared.
+  if (reason === "delete" && !info.sessionId) {
+    return { applied: false, key, agentId: info.agentId, result };
   }
   const selectedGlobalAgentId = info.agentId ?? options.selectedGlobalAgentId ?? null;
-  const existing = result.sessions.find((candidate) =>
+  const existing = result?.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,
       { key, kind: "global", updatedAt: null },
@@ -426,8 +422,11 @@ export function reconcileSessionChanged(
   );
 
   if (reason === "delete") {
-    if (!existing) {
+    if (!result || !existing) {
       return { applied: true, result, key, agentId: info.agentId, deletedKey: key };
+    }
+    if (existing.sessionId !== info.sessionId) {
+      return { applied: false, result, key, agentId: info.agentId };
     }
     const sessions = result.sessions.filter((candidate) => candidate !== existing);
     return {
@@ -441,6 +440,9 @@ export function reconcileSessionChanged(
       },
       deletedKey: existing.key,
     };
+  }
+  if (!result) {
+    return { applied: false, result };
   }
   // The gateway wire folds cron/spawn-child into "direct" before projection
   // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.

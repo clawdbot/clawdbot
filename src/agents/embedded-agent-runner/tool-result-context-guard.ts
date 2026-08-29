@@ -11,7 +11,10 @@ import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
+import {
+  shouldPreemptivelyCompactBeforePrompt,
+  type CompactionReplayPressureContext,
+} from "./run/preemptive-compaction.js";
 import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
@@ -37,6 +40,7 @@ type GuardableAgentRecord = {
 };
 
 type MidTurnPrecheckOptions = {
+  getReplay?: () => CompactionReplayPressureContext;
   enabled?: boolean;
   contextTokenBudget: number;
   reserveTokens: () => number;
@@ -498,6 +502,7 @@ export function installToolResultContextGuard(params: {
         // Recovery re-applies truncation to the persisted session manager, so
         // this precheck is only a routing signal, not the source of truth.
         const precheck = shouldPreemptivelyCompactBeforePrompt({
+          replay: params.midTurnPrecheck.getReplay?.(),
           messages: contextMessages,
           systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
           // During a tool loop, the active user prompt is already part of messages.

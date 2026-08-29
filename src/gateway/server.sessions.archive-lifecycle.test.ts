@@ -27,7 +27,7 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import { registerWorkerInferenceSessionDrain } from "./worker-environments/inference-control-internal.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const {
@@ -648,12 +648,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   const sessionId = "session-archive-worker-recheck";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const release = vi.fn();
-  const workerEnvironmentService = {
-    cancelInferenceForSession: vi.fn(() => []),
-    hasInferenceForSession: vi.fn(() => false),
-    resolveInferenceSessionForRunId: vi.fn(),
-  };
-  registerWorkerInferenceSessionDrain(workerEnvironmentService, () => ({
+  const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
     hasWork: () => true,
     release,
@@ -714,16 +709,13 @@ test("sessions.patch releases the archive drain without appending a transcript m
       {
         client: identifiedClient("archive-reviewer"),
         context: {
-          workerEnvironmentService: {
-            beginInferenceSessionDrain: vi.fn(() => ({
+          workerEnvironmentService: createWorkerInferenceDrainService(
+            vi.fn(() => ({
               drained: Promise.resolve(),
               hasWork: () => false,
               release,
             })),
-            cancelInferenceForSession: vi.fn(() => []),
-            hasInferenceForSession: vi.fn(() => false),
-            resolveInferenceSessionForRunId: vi.fn(),
-          },
+          ),
         },
       },
     );
@@ -867,12 +859,7 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
     },
     {
       context: {
-        workerEnvironmentService: {
-          beginInferenceSessionDrain,
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => false),
-          resolveInferenceSessionForRunId: vi.fn(),
-        },
+        workerEnvironmentService: createWorkerInferenceDrainService(beginInferenceSessionDrain),
       },
     },
   );
@@ -925,16 +912,13 @@ test("sessions.patchMany attempts every archive drain release without masking su
     },
     {
       context: {
-        workerEnvironmentService: {
-          beginInferenceSessionDrain: vi.fn((sessionId: string) => ({
+        workerEnvironmentService: createWorkerInferenceDrainService(
+          vi.fn((sessionId: string) => ({
             drained: Promise.resolve(),
             hasWork: () => false,
             release: sessionId === firstSessionId ? firstRelease : secondRelease,
           })),
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => false),
-          resolveInferenceSessionForRunId: vi.fn(),
-        },
+        ),
       },
     },
   );

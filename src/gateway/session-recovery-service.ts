@@ -31,7 +31,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 import {
-  prepareSessionWorkerPlacementForArchive,
+  prepareSessionWorkerPlacementStop,
   type SessionWorkerPlacementContext,
 } from "./worker-environments/session-placement-lifecycle.js";
 
@@ -196,14 +196,14 @@ export async function recoverGatewaySession(params: {
         .get(currentSource.sessionId);
       if (placement && !alreadyRecovered) {
         try {
-          await prepareSessionWorkerPlacementForArchive({
+          await prepareSessionWorkerPlacementStop({
+            action: "recover",
             agentId: sourceTarget.agentId,
             ...(params.commitGuard ? { authorize: params.commitGuard } : {}),
             context: params.workerPlacementContext,
-            reclaimActive: true,
             sessionId: currentSource.sessionId,
             sessionKey: sourceTarget.canonicalKey,
-          });
+          })();
         } catch (error) {
           params.commitGuard?.();
           return {

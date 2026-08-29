@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345371,
-  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 345606,
+  "reason": "Generation-safe optimistic session deletion (#132233, fixing #132057); measured 345606 B after current-main integration, below the maintainer-approved 347323 B baseline; hard cap and allowances unchanged",
+  "updatedAt": "2026-08-29"
 }

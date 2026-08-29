@@ -170,8 +170,10 @@ The example profile above prepares OpenClaw worker turns only. To make the same 
 gateway_version="$(openclaw --version | awk '{print $2}')"
 existing_setup="$(openclaw config get cloudWorkers.profiles.aws.settings.setup)"
 openclaw config set cloudWorkers.profiles.aws.settings.setup \
-  "${existing_setup}; sudo npm install -g openclaw@${gateway_version}; openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
+  "${existing_setup}; sudo sh -c 'umask 022 && npm install -g openclaw@${gateway_version}' && openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
 ```
+
+The root shell scopes `umask 022` to the global install so the node user can read and execute the package. A restrictive inherited mask can otherwise leave a successful root install inaccessible to that user. Verify `openclaw --version` on the box as the same user that runs enrollment, without `sudo`; a root-only probe does not establish that enrollment can use it. Keep enrollment credentials and state private.
 
 `--force` allows setup replay to converge when the plugin is already installed. After upgrading the Gateway, update both appended package versions to match it while preserving the rest of the setup. This recipe requires both exact versions to exist in the registry. For unreleased source builds, use a complete custom node package as described below; a standalone local plugin tarball does not carry official npm provenance.
 
@@ -193,6 +195,15 @@ shasum -a 256 ".artifacts/cloud-node/openclaw-cloud-${source_sha}.tgz"
 Run this in a clean, trusted checkout with dependencies installed. The builder compiles the runtime, includes the selected plugin's built entrypoints and import closure, and regenerates the installation inventory. It temporarily adds the plugin's exact runtime dependency pins to the distribution manifest, rejecting conflicting or unpinned dependencies, then restores the source manifest and inventory. Repeat `--bundle-plugin <id>` for additional source plugins. Without that option, the ordinary core package and external plugin publication contracts are unchanged.
 
 Publish the resulting archive through your existing immutable artifact delivery path and make `settings.setup` verify its SHA-256 before installing it globally with normal npm lifecycle scripts enabled. Record both source SHA and archive digest: different unreleased builds can share a version. Do not copy a plugin into an installed release or substitute a standalone `npm-pack:` plugin archive for this distribution.
+
+After verifying the downloaded archive, install it with the mask scoped to the root command, then verify the version as the enrollment user:
+
+```bash
+sudo sh -c 'umask 022 && npm install -g /tmp/openclaw-cloud.tgz'
+openclaw --version
+```
+
+Use the path of your verified archive in place of `/tmp/openclaw-cloud.tgz`. Changing the install mask does not repair existing root-only parent directories; if an earlier install was inaccessible, correct access to that package and its parent directories before retrying enrollment.
 
 Native dependencies are declared at the distribution root and installed for the target operating system and CPU; the archive does not copy the build host's plugin `node_modules`. Target installation still needs registry access and is not an offline dependency bundle. Verify each target architecture you deploy. Use `--skip-build` only when reusing a complete build from that same source revision with all selected plugin outputs present.
 
@@ -316,11 +327,11 @@ openclaw gateway call sessions.dispatch \
   --params '{"key":"agent:main:big-refactor","profileId":"aws","machineClass":"large"}'
 ```
 
-The bundled Crabbox provider advertises usable legacy `classes` reported by `crabbox providers --json` for the selected backend, preserving their order and marking the configured class as the default. The picker includes at most 32 options; it appends the configured class only when a usable advertised list exists. Reported vCPU and RAM appear independently; missing dimensions stay unknown. An explicit `classCatalog.disposition: unmapped` suppresses class choices even if legacy `classes` are also present. Missing, failed, empty, or unusable metadata produces no machine selector, not generic fallback choices. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
+The bundled Crabbox provider reads `classCatalog.profiles` from `crabbox providers --json` for the selected backend when `classCatalog.disposition` is `mapped`. It uses Linux/amd64 primary profiles, preserving their order and marking the configured class as the default; other targets, architectures, and fallback machines are not merged into these choices. The picker includes at most 32 options; it appends the configured class only when a usable advertised list exists. Reported vCPU and RAM appear independently. RAM follows Crabbox's summary contract: positive integer GB/GiB values are shown; other units, fractional values, and missing dimensions stay unknown. Native type names are never used to guess dimensions. Unmapped, missing, unknown, failed, empty, or unusable catalog metadata produces no machine selector, even if legacy `classes` are present. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
 
 Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed probes are retried by the next discovery request; a Gateway restart is not needed to recover.
 
-A rich static `classCatalog` or a provider-native size catalog alone does not establish a usable picker override. For example, newer Crabbox versions report mapped Machine0 aliases but deliberately omit legacy `classes` because an explicitly configured native size takes precedence. OpenClaw does not flatten those profiles or translate native sizes into classes. Keep native size selection in Crabbox's configuration; the picker cannot override it or promise a resize. Acceptance of native server types through `machineClass` is backend-specific, not a universal Crabbox contract. An admitted machine choice remains fixed for that placement and is reused by provisioning retries; catalog changes do not rewrite it. `machineClass` is valid only with `profileId`, not `deviceId`.
+Mapped Machine0 classes appear even when Crabbox omits the legacy `classes` summary. These static mappings describe class choices, not current capacity or availability. OpenClaw does not translate provider-native size catalogs into classes. Keep native size selection in Crabbox's configuration: an explicitly configured native size still takes precedence over a class, so the picker cannot override that pin or promise a resize. Acceptance of native server types through `machineClass` is backend-specific, not a universal Crabbox contract. An admitted machine choice remains fixed for that placement and is reused by provisioning retries; catalog changes do not rewrite it. `machineClass` is valid only with `profileId`, not `deviceId`.
 
 `sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease for the selected execution mode, runs setup, enrolls the node, pushes the required pinned Gateway bundle, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first cloud dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.
 
@@ -350,7 +361,7 @@ ordinary reconcile-first move instead.
 
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
-Archiving a non-main cloud-worker session with an active placement also performs this safe stop and reclaim before the Gateway records it as archived. If the placement is still transitioning or failed without proof that its environment is gone, the session remains unarchived; wait for the placement to settle, then retry. Restoring the session retains the reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
+Archiving or deleting a non-main cloud-worker session with an active placement first interrupts and drains its current work, then safely reclaims the worker. The Gateway records the archive or deletion only after final reconciliation and safe teardown succeed. If reclaim is unavailable, fails, or the placement is transitioning or failed without proof that its environment is gone, the operation reports an error and retains the session and recovery state; it never force-discards unsynced work. Restoring an archived session retains reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
 
 For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment.
 
@@ -390,7 +401,7 @@ The Gateway owns the canonical session transcript in both modes. Worker-turn com
 
 Worker-turn live previews are snapshots of the current assistant message. Corrections, shorter previews, and empty replacements update that message without replaying or erasing earlier messages in the turn. Explicit commentary is kept out of answer text, including when its phase arrives at message completion. Live previews are bounded and can be dropped after stream degradation; the committed transcript remains authoritative.
 
-Workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud worker…** performs one final reconciliation before destroying the machine. Changes made between reconciliations exist only on the box and can be lost. Session deletion does not synchronize an active placement: it must first be stopped or archived. Deletion then snapshots the already-reconciled managed worktree under `refs/openclaw/snapshots/` before removing it.
+Workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud worker…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds, then snapshots the reconciled managed worktree under `refs/openclaw/snapshots/` before removing it. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
 
 After a failed placement, redispatch the session and retry the turn. A reclaimed placement redispatches automatically on the next turn. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
 

@@ -122,6 +122,8 @@ export function projectNormalizedToolItem(params: {
         stream: "tool",
         data: {
           phase: params.phase,
+          // Codex tool lifecycle is private telemetry; channels render authored progress only.
+          hideFromChannelProgress: true,
           name,
           itemId: item.id,
           toolCallId: item.id,

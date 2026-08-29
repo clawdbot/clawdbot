@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
-  buildFullReleaseCandidateRequest,
   canonicalFullReleaseCandidateRequestJson,
   candidateRequestSha256,
   fullReleaseCandidateArtifactName,
@@ -192,9 +191,7 @@ function output(name, value) {
 
 async function discover(args) {
   const contract = requestContract(
-    buildFullReleaseCandidateRequest(
-      readJson(option(args, "--request-input"), "candidate request input"),
-    ),
+    readJson(option(args, "--request-input"), "candidate request input"),
   );
   const expectedRequestSha256 = optionalOption(args, "--expected-request-sha256");
   if (expectedRequestSha256 !== undefined && expectedRequestSha256 !== contract.requestSha256) {

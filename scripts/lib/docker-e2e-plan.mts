@@ -25,6 +25,7 @@ import {
   normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
+  supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./upgrade-survivor-policy.mjs";
 
 export { DEFAULT_LIVE_RETRIES };
@@ -53,7 +54,6 @@ export const RELEASE_PATH_PROFILE = "release-path";
 
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
-type PublishedReleaseVersion = { year: number; month: number; patch: number };
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
@@ -260,56 +260,6 @@ function filterUpgradeSurvivorScenariosForTarget(
   );
   const supportedScenarios = new Set(targetScenarios);
   return scenarios.filter((scenario) => supportedScenarios.has(scenario));
-}
-
-function parsePublishedReleaseVersion(spec: string | undefined): PublishedReleaseVersion | null {
-  const match = /^openclaw@([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(spec ?? "");
-  if (!match) {
-    return null;
-  }
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    patch: Number(match[3]),
-  };
-}
-
-function comparePublishedReleaseVersion(a: PublishedReleaseVersion, b: PublishedReleaseVersion) {
-  return a.year - b.year || a.month - b.month || a.patch - b.patch;
-}
-
-function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec: string | undefined) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
-}
-
-function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec: string | undefined) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
-}
-
-function supportsUpgradeSurvivorScenarioAtBaseline(
-  scenario: string | undefined,
-  baselineSpec: string | undefined,
-) {
-  return (
-    (scenario !== "plugin-deps-cleanup" ||
-      supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
-    (scenario !== "acpx-openclaw-tools-bridge" ||
-      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
-  );
 }
 
 function expandedUpgradeSurvivorLaneName(

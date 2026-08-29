@@ -1047,14 +1047,14 @@ npm_config_has_raw_key() {
 }
 
 npm_lifecycle_allow_arg() {
-    local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version="" output=""
+    local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" exact_identity="${4:-}" version="" output=""
     if ! version="$("$npm_cmd" --version 2>/dev/null)"; then
         echo "Unable to determine npm version from ${npm_cmd}; no package changes were made." >&2
         return 1
     fi
-    output="$(node - "$version" "$spec" "$npm_cwd" <<'NODE'
+    output="$(node - "$version" "$spec" "$npm_cwd" "$exact_identity" <<'NODE'
 const path = require("node:path");
-const [versionOutput, spec, cwd] = process.argv.slice(2);
+const [versionOutput, spec, cwd, exactIdentity] = process.argv.slice(2);
 const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
 const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
 const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
@@ -1067,6 +1067,7 @@ let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\
 if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
 const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
 if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (exactIdentity) identity = exactIdentity;
 if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
 process.stdout.write(`--allow-scripts=${identity}\n`);
 NODE
@@ -2303,10 +2304,10 @@ install_node() {
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
-                run_required_step "Installing Node.js" dnf install -y -q nodejs
+                run_required_step "Installing Node.js" dnf install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             else
                 run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
+                run_required_step "Installing Node.js" sudo dnf install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             fi
         elif command -v yum &> /dev/null; then
             local tmp setup_url
@@ -2315,10 +2316,10 @@ install_node() {
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
-                run_required_step "Installing Node.js" yum install -y -q nodejs
+                run_required_step "Installing Node.js" yum install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             else
                 run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_required_step "Installing Node.js" sudo yum install -y -q nodejs
+                run_required_step "Installing Node.js" sudo yum install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             fi
         else
             ui_error "Could not detect package manager"
@@ -2503,37 +2504,40 @@ detect_pnpm_cmd() {
 }
 
 ensure_pnpm() {
-    if detect_pnpm_cmd && pnpm_cmd_is_ready; then
+    local repo_dir="${1:-$PWD}"
+    local spec version
+    spec="$(repo_pnpm_spec "$repo_dir" || true)"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.0.0"
+    version="${spec#pnpm@}"
+    version="${version%%+*}"
+    if detect_pnpm_cmd && [[ "$(cd "$repo_dir" && "${PNPM_CMD[@]}" --version 2>/dev/null || true)" == "$version" ]]; then
         ui_success "pnpm ready ($(pnpm_cmd_pretty))"
         return 0
     fi
 
-    if command -v corepack &> /dev/null; then
-        ui_info "Configuring pnpm via Corepack"
+    if command -v corepack >/dev/null 2>&1; then
+        ui_info "Activating repo pnpm ${version} via Corepack"
         corepack enable >/dev/null 2>&1 || true
-        if ! run_quiet_step "Activating pnpm" corepack prepare pnpm@11 --activate; then
-            ui_warn "Corepack pnpm activation failed; falling back"
-        fi
-        refresh_shell_command_cache
-        if detect_pnpm_cmd && pnpm_cmd_is_ready; then
-            if [[ "${PNPM_CMD[*]}" == "corepack pnpm" ]]; then
-                ui_warn "pnpm shim not on PATH; using corepack pnpm fallback"
-            fi
+        if run_quiet_step "Activating pnpm" corepack prepare "$spec" --activate &&
+            [[ "$(cd "$repo_dir" && corepack pnpm --version 2>/dev/null || true)" == "$version" ]]; then
+            set_pnpm_cmd corepack pnpm
             ui_success "pnpm ready ($(pnpm_cmd_pretty))"
             return 0
         fi
+        ui_warn "Corepack pnpm activation failed; falling back"
     fi
 
-    ui_info "Installing pnpm via npm"
+    ui_info "Installing pnpm ${version} via npm"
     fix_npm_permissions
-    run_quiet_step "Installing pnpm" npm install -g pnpm@11
+    local lifecycle_arg
+    lifecycle_arg="$(npm_lifecycle_allow_arg npm "pnpm@${version}" "$repo_dir" "pnpm@${version}")" || return 1
+    run_quiet_step "Installing pnpm" npm install -g "pnpm@${version}" ${lifecycle_arg:+"$lifecycle_arg"}
     refresh_shell_command_cache
-    if detect_pnpm_cmd && pnpm_cmd_is_ready; then
+    if detect_pnpm_cmd && [[ "$(cd "$repo_dir" && "${PNPM_CMD[@]}" --version 2>/dev/null || true)" == "$version" ]]; then
         ui_success "pnpm ready ($(pnpm_cmd_pretty))"
         return 0
     fi
-
-    ui_error "pnpm installation failed"
+    ui_error "Could not activate pnpm ${version} for ${repo_dir}"
     return 1
 }
 
@@ -2545,7 +2549,6 @@ ensure_pnpm_binary_for_scripts() {
     if command -v corepack >/dev/null 2>&1; then
         ui_info "Ensuring pnpm command is available"
         corepack enable >/dev/null 2>&1 || true
-        corepack prepare pnpm@11 --activate >/dev/null 2>&1 || true
         refresh_shell_command_cache
         if command -v pnpm >/dev/null 2>&1; then
             ui_success "pnpm command enabled via Corepack"
@@ -2571,7 +2574,7 @@ EOF
     fi
 
     ui_error "pnpm command not available on PATH"
-    ui_info "Install pnpm globally (npm install -g pnpm@11) and retry"
+    ui_info "Install pnpm globally (npm install -g pnpm@12.0.0 --allow-scripts=pnpm@12.0.0) and retry"
     return 1
 }
 
@@ -2580,7 +2583,7 @@ run_pnpm() {
         local repo_dir="$2"
         shift 2
         if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
-            ensure_pnpm
+            ensure_pnpm "$repo_dir"
         fi
         (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
         return
@@ -2848,32 +2851,6 @@ repo_pnpm_spec() {
     sed -n -E 's/^[[:space:]]*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1
 }
 
-activate_repo_pnpm_version() {
-    local repo_dir="$1"
-    local spec version
-
-    spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    if [[ "$spec" != pnpm@* ]]; then
-        return 0
-    fi
-
-    version="${spec#pnpm@}"
-    version="${version%%+*}"
-    if [[ -z "$version" ]]; then
-        return 0
-    fi
-
-    if command -v corepack >/dev/null 2>&1; then
-        ui_info "Activating repo pnpm ${version}"
-        corepack prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
-        refresh_shell_command_cache
-        if [[ "$(cd "$repo_dir" && corepack pnpm --version 2>/dev/null || true)" == "$version" ]]; then
-            set_pnpm_cmd corepack pnpm
-            return 0
-        fi
-        detect_pnpm_cmd || true
-    fi
-}
 
 ensure_user_local_bin_on_path() {
     local target="$HOME/.local/bin"
@@ -3298,9 +3275,6 @@ install_openclaw_from_git() {
         install_git
     fi
 
-    ensure_pnpm
-    ensure_pnpm_binary_for_scripts
-
     validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" || -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
         # Blobless clone: the installer checks out one release tag, so full blob
@@ -3325,7 +3299,8 @@ install_openclaw_from_git() {
     fi
 
     cleanup_legacy_submodules "$repo_dir"
-    activate_repo_pnpm_version "$repo_dir"
+    ensure_pnpm "$repo_dir"
+    ensure_pnpm_binary_for_scripts
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"

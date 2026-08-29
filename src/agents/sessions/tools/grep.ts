@@ -284,7 +284,7 @@ export function createGrepToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             spawnedChild.stderr?.setEncoding("utf8");
             spawnedChild.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk);
+              stderr = appendBoundedTextTail(stderr, chunk).tail;
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
               if (settled) {
