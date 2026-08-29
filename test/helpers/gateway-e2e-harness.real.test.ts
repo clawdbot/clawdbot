@@ -32,8 +32,10 @@ describe("connectGatewayStatusClient real transport", () => {
       server = net.createServer((clientSocket) => {
         socket = clientSocket;
         resolveAccepted();
+        let request = "";
         clientSocket.on("data", (data) => {
-          if (data.toString("utf8").includes("Upgrade: websocket")) {
+          request += data.toString("utf8");
+          if (request.includes("Upgrade: websocket")) {
             resolveUpgrade();
           }
         });
