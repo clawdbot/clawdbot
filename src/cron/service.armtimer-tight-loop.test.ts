@@ -229,6 +229,48 @@ describe("CronService - armTimer tight loop prevention", () => {
     }
   });
 
+  it("keeps a maintenance wake armed for legacy jobs that omit enabled", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const now = Date.parse("2026-02-28T12:32:00.000Z");
+
+    const state = createTimerState({
+      storePath: "/tmp/test-cron/jobs.json",
+      now,
+    });
+    // Legacy stores predate the `enabled` flag; isJobEnabled treats the
+    // absent value as enabled, so the job is still runnable.
+    const job = {
+      id: "legacy-no-enabled",
+      name: "legacy-no-enabled",
+      deleteAfterRun: false,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 30_000,
+      schedule: { kind: "cron", expr: "*/15 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "test" },
+      delivery: { mode: "none" },
+      state: {
+        lastRunStatus: "error",
+        lastRunAtMs: now - 45_000,
+        lastError: "provider overloaded",
+      },
+    } as unknown as CronJob;
+    state.store = {
+      version: 1,
+      jobs: [job],
+    };
+
+    try {
+      armTimer(state);
+
+      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+      expect(extractTimeoutDelays(timeoutSpy)).toContain(60_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("breaks the onTimer→armTimer hot-loop with stuck runningAtMs", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();

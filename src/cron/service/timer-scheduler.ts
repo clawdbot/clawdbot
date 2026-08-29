@@ -60,12 +60,20 @@ export function armTimer(state: CronServiceState) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
     return;
   }
-  const { nextWakeAtMs: nextAt, jobCount, enabledCount } = summarizeCronJobSchedule(state);
+  const {
+    nextWakeAtMs: nextAt,
+    jobCount,
+    enabledCount,
+    runnableCount,
+  } = summarizeCronJobSchedule(state);
   if (!nextAt) {
     // The summary uses the same scheduled-timestamp predicate as this branch,
     // so no explicitly enabled job can have a next run here.
     const withNextRun = 0;
-    if (enabledCount > 0) {
+    // Gate on runnable jobs, not the stricter diagnostic count: a legacy job
+    // that omits `enabled` is still runnable, and leaving it unarmed here
+    // stalls the scheduler until an unrelated mutation re-arms the timer.
+    if (runnableCount > 0) {
       armRunningRecheckTimer(state);
       state.deps.log.debug(
         { jobCount, enabledCount, withNextRun, delayMs: MAX_CRON_TIMER_DELAY_MS },
