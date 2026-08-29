@@ -65,7 +65,6 @@ export type ToolTranscriptCallInput = {
   id: string;
   name: string;
   arguments?: unknown;
-  hideFromChannelProgress?: boolean;
 };
 
 export type ToolTranscriptResultInput = {
@@ -316,10 +315,6 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultSummary(item: CodexThreadItem | undefined): void {
-    // Codex emits dynamic item notifications before the request that owns visibility.
-    if (item?.type === "dynamicToolCall") {
-      return;
-    }
     if (!item || !this.params.onToolResult || !this.shouldEmitToolResult()) {
       return;
     }
@@ -343,9 +338,6 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultOutput(item: CodexThreadItem | undefined): void {
-    if (item?.type === "dynamicToolCall") {
-      return;
-    }
     if (!item || !this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }
@@ -399,14 +391,11 @@ export class CodexToolProgressProjection {
 
   recordTranscriptCall(params: ToolTranscriptCallInput): void {
     this.transcriptArgumentsById.set(params.id, params.arguments);
-    if (
-      params.hideFromChannelProgress === true ||
-      !shouldEmitTranscriptToolProgress(params.name, params.arguments)
-    ) {
+    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       this.transcriptProgressSuppressedIds.add(params.id);
-      return;
+    } else {
+      this.transcriptProgressSuppressedIds.delete(params.id);
     }
-    this.transcriptProgressSuppressedIds.delete(params.id);
     this.emitTranscriptToolCallProgress(params);
   }
 

@@ -1837,75 +1837,6 @@ describe("runCodexAppServerAttempt", () => {
       .map((event) => event.data?.phase);
     expect(toolPhases).toEqual(["start", "result"]);
   });
-
-  it("preserves channel-progress visibility for Codex dynamic tool events", async () => {
-    const hiddenTool = {
-      ...createRuntimeDynamicTool("hidden_widget"),
-      hideFromChannelProgress: true,
-    };
-    const visibleTool = createRuntimeDynamicTool("visible_widget");
-    testing.setOpenClawCodingToolsFactoryForTests(() => [hiddenTool, visibleTool]);
-    const sessionFile = path.join(tempDir, "session-tool-visibility.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-tool-visibility");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
-    const onRunAgentEvent = vi.fn();
-    const onToolResult = vi.fn();
-    params.onAgentEvent = onRunAgentEvent;
-    params.onToolResult = onToolResult;
-    params.verboseLevel = "on";
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    for (const [tool, callId] of [
-      ["hidden_widget", "call-hidden"],
-      ["visible_widget", "call-visible"],
-    ] as const) {
-      await expect(
-        harness.handleServerRequest({
-          id: `request-${callId}`,
-          method: "item/tool/call",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId,
-            namespace: null,
-            tool,
-            arguments: {},
-          },
-        }),
-      ).resolves.toMatchObject({ success: true });
-    }
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-    const toolEvents = onRunAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter(
-        (event) =>
-          event.stream === "tool" &&
-          (event.data?.name === "hidden_widget" || event.data?.name === "visible_widget"),
-      );
-    expect(toolEvents.map((event) => [event.data?.name, event.data?.phase])).toEqual([
-      ["hidden_widget", "start"],
-      ["hidden_widget", "result"],
-      ["visible_widget", "start"],
-      ["visible_widget", "result"],
-    ]);
-    for (const toolEvent of toolEvents.filter((event) => event.data?.name === "hidden_widget")) {
-      expect(toolEvent.data).toMatchObject({ hideFromChannelProgress: true });
-    }
-    for (const toolEvent of toolEvents.filter((event) => event.data?.name === "visible_widget")) {
-      expect(toolEvent.data).not.toHaveProperty("hideFromChannelProgress");
-    }
-    const toolResultTexts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
-    expect(toolResultTexts.filter((text) => text.includes("Hidden Widget"))).toHaveLength(0);
-    expect(toolResultTexts.filter((text) => text.includes("Visible Widget"))).toHaveLength(1);
-  });
-
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     for (const [index, deliveryHint] of MESSAGE_TOOL_DELIVERY_HINTS.entries()) {
       // Bindings are keyed by session identity, so the previous iteration's
@@ -4698,22 +4629,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams.input?.[0]?.text).toBe(exactPrompt);
   });
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
-      {
-        ...createRuntimeDynamicTool("verbose_widget"),
-        execute: vi.fn(async () => ({
-          content: [{ type: "text" as const, text: "file contents" }],
-          details: {},
-        })),
-      },
-    ]);
     const onToolResult = vi.fn();
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
@@ -4723,38 +4642,21 @@ describe("runCodexAppServerAttempt", () => {
         type: "dynamicToolCall",
         id: "tool-1",
         namespace: null,
-        tool: "verbose_widget",
-        arguments: {},
+        tool: "read",
+        arguments: { path: "README.md" },
         status: "inProgress",
         contentItems: null,
         success: null,
         durationMs: null,
       }),
     );
-    await expect(
-      harness.handleServerRequest({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "tool-1",
-          namespace: null,
-          tool: "verbose_widget",
-          arguments: {},
-        },
-      }),
-    ).resolves.toMatchObject({
-      success: true,
-      contentItems: [{ type: "inputText", text: "file contents" }],
-    });
     await harness.notify(
       itemNotification("item/completed", {
         type: "dynamicToolCall",
         id: "tool-1",
         namespace: null,
-        tool: "verbose_widget",
-        arguments: {},
+        tool: "read",
+        arguments: { path: "README.md" },
         status: "completed",
         contentItems: [{ type: "inputText", text: "file contents" }],
         success: true,
@@ -4765,10 +4667,10 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "🧩 Verbose Widget",
+      text: "📖 Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "🧩 Verbose Widget\n```txt\nfile contents\n```",
+      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
     });
   });
 

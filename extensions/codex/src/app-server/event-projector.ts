@@ -423,17 +423,17 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  recordDynamicToolCall(
-    params: Parameters<CodexToolTranscriptProjection["recordDynamicToolCall"]>[0],
-  ): void {
+  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
   }
 
   /** Projects a successful OpenClaw progress_card call through the native plan stream. */
   async recordDynamicProgressCardUpdate(params: unknown): Promise<void> {
     if (isJsonObject(params)) {
-      const plan = Array.isArray(params.plan) ? params.plan : [];
-      await this.reasoningProjection.handleTurnPlanUpdated({ plan }, "openclaw");
+      const projected: JsonObject = {
+        plan: Array.isArray(params.plan) ? params.plan : [],
+      };
+      await this.reasoningProjection.handleTurnPlanUpdated(projected, "openclaw");
     }
   }
 

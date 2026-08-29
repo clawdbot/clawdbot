@@ -307,67 +307,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("waits for the dynamic tool request before emitting channel progress", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      onToolResult,
-    });
-
-    for (const [tool, callId, hideFromChannelProgress] of [
-      ["hidden_widget", "call-hidden", true],
-      ["visible_widget", "call-visible", false],
-    ] as const) {
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: {
-            type: "dynamicToolCall",
-            id: callId,
-            namespace: null,
-            tool,
-            arguments: {},
-            status: "inProgress",
-            contentItems: null,
-            success: null,
-            durationMs: null,
-          },
-        }),
-      );
-      projector.recordDynamicToolCall({
-        callId,
-        tool,
-        arguments: {},
-        hideFromChannelProgress,
-      });
-      projector.recordDynamicToolResult({
-        callId,
-        tool,
-        success: true,
-        contentItems: [{ type: "inputText", text: `${tool} done` }],
-      });
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            type: "dynamicToolCall",
-            id: callId,
-            namespace: null,
-            tool,
-            arguments: {},
-            status: "completed",
-            contentItems: [{ type: "inputText", text: `${tool} done` }],
-            success: true,
-            durationMs: 1,
-          },
-        }),
-      );
-    }
-
-    const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
-    expect(texts.filter((text) => text.includes("Hidden Widget"))).toHaveLength(0);
-    expect(texts.filter((text) => text.includes("Visible Widget"))).toHaveLength(2);
-  });
-
   it("does not replay transcript summaries when only tool output is enabled", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
