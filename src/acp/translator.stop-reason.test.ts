@@ -154,6 +154,10 @@ describe("acp translator stop reason mapping", () => {
       return {};
     }) as GatewayClient["request"];
     const connection = createAcpConnection();
+    const sessionUpdate = vi.fn(
+      async (_params: Parameters<typeof connection.sessionUpdate>[0]) => {},
+    );
+    connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
       sessionId: "session-1",
@@ -177,7 +181,7 @@ describe("acp translator stop reason mapping", () => {
     );
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
-    const chunkTexts = connection.__sessionUpdateMock.mock.calls
+    const chunkTexts = sessionUpdate.mock.calls
       .map(
         ([params]) =>
           (
