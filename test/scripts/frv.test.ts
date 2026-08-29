@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   continueFailed,
   createClient,
@@ -143,7 +143,12 @@ function historicalExecutionPlanArtifact() {
   return artifact;
 }
 
-function runFor(entry: ReturnType<typeof child>, attempt: number, conclusion: string | null) {
+function runFor(
+  entry: ReturnType<typeof child>,
+  attempt: number,
+  conclusion: string | null,
+  status = conclusion === null ? "in_progress" : "completed",
+) {
   return {
     actor: { login: "github-actions[bot]" },
     conclusion,
@@ -156,15 +161,20 @@ function runFor(entry: ReturnType<typeof child>, attempt: number, conclusion: st
     path: `.github/workflows/${entry.workflow}`,
     repository: { full_name: REPOSITORY },
     run_attempt: attempt,
-    status: conclusion === null ? "in_progress" : "completed",
+    status,
     triggering_actor: {
       login: attempt === entry.runAttempt ? "github-actions[bot]" : "release-operator",
     },
   };
 }
 
-function rootRun(attempt = 1, conclusion: string | null = "failure") {
+function rootRun(
+  attempt = 1,
+  conclusion: string | null = "failure",
+  status = conclusion === null ? "in_progress" : "completed",
+) {
   return {
+    actor: { login: "github-actions[bot]" },
     conclusion,
     display_title: "Full Release Validation",
     event: "workflow_dispatch",
@@ -174,7 +184,8 @@ function rootRun(attempt = 1, conclusion: string | null = "failure") {
     path: ".github/workflows/full-release-validation.yml",
     repository: { full_name: REPOSITORY },
     run_attempt: attempt,
-    status: conclusion === null ? "in_progress" : "completed",
+    status,
+    triggering_actor: { login: attempt === 1 ? "github-actions[bot]" : "release-operator" },
   };
 }
 
@@ -248,6 +259,108 @@ function controllerClient(
             childRuns.get(runId)!.conclusion,
           ),
     repository: REPOSITORY,
+  };
+}
+
+async function withFastPolling<T>(run: () => Promise<T>, reconcileTimeoutMs?: string) {
+  vi.stubEnv("OPENCLAW_FRV_POLL_MS", "1");
+  if (reconcileTimeoutMs) {
+    vi.stubEnv("OPENCLAW_FRV_RECONCILE_TIMEOUT_MS", reconcileTimeoutMs);
+  }
+  try {
+    return await run();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
+type ScenarioState = [
+  attempt: unknown,
+  conclusion: string | null,
+  status?: string,
+  actor?: string,
+  triggeringActor?: string,
+  headSha?: string,
+];
+
+function rerunScenario(options: {
+  childAfter?: ScenarioState[];
+  childBefore?: ScenarioState[];
+  childError?: Error;
+  childSource?: ScenarioState;
+  parentAfter?: ScenarioState[];
+  parentBefore?: ScenarioState[];
+  parentError?: Error;
+  parentSource?: ScenarioState;
+}) {
+  const selected = child("normalCi", "101");
+  const source = {
+    child: options.childSource ?? [1, "failure"],
+    parent: options.parentSource ?? [1, "success"],
+  };
+  const after = {
+    child: options.childAfter ?? [[2, "success"]],
+    parent: options.parentAfter ?? [[2, "success"]],
+  };
+  const mutated = { child: false, parent: false };
+  const beforeReads = { child: 0, parent: 0 };
+  const counters = {
+    posts: { child: 0, parent: 0 },
+    reads: { child: 0, parent: 0 },
+    verifies: 0,
+  };
+  const stateAt = (states: ScenarioState[], index: number) =>
+    states[Math.min(index, states.length - 1)]!;
+  const makeRun = (target: "child" | "parent", state: ScenarioState) => {
+    const [attempt, conclusion, status, actor, triggeringActor, headSha] = state;
+    const validAttempt = typeof attempt === "number" && attempt > 0 ? attempt : 1;
+    const base =
+      target === "child"
+        ? runFor(selected, validAttempt, conclusion, status)
+        : rootRun(validAttempt, conclusion, status);
+    return {
+      ...base,
+      actor: { login: actor ?? base.actor.login },
+      run_attempt: attempt,
+      ...(target === "child" && triggeringActor
+        ? { triggering_actor: { login: triggeringActor } }
+        : {}),
+      ...(headSha ? { head_sha: headSha } : {}),
+    };
+  };
+  const mutate = async (target: "child" | "parent", error?: Error) => {
+    counters.posts[target] += 1;
+    mutated[target] = true;
+    if (error) {
+      throw error;
+    }
+  };
+  return {
+    counters,
+    selected,
+    client: {
+      ...preflightMethods([selected], () => makeRun("child", source.child)),
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        job("test", attempt === source.child[0] ? (source.child[1] ?? "failure") : "success"),
+      ],
+      getRun: async (runId: string) => {
+        const target = runId === "77" ? "parent" : "child";
+        const states = mutated[target]
+          ? after[target]
+          : target === "parent"
+            ? (options.parentBefore ?? [source.parent])
+            : (options.childBefore ?? [source.child]);
+        const index = mutated[target] ? counters.reads[target]++ : beforeReads[target]++;
+        return makeRun(target, stateAt(states, index));
+      },
+      repository: REPOSITORY,
+      rerunFailed: () => mutate("child", options.childError),
+      rerunParent: () => mutate("parent", options.parentError),
+      verify: async () => {
+        counters.verifies += 1;
+        return "{}";
+      },
+    },
   };
 }
 
@@ -376,46 +489,18 @@ describe("FRV same-parent recovery", () => {
   });
 
   it("adopts an already-active newer child attempt without dispatching another rerun", async () => {
-    const selected = child("normalCi", "101");
-    let childReads = 0;
-    let reruns = 0;
-    const parent = { attempt: 1, conclusion: "success" as string | null };
-    const client = {
-      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      getAttemptJobs: async (_runId: string, attempt: number) =>
-        attempt === 1 ? [job("test", "failure")] : childReads < 2 ? [] : [job("test")],
-      getRun: async (runId: string) => {
-        if (runId === "77") {
-          return rootRun(parent.attempt, parent.conclusion);
-        }
-        childReads += 1;
-        return runFor(selected, 2, childReads < 2 ? null : "success");
-      },
-      repository: REPOSITORY,
-      rerunFailed: async () => {
-        reruns += 1;
-      },
-      rerunParent: async () => {
-        parent.attempt = 2;
-        parent.conclusion = "success";
-      },
-      verify: async () => "{}",
-    };
-    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
-    process.env.OPENCLAW_FRV_POLL_MS = "1";
-    try {
-      await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
-        action: "reran-parent",
-        finalRunId: "77",
-      });
-    } finally {
-      if (previousPoll === undefined) {
-        delete process.env.OPENCLAW_FRV_POLL_MS;
-      } else {
-        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
-      }
-    }
-    expect(reruns).toBe(0);
+    const scenario = rerunScenario({
+      childBefore: [
+        [2, null],
+        [2, "success"],
+      ],
+    });
+    await withFastPolling(() =>
+      expect(
+        continueFailed(plan([scenario.selected]), "77", scenario.client),
+      ).resolves.toMatchObject({ action: "reran-parent", finalRunId: "77" }),
+    );
+    expect(scenario.counters.posts.child).toBe(0);
   });
 
   it("reruns current v2 failed children concurrently, preserves green children, then reruns the parent once", async () => {
@@ -457,136 +542,118 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
-  it("reconciles an accepted child POST through stale reads without dispatching twice", async () => {
-    const selected = child("normalCi", "101");
-    const parent = { attempt: 1, conclusion: "success" as string | null };
-    let dispatched = false;
-    let visibleReads = 0;
-    let reruns = 0;
-    const client = {
-      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      getAttemptJobs: async (_runId: string, attempt: number) => [
-        job("test", attempt === 1 ? "failure" : "success"),
+  it.each(["child", "parent"])("reconciles a write-once %s rerun", async (target) => {
+    const transportError = Object.assign(new Error("read ECONNRESET after dispatch"), {
+      code: "ECONNRESET",
+    });
+    const scenario = rerunScenario(
+      target === "child"
+        ? {
+            childAfter: [
+              [1, null, "queued"],
+              [1, null, undefined, undefined, "release-operator"],
+              [2, "success"],
+            ],
+            childError: transportError,
+          }
+        : {
+            childSource: [1, "success"],
+            parentAfter: [
+              [1, null, "queued"],
+              [1, null],
+              [2, "success"],
+            ],
+            parentError: transportError,
+            parentSource: [1, "failure"],
+          },
+    );
+    await withFastPolling(() =>
+      expect(
+        continueFailed(plan([scenario.selected]), "77", scenario.client),
+      ).resolves.toMatchObject({ action: "reran-parent" }),
+    );
+    expect(
+      target === "child" ? scenario.counters.posts.child : scenario.counters.posts.parent,
+    ).toBe(1);
+    expect(scenario.counters.verifies).toBe(1);
+  });
+
+  it("keeps the reconciliation timeout when no newer attempt appears", async () => {
+    const scenario = rerunScenario({
+      childAfter: [[1, "failure"]],
+      childError: new Error("HTTP 502 after dispatch"),
+    });
+    await withFastPolling(
+      () =>
+        expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
+          "rerun mutation did not produce an observable newer attempt for 101",
+        ),
+      "5",
+    );
+    expect(scenario.counters.posts.child).toBe(1);
+  });
+
+  it("keeps exact-terminal parent admission before dispatch", async () => {
+    const scenario = rerunScenario({
+      childSource: [1, "success"],
+      parentBefore: [
+        [1, "failure"],
+        [2, null],
       ],
-      getRun: async (runId: string) => {
-        if (runId === "77") {
-          return rootRun(parent.attempt, parent.conclusion);
-        }
-        if (!dispatched || visibleReads++ < 2) {
-          return runFor(selected, 1, "failure");
-        }
-        return runFor(selected, 2, "success");
-      },
-      repository: REPOSITORY,
-      rerunFailed: async () => {
-        reruns += 1;
-        dispatched = true;
-        throw new Error("HTTP 502 after dispatch");
-      },
-      rerunParent: async () => {
-        parent.attempt = 2;
-        parent.conclusion = "success";
-      },
-      verify: async () => "{}",
-    };
-    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
-    process.env.OPENCLAW_FRV_POLL_MS = "1";
-    try {
-      await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
-        action: "reran-parent",
-      });
-    } finally {
-      if (previousPoll === undefined) {
-        delete process.env.OPENCLAW_FRV_POLL_MS;
-      } else {
-        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
-      }
-    }
-    expect(reruns).toBe(1);
+      parentSource: [1, "failure"],
+    });
+    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
+      "rerun source 77 is no longer the exact terminal run",
+    );
+    expect(scenario.counters.posts.parent).toBe(0);
   });
 
-  it("fails closed when an ambiguous child POST never becomes visible", async () => {
-    const selected = child("normalCi", "101");
-    let reruns = 0;
-    const client = {
-      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      getAttemptJobs: async () => [job("test", "failure")],
-      getRun: async (runId: string) =>
-        runId === "77" ? rootRun(1, "success") : runFor(selected, 1, "failure"),
-      repository: REPOSITORY,
-      rerunFailed: async () => {
-        reruns += 1;
-        throw new Error("HTTP 502 after dispatch");
-      },
-      rerunParent: async () => {},
-      verify: async () => "{}",
-    };
-    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
-    const previousReconcile = process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS;
-    process.env.OPENCLAW_FRV_POLL_MS = "1";
-    process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = "5";
-    try {
-      await expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
-        "rerun mutation did not produce an observable newer attempt for 101",
-      );
-    } finally {
-      if (previousPoll === undefined) {
-        delete process.env.OPENCLAW_FRV_POLL_MS;
-      } else {
-        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
-      }
-      if (previousReconcile === undefined) {
-        delete process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS;
-      } else {
-        process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = previousReconcile;
-      }
-    }
-    expect(reruns).toBe(1);
+  it("binds mutation reconciliation to the original actor", async () => {
+    const scenario = rerunScenario({
+      childAfter: [[2, "success", undefined, "other-actor"]],
+    });
+    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
+      "rerun source 101 changed during mutation reconciliation",
+    );
   });
 
-  it("reconciles an accepted parent POST through stale reads without dispatching twice", async () => {
-    const selected = child("normalCi", "101");
-    let dispatched = false;
-    let visibleReads = 0;
-    let reruns = 0;
-    const client = {
-      ...preflightMethods([selected], (entry) => runFor(entry, 1, "success")),
-      getAttemptJobs: async () => [job("test")],
-      getRun: async (runId: string) => {
-        if (runId !== "77") {
-          return runFor(selected, 1, "success");
-        }
-        if (!dispatched || visibleReads++ < 2) {
-          return rootRun(1, "failure");
-        }
-        return rootRun(2, "success");
-      },
-      repository: REPOSITORY,
-      rerunFailed: async () => {},
-      rerunParent: async () => {
-        reruns += 1;
-        dispatched = true;
-        throw new Error("HTTP 502 after dispatch");
-      },
-      verify: async () => "{}",
-    };
-    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
-    process.env.OPENCLAW_FRV_POLL_MS = "1";
-    try {
-      await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
-        action: "reran-parent",
-      });
-    } finally {
-      if (previousPoll === undefined) {
-        delete process.env.OPENCLAW_FRV_POLL_MS;
-      } else {
-        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
-      }
-    }
-    expect(reruns).toBe(1);
+  it.each([
+    ["missing", 1, undefined, "101 run attempt must be a positive integer"],
+    ["zero", 1, 0, "101 run attempt must be a positive integer"],
+    ["regressed", 2, 1, "rerun source 101 attempt regressed"],
+    ["skipped", 1, 3, "controller-owned run 101 advanced past attempt 2"],
+  ])("rejects a %s child attempt", async (_label, sourceAttempt, observedAttempt, error) => {
+    const scenario = rerunScenario({
+      childAfter: [[observedAttempt, "success"]],
+      childSource: [sourceAttempt, "failure"],
+    });
+    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
+      error,
+    );
   });
 
-  it("reconciles one ambiguous child response while distinct failed children rerun concurrently", async () => {
+  it.each([
+    ["child", "HTTP 403: workflow rerun forbidden"],
+    ["parent", "HTTP 422: workflow rerun rejected"],
+  ])("does not poll after a hard %s mutation failure", async (target, error) => {
+    const scenario = rerunScenario(
+      target === "child"
+        ? { childError: new Error(error) }
+        : {
+            childSource: [1, "success"],
+            parentError: new Error(error),
+            parentSource: [1, "failure"],
+          },
+    );
+    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
+      error,
+    );
+    expect(
+      target === "child" ? scenario.counters.reads.child : scenario.counters.reads.parent,
+    ).toBe(0);
+  });
+
+  it("reconciles an ambiguous peer before surfacing a hard child mutation failure", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
     const childRuns = new Map([
@@ -594,72 +661,70 @@ describe("FRV same-parent recovery", () => {
       ["202", { attempt: 1, conclusion: "failure" }],
     ]);
     const parent = { attempt: 1, conclusion: "success" as string | null };
+    const base = controllerClient([first, second], childRuns, parent);
     const calls: string[] = [];
+    let dispatched = false;
+    let hardRunReads = 0;
     const client = {
-      ...controllerClient([first, second], childRuns, parent),
+      ...base,
+      getRun: async (runId: string) => {
+        if (dispatched && runId === "202") {
+          hardRunReads += 1;
+        }
+        return base.getRun(runId);
+      },
       rerunFailed: async (runId: string) => {
+        dispatched = true;
         calls.push(runId);
-        childRuns.set(runId, { attempt: 2, conclusion: "success" });
         if (runId === "101") {
+          childRuns.set(runId, { attempt: 2, conclusion: "success" });
           throw new Error("HTTP 502 after dispatch");
         }
-      },
-      rerunParent: async () => {
-        parent.attempt = 2;
-        parent.conclusion = "success";
-      },
-      verify: async () => "{}",
-    };
-    await expect(continueFailed(plan([first, second]), "77", client)).resolves.toMatchObject({
-      action: "reran-parent",
-    });
-    expect(calls.toSorted()).toEqual(["101", "202"]);
-  });
-
-  it("fails closed without another POST when provenance changes during reconciliation", async () => {
-    const selected = child("normalCi", "101");
-    let drifted = false;
-    let reruns = 0;
-    const previousPoll = process.env.OPENCLAW_FRV_POLL_MS;
-    const previousReconcile = process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS;
-    const client = {
-      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      getAttemptJobs: async () => [job("test", "failure")],
-      getRun: async (runId: string) =>
-        runId === "77"
-          ? rootRun(1, "success")
-          : {
-              ...runFor(selected, 1, "failure"),
-              head_sha: drifted ? "f".repeat(40) : SHA,
-            },
-      repository: REPOSITORY,
-      rerunFailed: async () => {
-        reruns += 1;
-        drifted = true;
-        throw new Error("HTTP 502 before dispatch");
+        throw new Error("HTTP 403: workflow rerun forbidden");
       },
       rerunParent: async () => {},
       verify: async () => "{}",
     };
-    process.env.OPENCLAW_FRV_POLL_MS = "1";
-    process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = "5";
-    try {
-      await expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
+    await expect(continueFailed(plan([first, second]), "77", client)).rejects.toThrow("HTTP 403");
+    expect(calls.toSorted()).toEqual(["101", "202"]);
+    expect(hardRunReads).toBe(0);
+  });
+
+  it.each([
+    ["child", "101"],
+    ["parent", "77"],
+  ])("rejects %s attempt advancement before verification", async (target, targetRunId) => {
+    const advancingStates = [
+      [2, null],
+      [2, "success"],
+      [3, "success"],
+    ] satisfies ScenarioState[];
+    const scenario = rerunScenario(
+      target === "child"
+        ? { childAfter: advancingStates }
+        : {
+            childSource: [1, "success"],
+            parentAfter: advancingStates,
+            parentSource: [1, "failure"],
+          },
+    );
+    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
+      `controller-owned run ${targetRunId} advanced past attempt 2`,
+    );
+    expect(scenario.counters.verifies).toBe(0);
+  });
+
+  it("fails closed without another POST when provenance changes during reconciliation", async () => {
+    const scenario = rerunScenario({
+      childAfter: [[1, "failure", undefined, undefined, undefined, "f".repeat(40)]],
+      childError: new Error("HTTP 502 before dispatch"),
+    });
+    await withFastPolling(() =>
+      expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
         "rerun source 101 changed during mutation reconciliation",
-      );
-    } finally {
-      if (previousPoll === undefined) {
-        delete process.env.OPENCLAW_FRV_POLL_MS;
-      } else {
-        process.env.OPENCLAW_FRV_POLL_MS = previousPoll;
-      }
-      if (previousReconcile === undefined) {
-        delete process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS;
-      } else {
-        process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = previousReconcile;
-      }
-    }
-    expect(reruns).toBe(1);
+      ),
+    );
+    expect(scenario.counters.posts.child).toBe(1);
   });
 
   it("keeps dry-run recovery mutation-free", async () => {
@@ -684,6 +749,23 @@ describe("FRV same-parent recovery", () => {
       continueFailed(plan([selected]), "77", client, { dryRun: true }),
     ).resolves.toMatchObject({ action: "would-rerun" });
     expect(mutations).toBe(0);
+  });
+});
+
+describe("FRV rerun API", () => {
+  it("uses the direct failed-jobs and parent rerun endpoints", async () => {
+    const calls: string[][] = [];
+    const client = createClient(REPOSITORY, {
+      mutate: async (args: string[]) => {
+        calls.push(args);
+      },
+    });
+    await client.rerunFailed("101");
+    await client.rerunParent("77");
+    expect(calls).toEqual([
+      ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/101/rerun-failed-jobs`],
+      ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/77/rerun`],
+    ]);
   });
 });
 
