@@ -17,7 +17,6 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -43,7 +42,6 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
-import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import {
   buildSessionContext as buildCoreSessionContext,
@@ -1113,8 +1111,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             `Compaction provider "${compactionProvider.id}" returned empty result, falling back to LLM.`,
           );
         } catch (err) {
-          // Caller cancellation and real transport timeouts remain terminal.
-          if (signal?.aborted || (!isAbortError(err) && isTimeoutError(err))) {
+          // Escaped hook errors fall through to raw core compaction. Keep provider-local
+          // failures in the audited fallback unless the caller aborted.
+          if (signal?.aborted) {
             throw err;
           }
           log.warn(
