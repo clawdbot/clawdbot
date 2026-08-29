@@ -2579,19 +2579,16 @@ EOF
 }
 
 run_pnpm() {
-    if [[ "${PNPM_CMD[*]}" == "corepack pnpm" && "${1:-}" == "-C" && -n "${2:-}" ]]; then
-        local repo_dir="$2"
+    local repo_dir="$PWD"
+    if [[ "${1:-}" == "-C" && -n "${2:-}" ]]; then
+        repo_dir="$2"
         shift 2
-        if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
-            ensure_pnpm "$repo_dir"
-        fi
-        (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
-        return
     fi
-    if ! pnpm_cmd_is_ready; then
-        ensure_pnpm
+    # Corepack-backed pnpm shims choose a version before pnpm processes -C.
+    if ! (cd "$repo_dir" && pnpm_cmd_is_ready); then
+        ensure_pnpm "$repo_dir"
     fi
-    "${PNPM_CMD[@]}" "$@"
+    (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
 }
 
 should_prefer_offline_pnpm_install() {
