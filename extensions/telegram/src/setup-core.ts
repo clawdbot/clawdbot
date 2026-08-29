@@ -106,14 +106,11 @@ export const telegramSetupAdapter: ChannelSetupAdapter = {
           : {},
     // Resolution prefers tokenFile over inline botToken, so writing one source
     // has to retire the other or the stale credential keeps winning (see #132231).
+    // The full pair is retired on any credential write because a promoted
+    // accounts.default record outranks root regardless of which form it holds;
+    // the patch re-adds the written source after the clear.
     buildClearFields: (input) =>
-      input.useEnv
-        ? ["tokenFile", "botToken"]
-        : input.tokenFile
-          ? ["botToken"]
-          : input.token
-            ? ["tokenFile"]
-            : [],
+      input.useEnv || input.tokenFile || input.token ? ["tokenFile", "botToken"] : [],
   }),
   singleAccountKeysToMove,
   namedAccountPromotionKeys,

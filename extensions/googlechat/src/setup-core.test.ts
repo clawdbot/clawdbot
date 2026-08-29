@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveGoogleChatConfigAccessorAccount } from "./accounts.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 
 type GoogleChatChannelConfig = {
   serviceAccount?: string;
   serviceAccountFile?: string;
+  accounts?: Record<
+    string,
+    { serviceAccount?: string; serviceAccountFile?: string; name?: string }
+  >;
 };
 
 function applyGoogleChatSetup(
@@ -53,5 +58,30 @@ describe("googlechat credential rotation", () => {
 
     expect(rotated.serviceAccount).toBeUndefined();
     expect(rotated.serviceAccountFile).toBeUndefined();
+  });
+
+  it("retires a promoted accounts.default credential so the rotation wins at resolution", () => {
+    // Named-account setup promotes the root credential into accounts.default,
+    // and the merged account config reads that record ahead of the root fields.
+    const promoted = {
+      channels: {
+        googlechat: {
+          enabled: true,
+          accounts: {
+            default: { serviceAccount: '{"type":"service_account","old":true}', name: "Main" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotatedConfig = applyGoogleChatSetup({ token: '{"type":"service_account"}' }, promoted);
+    const rotated = (rotatedConfig.channels?.googlechat ?? {}) as GoogleChatChannelConfig;
+
+    expect(rotated.serviceAccount).toBe('{"type":"service_account"}');
+    expect(rotated.accounts?.default?.serviceAccount).toBeUndefined();
+    expect(rotated.accounts?.default?.name).toBe("Main");
+    expect(
+      resolveGoogleChatConfigAccessorAccount({ cfg: rotatedConfig }).config.serviceAccount,
+    ).toBe('{"type":"service_account"}');
   });
 });

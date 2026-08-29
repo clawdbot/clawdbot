@@ -50,15 +50,12 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
   },
   // Resolution prefers inline serviceAccount over serviceAccountFile, so writing
   // one source has to retire the other or the stale credential (including the
-  // plaintext private key) keeps winning (see #132231).
+  // plaintext private key) keeps winning (see #132231). The full pair is retired
+  // on any credential write because a promoted accounts.default record outranks
+  // root regardless of which form it holds; the patch re-adds the written source
+  // after the clear.
   buildClearFields: (input) =>
-    input.useEnv
-      ? ["serviceAccountFile", "serviceAccount"]
-      : input.tokenFile
-        ? ["serviceAccount"]
-        : input.token
-          ? ["serviceAccountFile"]
-          : [],
+    input.useEnv || input.tokenFile || input.token ? ["serviceAccountFile", "serviceAccount"] : [],
 });
 
 export const googlechatSetupContract = defineChannelSetupContract({

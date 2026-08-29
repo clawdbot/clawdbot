@@ -227,6 +227,35 @@ describe("patchScopedAccountConfig credential clearing", () => {
     });
   });
 
+  it("retires the promoted accounts.default credential that outranks a root rotation", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: true,
+            webhookPath: "/keep",
+            accounts: {
+              default: { name: "Main", token: "promoted-stale-token", tokenFile: "/stale/token" },
+              work: { token: "work-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: DEFAULT_ACCOUNT_ID,
+      clearFields: ["token", "tokenFile"],
+      patch: { token: "new-token" },
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.token).toBe("new-token");
+    expect(channel.webhookPath).toBe("/keep");
+    // The stale account-scoped credential is retired while unrelated account
+    // fields and named accounts are preserved.
+    expect(accountRecord(channel, "default")).toEqual({ name: "Main" });
+    expect(accountRecord(channel, "work")).toEqual({ token: "work-token" });
+  });
+
   it("clears only selected named-account credentials and preserves disabled siblings", () => {
     const next = patchScopedAccountConfig({
       cfg: asConfig({
