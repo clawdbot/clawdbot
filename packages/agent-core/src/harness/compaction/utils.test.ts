@@ -1,6 +1,7 @@
 import type { Message } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
+import { estimateTokens } from "./compaction.js";
 import {
   computeFileLists,
   createFileOps,
@@ -159,11 +160,14 @@ describe("serializeConversation", () => {
       ] as unknown as Message[]);
       const label = `[${role === "user" ? "User" : "Tool result"}]: `;
       const markers =
-        "[image data removed - already processed by model]\n" +
-        "[non-text data removed - already processed by model]\n";
+        "[image data omitted from summary input]\n" +
+        "[non-text data omitted from summary input]\n";
 
       expect(serialized).toBe(`${label}${markers}${textOnly.slice(label.length)}`);
-      expect(serialized.length - textOnly.length).toBe(103);
+      expect(serialized.length - textOnly.length).toBe(83);
+      expect(estimateTokens({ role, content } as unknown as AgentMessage)).toBe(
+        1_000 * 2_000 + Math.ceil((`start ${toolText}`.length + 99) / 4),
+      );
       expect(serialized).toContain("start ");
       expect(serialized).toContain("ERROR: terminal failure");
       expect(serialized).not.toMatch(/SENTINEL|other-media-/);
@@ -178,11 +182,60 @@ describe("serializeConversation", () => {
         content: [{ type: "audio", data: "AUDIO_PAYLOAD_SENTINEL" }],
       } as unknown as Message;
       const empty = { role, content: [{ type: "text", text: "" }] } as Message;
-      const expected = `[${role === "user" ? "User" : "Tool result"}]: [non-text data removed - already processed by model]`;
+      const expected = `[${role === "user" ? "User" : "Tool result"}]: [non-text data omitted from summary input]`;
 
       expect(serializeConversation([empty, message, empty, message])).toBe(
         `${expected}\n\n${expected}`,
       );
+    },
+  );
+
+  it.each(["user", "toolResult"] as const)(
+    "caps omission additions across %s messages, including empty-message wrappers",
+    (role) => {
+      const baseline: Message = { role: "user", content: "existing text", timestamp: 0 };
+      const aggregate = "[More image/non-text data omitted from summary input]";
+      for (const categories of [["image"], ["audio"], ["image", "audio"]]) {
+        for (const caption of ["", "caption 🚀"]) {
+          for (const count of [200, 8, 9, 10_000]) {
+            const messages = Array.from({ length: count }, () => ({
+              role,
+              content: [
+                { type: "text", text: caption },
+                ...categories.map((type) => ({ type, data: "PAYLOAD_SENTINEL" })),
+              ],
+            })) as unknown as Message[];
+            const textOnly = messages.map(() => ({ role, content: caption })) as Message[];
+            const serialized = serializeConversation([baseline, ...messages, baseline]);
+            const control = serializeConversation([baseline, ...textOnly, baseline]);
+            const addedBytes = Buffer.byteLength(serialized) - Buffer.byteLength(control);
+            expect(addedBytes).toBeLessThanOrEqual(847);
+            const estimatedTokens = messages.reduce(
+              (total, message) => total + estimateTokens(message),
+              0,
+            );
+            expect(estimatedTokens).toBeGreaterThanOrEqual(Math.ceil(addedBytes / 4));
+            if (role === "toolResult" && !caption && categories.length === 2 && count > 8) {
+              expect(addedBytes).toBe(847);
+            }
+            expect(serialized.split(aggregate)).toHaveLength(count > 8 ? 2 : 1);
+            expect(serialized.match(/\[(?:image|non-text) data omitted/g)).toHaveLength(
+              Math.min(count, 8) * categories.length,
+            );
+            expect(serialized.match(/caption 🚀/g)?.length ?? 0).toBe(caption ? count : 0);
+            expect(serialized).toContain("[User]: existing text");
+            expect(serialized).not.toContain("PAYLOAD_SENTINEL");
+          }
+        }
+      }
+      const images = Array.from({ length: 8 }, () => ({
+        role,
+        content: [{ type: "image", data: "PAYLOAD_SENTINEL" }],
+      }));
+      const lateOther = { role, content: [{ type: "audio", data: "LATE_PAYLOAD_SENTINEL" }] };
+      const serialized = serializeConversation([...images, lateOther] as unknown as Message[]);
+      expect(serialized).toContain(aggregate);
+      expect(serialized).not.toContain("SENTINEL");
     },
   );
 

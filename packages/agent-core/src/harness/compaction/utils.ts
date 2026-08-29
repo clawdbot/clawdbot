@@ -200,7 +200,7 @@ function truncateForSummary(text: string, maxChars: number): string {
 }
 
 /** Extract text that compaction both estimates and includes in summary prompts. */
-export function getCompactionContentBlockText(block: {
+function getCompactionContentBlockText(block: {
   type: string;
   content?: unknown;
   text?: string;
@@ -217,33 +217,49 @@ export function getCompactionContentBlockText(block: {
     : "";
 }
 
+/** Project summary content once so rendering and token accounting share omission facts. */
+export function getCompactionContent(
+  content: string | Array<{ type: string; content?: unknown; text?: string }>,
+): { text: string; omissionText: string } {
+  const omissions = new Set<string>();
+  const text =
+    typeof content === "string"
+      ? content
+      : content
+          .map((block) => {
+            const blockText = getCompactionContentBlockText(block);
+            if (block.type !== "text" && !blockText) {
+              // This projection knows only what it omits, not whether a model processed it.
+              omissions.add(
+                block.type === "image"
+                  ? "[image data omitted from summary input]"
+                  : "[non-text data omitted from summary input]",
+              );
+            }
+            return blockText;
+          })
+          .join("");
+  return { text, omissionText: [...omissions].join("\n") };
+}
+
+const MAX_OMISSION_MESSAGES = 8;
+const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
+
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
+  let omissionMessages = 0;
 
   for (const msg of messages) {
     if (msg.role === "user" || msg.role === "toolResult") {
-      const omissions = new Set<string>();
-      const text =
-        typeof msg.content === "string"
-          ? msg.content
-          : msg.content
-              .map((block) => {
-                const blockText = getCompactionContentBlockText(block);
-                if (block.type !== "text" && !blockText) {
-                  // Reuse history-image-prune's vocabulary, capped at two fixed markers per message.
-                  omissions.add(
-                    block.type === "image"
-                      ? "[image data removed - already processed by model]"
-                      : "[non-text data removed - already processed by model]",
-                  );
-                }
-                return blockText;
-              })
-              .join("");
-      // Keep omission facts outside tool-text truncation and token estimation.
+      const { text, omissionText } = getCompactionContent(msg.content);
+      // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
+      // Keep the aggregate outside truncation too; later omissions must never disappear silently.
+      if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
+        parts.push(OMISSION_OVERFLOW);
+      }
       const content = [
-        ...omissions,
+        omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "",
         msg.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
       ]
         .filter(Boolean)

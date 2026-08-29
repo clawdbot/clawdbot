@@ -20,7 +20,7 @@ The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) charact
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
-Built-in summarization receives text, not image pixels. Image-only user messages and tool results remain visible in its input as `[image data removed - already processed by model]`. Other omitted non-text input receives a similar marker, with at most two fixed markers per message. Custom compaction providers still receive the original message content.
+Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
 <Note>
 New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter guardrails, summary quality audits). Set `mode: "default"` explicitly to opt out.
