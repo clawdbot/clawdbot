@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
@@ -22,6 +22,7 @@ import {
   buildQaRuntimeEnv,
   stageQaCodexMockModelCatalog,
 } from "./gateway-child-env.js";
+import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import {
   closeQaGatewayLogStream,
   createQaGatewayChildLogCollector,
@@ -69,6 +70,10 @@ vi.mock("./node-exec.js", () => ({
 
 const tempDirs = createTempDirHarness();
 const owners: ReturnType<typeof createQaGatewayChild>[] = [];
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+});
 function ownGateway() {
   const owner = createQaGatewayChild();
   owners.push(owner);
@@ -217,6 +222,7 @@ if (args[0] === "update") {
     await fail(8, "plugin fixture rejected: Authorization: Bearer " + "fixture-plugin-secret".repeat(200));
   }
   if (args.includes("--help")) {
+    record({ kind: "help", args, authDbPath, configPath, stateDir });
     process.stdout.write(process.env.QA_LEGACY_PLUGIN_SETUP === "1" ? "Options: --yes" : "Options: --accept-capabilities --yes");
     process.exit(0);
   }
@@ -273,6 +279,7 @@ async function readJsonLines(filePath: string): Promise<Array<Record<string, unk
 describe("runQaGatewayCliCommand", () => {
   it("runs CLI commands with the Gateway fixture environment", async () => {
     const output = await runQaGatewayCliCommand({
+      lifetime: new QaGatewayChildLifecycle(),
       executablePath: process.execPath,
       argsPrefix: [
         "--eval",
@@ -289,6 +296,7 @@ describe("runQaGatewayCliCommand", () => {
   it("reports CLI stderr when a fixture command fails", async () => {
     await expect(
       runQaGatewayCliCommand({
+        lifetime: new QaGatewayChildLifecycle(),
         executablePath: process.execPath,
         argsPrefix: ["--eval", 'process.stderr.write("fixture failure"); process.exit(7)'],
         args: [],
@@ -1603,8 +1611,15 @@ describe("buildQaRuntimeEnv", () => {
       });
       expect(records.at(-1)?.configPath).not.toBe(authConfigPaths[0]);
       expect(records.at(-1)?.fixtureProfiles).toBeUndefined();
-      expect(records.map((record) => record.kind)).toEqual(["auth", "auth", "plugins", "gateway"]);
-      expect(records[2]).toMatchObject({
+      expect(records.map((record) => record.kind)).toEqual([
+        "auth",
+        "auth",
+        "help",
+        "plugins",
+        "gateway",
+      ]);
+      expect(records[2]?.args).toEqual(["update", "repair", "--help"]);
+      expect(records[3]).toMatchObject({
         args: [
           "update",
           "repair",
@@ -1655,6 +1670,15 @@ describe("buildQaRuntimeEnv", () => {
       expect(records.filter((record) => record.kind === "plugins")).toHaveLength(configBuilds);
       expect(mutateConfig).toHaveBeenCalledTimes(configBuilds);
       expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
+      expect(records.map((record) => record.kind)).toEqual([
+        "auth",
+        "auth",
+        "help",
+        "plugins",
+        "gateway",
+        ...(retry === "bind" ? ["help", "plugins"] : []),
+        "gateway",
+      ]);
       expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
       for (const gateway of gateways) {
         expect(gateway.args).toContainEqual(String(gateway.configPort));
@@ -1717,7 +1741,7 @@ describe("buildQaRuntimeEnv", () => {
           ? provider === "openai"
             ? ["auth"]
             : ["auth", "auth"]
-          : ["auth", "auth", "plugins"],
+          : ["auth", "auth", ...(phase === "repair" ? ["help"] : []), "plugins"],
       );
       expect(records[0]).toMatchObject({
         kind: "auth",
@@ -1740,7 +1764,7 @@ describe("buildQaRuntimeEnv", () => {
           readFile(path.join(tempParentDir, tempRoots[0]!, `gateway.${stream}.log`), "utf8"),
         ).resolves.toBe("");
       }
-      await expect(owner.stop()).resolves.toEqual({ process: "never-spawned", errors: [] });
+      await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
       await expect(readdir(tempParentDir)).resolves.toEqual([]);
     },
   );
