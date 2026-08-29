@@ -85,7 +85,7 @@ describe("findCatalogSessionHovercardRow", () => {
       findCatalogSessionHovercardRow({
         catalogs: [catalog],
         sessionKey: "agent:main:adopted-project",
-        liveRow: { label: "Operator chosen label" },
+        liveRow: { label: "Operator chosen label", hasAutomation: false },
       }),
     ).toMatchObject({
       label: "Operator chosen label",
