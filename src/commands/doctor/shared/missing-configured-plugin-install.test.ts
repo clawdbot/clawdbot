@@ -400,15 +400,24 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         bytes: fs.readFileSync(path.join(installDir, file)),
       }));
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      const pluginMetadata = {
+        id: "codex",
+        packageName: "@openclaw/codex",
+        packageVersion: "2026.5.6",
+        channels: ["codex"],
+        origin: "global" as const,
+        rootDir: installDir,
+      };
       mocks.loadPluginMetadataSnapshot.mockReturnValue({
         index: { plugins: [] },
-        plugins: [{ id: "codex", packageVersion: "2026.5.6", channels: ["codex"] }],
+        plugins: [pluginMetadata],
         diagnostics:
           previousState === "damaged"
             ? brokenPluginSnapshot("codex").diagnostics
             : previousState === "stale-descriptor"
               ? [{ level: "error", pluginId: "codex", message: "without channelConfigs metadata" }]
               : [],
+        byPluginId: new Map([["codex", pluginMetadata]]),
       });
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         officialPluginEntry({ id: "codex", npmSpec: "@openclaw/codex" }),
@@ -2827,25 +2836,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    const pluginMetadata = {
+      id: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.5.6",
+      providers: ["codex"],
+      channels: [],
+      origin: "global" as const,
+      rootDir: installDir,
+    };
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "codex",
-          packageVersion: "2026.5.6",
-          providers: ["codex"],
-        },
-      ],
+      plugins: [pluginMetadata],
       diagnostics: [],
-      byPluginId: new Map([
-        [
-          "codex",
-          {
-            id: "codex",
-            packageVersion: "2026.5.6",
-            providers: ["codex"],
-          },
-        ],
-      ]),
+      byPluginId: new Map([["codex", pluginMetadata]]),
     });
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
       successfulInstall({
@@ -2936,14 +2939,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       diagnostics: [],
       byPluginId: new Map([["codex", pluginMetadata]]),
     });
-    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-      successfulInstall({
-        pluginId: "codex",
-        npmSpec: "@openclaw/codex",
-        version: VERSION,
-      }),
-    );
-
     const { detectConfiguredPluginInstallHealthIssues, repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const cfg = {
@@ -3274,25 +3269,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    const pluginMetadata = {
+      id: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.5.6",
+      providers: ["codex"],
+      channels: [],
+      origin: "global" as const,
+      rootDir: installDir,
+    };
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "codex",
-          packageVersion: "2026.5.6",
-          providers: ["codex"],
-        },
-      ],
+      plugins: [pluginMetadata],
       diagnostics: [],
-      byPluginId: new Map([
-        [
-          "codex",
-          {
-            id: "codex",
-            packageVersion: "2026.5.6",
-            providers: ["codex"],
-          },
-        ],
-      ]),
+      byPluginId: new Map([["codex", pluginMetadata]]),
     });
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
       successfulInstall({

@@ -3,7 +3,10 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec.js";
+import {
+  compareOpenClawReleaseVersions,
+  parseRegistryNpmSpec,
+} from "../../../infra/npm-registry-spec.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
@@ -36,6 +39,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
+  resolveConfiguredRuntimePluginInstallCandidate,
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
 } from "./configured-runtime-plugin-installs.js";
 import {
@@ -113,6 +117,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
       installRecords: records,
       configuredPluginIds: params.configuredPluginIds,
       updateChannel,
+      env: params.env,
     });
   const installedPluginIdsWithMissingRequiredDependencies =
     collectInstalledPluginMissingRequiredDependencies({
@@ -498,10 +503,37 @@ function activePluginMatchesRepairableInstallRecord(params: {
   return canonicalPluginRoot === canonicalInstallPath;
 }
 
+function resolveVersionBoundRuntimeNpmSpecForActivePackage(params: {
+  pluginId: string;
+  activePackageName: string | undefined;
+  record: PluginInstallRecord | undefined;
+}): string | undefined {
+  if (params.record?.source !== "npm") {
+    return undefined;
+  }
+  const candidate = resolveConfiguredRuntimePluginInstallCandidate(params.pluginId);
+  const candidatePackageName = candidate?.npmSpec
+    ? parseRegistryNpmSpec(candidate.npmSpec)?.name
+    : undefined;
+  const selectorPackageName = params.record.spec
+    ? parseRegistryNpmSpec(params.record.spec)?.name
+    : undefined;
+  if (
+    !candidate?.versionBoundToOpenClaw ||
+    !candidate.npmSpec ||
+    !candidatePackageName ||
+    params.activePackageName?.trim() !== candidatePackageName ||
+    selectorPackageName !== candidatePackageName
+  ) {
+    return undefined;
+  }
+  return candidate.npmSpec;
+}
+
 type InstalledPluginMissingDependencyState = {
   missingDependencies: string[];
-  /** Package identity discovered from the active record-owned plugin root. */
-  activePackageName?: string;
+  /** Official runtime spec authorized by the active package and durable selector. */
+  versionBoundRuntimeNpmSpec?: string;
 };
 
 /**
@@ -520,10 +552,11 @@ function collectInstalledPluginMissingRequiredDependencies(params: {
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const missingByPluginId = new Map<string, InstalledPluginMissingDependencyState>();
   for (const plugin of params.snapshot.plugins) {
+    const record = params.installRecords[plugin.id];
     if (
       !activePluginMatchesRepairableInstallRecord({
         rootDir: plugin.rootDir,
-        record: params.installRecords[plugin.id],
+        record,
         env: params.env,
       })
     ) {
@@ -545,10 +578,14 @@ function collectInstalledPluginMissingRequiredDependencies(params: {
       optionalDependencies: plugin.packageOptionalDependencies,
     });
     if (dependencyStatus.hasDependencies && !dependencyStatus.requiredInstalled) {
-      const activePackageName = plugin.packageName?.trim();
+      const versionBoundRuntimeNpmSpec = resolveVersionBoundRuntimeNpmSpecForActivePackage({
+        pluginId: plugin.id,
+        activePackageName: plugin.packageName,
+        record,
+      });
       missingByPluginId.set(plugin.id, {
         missingDependencies: dependencyStatus.missing,
-        ...(activePackageName ? { activePackageName } : {}),
+        ...(versionBoundRuntimeNpmSpec ? { versionBoundRuntimeNpmSpec } : {}),
       });
     }
   }
@@ -606,6 +643,7 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
   updateChannel: UpdateChannel;
+  env: NodeJS.ProcessEnv;
 }): Set<string> {
   const pluginIds = new Set<string>();
   const currentVersion = normalizeOptionalLowercaseString(VERSION);
@@ -620,7 +658,20 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
       continue;
     }
     const record = params.installRecords[candidate.pluginId];
-    if (!record) {
+    const activePlugin = params.snapshot.byPluginId?.get(candidate.pluginId);
+    if (
+      !activePlugin ||
+      !activePluginMatchesRepairableInstallRecord({
+        rootDir: activePlugin.rootDir,
+        record,
+        env: params.env,
+      }) ||
+      !resolveVersionBoundRuntimeNpmSpecForActivePackage({
+        pluginId: candidate.pluginId,
+        activePackageName: activePlugin.packageName,
+        record,
+      })
+    ) {
       continue;
     }
     const installedVersion = resolveInstalledRuntimePackageVersion({

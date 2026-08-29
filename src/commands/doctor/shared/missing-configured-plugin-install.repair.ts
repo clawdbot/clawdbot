@@ -3,7 +3,6 @@ import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -18,10 +17,6 @@ import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-leas
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
-import {
-  resolveConfiguredRuntimePluginInstallCandidate,
-  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
-} from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
@@ -314,34 +309,11 @@ async function repairMissingPluginInstallsWithLease(
     if (preparedMissingRecordedPluginIds.length > 0) {
       const versionBoundToCoreSpecOverrides = Object.fromEntries(
         preparedMissingRecordedPluginIds.flatMap((pluginId) => {
-          if (
-            !installedPluginIdsWithMissingRequiredDependencies.has(pluginId) ||
-            !VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId)
-          ) {
-            return [];
-          }
-          const candidate = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
-          const candidatePackageName = candidate?.npmSpec
-            ? parseRegistryNpmSpec(candidate.npmSpec)?.name
-            : undefined;
-          const activePackageName =
-            installedPluginIdsWithMissingRequiredDependencies.get(pluginId)?.activePackageName;
-          const originalRecord = records[pluginId];
-          const selectorPackageName =
-            originalRecord?.source === "npm" && originalRecord.spec
-              ? parseRegistryNpmSpec(originalRecord.spec)?.name
-              : undefined;
-          // `spec` is the updater's durable selector; resolved fields only describe
-          // the prior resolution and cannot authorize overriding changed intent.
-          if (
-            !candidate?.npmSpec ||
-            !candidatePackageName ||
-            activePackageName !== candidatePackageName ||
-            selectorPackageName !== candidatePackageName
-          ) {
-            return [];
-          }
-          return [[pluginId, candidate.npmSpec] as const];
+          const npmSpec =
+            installedPluginIdsWithMissingRequiredDependencies.get(
+              pluginId,
+            )?.versionBoundRuntimeNpmSpec;
+          return npmSpec ? [[pluginId, npmSpec] as const] : [];
         }),
       );
       let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
