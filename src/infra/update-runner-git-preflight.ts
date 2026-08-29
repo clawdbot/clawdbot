@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { hasErrnoCode } from "./errno.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
@@ -100,16 +101,14 @@ function resolvePreflightWorktreeDir(preflightRoot: string) {
 }
 
 async function createPreflightRoot(gitRoot: string) {
-  if (process.platform === "win32" && path.sep === "\\") {
-    const baseDir = path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR);
-    await fs.mkdir(baseDir, { recursive: true });
-    return fs.mkdtemp(path.win32.join(baseDir, PREFLIGHT_TEMP_PREFIX));
-  }
-  // Ignored artifact storage keeps interrupted worktrees out of Git status.
+  // On POSIX, ignored artifact storage keeps interrupted worktrees out of Git status.
   // Honor existing redirects like build-all-cache; only the mkdtemp child is private.
-  const artifactRoot = path.join(await fs.realpath(gitRoot), ".artifacts");
-  await fs.mkdir(artifactRoot, { recursive: true });
-  return fs.mkdtemp(path.join(artifactRoot, PREFLIGHT_TEMP_PREFIX));
+  const baseDir =
+    process.platform === "win32" && path.sep === "\\"
+      ? path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR)
+      : path.join(await fs.realpath(gitRoot), ".artifacts");
+  await fs.mkdir(baseDir, { recursive: true });
+  return fs.mkdtemp(path.join(baseDir, PREFLIGHT_TEMP_PREFIX));
 }
 
 async function removePathRecursive(target: string) {
@@ -319,11 +318,16 @@ function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insuffici
   // pnpm reports filesystem errors on stdout by default. Require the storage
   // diagnostic: ENOSPC also covers inotify limits.
   const output = stripAnsi(`${step.stdoutTail ?? ""}\n${step.stderrTail ?? ""}`);
-  return /^\s*(?:\[(?:ERR_PNPM_)?ENOSPC\][^\r\n]*|(?:Error:\s*)?)ENOSPC: no space left on device(?:,|$)/m.test(
-    output,
-  )
-    ? "insufficient-space"
-    : "failed";
+  const nodeNoSpace =
+    /^\s*(?:\[(?:ERR_PNPM_)?ENOSPC\][^\r\n]*|(?:Error:\s*)?)ENOSPC: no space left on device(?:,|$)/m.test(
+      output,
+    );
+  // Git uses strerror without an errno token; require a complete operation diagnostic.
+  const gitNoSpace =
+    /^(?:fatal|error): (?:cannot|could not|unable to) [^\r\n]+: No space left on device$/m.test(
+      output,
+    );
+  return nodeNoSpace || gitNoSpace ? "insufficient-space" : "failed";
 }
 
 async function testPreflightCandidate(params: {
@@ -472,7 +476,17 @@ export async function runGitDevPreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
-  const preflightRoot = await createPreflightRoot(params.gitRoot);
+  let preflightRoot: string;
+  try {
+    preflightRoot = await createPreflightRoot(params.gitRoot);
+  } catch (error) {
+    return {
+      status: "error",
+      reason: hasErrnoCode(error, "ENOSPC")
+        ? "preflight-insufficient-space"
+        : "preflight-worktree-failed",
+    };
+  }
   const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
   const worktreeStep = await runStep(
     params.step(
@@ -483,7 +497,13 @@ export async function runGitDevPreflight(params: {
   );
   if (worktreeStep.exitCode !== 0) {
     await removePathRecursive(preflightRoot);
-    return { status: "error", reason: "preflight-worktree-failed" };
+    return {
+      status: "error",
+      reason:
+        classifyPreflightFailure(worktreeStep) === "insufficient-space"
+          ? "preflight-insufficient-space"
+          : "preflight-worktree-failed",
+    };
   }
 
   let tested: PreflightCandidateResult | undefined;

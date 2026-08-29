@@ -1664,6 +1664,31 @@ describe("runGatewayUpdate", () => {
   );
 
   it.each([
+    { operation: "mkdir", code: "ENOSPC", reason: "preflight-insufficient-space" },
+    { operation: "mkdtemp", code: "ENOSPC", reason: "preflight-insufficient-space" },
+    { operation: "mkdir", code: "EACCES", reason: "preflight-worktree-failed" },
+    { operation: "mkdtemp", code: "EROFS", reason: "preflight-worktree-failed" },
+  ] as const)(
+    "returns a structured preflight failure when $operation rejects with $code",
+    async ({ operation, code, reason }) => {
+      await setupGitPackageManagerFixture();
+      const { runCommand } = createDevGitRunner();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const allocator = vi
+        .spyOn(fs, operation)
+        .mockRejectedValueOnce(Object.assign(new Error("preflight allocation failed"), { code }));
+      try {
+        await expect(
+          runWithCommand(runCommand, { channel: "dev", beforeGitMutation }),
+        ).resolves.toMatchObject({ status: "error", reason });
+        expect(beforeGitMutation).not.toHaveBeenCalled();
+      } finally {
+        allocator.mockRestore();
+      }
+    },
+  );
+
+  it.each([
     {
       command: "pnpm install",
       stdout: "[ENOSPC] ENOSPC: no space left on device, write",
@@ -1707,6 +1732,18 @@ describe("runGatewayUpdate", () => {
       command: "pnpm build",
       stdout: "",
       stderr: "test expected ENOSPC or disk full",
+      capacity: false,
+    },
+    {
+      command: "pnpm build",
+      stdout: "",
+      stderr: "test expected fatal: unable to create file: No space left on device",
+      capacity: false,
+    },
+    {
+      command: "pnpm build",
+      stdout: "",
+      stderr: "fatal: unable to create file: No space left on device (expected)",
       capacity: false,
     },
   ])(
@@ -1753,30 +1790,52 @@ describe("runGatewayUpdate", () => {
     },
   );
 
-  it("removes partial staging when preflight worktree creation fails", async () => {
-    await setupGitPackageManagerFixture();
-    const roots: string[] = [];
-    const { runCommand } = createDevGitRunner({
-      onCommand: async (key) => {
-        if (key.startsWith(`git -C ${tempDir} worktree add --detach `)) {
-          await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
-          const worktree = /worktree add --detach (\S+)/u.exec(key)?.[1];
-          if (!worktree) {
-            throw new Error(`missing worktree path: ${key}`);
+  it.each([
+    {
+      stderr: "fatal: unable to create file: No space left on device",
+      reason: "preflight-insufficient-space",
+    },
+    {
+      stderr: "error: cannot create directory at 'src': No space left on device",
+      reason: "preflight-insufficient-space",
+    },
+    {
+      stderr: "fatal: could not create leading directories of 'worktree': No space left on device",
+      reason: "preflight-insufficient-space",
+    },
+    {
+      stderr: "fatal: unable to create file: Permission denied",
+      reason: "preflight-worktree-failed",
+    },
+  ])(
+    "classifies preflight worktree creation failure and removes partial staging: $stderr",
+    async ({ stderr, reason }) => {
+      await setupGitPackageManagerFixture();
+      const roots: string[] = [];
+      const { runCommand } = createDevGitRunner({
+        onCommand: async (key) => {
+          if (key.startsWith(`git -C ${tempDir} worktree add --detach `)) {
+            await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
+            const worktree = /worktree add --detach (\S+)/u.exec(key)?.[1];
+            if (!worktree) {
+              throw new Error(`missing worktree path: ${key}`);
+            }
+            roots.push(path.dirname(worktree));
+            return { code: 128, stderr };
           }
-          roots.push(path.dirname(worktree));
-          return { code: 128, stderr: "fatal: unable to create file: No space left on device" };
-        }
-        return undefined;
-      },
-    });
-    const result = await runWithCommand(runCommand, { channel: "dev" });
-    expect(result).toMatchObject({ status: "error", reason: "preflight-worktree-failed" });
-    expect(roots).toHaveLength(1);
-    for (const root of roots) {
-      expect(await pathExists(root)).toBe(false);
-    }
-  });
+          return undefined;
+        },
+      });
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
+      expect(result).toMatchObject({ status: "error", reason });
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(roots).toHaveLength(1);
+      for (const root of roots) {
+        expect(await pathExists(root)).toBe(false);
+      }
+    },
+  );
 
   it("continues dev preflight after one candidate is missing its package manager", async () => {
     await setupGitCheckout({ packageManager: "npm@10.0.0" });
