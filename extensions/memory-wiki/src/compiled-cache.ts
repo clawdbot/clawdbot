@@ -5,9 +5,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import type { MemoryWikiImportInsightsStatus } from "./import-insights.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
-import type { MemoryWikiOverviewStatus } from "./wiki-overview.js";
 
 export const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
   ".openclaw-wiki/cache/agent-digest.json",
@@ -68,6 +66,86 @@ export type MemoryWikiCompiledClaim = {
   privacyTiers?: string[];
   freshnessLevel?: string;
   lastTouchedAt?: string;
+};
+
+export type MemoryWikiImportInsightItem = {
+  pagePath: string;
+  title: string;
+  riskLevel: "low" | "medium" | "high" | "unknown";
+  riskReasons: string[];
+  labels: string[];
+  topicKey: string;
+  topicLabel: string;
+  digestStatus: "available" | "withheld";
+  activeBranchMessages: number;
+  userMessageCount: number;
+  assistantMessageCount: number;
+  firstUserLine?: string;
+  lastUserLine?: string;
+  assistantOpener?: string;
+  summary: string;
+  candidateSignals: string[];
+  correctionSignals: string[];
+  preferenceSignals: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type MemoryWikiImportInsightCluster = {
+  key: string;
+  label: string;
+  itemCount: number;
+  highRiskCount: number;
+  withheldCount: number;
+  preferenceSignalCount: number;
+  updatedAt?: string;
+  items: MemoryWikiImportInsightItem[];
+};
+
+export type MemoryWikiImportInsightsStatus = {
+  sourceType: "chatgpt";
+  totalItems: number;
+  totalClusters: number;
+  clusters: MemoryWikiImportInsightCluster[];
+};
+
+export type MemoryWikiOverviewItem = {
+  pagePath: string;
+  title: string;
+  kind: WikiPageKind;
+  id?: string;
+  updatedAt?: string;
+  sourceType?: string;
+  claimCount: number;
+  questionCount: number;
+  contradictionCount: number;
+  claims: string[];
+  questions: string[];
+  contradictions: string[];
+  snippet?: string;
+};
+
+type MemoryWikiOverviewCluster = {
+  key: WikiPageKind;
+  label: string;
+  itemCount: number;
+  claimCount: number;
+  questionCount: number;
+  contradictionCount: number;
+  updatedAt?: string;
+  items: MemoryWikiOverviewItem[];
+};
+
+export type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
+
+export type MemoryWikiOverviewStatus = {
+  totalItems: number;
+  totalPages: number;
+  pageCounts: MemoryWikiOverviewPageCounts;
+  totalClaims: number;
+  totalQuestions: number;
+  totalContradictions: number;
+  clusters: MemoryWikiOverviewCluster[];
 };
 
 export type MemoryWikiCompiledCacheSnapshot = {
@@ -494,5 +572,6 @@ export async function writeMemoryWikiCompiledCache(
     ...activeVault,
     compiledCachePublicationId: publicationId,
     reconciled: true,
+    snapshot,
   });
 }

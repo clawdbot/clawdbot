@@ -34,12 +34,13 @@ import {
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiImportInsightItem,
+  type MemoryWikiOverviewItem,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   buildMemoryWikiImportInsights,
   projectMemoryWikiImportInsight,
-  type MemoryWikiImportInsightItem,
 } from "./import-insights.js";
 import {
   appendMemoryWikiLog,
@@ -65,11 +66,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
-import {
-  buildMemoryWikiOverview,
-  projectMemoryWikiOverviewItem,
-  type MemoryWikiOverviewItem,
-} from "./wiki-overview.js";
+import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -1450,7 +1447,8 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
 }): Promise<RefreshMemoryWikiIndexesResult> {
   await initializeMemoryWikiVault(params.config);
-  if (!params.config.ingest.autoCompile) {
+  const missingCompiledCache = (await loadMemoryWikiCompiledCache(params.config)) === null;
+  if (!params.config.ingest.autoCompile && !missingCompiledCache) {
     return {
       refreshed: false,
       reason: "auto-compile-disabled",
@@ -1461,7 +1459,6 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
-  const missingCompiledCache = (await loadMemoryWikiCompiledCache(params.config)) === null;
   if (!importChanged && !missingIndexes && !missingCompiledCache) {
     return {
       refreshed: false,

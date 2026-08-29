@@ -226,6 +226,16 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     );
   });
 
+  it("replaces a loaded snapshot when a newer publication commits", async () => {
+    const { config } = await createPersistentVault({ initialize: true });
+    await publishSnapshot(config, snapshot("before"));
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("before");
+
+    await publishSnapshot(config, snapshot("after"));
+
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("after");
+  });
+
   it("ignores legacy files and rebuilds only on compile", async () => {
     const { rootDir, config } = await createPersistentVault({
       initialize: true,
@@ -574,6 +584,9 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     );
     configureMemoryWikiCompiledCacheStore(store);
     await publishSnapshot(config, snapshot("recoverable"));
+    configureMemoryWikiCompiledCacheStore(undefined);
+    configureMemoryWikiCompiledCacheStore(store);
+    await activateVault(config);
     failNextRead = true;
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();

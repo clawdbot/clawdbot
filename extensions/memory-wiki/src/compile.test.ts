@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { compileMemoryWikiVault } from "./compile.js";
-import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
+import {
+  invalidateMemoryWikiCompiledCache,
+  loadMemoryWikiCompiledCache,
+} from "./compiled-cache.js";
 import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -113,6 +116,28 @@ describe("compileMemoryWikiVault", () => {
       "Alpha is the canonical source page.",
     ]);
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
+  });
+
+  it("rebuilds a missing compiled cache when import auto-compile is disabled", async () => {
+    const { config } = await createVault({
+      rootDir: nextCaseRoot(),
+      config: {
+        ingest: { autoCompile: false },
+        render: { createBacklinks: false, createDashboards: false },
+      },
+      initialize: true,
+    });
+    await compileMemoryWikiVault(config);
+    await invalidateMemoryWikiCompiledCache(config);
+
+    const result = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+    });
+
+    expect(result.reason).toBe("missing-compiled-cache");
+    expect(result.refreshed).toBe(true);
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {

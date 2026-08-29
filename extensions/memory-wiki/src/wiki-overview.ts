@@ -1,6 +1,11 @@
 // Memory Wiki plugin module implements the memory wiki overview.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import {
+  loadMemoryWikiCompiledCache,
+  type MemoryWikiOverviewItem,
+  type MemoryWikiOverviewPageCounts,
+  type MemoryWikiOverviewStatus,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageKind, WikiPageSummary } from "./markdown.js";
 
@@ -12,45 +17,6 @@ const OVERVIEW_KIND_LABELS: Record<WikiPageKind, string> = {
   concept: "Concepts",
   source: "Sources",
   report: "Reports",
-};
-
-export type MemoryWikiOverviewItem = {
-  pagePath: string;
-  title: string;
-  kind: WikiPageKind;
-  id?: string;
-  updatedAt?: string;
-  sourceType?: string;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  claims: string[];
-  questions: string[];
-  contradictions: string[];
-  snippet?: string;
-};
-
-type MemoryWikiOverviewCluster = {
-  key: WikiPageKind;
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: MemoryWikiOverviewItem[];
-};
-
-type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
-
-export type MemoryWikiOverviewStatus = {
-  totalItems: number;
-  totalPages: number;
-  pageCounts: MemoryWikiOverviewPageCounts;
-  totalClaims: number;
-  totalQuestions: number;
-  totalContradictions: number;
-  clusters: MemoryWikiOverviewCluster[];
 };
 
 const EMPTY_OVERVIEW_PAGE_COUNTS: MemoryWikiOverviewPageCounts = {
