@@ -357,6 +357,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("does not infer silence from a gap between provisional results", async () => {
+    vi.useFakeTimers();
     let socket: WebSocket | undefined;
     const server = await createDeepgramRealtimeServer({
       onRequest: () => undefined,
@@ -375,9 +376,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
 
     await session.connect();
     await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith("still speaking"));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 350);
-    });
+    await vi.advanceTimersByTimeAsync(350);
     expect(onTranscript).not.toHaveBeenCalled();
 
     sendResult(socket!, { text: "continuous speech", isFinal: true, speechFinal: true });
@@ -386,6 +385,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("does not merge an interrupted turn into a reconnected provider stream", async () => {
+    vi.useFakeTimers();
     let connectionCount = 0;
     const server = await createDeepgramRealtimeServer({
       onRequest: () => undefined,
@@ -406,6 +406,9 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
+    // Observe the real socket close before advancing the provider's retry delay.
+    await vi.waitFor(() => expect(session.isConnected()).toBe(false));
+    await vi.advanceTimersByTimeAsync(1000);
     await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("new"), {
       timeout: 3000,
     });
@@ -415,6 +418,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("preserves finalized speech as a separate turn when the provider reconnects", async () => {
+    vi.useFakeTimers();
     let connectionCount = 0;
     const server = await createDeepgramRealtimeServer({
       onRequest: () => undefined,
@@ -435,6 +439,8 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
+    await vi.waitFor(() => expect(session.isConnected()).toBe(false));
+    await vi.advanceTimersByTimeAsync(1000);
     await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledTimes(2), {
       timeout: 3000,
     });
