@@ -68,6 +68,9 @@ else
   FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
 fi
 run_log=""
+# Signal traps inherit the harness function's log redirection. Reserve the original stdout
+# so EXIT cleanup cannot print the failure tail back into the log it is reading.
+exec 3>&1
 
 cleanup() {
   local cleanup_status="$?"
@@ -78,9 +81,8 @@ cleanup() {
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   fi
   if [ -n "${run_log:-}" ]; then
-    # Harness signal handlers exit before the outer failure branch can print.
     if [ "$cleanup_status" -ne 0 ]; then
-      docker_e2e_print_log "$run_log" || true
+      docker_e2e_print_log "$run_log" >&3 || true
     fi
     rm -f "$run_log"
   fi
