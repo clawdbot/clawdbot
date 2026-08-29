@@ -2319,6 +2319,14 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeRepairOpenAICodexAuthConfig.mock.calls[0]?.[1]).toEqual({
       profileIdMap: collisionMap,
     });
+    // The migration imports config-backed credentials under their configured
+    // ids, so the canonicalized config is what the migration must receive.
+    expect(mocks.maybeRepairOpenAICodexAuthConfig.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.calls[0]?.[0]).toMatchObject({
+      cfg: { openAICodexProfileIdsCanonicalized: true },
+    });
     expect(ctx.cfg).toMatchObject({ openAICodexProfileIdsCanonicalized: true });
   });
 
@@ -2330,10 +2338,12 @@ describe("doctor health contributions", () => {
       options: { nonInteractive: true },
       configPath: "/tmp/openclaw.json",
     });
+    const cfgBefore = ctx.cfg;
 
     await contribution.run(ctx);
 
-    expect(mocks.maybeRepairOpenAICodexAuthConfig).not.toHaveBeenCalled();
+    expect(mocks.maybeRepairOpenAICodexAuthConfig).toHaveBeenCalledOnce();
+    expect(ctx.cfg).toBe(cfgBefore);
     expect(mocks.noteAuthProfileHealth).toHaveBeenCalledOnce();
   });
 

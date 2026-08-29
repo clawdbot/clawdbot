@@ -89,17 +89,21 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
-  const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+  // Canonicalize config BEFORE the migration imports config-backed credentials
+  // (the same pre-import order as repair-sequencing): the migration persists
+  // credentials under their configured profile ids, so importing from a legacy
+  // config would archive them under ids canonical runtime selection never
+  // looks up. The migration itself strips imported credentials from this
+  // config object in place.
+  ctx.cfg = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
+    profileIdMap: openAICodexAuthProfileIdMap,
+  }).config;
+  await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
     openAICodexAuthProfileIdMap,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
-  if (authProfileSqliteMigration.changes.length > 0) {
-    ctx.cfg = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
-      profileIdMap: openAICodexAuthProfileIdMap,
-    }).config;
-  }
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
