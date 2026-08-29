@@ -259,7 +259,7 @@ describe("gateway-backed session route resolution", () => {
       loadChatRoute(context, targetLocation(target), "chat", new AbortController().signal),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: catalogKey,
+      sessionKey: `agent:roboclaw:${catalogKey}`,
       agentId: "roboclaw",
       draft: undefined,
       face: "dashboard",

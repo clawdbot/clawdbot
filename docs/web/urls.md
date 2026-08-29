@@ -119,6 +119,21 @@ own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
 
+### Native catalog links
+
+Native catalog threads use the agent path with a source query:
+
+```text
+/chat/<agentId>?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+URL-encode each query value. The agent in the path owns the OpenClaw pane,
+including catalog reads and continuation; `catalog`, `host`, and `thread`
+identify the native source. Opening the same source under different agents
+keeps their panes and drafts separate, including in split view. Continuing a
+thread navigates to the adopted OpenClaw session link. The same catalog query
+also works under `/dashboard/<agentId>`.
+
 ## Focus presentation routes
 
 A focus route renders one supported content surface without the normal Control

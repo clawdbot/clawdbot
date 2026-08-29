@@ -83,6 +83,10 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
     bodyStart += 1;
   }
   const channel = parts[bodyStart]?.toLowerCase();
+  // Catalog source identifiers are opaque; only the agent prefix is normalized.
+  if (channel === "catalog") {
+    return parts.join(":");
+  }
   const peerKind = parts[bodyStart + 1]?.toLowerCase();
   const preservesMatrixTail =
     channel === "matrix" && (peerKind === "channel" || peerKind === "group");
