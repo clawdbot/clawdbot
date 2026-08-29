@@ -1,10 +1,10 @@
-// Covers package-update recovery metadata for blocking post-install Doctor.
+// Covers package-update recovery metadata for blocking Doctor and verify.
 import { describe, expect, it } from "vitest";
 import { PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } from "./update-doctor-result.js";
 import { resolvePackageUpdateRecovery } from "./update-runner-command.js";
 
 describe("resolvePackageUpdateRecovery", () => {
-  it.each([{ name: "openclaw doctor" }, { name: "acp doctor" }])(
+  it.each([{ name: "openclaw doctor" }, { name: "acp doctor" }, { name: "global install verify" }])(
     "marks a blocking $name failure unsafe to restart",
     ({ name }) => {
       expect(resolvePackageUpdateRecovery({ name })).toEqual({

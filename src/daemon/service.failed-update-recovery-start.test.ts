@@ -1,7 +1,10 @@
-// Failed-update recovery must reuse the canonical start preflight.
+// Failed-update recovery must reuse the canonical start preflight
+// and keep the stopped-service pin through the helper's own start.
 import os from "node:os";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 vi.mock("../config/paths.js", async () => {
@@ -47,6 +50,10 @@ afterEach(() => {
   });
 });
 
+function commandFingerprint(programArguments: string[]): string {
+  return sha256Hex(stableStringify({ programArguments }));
+}
+
 describe("startGatewayServiceAfterFailedUpdate", () => {
   it.each([
     {
@@ -59,13 +66,32 @@ describe("startGatewayServiceAfterFailedUpdate", () => {
     },
   ])("refuses to start a $kind service program", async ({ kind, program }) => {
     mockProcessPlatform("linux");
-    mocks.readCommand.mockResolvedValue({
-      programArguments: [process.execPath, program, "gateway"],
-    });
+    const programArguments = [process.execPath, program, "gateway"];
+    mocks.readCommand.mockResolvedValue({ programArguments });
 
     await expect(
-      startGatewayServiceAfterFailedUpdate({ env: {}, stdout: process.stdout }),
+      startGatewayServiceAfterFailedUpdate({
+        env: {},
+        stdout: process.stdout,
+        expectedCommandFingerprint: commandFingerprint(programArguments),
+      }),
     ).rejects.toThrow(`service command points at a ${kind} path: ${program}`);
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it("refuses to start when the helper rereads a changed effective command", async () => {
+    mockProcessPlatform("linux");
+    const stopped = [process.execPath, process.execPath, "gateway"];
+    const changed = [process.execPath, process.execPath, "gateway", "--port", "9"];
+    mocks.readCommand.mockResolvedValue({ programArguments: changed });
+
+    await expect(
+      startGatewayServiceAfterFailedUpdate({
+        env: {},
+        stdout: process.stdout,
+        expectedCommandFingerprint: commandFingerprint(stopped),
+      }),
+    ).rejects.toThrow("no longer matches the stopped-service pin");
     expect(mocks.start).not.toHaveBeenCalled();
   });
 });

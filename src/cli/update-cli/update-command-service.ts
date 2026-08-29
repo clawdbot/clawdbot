@@ -675,6 +675,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await startGatewayServiceAfterFailedUpdate({
         env: before.serviceEnv,
         stdout: serviceControlStdoutForMode(params.jsonMode),
+        expectedCommandFingerprint: before.serviceUpdateVerdict.fingerprint,
       });
       if (!params.jsonMode) {
         defaultRuntime.log(

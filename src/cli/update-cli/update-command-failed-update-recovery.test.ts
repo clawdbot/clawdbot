@@ -133,7 +133,10 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     await recover();
 
     expect(mocks.recoveryStart).toHaveBeenCalledTimes(1);
-    expect(mocks.recoveryStart.mock.calls[0]?.[0]).toMatchObject({ env: serviceEnv });
+    expect(mocks.recoveryStart.mock.calls[0]?.[0]).toMatchObject({
+      env: serviceEnv,
+      expectedCommandFingerprint: OWNED_FINGERPRINT,
+    });
     expect(messages()).not.toContain("Failed to restart managed gateway service");
   });
 

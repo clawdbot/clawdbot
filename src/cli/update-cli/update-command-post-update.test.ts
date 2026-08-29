@@ -1110,6 +1110,38 @@ describe("failed package update recovery provenance", () => {
     );
   });
 
+  it("does not start a verification-rejected in-place candidate after replacement", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await finishUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        reason: "global-install-failed",
+        steps: [
+          { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
+          {
+            name: "global install verify",
+            command: "verify",
+            cwd: "/",
+            durationMs: 1,
+            exitCode: 1,
+          },
+        ],
+        packageReplacementVerified: true,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        durationMs: 1,
+      },
+      opts: {},
+      showProgress: false,
+      preManagedServiceStop: { stopped: true, serviceEnv: {} },
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
+  });
+
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 

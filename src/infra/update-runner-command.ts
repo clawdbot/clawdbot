@@ -85,9 +85,9 @@ export function normalizeFallbackFailureReason(
 }
 
 /**
- * Blocking post-install Doctor is runtime rejection, not package-swap
- * provenance. Without this, failed-update recovery can start the candidate
- * Doctor already refused.
+ * Blocking post-install Doctor or packaged-install verification is runtime
+ * rejection, not package-swap provenance. Without this, failed-update
+ * recovery can start a candidate the verifier already refused.
  */
 export function resolvePackageUpdateRecovery(
   failedStep: { name: string; advisory?: UpdateStepAdvisory } | null | undefined,
@@ -96,7 +96,11 @@ export function resolvePackageUpdateRecovery(
     return undefined;
   }
   // CLI names this `$cliName doctor`; the shared runner uses `openclaw doctor`.
-  if (failedStep.name !== "openclaw doctor" && !failedStep.name.endsWith(" doctor")) {
+  if (
+    failedStep.name !== "global install verify" &&
+    failedStep.name !== "openclaw doctor" &&
+    !failedStep.name.endsWith(" doctor")
+  ) {
     return undefined;
   }
   return { serviceRestartSafe: false, reason: "runtime-verification-failed" };

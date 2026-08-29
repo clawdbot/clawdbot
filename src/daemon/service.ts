@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
@@ -240,6 +242,7 @@ export async function startGatewayService(
   service: GatewayService,
   args: GatewayServiceControlArgs,
   expectedPort?: number,
+  expectedCommandFingerprint?: string,
 ): Promise<GatewayServiceStartResult> {
   const { state, issues: repairIssues } = await inspectGatewayServiceStartRepair(
     service,
@@ -270,6 +273,17 @@ export async function startGatewayService(
       state,
       issues: repairIssues,
     };
+  }
+
+  // Recovery is the future-config exception: the last inspection before
+  // privileged start must still match the stopped command pin.
+  if (
+    expectedCommandFingerprint !== undefined &&
+    (!state.command || sha256Hex(stableStringify(state.command)) !== expectedCommandFingerprint)
+  ) {
+    throw new Error(
+      "effective service definition no longer matches the stopped-service pin; inspect it before starting manually.",
+    );
   }
 
   let nextState: GatewayServiceState;
@@ -479,21 +493,27 @@ export function resolveGatewayService(): GatewayService {
  * return repair-required, not launch.
  */
 export async function startGatewayServiceAfterFailedUpdate(
-  args: GatewayServiceControlArgs,
+  args: GatewayServiceControlArgs & { expectedCommandFingerprint: string },
 ): Promise<void> {
+  const { expectedCommandFingerprint, ...controlArgs } = args;
   // Ownership only — do not go through withGatewayServiceMutationGuards, which
   // also applies the future-config version block this recovery must survive.
   // Call Allowed directly so a merge with main (which inlined/removed the local
   // OwnedByOpenClaw helper) cannot leave a dangling name at this call site.
   assertGatewayServiceMutationAllowed("start the gateway service", process.env);
-  if (args.env && args.env !== process.env) {
-    assertGatewayServiceMutationAllowed("start the gateway service", args.env);
+  if (controlArgs.env && controlArgs.env !== process.env) {
+    assertGatewayServiceMutationAllowed("start the gateway service", controlArgs.env);
   }
   const service = isSupportedGatewayServicePlatform(process.platform)
     ? GATEWAY_SERVICE_REGISTRY[process.platform]
     : createUnsupportedGatewayService();
 
-  const result = await startGatewayService(service, args);
+  const result = await startGatewayService(
+    service,
+    controlArgs,
+    undefined,
+    expectedCommandFingerprint,
+  );
   if (result.outcome === "missing-install") {
     throw new Error("no managed service is installed.");
   }
