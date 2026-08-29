@@ -22,11 +22,12 @@ type StreamFrame =
 
 /** Adapter contract for provider media stream wire formats. */
 export interface StreamFrameAdapter {
-  readonly providerName: "twilio" | "telnyx";
+  readonly providerName: "twilio" | "telnyx" | "asterisk";
+  readonly acknowledgeMarksOnSend?: boolean;
   parseInbound(rawMessage: string): StreamFrame;
-  serializeMedia(payloadBase64: string): string;
-  serializeClear(): string;
-  serializeMark(name: string): string;
+  serializeMedia(payloadBase64: string): string | Buffer;
+  serializeClear(): string | Buffer;
+  serializeMark(name: string): string | Buffer;
 }
 
 /** Parse numeric timestamps sent as numbers or integer strings. */

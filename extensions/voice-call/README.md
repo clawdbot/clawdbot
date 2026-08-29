@@ -4,10 +4,11 @@ Official Voice Call plugin for **OpenClaw**.
 
 Providers:
 
-- **Twilio** (Programmable Voice + Media Streams)
-- **Telnyx** (Call Control v2)
-- **Plivo** (Voice API + XML transfer + GetInput speech)
+- **Asterisk** (ARI + AudioSocket realtime media)
 - **Mock** (dev/no network)
+- **Plivo** (Voice API + XML transfer + GetInput speech)
+- **Telnyx** (Call Control v2)
+- **Twilio** (Programmable Voice + Media Streams)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
 Plugin system: `https://docs.openclaw.ai/tools/plugin`
@@ -35,7 +36,7 @@ Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio", // or "telnyx" | "plivo" | "mock"
+  provider: "twilio", // or "asterisk" | "mock" | "plivo" | "telnyx"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
   sessionScope: "per-phone", // or "per-call" | "main"
@@ -58,6 +59,19 @@ Put under `plugins.entries.voice-call.config`:
     authToken: "your_token",
   },
 
+  asterisk: {
+    baseUrl: "http://127.0.0.1:8088/ari",
+    username: "openclaw",
+    password: "your_ari_password",
+    application: "openclaw",
+    endpoint: "PJSIP/{number}@trunk",
+    audioSocket: {
+      bind: "127.0.0.1",
+      host: "127.0.0.1", // must be reachable from Asterisk
+      port: 3335,
+    },
+  },
+
   // Webhook server
   serve: {
     port: 3334,
@@ -70,7 +84,7 @@ Put under `plugins.entries.voice-call.config`:
   // tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" }
 
   outbound: {
-    defaultMode: "notify", // or "conversation"
+    defaultMode: "conversation", // Asterisk requires conversation
   },
 
   // Optional response agent workspace. Defaults to "main".
@@ -98,6 +112,9 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- Asterisk requires 18 or newer with ARI, `chan_audiosocket`, and `res_audiosocket`. It uses conversation mode with `realtime.enabled: true`; notify mode and pre-connect TwiML are rejected.
+- Route inbound Asterisk extensions to `Stasis(openclaw)`. The configured AudioSocket host and port must be reachable from Asterisk.
+- Restrict the AudioSocket TCP listener to Asterisk with host firewall rules whenever `audioSocket.bind` is not loopback.
 - `tailscale.port` defaults to `443` and owns the external HTTPS port for both legacy `tailscale.mode` and unified Tailscale tunnel providers. Funnel supports `443`, `8443`, or `10000`; Serve accepts any valid TCP port.
 - Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).

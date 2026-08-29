@@ -1,5 +1,5 @@
 ---
-summary: "Place outbound and accept inbound voice calls via Twilio, Telnyx, or Plivo, with optional realtime voice and streaming transcription"
+summary: "Place outbound and accept inbound voice calls via Asterisk, Plivo, Telnyx, or Twilio, with optional realtime voice and streaming transcription"
 read_when:
   - You want to place an outbound voice call from OpenClaw
   - You are configuring or developing the voice-call plugin
@@ -12,9 +12,9 @@ Voice calls for OpenClaw via a plugin: outbound notifications, multi-turn
 conversations, full-duplex realtime voice, streaming transcription, and
 inbound calls with allowlist policies.
 
-**Providers:** `mock` (dev, no network), `plivo` (Voice API + XML transfer +
-GetInput speech), `telnyx` (Call Control v2), `twilio` (Programmable Voice +
-Media Streams).
+**Providers:** `asterisk` (ARI + AudioSocket realtime media), `mock` (dev, no
+network), `plivo` (Voice API + XML transfer + GetInput speech), `telnyx` (Call
+Control v2), `twilio` (Programmable Voice + Media Streams).
 
 <Note>
 The Voice Call plugin runs **inside the Gateway process**. If you use a
@@ -49,7 +49,9 @@ Gateway, then restart the Gateway to load it.
   <Step title="Configure provider and webhook">
     Set config under `plugins.entries.voice-call.config` (see
     [Configuration](#configuration) below). At minimum: `provider`, provider
-    credentials, `fromNumber`, and a publicly reachable webhook URL.
+    credentials and `fromNumber`. Plivo, Telnyx, and Twilio also need a
+    publicly reachable webhook URL. Asterisk instead needs an ARI endpoint and
+    an AudioSocket address reachable from the PBX.
 
     For an inbound Twilio number, set its **Voice webhook** to the public Voice
     Call webhook URL with method `POST`. Set the number-level **Status
@@ -98,7 +100,7 @@ starting the runtime. Commands, RPC calls, and agent tools still return the
 exact missing configuration when used.
 
 <Note>
-Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.asterisk.password`, `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
 </Note>
 
 ```json5
@@ -108,7 +110,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
       "voice-call": {
         enabled: true,
         config: {
-          provider: "twilio", // or "telnyx" | "plivo" | "mock"
+          provider: "twilio", // or "asterisk" | "mock" | "plivo" | "telnyx"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
           sessionScope: "per-phone", // per-phone | per-call | main
@@ -140,6 +142,18 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
             authId: "MAxxxxxxxxxxxxxxxxxxxx",
             authToken: "...",
           },
+          asterisk: {
+            baseUrl: "http://127.0.0.1:8088/ari",
+            username: "openclaw",
+            password: "...",
+            application: "openclaw",
+            endpoint: "PJSIP/{number}@trunk",
+            audioSocket: {
+              bind: "127.0.0.1",
+              host: "127.0.0.1",
+              port: 3335,
+            },
+          },
 
           // Webhook server
           serve: {
@@ -170,6 +184,57 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
   },
 }
 ```
+
+### Asterisk ARI and AudioSocket
+
+Asterisk 18 or newer can carry full-duplex call audio to OpenClaw without an
+external AVR core. The provider uses ARI for channel control and events, then
+creates an `externalMedia` channel with the AudioSocket TCP transport. OpenClaw
+keeps ownership of realtime transcription, speech, agent tools, and call state.
+
+Enable the Asterisk HTTP server and create a write-capable ARI user:
+
+```ini
+; http.conf
+[general]
+enabled = yes
+bindaddr = 127.0.0.1
+bindport = 8088
+```
+
+```ini
+; ari.conf
+[general]
+enabled = yes
+
+[openclaw]
+type = user
+read_only = no
+password = <ARI_PASSWORD>
+```
+
+Load `res_ari`, `res_http_websocket`, `res_audiosocket`, and
+`chan_audiosocket`. For inbound calls, route the extension into the configured
+Stasis application:
+
+```ini
+[from-openclaw-trunk]
+exten => 5000,1,Stasis(openclaw)
+ same => n,Hangup()
+```
+
+Set `asterisk.endpoint` to an ARI endpoint template such as
+`PJSIP/{number}@trunk`. OpenClaw replaces `{number}` with the validated E.164
+destination. Set `asterisk.audioSocket.host` to an address the Asterisk process
+can reach; loopback works only when Asterisk and the Gateway share a network
+namespace.
+
+The Asterisk provider requires `realtime.enabled: true` and supports
+conversation calls. It rejects notify-mode TwiML and pre-connect TwiML instead
+of starting a call that cannot execute those instructions. Set
+`outbound.defaultMode: "conversation"` and use `--mode conversation` for live
+smoke calls. If `asterisk.audioSocket.bind` is not loopback, restrict the TCP
+listener to the Asterisk host with firewall rules.
 
 ### Config reference
 
@@ -272,7 +337,7 @@ audio mode per call.
 
 Current runtime behavior:
 
-- `realtime.enabled` is supported for Twilio and Telnyx.
+- `realtime.enabled` is supported for Asterisk, Telnyx, and Twilio.
 - `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
@@ -439,7 +504,7 @@ options.
 
 `streaming` connects Twilio Media Streams to a realtime transcription provider.
 The classic streaming path requires `provider: "twilio"`; configuration with
-Telnyx, Plivo, or mock is rejected. Telnyx live audio uses the separately
+Telnyx, Plivo, Asterisk, or mock is rejected. Asterisk and Telnyx live audio use the separately
 authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:

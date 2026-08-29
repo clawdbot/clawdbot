@@ -14,7 +14,9 @@ import {
 } from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
-function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
+function createBaseConfig(
+  provider: "telnyx" | "twilio" | "plivo" | "asterisk" | "mock",
+): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
 }
 
@@ -358,7 +360,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.errors).not.toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", "asterisk", or "mock" when realtime.enabled is true',
       );
     });
 
@@ -381,13 +383,35 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors).toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", "asterisk", or "mock" when realtime.enabled is true',
+      );
+    });
+
+    it("accepts Asterisk only with complete ARI, AudioSocket, and realtime config", () => {
+      const config = createBaseConfig("asterisk");
+      config.asterisk = {
+        baseUrl: "http://127.0.0.1:8088/ari",
+        username: "openclaw",
+        password: { source: "env", provider: "default", id: "ASTERISK_ARI_PASSWORD" },
+        application: "openclaw",
+        endpoint: "PJSIP/{number}@trunk",
+        audioSocket: { bind: "127.0.0.1", host: "127.0.0.1", port: 3335 },
+      };
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+      config.outbound.defaultMode = "conversation";
+
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
+
+      config.asterisk.endpoint = "PJSIP/trunk";
+      expect(validateProviderConfig(config).errors).toContain(
+        'plugins.entries.voice-call.config.asterisk.endpoint must contain the "{number}" placeholder',
       );
     });
   });
 
   describe("streaming config", () => {
-    it.each(["telnyx", "plivo", "mock"] as const)(
+    it.each(["telnyx", "plivo", "asterisk", "mock"] as const)(
       "rejects streaming.enabled with provider=%s",
       (provider) => {
         const config = createBaseConfig(provider);

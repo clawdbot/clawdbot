@@ -16,8 +16,12 @@ import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
+import { AsteriskConfigSchema, collectAsteriskConfigErrors } from "./asterisk-config.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
-import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
+import {
+  DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
+  resolveDefaultRealtimeStreamPath,
+} from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
 
 // -----------------------------------------------------------------------------
@@ -387,8 +391,8 @@ export const VoiceCallConfigSchema = z
     /** Enable voice call functionality */
     enabled: z.boolean().default(false),
 
-    /** Active provider (telnyx, twilio, plivo, or mock) */
-    provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
+    /** Active provider (telnyx, twilio, plivo, asterisk, or mock) */
+    provider: z.enum(["telnyx", "twilio", "plivo", "asterisk", "mock"]).optional(),
 
     /** Telnyx-specific configuration */
     telnyx: TelnyxConfigSchema.optional(),
@@ -398,6 +402,9 @@ export const VoiceCallConfigSchema = z
 
     /** Plivo-specific configuration */
     plivo: PlivoConfigSchema.optional(),
+
+    /** Asterisk ARI and AudioSocket configuration */
+    asterisk: AsteriskConfigSchema.optional(),
 
     /** Phone number to call from (E.164) */
     fromNumber: E164Schema.optional(),
@@ -518,17 +525,6 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
-function defaultRealtimeStreamPathForServePath(servePath: string): string {
-  const normalized = normalizeWebhookPath(servePath);
-  if (normalized.endsWith("/webhook")) {
-    return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
-  }
-  if (normalized === "/") {
-    return "/voice/stream/realtime";
-  }
-  return `${normalized}/stream/realtime`;
-}
-
 export type VoiceCallStreamExposurePath = {
   publicPath: string;
   localPath: string;
@@ -553,7 +549,7 @@ export function resolveVoiceCallStreamExposurePaths(
   const publicPathPrefix = resolveVoiceCallPublicPathPrefix(publicWebhookPath, localWebhookPath);
   if (config.realtime.enabled) {
     const localPath = normalizeWebhookPath(
-      config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
+      config.realtime.streamPath ?? resolveDefaultRealtimeStreamPath(config.serve.path),
     );
     exposurePaths.push({
       localPath,
@@ -707,6 +703,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   return {
     ...defaults,
     ...config,
+    asterisk: config.asterisk ? AsteriskConfigSchema.parse(config.asterisk) : undefined,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
     numbers: sanitizeVoiceCallNumberRoutes(
       (config.numbers ?? defaults.numbers) as Record<string, unknown>,
@@ -734,7 +731,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
       provider: realtimeProvider,
       streamPath:
         config.realtime?.streamPath ??
-        defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
+        resolveDefaultRealtimeStreamPath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
       consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
@@ -958,6 +955,8 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     }
   }
 
+  errors.push(...collectAsteriskConfigErrors(config));
+
   if (config.realtime.enabled && config.inboundPolicy === "disabled") {
     errors.push(
       'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
@@ -981,10 +980,11 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     config.provider &&
     config.provider !== "twilio" &&
     config.provider !== "telnyx" &&
+    config.provider !== "asterisk" &&
     config.provider !== "mock"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", "asterisk", or "mock" when realtime.enabled is true',
     );
   }
 

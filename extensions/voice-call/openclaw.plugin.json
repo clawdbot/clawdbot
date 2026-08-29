@@ -5,7 +5,7 @@
     "stateMigrations": true
   },
   "name": "Voice Call",
-  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "description": "OpenClaw voice-call plugin for Asterisk, Plivo, Telnyx, and Twilio phone calls.",
   "cliCommands": [
     {
       "name": "voicecall",
@@ -25,7 +25,7 @@
   "uiHints": {
     "provider": {
       "label": "Provider",
-      "help": "Use twilio, telnyx, or mock for dev/no-network."
+      "help": "Use asterisk, mock for dev/no-network, plivo, telnyx, or twilio."
     },
     "fromNumber": {
       "label": "From Number",
@@ -48,6 +48,37 @@
     "numbers": {
       "label": "Per-number Routing",
       "help": "Inbound overrides keyed by dialed E.164 number.",
+      "advanced": true
+    },
+    "asterisk.baseUrl": {
+      "label": "Asterisk ARI Base URL",
+      "placeholder": "http://127.0.0.1:8088/ari"
+    },
+    "asterisk.username": {
+      "label": "Asterisk ARI Username"
+    },
+    "asterisk.password": {
+      "label": "Asterisk ARI Password",
+      "sensitive": true
+    },
+    "asterisk.application": {
+      "label": "Asterisk Stasis Application",
+      "advanced": true
+    },
+    "asterisk.endpoint": {
+      "label": "Asterisk Endpoint Template",
+      "placeholder": "PJSIP/{number}@trunk"
+    },
+    "asterisk.audioSocket.bind": {
+      "label": "AudioSocket Bind Address",
+      "advanced": true
+    },
+    "asterisk.audioSocket.host": {
+      "label": "AudioSocket Advertised Host",
+      "advanced": true
+    },
+    "asterisk.audioSocket.port": {
+      "label": "AudioSocket Port",
       "advanced": true
     },
     "telnyx.apiKey": {
@@ -272,7 +303,50 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["asterisk", "mock", "plivo", "telnyx", "twilio"]
+      },
+      "asterisk": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": ["string", "object"]
+          },
+          "application": {
+            "type": "string",
+            "default": "openclaw"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "audioSocket": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "bind": {
+                "type": "string",
+                "default": "127.0.0.1"
+              },
+              "host": {
+                "type": "string",
+                "default": "127.0.0.1"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "default": 3335
+              }
+            }
+          }
+        }
       },
       "telnyx": {
         "type": "object",

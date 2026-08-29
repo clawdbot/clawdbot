@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
   managerGetCall: vi.fn(),
+  managerProcessEvent: vi.fn(),
+  asteriskSetRealtimeHandler: vi.fn(),
+  asteriskStartEventListener: vi.fn(),
+  asteriskStop: vi.fn(),
   webhookStart: vi.fn(),
   webhookStop: vi.fn(),
   webhookSetRealtimeHandler: vi.fn(),
@@ -77,6 +81,16 @@ vi.mock("./manager.js", () => ({
   CallManager: class {
     initialize = mocks.managerInitialize;
     getCall = mocks.managerGetCall;
+    processEvent = mocks.managerProcessEvent;
+  },
+}));
+
+vi.mock("./providers/asterisk.js", () => ({
+  AsteriskProvider: class {
+    readonly name = "asterisk";
+    setRealtimeHandler = mocks.asteriskSetRealtimeHandler;
+    startEventListener = mocks.asteriskStartEventListener;
+    stop = mocks.asteriskStop;
   },
 }));
 
@@ -235,6 +249,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.validateProviderConfig.mockReturnValue({ valid: true, errors: [] });
     mocks.managerInitialize.mockResolvedValue(undefined);
     mocks.managerGetCall.mockReset();
+    mocks.managerProcessEvent.mockReset();
+    mocks.asteriskSetRealtimeHandler.mockReset();
+    mocks.asteriskStartEventListener.mockReset();
+    mocks.asteriskStartEventListener.mockResolvedValue(undefined);
+    mocks.asteriskStop.mockReset();
+    mocks.asteriskStop.mockResolvedValue(undefined);
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookStop.mockResolvedValue(undefined);
     mocks.webhookSetRealtimeHandler.mockReset();
@@ -338,6 +358,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await vi.waitFor(() => {
       expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
     });
+
     expect(stopped).toBe(false);
 
     releaseWebhookStop?.();
@@ -347,6 +368,41 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires Asterisk ARI events and AudioSocket into the realtime lifecycle", async () => {
+    const config = createVoiceCallBaseConfig({
+      provider: "asterisk",
+      tunnelProvider: "none",
+    });
+    config.asterisk = {
+      baseUrl: "http://127.0.0.1:8088/ari",
+      username: "openclaw",
+      password: "ari-secret",
+      application: "openclaw",
+      endpoint: "PJSIP/{number}@trunk",
+      audioSocket: { bind: "127.0.0.1", host: "127.0.0.1", port: 3335 },
+    };
+    config.realtime.enabled = true;
+    config.inboundPolicy = "allowlist";
+    config.outbound.defaultMode = "conversation";
+
+    const runtime = await createVoiceCallRuntime({
+      config,
+      coreConfig: {},
+      agentRuntime: {} as never,
+    });
+
+    expect(mocks.asteriskSetRealtimeHandler).toHaveBeenCalledTimes(1);
+    expect(mocks.asteriskStartEventListener).toHaveBeenCalledTimes(1);
+
+    const eventSink = mocks.asteriskStartEventListener.mock.calls[0]?.[0];
+    expect(eventSink).toBeTypeOf("function");
+    eventSink?.({ id: "event-1" });
+    expect(mocks.managerProcessEvent).toHaveBeenCalledWith({ id: "event-1" });
+
+    await runtime.stop();
+    expect(mocks.asteriskStop).toHaveBeenCalledTimes(1);
   });
 
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {

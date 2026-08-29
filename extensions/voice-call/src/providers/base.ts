@@ -6,6 +6,7 @@ import type {
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
+  NormalizedEvent,
   PlayTtsInput,
   ProviderName,
   SendDtmfInput,
@@ -16,6 +17,7 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import type { RealtimeCallHandler } from "../webhook/realtime-handler.js";
 
 /**
  * Abstract base interface for voice call providers.
@@ -33,6 +35,15 @@ export interface VoiceCallProvider {
   readonly name: ProviderName;
 
   setPublicUrl?(url: string): void;
+
+  /** Start provider-owned event ingress after the call manager is ready. */
+  startEventListener?(onEvent: (event: NormalizedEvent) => void): Promise<void>;
+
+  /** Stop provider-owned event ingress and transport resources. */
+  stop?(): Promise<void>;
+
+  /** Attach the shared realtime voice bridge when the provider owns live media ingress. */
+  setRealtimeHandler?(handler: RealtimeCallHandler): void;
 
   /**
    * Verify webhook signature/HMAC before processing.

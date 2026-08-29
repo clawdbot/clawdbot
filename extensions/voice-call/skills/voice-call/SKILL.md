@@ -14,7 +14,7 @@ metadata:
 
 # Voice Call
 
-Use the voice-call plugin to start or inspect calls (Twilio, Telnyx, Plivo, or mock).
+Use the voice-call plugin to start or inspect calls (Asterisk, Plivo, Telnyx, Twilio, or mock).
 
 ## CLI
 
@@ -39,7 +39,8 @@ Notes:
 
 - Requires the voice-call plugin to be enabled.
 - Plugin config lives under `plugins.entries.voice-call.config`.
-- Twilio config: `provider: "twilio"` + `twilio.accountSid/authToken` + `fromNumber`.
-- Telnyx config: `provider: "telnyx"` + `telnyx.apiKey/connectionId` + `fromNumber`.
-- Plivo config: `provider: "plivo"` + `plivo.authId/authToken` + `fromNumber`.
+- Asterisk config: `provider: "asterisk"` + `asterisk.baseUrl/username/password/endpoint` + `fromNumber`; requires realtime voice.
 - Dev fallback: `provider: "mock"` (no network).
+- Plivo config: `provider: "plivo"` + `plivo.authId/authToken` + `fromNumber`.
+- Telnyx config: `provider: "telnyx"` + `telnyx.apiKey/connectionId` + `fromNumber`.
+- Twilio config: `provider: "twilio"` + `twilio.accountSid/authToken` + `fromNumber`.

@@ -241,6 +241,7 @@ export async function initiateCall(
 
     const result = await ctx.provider.initiateCall({
       callId,
+      mode,
       from,
       to,
       webhookUrl: ctx.webhookUrl,

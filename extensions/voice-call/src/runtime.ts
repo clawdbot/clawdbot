@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawPluginApi } from "../api.js";
+import { resolveAsteriskPassword } from "./asterisk-config.js";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -78,6 +79,8 @@ const loadPlivoProvider = createLazyRuntimeModule(() => import("./providers/pliv
 
 const loadMockProvider = createLazyRuntimeModule(() => import("./providers/mock.js"));
 
+const loadAsteriskProvider = createLazyRuntimeModule(() => import("./providers/asterisk.js"));
+
 const loadRealtimeVoiceRuntime = createLazyRuntimeModule(
   () => import("./realtime-voice.runtime.js"),
 );
@@ -123,6 +126,7 @@ function mapVoiceCallConsultTranscript(
 
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
+  provider: VoiceCallProvider;
   webhookServer: VoiceCallWebhookServer;
 }): {
   setTunnelResult: (result: TunnelResult | null) => void;
@@ -149,6 +153,9 @@ function createRuntimeResourceLifecycle(params: {
       }
       const suppressErrors = opts?.suppressErrors ?? false;
       stopPromise = (async () => {
+        await runStep(async () => {
+          await params.provider.stop?.();
+        }, suppressErrors);
         await runStep(async () => {
           if (tunnelResult) {
             await tunnelResult.stop();
@@ -215,6 +222,22 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
           skipVerification: config.skipSignatureVerification,
           ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
           webhookSecurity: config.webhookSecurity,
+        },
+      );
+    }
+    case "asterisk": {
+      const { AsteriskProvider } = await loadAsteriskProvider();
+      return new AsteriskProvider(
+        {
+          baseUrl: config.asterisk?.baseUrl,
+          username: config.asterisk?.username,
+          password: resolveAsteriskPassword(config),
+          application: config.asterisk?.application,
+          endpoint: config.asterisk?.endpoint,
+          audioSocket: config.asterisk?.audioSocket,
+        },
+        {
+          ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
         },
       );
     }
@@ -464,8 +487,9 @@ export async function createVoiceCallRuntime(params: {
       );
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
+    provider.setRealtimeHandler?.(realtimeHandler);
   }
-  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
+  const lifecycle = createRuntimeResourceLifecycle({ config, provider, webhookServer });
 
   const localUrl = await webhookServer.start();
 
@@ -558,6 +582,9 @@ export async function createVoiceCallRuntime(params: {
     }
 
     await manager.initialize(provider, webhookUrl);
+    await provider.startEventListener?.((event) => {
+      manager.processEvent(event);
+    });
 
     const stop = () => lifecycle.stop();
 

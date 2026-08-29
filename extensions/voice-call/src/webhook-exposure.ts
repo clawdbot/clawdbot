@@ -46,11 +46,14 @@ export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
 export function resolveWebhookExposureStatus(
   config: VoiceCallWebhookExposureConfig,
 ): VoiceCallWebhookExposureStatus {
-  if (config.provider === "mock") {
+  if (config.provider === "mock" || config.provider === "asterisk") {
     return {
       ok: true,
       configured: true,
-      message: "Mock provider does not need a public webhook",
+      message:
+        config.provider === "asterisk"
+          ? "Asterisk uses configured ARI and AudioSocket endpoints"
+          : "Mock provider does not need a public webhook",
     };
   }
 

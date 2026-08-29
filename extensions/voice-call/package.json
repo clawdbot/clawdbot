@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/voice-call",
   "version": "2026.8.1",
-  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "description": "OpenClaw voice-call plugin for Asterisk, Plivo, Telnyx, and Twilio phone calls.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
