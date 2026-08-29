@@ -4,8 +4,8 @@ scenario:
   id: qa-channel-failed-tool-terminal-finalization
   surface: channel
   coverage:
-    primary: [agent-runtime.failure-recovery-retry-policy]
-    secondary: [channels.qa-channel-final-reply]
+    primary: [channels.qa-channel-final-reply]
+    secondary: [agent-runtime.failure-recovery-retry-policy]
   regressionRefs:
     - openclaw/openclaw#118274
   gatewayConfigPatch:

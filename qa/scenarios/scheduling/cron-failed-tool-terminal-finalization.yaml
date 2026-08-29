@@ -4,8 +4,10 @@ scenario:
   id: cron-failed-tool-terminal-finalization
   surface: cron
   coverage:
-    primary: [agent-runtime.failure-recovery-retry-policy]
-    secondary: [automation.isolated-cron-execution, channels.qa-channel-final-reply]
+    primary: [automation.isolated-cron-execution]
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+      - channels.qa-channel-final-reply
   regressionRefs:
     - openclaw/openclaw#118274
   gatewayConfigPatch:
