@@ -1112,8 +1112,8 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.groups.delete not supported by this transport"])
     }
 
-    // No parameter defaults: a call that omits a patch field must fail to compile instead of
-    // silently binding here (past the conforming witness) when the requirement gains a field.
+    /// No parameter defaults: a call that omits a patch field must fail to compile instead of
+    /// silently binding here (past the conforming witness) when the requirement gains a field.
     public func patchSession(
         key _: String,
         expectedSessionID _: String?,
