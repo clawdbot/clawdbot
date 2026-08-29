@@ -243,13 +243,7 @@ export function findNearestAssistantMessageIndex(
     const nextDelta = next.timestamp - toolTimestamp;
     return nextDelta < previousDelta ? next.index : previous.index;
   }
-  if (previous) {
-    return previous.index;
-  }
-  if (next) {
-    return next.index;
-  }
-  return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+  return previous?.index ?? next?.index ?? assistantEntries.at(-1)?.index ?? null;
 }
 
 export function findCanvasInsertionIndex(

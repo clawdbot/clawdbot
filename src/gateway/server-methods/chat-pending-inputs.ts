@@ -22,7 +22,7 @@ export function projectPendingInputMessage(input: SessionPendingInput, maxChars:
   if (!message) {
     return undefined;
   }
-  const metadata = { ...asOptionalRecord(message?.__openclaw) };
+  const metadata = { ...asOptionalRecord(message["__openclaw"]) };
   delete metadata.idempotencyKey;
   delete metadata.runId;
   return {
@@ -52,12 +52,17 @@ export function readChatPendingInputs(
   }).messages;
   return {
     ...page,
-    items: visible.map(({ input: item }, index) => ({
-      id: item.id,
-      ...(item.runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS ? { runId: item.runId } : {}),
-      acceptedAt: item.acceptedAt,
-      state: item.state,
-      message: messages[index],
-    })),
+    items: visible.map(({ input: item }, index) => {
+      const display: ChatPendingInputsPage["items"][number] = {
+        id: item.id,
+        acceptedAt: item.acceptedAt,
+        state: item.state,
+        message: messages[index],
+      };
+      if (item.runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS) {
+        display.runId = item.runId;
+      }
+      return display;
+    }),
   };
 }

@@ -14,8 +14,8 @@ export function hasSessionPendingInputsSchema(db: DatabaseSync): boolean {
   if (!db.isTransaction && absentDatabases.has(db)) {
     return false;
   }
-  // sqlite-allow-raw -- Feature-local schema discovery, never application data.
   const present = Boolean(
+    // sqlite-allow-raw -- Feature-local schema discovery, never application data.
     db
       .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get(SESSION_PENDING_INPUTS_TABLE),

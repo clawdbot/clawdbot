@@ -248,7 +248,7 @@ function boundPendingInputs(page: ChatPendingInputsPage) {
     const result = sanitizeHistoryMessage(item.message, Math.max(1, Math.floor(messageBudget / 8)));
     redacted ||= result.redacted;
     const record = asOptionalRecord(result.message);
-    const media = asOptionalRecord(record?.__openclaw)?.media;
+    const media = asOptionalRecord(record?.["__openclaw"])?.media;
     const message = { role: "user", content: record?.content, ...(media ? { media } : {}) };
     const oversized = jsonUtf8Bytes(message) > messageBudget;
     truncated ||= result.truncated || oversized;

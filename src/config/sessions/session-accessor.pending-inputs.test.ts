@@ -78,7 +78,7 @@ describe("accepted input custody", () => {
     const before = await loadTranscriptEvents(scope());
     const prepare = vi.fn((input: PersistedUserTurnMessage) => ({
       ...input,
-      content: `${input.content} (approved)`,
+      content: typeof input.content === "string" ? `${input.content} (approved)` : input.content,
     }));
     const receipt = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
     await expect(
