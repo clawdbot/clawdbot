@@ -68,6 +68,9 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source.outputSchema !== undefined) {
     target.outputSchema = source.outputSchema;
   }
+  if (source.hideFromChannelProgress === true) {
+    target.hideFromChannelProgress = true;
+  }
   copyAgentToolMetadata(source as never, target as never);
 }
 

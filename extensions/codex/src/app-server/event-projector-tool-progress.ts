@@ -316,6 +316,10 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultSummary(item: CodexThreadItem | undefined): void {
+    // Codex emits dynamic item notifications before the request that owns visibility.
+    if (item?.type === "dynamicToolCall") {
+      return;
+    }
     if (!item || !this.params.onToolResult || !this.shouldEmitToolResult()) {
       return;
     }
@@ -339,6 +343,9 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultOutput(item: CodexThreadItem | undefined): void {
+    if (item?.type === "dynamicToolCall") {
+      return;
+    }
     if (!item || !this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }

@@ -4698,10 +4698,22 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams.input?.[0]?.text).toBe(exactPrompt);
   });
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        ...createRuntimeDynamicTool("verbose_widget"),
+        execute: vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "file contents" }],
+          details: {},
+        })),
+      },
+    ]);
     const onToolResult = vi.fn();
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
@@ -4711,21 +4723,38 @@ describe("runCodexAppServerAttempt", () => {
         type: "dynamicToolCall",
         id: "tool-1",
         namespace: null,
-        tool: "read",
-        arguments: { path: "README.md" },
+        tool: "verbose_widget",
+        arguments: {},
         status: "inProgress",
         contentItems: null,
         success: null,
         durationMs: null,
       }),
     );
+    await expect(
+      harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "tool-1",
+          namespace: null,
+          tool: "verbose_widget",
+          arguments: {},
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "file contents" }],
+    });
     await harness.notify(
       itemNotification("item/completed", {
         type: "dynamicToolCall",
         id: "tool-1",
         namespace: null,
-        tool: "read",
-        arguments: { path: "README.md" },
+        tool: "verbose_widget",
+        arguments: {},
         status: "completed",
         contentItems: [{ type: "inputText", text: "file contents" }],
         success: true,
@@ -4736,10 +4765,10 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "📖 Read: `from README.md`",
+      text: "🧩 Verbose Widget",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      text: "🧩 Verbose Widget\n```txt\nfile contents\n```",
     });
   });
 

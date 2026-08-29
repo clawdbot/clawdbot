@@ -278,6 +278,25 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     expect(result[0]?.outputSchema).toBe(outputSchema);
   });
 
+  it("preserves channel-progress visibility when runtime normalization clones tools", () => {
+    const tool = {
+      ...createParameterFreeTool("quiet_lookup"),
+      hideFromChannelProgress: true,
+    } as AgentTool;
+    const normalized = {
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: normalizedParameterFreeSchema(),
+      execute: tool.execute,
+    } as AgentTool;
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    expect(
+      normalizeAgentRuntimeTools({ tools: [tool], provider: "openai" })[0]?.hideFromChannelProgress,
+    ).toBe(true);
+  });
+
   it("preserves private execution metadata when provider normalization clones tools", () => {
     const formatter = vi.fn(() => ({ text: "Terminal summary" }));
     const tool = {
