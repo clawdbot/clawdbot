@@ -260,10 +260,7 @@ function authorizeGatewayMethod(
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect) {
-    return null;
-  }
-  if (method === "health") {
+  if (!client?.connect || method === "health") {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";

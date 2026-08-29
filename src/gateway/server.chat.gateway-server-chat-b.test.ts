@@ -422,8 +422,8 @@ async function callDirectChatHandler(
   method: DirectChatMethod,
   options: GatewayRequestHandlerOptions,
 ) {
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  await expectDefined(chatHandlers[method], `${method} test invariant`)(options);
+  const { coreGatewayHandlers } = await import("./server-methods.js");
+  await expectDefined(coreGatewayHandlers[method], `${method} test invariant`)(options);
 }
 
 type DirectChatCallOptions = Omit<
