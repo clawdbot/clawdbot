@@ -561,7 +561,6 @@ extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
-extensions/imessage/doctor-contract-api.ts	2
 extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-chat-guid.ts	1
 extensions/imessage/src/actions-contract.ts	1

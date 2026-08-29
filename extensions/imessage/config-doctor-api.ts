@@ -55,6 +55,7 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
+  // SAFETY: doctor inspects legacy channel keys before schema validation.
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const imessage = channels?.imessage;
   if (!isRecord(imessage)) {
@@ -94,7 +95,7 @@ export function normalizeCompatibilityConfig({
     cfg:
       nextImessage === imessage
         ? cfg
-        : ({ ...cfg, channels: { ...channels, imessage: nextImessage } } as OpenClawConfig),
+        : ({ ...cfg, channels: { ...channels, imessage: nextImessage } } as OpenClawConfig), // SAFETY: only retired catchup keys are removed.
     changes,
   });
   if (changes.length === 0) {

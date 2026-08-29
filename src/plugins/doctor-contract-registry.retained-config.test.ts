@@ -31,7 +31,7 @@ describe("retained channel config repairs", () => {
   it("repairs retained channel config before installation without selecting state owners", () => {
     const rule = { path: ["channels", "discord", "dm", "policy"], message: "retired DM policy" };
     const config = {
-      channels: { discord: { dm: { policy: "allowlist" } } },
+      channels: { discord: { dm: { enabled: true, policy: "allowlist" } } },
       plugins: { allow: [] },
     };
     retainedConfigDoctorMock.mockReturnValue({
@@ -78,7 +78,7 @@ describe("retained channel config repairs", () => {
         ],
         diagnostics: [],
       });
-      const config = { channels: { discord: { dm: { policy: "allowlist" } } } };
+      const config = { channels: { discord: { dm: { enabled: true, policy: "allowlist" } } } };
       expect(doctor.listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([]);
       expect(doctor.applyPluginDoctorCompatibilityMigrations(config, { env: {} })).toEqual({
         config,

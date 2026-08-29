@@ -50,7 +50,7 @@ afterEach(() => {
 describe("bundled plugin public surface loader", () => {
   it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
     const tempRoot = tempDirs.make("openclaw-public-surface-env-");
-    const environments = ["first", "second"].map((marker) => {
+    const createEnvironment = (marker: string) => {
       const bundledPluginsDir = path.join(tempRoot, marker);
       const pluginRoot = path.join(bundledPluginsDir, "demo");
       fs.mkdirSync(pluginRoot, { recursive: true });
@@ -64,7 +64,9 @@ describe("bundled plugin public surface loader", () => {
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       };
-    });
+    };
+    const firstEnvironment = createEnvironment("first");
+    const secondEnvironment = createEnvironment("second");
     const loader = await importFreshModule<typeof import("./public-surface-loader.js")>(
       import.meta.url,
       "./public-surface-loader.js?scope=caller-environment",
@@ -76,15 +78,15 @@ describe("bundled plugin public surface loader", () => {
         env,
       });
 
-    expect(load(environments[0]).marker).toBe("first");
+    expect(load(firstEnvironment).marker).toBe("first");
     expect(
       loader.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
         dirName: "demo",
         artifactCandidates: ["missing.js", "api.js"],
-        env: environments[1],
+        env: secondEnvironment,
       })?.marker,
     ).toBe("second");
-    expect(load(environments[0]).marker).toBe("first");
+    expect(load(firstEnvironment).marker).toBe("first");
   });
 
   it.each([false, true])(
