@@ -145,23 +145,37 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     await assertMatrixQaTestPortClosed(proxy.baseUrl);
   });
 
-  it("closes the already-acquired proxy when runtime construction fails", async () => {
-    const failure = new Error("runtime construction failed");
-    mocks.createRuntime.mockRejectedValueOnce(failure);
-    await expect(run()).rejects.toBe(failure);
-    await assertMatrixQaTestPortClosed(proxy.baseUrl);
-  });
+  it.each([new Error("runtime construction failed"), undefined, "construction rejected"])(
+    "closes the already-acquired proxy and preserves construction rejection %s",
+    async (failure) => {
+      mocks.createRuntime.mockRejectedValueOnce(failure);
+      await expect(run()).rejects.toBe(failure);
+      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    },
+  );
 
-  it("retains construction and proxy cleanup failures", async () => {
-    const failure = new Error("runtime construction failed");
-    proxyCleanupFailure = new Error("proxy stop failed");
-    mocks.createRuntime.mockRejectedValueOnce(failure);
-    await expect(run()).rejects.toMatchObject({
-      cause: failure,
-      errors: [failure, proxyCleanupFailure],
-    });
-    await assertMatrixQaTestPortClosed(proxy.baseUrl);
-  });
+  it.each([new Error("runtime construction failed"), undefined, "construction rejected"])(
+    "retains construction rejection %s before proxy cleanup failure",
+    async (failure) => {
+      proxyCleanupFailure = new Error("proxy stop failed");
+      mocks.createRuntime.mockRejectedValueOnce(failure);
+      await expect(run()).rejects.toMatchObject({
+        cause: failure,
+        errors: [failure, proxyCleanupFailure],
+      });
+      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    },
+  );
+
+  it.each([undefined, "CLI cleanup rejected"])(
+    "preserves a single non-Error cleanup rejection %s",
+    async (failure) => {
+      configureCli(["POST"]);
+      dispose.mockRejectedValueOnce(failure);
+      await expect(run()).rejects.toBe(failure);
+      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    },
+  );
 
   it("reports disposal and proxy cleanup failures instead of returning success", async () => {
     const disposalFailure = new Error("CLI disposal failed");
