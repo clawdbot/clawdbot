@@ -425,15 +425,37 @@ merge_run() {
   fi
 
   local crabbox_final_main_sha="" route=immediate
-  merge_outcome_observe "$pr" || return 1
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
-    .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
-    .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
-    .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
-  ' >/dev/null; then
-    merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
-    return 1
-  fi
+  local admission_attempt admission_authority initial_authority=""
+  for admission_attempt in 1 2 3 4 5 6; do
+    merge_outcome_observe "$pr" || return 1
+    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
+      .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
+      .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
+      .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
+    ' >/dev/null; then
+      merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
+      return 1
+    fi
+    # Only initial UNKNOWN projections may settle; all other facts stay pinned.
+    # Keep the complete observation for routing and the unchanged final reread.
+    admission_authority=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c 'del(.pr.mergeable, .pr.mergeStateStatus)') || return 1
+    [ -n "$initial_authority" ] || initial_authority="$admission_authority"
+    if [ "$admission_authority" != "$initial_authority" ]; then
+      merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
+      return 1
+    fi
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
+      break
+    fi
+    if [ "$admission_attempt" -eq 6 ]; then
+      merge_outcome_stop "mergeability remained UNKNOWN after 6 observations; stopped before intent/dispatch"
+      return 1
+    fi
+    if [ "$admission_attempt" -eq 1 ]; then
+      echo "Waiting for GitHub mergeability to settle (up to 6 observations, 2 seconds between UNKNOWN samples)."
+    fi
+    sleep 2
+  done
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
     route="admin"
     merge_args=(--admin "${merge_args[@]}")

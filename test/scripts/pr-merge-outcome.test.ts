@@ -17,6 +17,7 @@ const scripts = join(process.cwd(), "scripts");
 const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
 const lockRef = "refs/openclaw/pr-operation-locks/123";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
 
 function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
   const root = realpathSync(temps.make("pr-merge-outcome-"));
@@ -89,7 +90,14 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     mode: "success",
     landing: "requested",
     reads: 0,
-    observations: [] as Array<{ main?: string; pr?: Record<string, unknown> }>,
+    observationReads: 0,
+    settlementSleeps: 0,
+    observations: [] as Array<{
+      pr?: Record<string, unknown>;
+      main?: string;
+      invalid?: boolean;
+      unavailable?: boolean;
+    }>,
     calls: [] as string[][],
     mutations: 0,
     mergeBody: null as string | null,
@@ -126,6 +134,7 @@ const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","co
 const save=()=>fs.writeFileSync(file,JSON.stringify(s));
 const out=(value)=>console.log(typeof value==="string"?value:JSON.stringify(value));
 const fail=(text)=>{save();console.error(text);process.exit(1)};
+if(route==="sleep") {s.settlementSleeps++;save();process.exit(0);}
 s.calls.push([route,...args]);save();
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
 if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
@@ -178,7 +187,16 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(s.unavailable) fail("metadata unavailable");
   if(s.invalid) {out({data:{repository:{}}});process.exit(0);}
   if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeBodyText:"Fixture body"}}}});}
-  else {const observation=s.observations.shift()??{};const pr={...s.pr,...observation.pr};if(s.drift&&s.reads%2===0) pr.baseRefName="changed";out({data:{repository:{...s.repo,ref:{target:{oid:observation.main??main()}},pullRequest:pr}}});}
+  else {
+    s.observationReads++;
+    const step=s.observations.shift();
+    if(step?.pr) Object.assign(s.pr,step.pr);
+    if(step?.main) git(["push","-q","origin",step.main+":refs/heads/main"]);
+    if(step?.unavailable) fail("metadata unavailable");
+    if(step?.invalid) {save();out({data:{repository:{}}});process.exit(0);}
+    const pr={...s.pr};if(s.drift&&s.reads%2===0) pr.baseRefName="changed";
+    out({data:{repository:{...s.repo,ref:{target:{oid:main()}},pullRequest:pr}}});
+  }
 } else if(args.some(x=>x.includes("/comments"))) {
   if(args.includes("POST")) {
     s.posts++;
@@ -219,6 +237,8 @@ verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" =
 node() { if [[ "$1" == */watch-pr-ci.mjs ]]; then return 0; fi; command node "$@"; }
 gh() { command node "$FIXTURE_GH" path "$@"; }
 gh_plain() { command node "$FIXTURE_GH" direct "$@"; }
+# Skip only admission settlement delays; preserve the operation lock's short sleeps.
+sleep() { if [ "$#" = 1 ] && [ "$1" = 2 ]; then command node "$FIXTURE_GH" sleep; else command sleep "$@"; fi; }
 verify_crabbox_admin_merge_bypass() {
   [ "$(command jq -r .admin "$FIXTURE_STATE")" = true ] || return 1
   command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
@@ -331,9 +351,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.save({
       ...f.state(),
       pr: { ...f.state().pr, mergeStateStatus: "CLEAN" },
-      observations: Array.from({ length: auto ? 2 : 1 }, () => ({
-        pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
-      })),
+      observations: [
+        ...Array.from({ length: auto ? 2 : 1 }, () => ({ pr: unknownProjection })),
+        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } },
+      ],
     });
     const run = f.run(auto);
     expect(run.status, run.output).toBe(0);
@@ -380,12 +401,16 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     if (change === "queue") pr.isInMergeQueue = true;
     if (change === "queue-policy") pr.isMergeQueueEnabled = true;
     if (change === "settled-mergeable") pr.mergeable = "CONFLICTING";
+    if (change === "settled-status") pr.mergeStateStatus = "BEHIND";
     const pending = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
     if (change === "settled-mergeable") pending.mergeable = "MERGEABLE";
     if (change === "settled-status") pending.mergeStateStatus = "CLEAN";
     f.save({
       ...f.state(),
-      observations: [{ pr: pending }, { pr, ...(change === "main" ? { main: f.head } : {}) }],
+      observations: [
+        { pr: pending },
+        { pr: { ...f.state().pr, ...pr }, ...(change === "main" ? { main: f.head } : {}) },
+      ],
     });
     const run = f.run();
     expect(run.status, run.output).toBe(1);
@@ -405,6 +430,182 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);
   });
+  it.each([
+    { auto: false, mergeStateStatus: "CLEAN", route: "immediate" },
+    { auto: true, mergeStateStatus: "CLEAN", route: "immediate" },
+    { auto: true, mergeStateStatus: "BEHIND", route: "auto" },
+  ])(
+    "settles initial UNKNOWN projections before one pinned dispatch: %j",
+    ({ auto, mergeStateStatus, route }) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        observations: [
+          { pr: unknownProjection },
+          { pr: { mergeable: "MERGEABLE" } },
+          { pr: { mergeStateStatus } },
+        ],
+      });
+      const run = f.run(auto);
+      expect(run.status, run.output).toBe(0);
+      const state = f.state();
+      const submissions = state.calls.filter((call) => call[1] === "pr" && call[2] === "merge");
+      expect(submissions).toHaveLength(1);
+      const args = submissions[0]!;
+      expect(args[args.indexOf("--match-head-commit") + 1]).toBe(f.head);
+      expect(args.includes("--auto")).toBe(route === "auto");
+      expect(state.mutations).toBe(1);
+      expect(state.posts).toBe(1);
+      expect(state.settlementSleeps).toBe(2);
+      expect(f.record()).toMatchObject({ route, phase: "complete", head: f.head, main: f.base });
+      expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
+    },
+  );
+  it.each([
+    "persistent UNKNOWN",
+    "persistent UNKNOWN mergeable",
+    "invalid metadata",
+    "API error",
+    "PR identity",
+    "main",
+    "head",
+    "base",
+    "closed",
+    "merged",
+    "draft",
+    "auto request",
+    "queue policy",
+    "queue membership",
+    "invalid receipt",
+    "conflicting",
+    "known BLOCKED",
+    "final UNKNOWN mergeable",
+    "final UNKNOWN status",
+    "final changed status",
+    "final main",
+  ])("stops initial settlement without dispatch on %s", (fault) => {
+    const f = fixture();
+    const next = f.state();
+    const step: (typeof next.observations)[number] = {};
+    switch (fault) {
+      case "invalid metadata":
+        step.invalid = true;
+        break;
+      case "API error":
+        step.unavailable = true;
+        break;
+      case "PR identity":
+        step.pr = { id: "other-pr" };
+        break;
+      case "main":
+      case "final main":
+        step.main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+        break;
+      case "head":
+        step.pr = { headRefOid: f.base };
+        break;
+      case "base":
+        step.pr = { baseRefName: "release" };
+        break;
+      case "closed":
+        step.pr = { state: "CLOSED" };
+        break;
+      case "merged":
+        step.main = f.commit(f.tree("after\n"), [f.base]);
+        step.pr = { state: "MERGED", mergeCommit: { oid: step.main } };
+        break;
+      case "draft":
+        step.pr = { isDraft: true };
+        break;
+      case "auto request":
+        step.pr = { autoMergeRequest: { mergeMethod: "SQUASH" } };
+        break;
+      case "queue policy":
+        step.pr = { isMergeQueueEnabled: true };
+        break;
+      case "queue membership":
+        step.pr = { isInMergeQueue: true };
+        break;
+      case "invalid receipt":
+        step.pr = { mergeCommit: { oid: f.head } };
+        break;
+      case "conflicting":
+        step.pr = { mergeable: "CONFLICTING" };
+        break;
+      case "known BLOCKED":
+        step.pr = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+        break;
+      case "final UNKNOWN mergeable":
+        step.pr = { mergeable: "UNKNOWN" };
+        break;
+      case "final UNKNOWN status":
+        step.pr = { mergeStateStatus: "UNKNOWN" };
+        break;
+      case "final changed status":
+        step.pr = { mergeStateStatus: "BEHIND" };
+        break;
+    }
+    next.observations = [{ pr: unknownProjection }];
+    const persistent = fault.startsWith("persistent ");
+    if (fault === "persistent UNKNOWN mergeable")
+      next.observations = [{ pr: { mergeable: "UNKNOWN", mergeStateStatus: "CLEAN" } }];
+    const finalRead = fault.startsWith("final ");
+    if (finalRead)
+      next.observations.push({ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } });
+    if (!persistent) next.observations.push(step);
+    f.save(next);
+    const run = f.run(true);
+    expect(run.status, run.output).toBe(1);
+    const state = f.state();
+    expect(state.observationReads).toBe(persistent ? 6 : finalRead ? 3 : 2);
+    expect(state.settlementSleeps).toBe(persistent ? 5 : 1);
+    expect(state.mutations).toBe(0);
+    expect(state.posts).toBe(0);
+    expect(() => f.record()).toThrow();
+    expect(existsSync(join(f.worktree, ".local/merge-output.log"))).toBe(false);
+    expect(existsSync(f.worktree)).toBe(true);
+    expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    expect(f.git(["cat-file", "-t", lockRef])).toBe("blob");
+    expect(run.output).toContain("Waiting for GitHub mergeability to settle");
+    if (persistent) expect(run.output).toContain("stopped before intent/dispatch");
+    if (finalRead) expect(run.output).toContain("PR or main changed during observation");
+    if (fault === "known BLOCKED")
+      expect(run.output).toContain(
+        "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status",
+      );
+  });
+  it.each(["OPEN", "MERGED"])(
+    "reconciles retained %s with UNKNOWN projections without admission waiting",
+    (state) => {
+      const f = fixture();
+      f.save({ ...f.state(), mode: "unapplied" });
+      expect(f.run().status).toBe(1);
+      const before = f.git(["rev-parse", outcomeRef]);
+      const capture = readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8");
+      f.recover();
+      const landed = state === "MERGED" ? f.advance("after\n", "stable\n") : null;
+      f.save({
+        ...f.state(),
+        observationReads: 0,
+        pr: {
+          ...f.state().pr,
+          ...unknownProjection,
+          state,
+          mergeCommit: landed ? { oid: landed } : null,
+        },
+      });
+      const run = f.run();
+      expect(run.status, run.output).toBe(state === "MERGED" ? 0 : 1);
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().posts).toBe(0);
+      expect(f.state().settlementSleeps).toBe(0);
+      expect(f.state().observationReads).toBe(2);
+      expect(readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8")).toBe(capture);
+      expect(existsSync(f.worktree)).toBe(true);
+      if (landed) expect(f.record()).toMatchObject({ phase: "merged", landed });
+      else expect(f.git(["rev-parse", outcomeRef])).toBe(before);
+    },
+  );
   it.each([false, true])("confirms a real multi-commit rebase with queue=%s", (queue) => {
     const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
     const main = f.advance("before\n");
