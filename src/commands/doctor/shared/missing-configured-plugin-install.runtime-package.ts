@@ -68,7 +68,7 @@ export function resolveVersionBoundRuntimeNpmSpecForActivePackage(params: {
   return candidate.npmSpec;
 }
 
-function resolveInstalledRuntimePackageVersion(params: {
+function resolveActiveRuntimePackageVersion(params: {
   pluginId: string;
   snapshot: PluginMetadataSnapshot;
   record: PluginInstallRecord;
@@ -77,10 +77,10 @@ function resolveInstalledRuntimePackageVersion(params: {
     params.snapshot.byPluginId?.get(params.pluginId) ??
     params.snapshot.plugins.find((entry) => entry.id === params.pluginId);
   return normalizeOptionalLowercaseString(
-    params.record.resolvedVersion ??
-      params.record.version ??
-      plugin?.packageVersion ??
-      plugin?.version,
+    plugin?.packageVersion ??
+      plugin?.version ??
+      params.record.resolvedVersion ??
+      params.record.version,
   );
 }
 
@@ -245,7 +245,7 @@ export function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(pa
     ) {
       continue;
     }
-    const installedVersion = resolveInstalledRuntimePackageVersion({
+    const installedVersion = resolveActiveRuntimePackageVersion({
       pluginId: candidate.pluginId,
       snapshot: params.snapshot,
       record,
