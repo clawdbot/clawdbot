@@ -1,11 +1,23 @@
 // WhatsApp monitor inbox append behavior.
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  getAuthDir,
   installWebMonitorInboxUnitTestHooks,
   settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
+
+/** Seed the credential Baileys would have written for a session that already synced. */
+function writeSyncedCreds(accountSyncCounter: number) {
+  fs.writeFileSync(
+    path.join(getAuthDir(), "creds.json"),
+    JSON.stringify({ accountSyncCounter }),
+    "utf8",
+  );
+}
 
 function emitUpsert(
   sock: { ev: { emit: (event: string, payload: unknown) => void } },
@@ -233,5 +245,59 @@ describe("append upsert handling (#20952)", () => {
     } finally {
       dateNow.mockRestore();
     }
+  });
+
+  it("delivery coordinator answers an offline append after a cold start", async () => {
+    writeSyncedCreds(3);
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    emitUpsert(sock, {
+      id: "cold-start-inside",
+      body: "sent while the gateway was down",
+      remoteJid: "999@s.whatsapp.net",
+      type: "append",
+      timestamp: Math.floor(Date.now() / 1000) - 5 * 60,
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it("delivery coordinator drops a cold-start append past the catch-up ceiling", async () => {
+    writeSyncedCreds(3);
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    emitUpsert(sock, {
+      id: "cold-start-outside",
+      body: "older than the catch-up ceiling",
+      remoteJid: "999@s.whatsapp.net",
+      type: "append",
+      timestamp: Math.floor(Date.now() / 1000) - 25 * 60,
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    await listener.close();
+  });
+
+  it("delivery coordinator drops replayed history for a session awaiting its first sync", async () => {
+    writeSyncedCreds(0);
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    emitUpsert(sock, {
+      id: "first-link-history",
+      body: "predates the pairing",
+      remoteJid: "999@s.whatsapp.net",
+      type: "append",
+      timestamp: Math.floor(Date.now() / 1000) - 5 * 60,
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    await listener.close();
   });
 });
