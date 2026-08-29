@@ -30,7 +30,10 @@ import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
-import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import {
+  beginReplyOperationFinalization,
+  beginReplyOperationFinalizationWork,
+} from "./reply-run-finalization-lease.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -194,10 +197,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         reconcile: params.clearRecoveredAutoFallbackPrimaryProbe,
       },
       onAcceptedTerminal: () => {
-        params.commitTerminalOutcome();
-        return turn.replyOperation
-          ? beginReplyOperationFinalizationWork(turn.replyOperation, RUN_STALE_TAKEOVER_MS)
-          : undefined;
+        if (!turn.replyOperation) {
+          return undefined;
+        }
+        beginReplyOperationFinalization(turn.replyOperation);
+        return beginReplyOperationFinalizationWork(turn.replyOperation, RUN_STALE_TAKEOVER_MS);
       },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {

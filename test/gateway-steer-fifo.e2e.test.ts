@@ -815,7 +815,7 @@ function currentUserInput(request: ModelRequest | undefined): string {
 
 describe("Gateway steer FIFO", () => {
   it(
-    "rejects a late abort after the durable final reply while after-turn work settles",
+    "dedupes a late abort after the durable final reply while after-turn work settles",
     async () => {
       const fixture = await createGatewayFixture("final-reply-late-abort", {
         withAfterTurnGate: true,
@@ -875,8 +875,8 @@ describe("Gateway steer FIFO", () => {
         });
         expect(abort, redactedFixtureLogs(fixture.instance)).toEqual({
           ok: true,
-          aborted: false,
-          runIds: [],
+          aborted: true,
+          runIds: [first.runId],
         });
         emitProofTrace({ phase: "late-abort", ...abort });
 
@@ -896,7 +896,10 @@ describe("Gateway steer FIFO", () => {
           { runId: first.runId, timeoutMs: 30_000 },
           { timeoutMs: 35_000 },
         );
-        expect(terminal.status).toBe("ok");
+        // The abort is accepted for the still-active run; the persistence
+        // boundary deduplicates its already-committed reply while settlement
+        // reports the expected abort outcome.
+        expect(terminal.status).toBe("error");
         await waitForRunTerminal(fixture, first.runId);
 
         let finalHistory:
