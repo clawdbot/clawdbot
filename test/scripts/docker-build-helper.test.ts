@@ -6621,6 +6621,8 @@ done
   it("prepares pnpm workspace package fixtures without package dependencies", () => {
     const root = tempDirs.make("openclaw-update-channel-fixture-");
     mkdirSync(join(root, "patches"));
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist/build-info.json"), JSON.stringify({ version: "2026.5.6" }));
     writeFileSync(
       join(root, "package.json"),
       `${JSON.stringify({ name: "openclaw", version: "2026.5.6", scripts: {} }, null, 2)}\n`,

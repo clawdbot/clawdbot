@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import {
   renderCloudProfileMenuItems,
@@ -211,6 +212,12 @@ export function renderWhereChip(params: {
                 params.submitting,
               )}
               ${params.state.devices.map((device) => {
+                const capacity = workerCapacityPresentation({
+                  workerSlots: device.workerSlots,
+                  capabilities: device.capabilities,
+                  commands: device.invocableCommands,
+                  unavailable: !device.selectable,
+                });
                 return renderSessionMenuItem(
                   {
                     value: `device:${device.deviceId}`,
@@ -218,9 +225,12 @@ export function renderWhereChip(params: {
                     sub: device.subtitle,
                     icon: icons.monitor,
                     facts: device.facts,
+                    meter: capacity?.meter,
                     checked: params.deviceId === device.deviceId,
                     disabled: !device.selectable,
-                    title: device.disabledReason,
+                    title:
+                      [device.disabledReason, capacity?.title].filter(Boolean).join(" · ") ||
+                      undefined,
                     onSelect: () => params.onSelectDevice(device.deviceId),
                   },
                   params.submitting,

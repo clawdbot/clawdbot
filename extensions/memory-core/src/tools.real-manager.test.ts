@@ -1,11 +1,13 @@
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { describe, expect, it } from "vitest";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./memory/manager-index.test-support.js";
-import { createMemorySearchTool } from "./tools.js";
+import { createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
 
@@ -13,6 +15,10 @@ describe("memory_search real manager", () => {
   const fixture: ManagerIndexFixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
+  });
+
+  beforeEach(() => {
+    testing.resetMemorySearchToolCooldowns();
   });
 
   it("backfills visible sessions with one bounded query embedding", async () => {
@@ -104,5 +110,64 @@ describe("memory_search real manager", () => {
       withheldHits: 2,
       searchWindow: 4,
     });
+  });
+
+  it("preserves canonical-session migration recovery through cooldown", async () => {
+    const baseConfig = fixture.createConfig({
+      sources: ["sessions"],
+      sessionMemory: true,
+      minScore: 0,
+      vectorEnabled: false,
+    });
+    const cfg = {
+      ...baseConfig,
+      memory: { ...baseConfig.memory, citations: "off" },
+    } satisfies OpenClawConfig;
+    const initializedManager = await fixture.getFreshManager(cfg);
+    await initializedManager.sync({ reason: "test", force: true });
+    await initializedManager.close();
+    await closeAllMemorySearchManagers();
+
+    openOpenClawAgentDatabase({ agentId: "main" })
+      .db.prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        "Agent:Main:Main",
+        "legacy-session",
+        JSON.stringify({ sessionId: "legacy-session", updatedAt: 1 }),
+        1,
+      );
+    closeOpenClawAgentDatabasesForTest();
+
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+
+    const first = await tool.execute("migration-first", { query: "operator recovery" });
+    openOpenClawAgentDatabase({ agentId: "main" })
+      .db.prepare("DELETE FROM session_nodes WHERE session_key = ?")
+      .run("Agent:Main:Main");
+    closeOpenClawAgentDatabasesForTest();
+    const replay = await tool.execute("migration-replay", {
+      query: "different anti-cheat query",
+    });
+    const expected = {
+      unavailable: true,
+      error: expect.stringContaining("openclaw doctor --fix"),
+      warning:
+        "Memory search is unavailable because the session catalog requires canonical-key migration.",
+      action:
+        "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.",
+    };
+
+    expect(first.details).toMatchObject(expected);
+    expect(replay.details).toMatchObject(expected);
+    expect(fixture.provider.embedQueryCalls).toBe(0);
   });
 });

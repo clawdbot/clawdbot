@@ -500,6 +500,7 @@ vi.mock("../../agents/sandbox/context.js", async () => {
 });
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
+  SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
   stageSandboxMedia: vi.fn(
     async (params: {
       ctx: { media?: Array<{ path?: string; contentType?: string; workspaceDir?: string }> };
@@ -6623,16 +6624,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("passes already-managed oversized inbound PDFs through staging instead of rejecting", async () => {
-    // #90097: a managed inbound PDF above the sandbox staging cap is read
-    // host-side (media-understanding) rather than copied into the sandbox, so
-    // it must reach dispatch with its managed media path instead of a 4xx.
+  it("stages already-managed PDFs above the generic media-store limit", async () => {
+    // #90097: the sandbox staging ceiling is intentionally higher than the
+    // generic media-store limit, so a 6 MiB PDF should still land in the
+    // workspace rather than taking the oversized host-path fallback.
     await createReadyChatTranscript("openclaw-chat-send-managed-pdf-pass-through-");
     useChatTestModel("vision-model");
     setSavedMediaResults(["/home/user/.openclaw/media/inbound/huge.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/huge.pdf"];
     const { send } = createChatRequestFixture();
-    // 6MB PDF — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    // 6 MiB PDF — above MEDIA_MAX_BYTES (5 MiB) but below both the default
+    // 20 MiB parser cap and the 50 MiB sandbox staging cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("%PDF-1.4\n"), 0);
 
@@ -6647,13 +6650,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    // Reaches dispatch with the managed media path; not staged into the sandbox,
-    // so no workspace dir, and the media-store entry is kept (not cleaned up).
+    // Reaches dispatch through the same staged workspace path as other files.
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
-        path: "/home/user/.openclaw/media/inbound/huge.pdf",
+        path: "media/inbound/huge.pdf",
         contentType: "application/pdf",
-        workspaceDir: "/home/user/.openclaw/media/inbound",
+        workspaceDir: "/sandbox/workspace",
       },
     ]);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
@@ -6776,14 +6778,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
-    // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
-    // silently drops oversize files. Without a pre-check, a sandbox session
-    // accepting a 5-20MB non-image would fail staging and surface as a
-    // retryable 5xx UNAVAILABLE, misleading clients into retrying a
-    // deterministically broken request. Managed PDFs pass through (see above);
-    // other oversized non-image files must still be rejected.
+  it("stages non-image attachments above the generic media-store limit", async () => {
+    // Regression: Gateway used MEDIA_MAX_BYTES (5 MiB) as a pre-staging cap
+    // even though stageSandboxMedia accepts files up to 50 MiB.
     await createReadyChatTranscript("openclaw-chat-send-sandbox-oversize-");
     useChatTestModel("vision-model");
     setSavedMediaResults([
@@ -6791,8 +6788,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "application/octet-stream",
     ]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    const { respond, send } = createChatRequestFixture();
-    // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    mockState.stagedRelativePaths = ["media/inbound/huge.bin"];
+    const { send } = createChatRequestFixture();
+    // 6 MiB buffer — above MEDIA_MAX_BYTES but below the default 20 MiB parser
+    // cap and the canonical 50 MiB sandbox staging cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("OPENCLAW-BINARY\n"), 0);
     const oversizedPayload = oversized.toString("base64");
@@ -6806,20 +6805,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ],
       },
       expectBroadcast: false,
-      waitFor: "none",
     });
 
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = lastRespondCall(respond) ?? [];
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
-    // succeed, so the failure must be surfaced as a client-side rejection.
-    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(responseErrorMessage(error)).toMatch(/sandbox staging limit/i);
-    // Orphaned media-store entries are cleaned up before the 4xx surfaces.
-    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/huge.bin",
+        contentType: "application/octet-stream",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {

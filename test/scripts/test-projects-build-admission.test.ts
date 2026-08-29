@@ -37,9 +37,10 @@ const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 let originalArgv: string[];
 let originalExitCode: typeof process.exitCode;
 let terminal: ReturnType<typeof createDeferred<unknown>>;
+const testProjectsUrl = new URL("../../scripts/test-projects.mts", import.meta.url).href;
+let startCount = 0;
 
 beforeEach(() => {
-  vi.resetModules();
   commands.prepare.mockReset();
   commands.prepareE2e.mockReset();
   commands.reader.mockReset().mockImplementation(() => ({
@@ -287,7 +288,8 @@ syncBuiltinESMExports();\n`,
 
 async function start(args: string[]) {
   process.argv = [process.execPath, "scripts/test-projects.mts", ...args];
-  await import("../../scripts/test-projects.mts");
+  // Replay the command entry while retaining its immutable planner dependencies.
+  await import(`${testProjectsUrl}?case=${startCount++}`);
 }
 
 describe("test-projects build admission", () => {
