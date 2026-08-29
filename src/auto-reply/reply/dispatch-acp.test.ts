@@ -32,6 +32,7 @@ import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
+import { AcpTranscriptSessionFenceError } from "./dispatch-acp-transcript.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import {
@@ -1071,6 +1072,41 @@ describe("tryDispatchAcpReplyCore", () => {
     );
     expect(String(transcript.finalText)).toContain("partial answer");
     expect(String(transcript.finalText)).toContain("acp died after streaming");
+  });
+
+  it("keeps a delivered turn completed when transcript persistence fails operationally", async () => {
+    setReadyAcpResolution();
+    mockRoutedTextTurn("hello");
+    transcriptMocks.persistAcpDispatchTranscript.mockRejectedValueOnce(
+      new Error("ENOSPC: no space left on device"),
+    );
+    const recordProcessed = vi.fn();
+
+    await runDispatch({ bodyForAgent: "reply", recordProcessed });
+
+    // The reply was fully delivered; an operational persistence failure must
+    // not contradict that with a user-facing "turn failed" error outcome.
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
+    expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_dispatch" });
+  });
+
+  it("stays fail-visible when persistence hits a session identity fence", async () => {
+    setReadyAcpResolution();
+    mockRoutedTextTurn("hello");
+    transcriptMocks.persistAcpDispatchTranscript.mockRejectedValueOnce(
+      new AcpTranscriptSessionFenceError(
+        "ACP transcript session changed before the turn could be persisted.",
+      ),
+    );
+    const recordProcessed = vi.fn();
+
+    await runDispatch({ bodyForAgent: "reply", recordProcessed });
+
+    // Identity fences still surface: persisting would attach the turn to the
+    // wrong session, so the error outcome is the intended visibility.
+    expect(recordProcessed).toHaveBeenCalledWith("completed", {
+      reason: "acp_error:acp_turn_failed",
+    });
   });
 
   it("preserves an intentionally empty canonical agent prompt", async () => {

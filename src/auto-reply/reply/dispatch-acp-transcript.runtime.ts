@@ -8,6 +8,7 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { ReplyDispatchAssistantTranscript } from "../get-reply-options.types.js";
+import { AcpTranscriptSessionFenceError } from "./dispatch-acp-transcript.js";
 
 export async function persistAcpDispatchTranscript(params: {
   cfg: OpenClawConfig;
@@ -40,10 +41,12 @@ export async function persistAcpDispatchTranscript(params: {
   });
   const sessionId = sessionEntry?.sessionId;
   if (!sessionId) {
-    throw new Error(`unknown ACP session key: ${params.sessionKey}`);
+    throw new AcpTranscriptSessionFenceError(`unknown ACP session key: ${params.sessionKey}`);
   }
   if (params.expectedSessionId && sessionId !== params.expectedSessionId) {
-    throw new Error("ACP transcript session changed before the turn could be persisted.");
+    throw new AcpTranscriptSessionFenceError(
+      "ACP transcript session changed before the turn could be persisted.",
+    );
   }
 
   const result = await persistAcpTurnTranscript({
@@ -63,7 +66,9 @@ export async function persistAcpDispatchTranscript(params: {
     assistantIdempotencyKey: params.assistantIdempotencyKey,
   });
   if (result.kind === "session-rebound") {
-    throw new Error("ACP transcript session changed before the turn could be persisted.");
+    throw new AcpTranscriptSessionFenceError(
+      "ACP transcript session changed before the turn could be persisted.",
+    );
   }
   return result.assistantTranscript && params.assistantIdempotencyKey
     ? {

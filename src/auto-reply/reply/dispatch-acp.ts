@@ -71,6 +71,7 @@ import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
+import { AcpTranscriptSessionFenceError } from "./dispatch-acp-transcript.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -716,18 +717,32 @@ export async function tryDispatchAcpReplyCore(params: {
       return;
     }
     transcriptPersistenceAttempted = true;
-    const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
-    assistantTranscript = await persistAcpDispatchTranscript({
-      cfg: params.cfg,
-      sessionKey: canonicalSessionKey,
-      expectedSessionId: transcriptSessionId,
-      promptText: transcriptPromptText,
-      finalText,
-      meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
-      threadId: params.ctx.MessageThreadId,
-      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-      assistantIdempotencyKey: existingRunId,
-    });
+    try {
+      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+      assistantTranscript = await persistAcpDispatchTranscript({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
+        expectedSessionId: transcriptSessionId,
+        promptText: transcriptPromptText,
+        finalText,
+        meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
+        threadId: params.ctx.MessageThreadId,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+        assistantIdempotencyKey: existingRunId,
+      });
+    } catch (error) {
+      // Identity fences (rebound/missing session) stay fail-visible: persisting
+      // anyway would attach the turn to the wrong session. Operational failures
+      // must not turn an already-delivered turn into a user-facing "turn failed".
+      if (error instanceof AcpTranscriptSessionFenceError) {
+        throw error;
+      }
+      logVerbose(
+        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
+          error,
+        )}`,
+      );
+    }
   };
   let admittedRunContext: AdmittedRunContext | undefined;
   let nativeActionEvidenceRecorded = false;
