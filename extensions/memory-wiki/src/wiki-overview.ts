@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  loadMemoryWikiCompiledCache,
+  loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
   type MemoryWikiOverviewCluster,
   type MemoryWikiOverviewItem,
@@ -81,11 +81,7 @@ function compareOverviewItems(left: MemoryWikiOverviewItem, right: MemoryWikiOve
 export async function listMemoryWikiOverview(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiOverviewStatus> {
-  const snapshot = await loadMemoryWikiCompiledCache(config);
-  if (!snapshot?.dashboards) {
-    throw new Error('Memory Wiki has no compiled dashboard snapshot. Run "openclaw wiki compile".');
-  }
-  return snapshot.dashboards.overview;
+  return (await loadMemoryWikiCompiledDashboards(config)).overview;
 }
 
 export function projectMemoryWikiOverviewItem(

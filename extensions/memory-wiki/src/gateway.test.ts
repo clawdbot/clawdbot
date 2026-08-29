@@ -2,6 +2,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import { MemoryWikiDashboardUnavailableError } from "./compiled-cache.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -102,6 +103,14 @@ function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): 
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   return call?.[2];
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 const VAULT_BACKED_GATEWAY_CASES = [
@@ -302,7 +311,10 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+    });
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
       appConfig: undefined,
     });
@@ -329,7 +341,10 @@ describe("memory-wiki gateway methods", () => {
 
     await handler({ params: { agentId: "marketing" }, respond: vi.fn() });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig,
+    });
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, { appConfig });
   });
 
@@ -506,7 +521,10 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+    });
     expect(listMemoryWikiImportInsights).toHaveBeenCalledWith(config);
     expect(readRespondPayload(respond)).toEqual({
       sourceType: "chatgpt",
@@ -539,6 +557,71 @@ describe("memory-wiki gateway methods", () => {
       ],
     });
   });
+
+  it.each(["wiki.importInsights", "wiki.overview"])(
+    "%s responds without waiting for source sync",
+    async (method) => {
+      const { config } = await createVault({ prefix: "memory-wiki-gateway-background-" });
+      const { api, registerGatewayMethod } = createPluginApi();
+      const syncGate = deferred<Awaited<ReturnType<typeof syncMemoryWikiImportedSources>>>();
+      vi.mocked(syncMemoryWikiImportedSources).mockReturnValueOnce(syncGate.promise);
+
+      registerMemoryWikiGatewayMethods({ api, config });
+      const handler = findGatewayHandler(registerGatewayMethod, method);
+      if (!handler) {
+        throw new Error(`${method} handler missing`);
+      }
+      const respond = vi.fn();
+
+      await handler({ params: {}, respond });
+
+      expect(respond).toHaveBeenCalledOnce();
+      syncGate.resolve({
+        importedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        removedCount: 0,
+        artifactCount: 0,
+        workspaces: 0,
+        pagePaths: [],
+        indexesRefreshed: false,
+        indexUpdatedFiles: [],
+        indexRefreshReason: "no-import-changes",
+      });
+      await syncGate.promise;
+    },
+  );
+
+  it.each([
+    ["rebuilding", "UNAVAILABLE", true, 500],
+    ["compile-required", "INVALID_REQUEST", undefined, undefined],
+    ["failed", "UNAVAILABLE", undefined, undefined],
+  ] as const)(
+    "returns explicit %s dashboard availability",
+    async (state, code, retryable, retryAfterMs) => {
+      const { config } = await createVault({ prefix: "memory-wiki-gateway-state-" });
+      const { api, registerGatewayMethod } = createPluginApi();
+      vi.mocked(listMemoryWikiImportInsights).mockRejectedValueOnce(
+        new MemoryWikiDashboardUnavailableError(state, `dashboard ${state}`),
+      );
+
+      registerMemoryWikiGatewayMethods({ api, config });
+      const handler = findGatewayHandler(registerGatewayMethod, "wiki.importInsights");
+      if (!handler) {
+        throw new Error("wiki.importInsights handler missing");
+      }
+      const respond = vi.fn();
+
+      await handler({ params: {}, respond });
+
+      expect(readRespondError(respond)).toEqual({
+        code,
+        message: `dashboard ${state}`,
+        details: { state },
+        ...(retryable ? { retryable, retryAfterMs } : {}),
+      });
+    },
+  );
 
   it("returns the wiki overview over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
@@ -593,7 +676,10 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+    });
     expect(listMemoryWikiOverview).toHaveBeenCalledWith(config);
     expect(readRespondPayload(respond)).toEqual({
       totalItems: 1,

@@ -113,3 +113,11 @@ export async function syncMemoryWikiImportedSources(
     }
   }
 }
+
+export async function waitForMemoryWikiImportedSourceSyncs(): Promise<void> {
+  await Promise.allSettled(
+    [...activeImportedSourceSyncs.values()].flatMap((entries) =>
+      entries.map((entry) => entry.promise),
+    ),
+  );
+}

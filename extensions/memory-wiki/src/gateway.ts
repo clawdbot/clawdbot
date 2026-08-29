@@ -1,10 +1,15 @@
 // Memory Wiki plugin module implements gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
+import {
+  MemoryWikiDashboardUnavailableError,
+  setMemoryWikiDashboardState,
+} from "./compiled-cache.js";
 import {
   resolveMemoryWikiAgentConfig,
   WIKI_SEARCH_BACKENDS,
@@ -74,6 +79,22 @@ function readEnumParam<T extends string>(
 }
 
 function respondError(respond: GatewayRespond, error: unknown) {
+  if (error instanceof MemoryWikiDashboardUnavailableError) {
+    const retryable = error.state === "rebuilding";
+    respond(
+      false,
+      undefined,
+      errorShape(
+        error.state === "compile-required" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+        error.message,
+        {
+          details: { state: error.state },
+          ...(retryable ? { retryable: true, retryAfterMs: 500 } : {}),
+        },
+      ),
+    );
+    return;
+  }
   const message = formatErrorMessage(error);
   respond(false, undefined, { code: "internal_error", message });
 }
@@ -93,6 +114,16 @@ export function registerMemoryWikiGatewayMethods(params: {
   resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
 }) {
   const { api, config: baseConfig } = params;
+
+  const syncImportedSourcesInBackground = (
+    config: ResolvedMemoryWikiConfig,
+    appConfig?: OpenClawConfig,
+  ) => {
+    void syncMemoryWikiImportedSources({ config, appConfig }).catch((error: unknown) => {
+      setMemoryWikiDashboardState(config, { state: "failed" });
+      api.logger.warn(`memory-wiki: background source sync failed: ${formatErrorMessage(error)}`);
+    });
+  };
 
   const getAppConfig = () => {
     if (params.getAppConfig) {
@@ -166,7 +197,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        syncImportedSourcesInBackground(config, appConfig);
         respond(true, await listMemoryWikiImportInsights(config));
       } catch (error) {
         respondError(respond, error);
@@ -183,7 +214,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        syncImportedSourcesInBackground(config, appConfig);
         respond(true, await listMemoryWikiOverview(config));
       } catch (error) {
         respondError(respond, error);

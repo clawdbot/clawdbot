@@ -18,6 +18,7 @@ import {
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
   loadMemoryWikiCompiledCache,
+  readMemoryWikiDashboardState,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
   reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheGeneration,
@@ -108,6 +109,18 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
         text,
       },
     ],
+    dashboards: {
+      importInsights: { sourceType: "chatgpt", totalItems: 0, totalClusters: 0, clusters: [] },
+      overview: {
+        totalItems: 0,
+        totalPages: 0,
+        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
+        totalClaims: 0,
+        totalQuestions: 0,
+        totalContradictions: 0,
+        clusters: [],
+      },
+    },
   };
 }
 
@@ -217,17 +230,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await expect(preparePrompt(config)).resolves.toContain(
       "Alpha uses PostgreSQL for production writes.",
     );
-  });
-
-  it("keeps a version-2 prompt digest readable before dashboard cache refresh", async () => {
-    const { config } = await createPersistentVault({
-      initialize: true,
-      config: { context: { includeCompiledDigestPrompt: true } },
-    });
-    await publishSnapshot(config, snapshot("version-2 prompt claim"));
-
-    await expect(preparePrompt(config)).resolves.toContain("version-2 prompt claim");
-    expect((await loadMemoryWikiCompiledCache(config))?.dashboards).toBeUndefined();
   });
 
   it("bounds dashboard projections below the compiled-cache entry limit", () => {
@@ -627,7 +629,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it("treats transient SQLite read failures as a recoverable cache miss", async () => {
+  it("reports transient SQLite read failures as failed dashboard state", async () => {
     const { config } = await createPersistentVault({ initialize: true });
     const errors: unknown[] = [];
     let failNextRead = false;
@@ -654,7 +656,9 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await activateVault(config);
     failNextRead = true;
 
-    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({
+      state: "failed",
+    });
     expect(errors).toHaveLength(1);
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("recoverable");
   });

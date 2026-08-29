@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
-import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -115,7 +115,7 @@ describe("compileMemoryWikiVault", () => {
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
   });
 
-  it("refreshes only the compiled cache after changed imports when auto-compile is disabled", async () => {
+  it("keeps changed imports compile-required when auto-compile is disabled", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
       config: {
@@ -135,28 +135,24 @@ describe("compileMemoryWikiVault", () => {
         body: `# Cache only\n\n## Auto Digest\n- First user line: ${value}\n`,
       });
     await fs.writeFile(sourcePath, renderSource("before"), "utf8");
+    await compileMemoryWikiVault(config);
+    const snapshotBefore = await loadMemoryWikiCompiledCache(config);
     const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
 
-    const first = await refreshMemoryWikiIndexesAfterImport({
-      config,
-      syncResult: { importedCount: 1, updatedCount: 0, removedCount: 0 },
-    });
-    const firstSnapshot = await loadMemoryWikiCompiledCache(config);
-
     await fs.writeFile(sourcePath, renderSource("after"), "utf8");
-    const second = await refreshMemoryWikiIndexesAfterImport({
+    const refresh = await refreshMemoryWikiIndexesAfterImport({
       config,
       syncResult: { importedCount: 0, updatedCount: 1, removedCount: 0 },
     });
-    const secondSnapshot = await loadMemoryWikiCompiledCache(config);
+    const snapshotAfter = await loadMemoryWikiCompiledCache(config);
 
-    expect(first).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
-    expect(first.compile?.updatedFiles).toEqual([]);
-    expect(JSON.stringify(firstSnapshot?.dashboards)).toContain("before");
-    expect(second).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
-    expect(second.compile?.updatedFiles).toEqual([]);
-    expect(JSON.stringify(secondSnapshot?.dashboards)).toContain("after");
-    expect(JSON.stringify(secondSnapshot?.dashboards)).not.toContain("before");
+    expect(refresh).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
+    expect(JSON.stringify(snapshotBefore?.dashboards)).toContain("before");
+    expect(snapshotAfter).toEqual(snapshotBefore);
+    expect(JSON.stringify(snapshotAfter?.dashboards)).not.toContain("after");
+    await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
+      state: "compile-required",
+    });
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
   });
 

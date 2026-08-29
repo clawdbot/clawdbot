@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Memory Wiki plugin module implements import insights behavior.
 import {
-  loadMemoryWikiCompiledCache,
+  loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
   type MemoryWikiImportInsightCluster,
   type MemoryWikiImportInsightItem,
@@ -290,11 +290,7 @@ function capImportInsightItem(item: MemoryWikiImportInsightItem): MemoryWikiImpo
 export async function listMemoryWikiImportInsights(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiImportInsightsStatus> {
-  const snapshot = await loadMemoryWikiCompiledCache(config);
-  if (!snapshot?.dashboards) {
-    throw new Error('Memory Wiki has no compiled dashboard snapshot. Run "openclaw wiki compile".');
-  }
-  return snapshot.dashboards.importInsights;
+  return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
 }
 
 export function projectMemoryWikiImportInsight(

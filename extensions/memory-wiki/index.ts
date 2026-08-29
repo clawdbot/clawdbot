@@ -36,6 +36,7 @@ import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
 } from "./src/source-sync-state.js";
+import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,
@@ -154,6 +155,9 @@ export default definePluginEntry({
         }
         deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
         await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);
+      },
+      async stop() {
+        await waitForMemoryWikiImportedSourceSyncs();
       },
     });
 
