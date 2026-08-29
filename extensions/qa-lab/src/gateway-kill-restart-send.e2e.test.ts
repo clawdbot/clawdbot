@@ -168,7 +168,7 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
         { cause: error },
       );
     }
-    // Nominal runtime is ~130s; heavily loaded hosts stretch child boots and
-    // waits severalfold, so the budget leaves real headroom before flaking.
+    // Heavily loaded hosts stretch child boots and the pending checkpoint wait,
+    // so the budget leaves real headroom before flaking.
   }, 600_000);
 });

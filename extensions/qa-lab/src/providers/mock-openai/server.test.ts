@@ -6884,70 +6884,127 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
   });
 
+  const restartCheckpointTools = [
+    {
+      type: "function",
+      name: "exec",
+      parameters: {
+        type: "object",
+        properties: {
+          language: { type: "string" },
+          code: { type: "string" },
+          restartSafe: { type: "boolean" },
+        },
+        required: ["code"],
+      },
+    },
+    {
+      type: "function",
+      name: "wait",
+      parameters: {
+        type: "object",
+        properties: { runId: { type: "string" } },
+        required: ["runId"],
+      },
+    },
+  ];
+  const restartRecoveryPrompt =
+    "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+
+  async function expectRestartCheckpointExecution(
+    execArgs: Record<string, unknown>,
+    checkpoint: number,
+  ) {
+    expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+    expect(execArgs.code).toContain("qa_restart_wait");
+    expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
+    expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+    const started = createDeferred<void>();
+    const released = createDeferred<void>();
+    const calls: unknown[] = [];
+    const target = Object.assign(
+      (args: unknown) => {
+        calls.push(args);
+        started.resolve();
+        return released.promise;
+      },
+      { toolName: "qa_restart_wait" },
+    );
+    let yielded = false;
+    const execution: unknown = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
+      catalog: {
+        search: async (name: string) => {
+          expect(name).toBe("qa_restart_wait");
+          return [target];
+        },
+      },
+      yield_control: () => {
+        yielded = true;
+      },
+    });
+    try {
+      await started.promise;
+      expect(yielded).toBe(true);
+    } finally {
+      released.resolve();
+      await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
+    }
+    expect(calls).toEqual([{}]);
+  }
+
+  it("settles hard-kill recovery after one real checkpoint and resets from request history", async () => {
+    const server = await startMockServer();
+    const prompt = "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.";
+    const tools = [
+      ...restartCheckpointTools,
+      { type: "function", name: "qa_restart_unsafe_probe", parameters: { type: "object" } },
+    ];
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+    const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(execPayload)).toHaveLength(1);
+    const execCall = outputToolCall(execPayload, "exec");
+    const execArgs = outputToolArgsFromItem(execCall);
+    await expectRestartCheckpointExecution(execArgs, 1);
+
+    const runId = "kill-restart-checkpoint-1";
+    input.push(
+      execCall,
+      makeToolOutputWithCallId(
+        outputToolCallId(execCall, "kill-restart-exec"),
+        JSON.stringify({ status: "waiting", runId }),
+      ),
+    );
+    const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(waitPayload)).toHaveLength(1);
+    const waitCall = outputToolCall(waitPayload, "wait");
+    expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+    input.push(waitCall, makeUserInput(restartRecoveryPrompt));
+
+    const recovered = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(recovered).map((item) => item.type)).toEqual(["message"]);
+    expect(outputText(recovered)).toBe("KILL-RESTART-RECOVERED-OK");
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools,
+      input: [makeUserInput(prompt)],
+    });
+    expect(outputItems(freshPayload)).toHaveLength(1);
+    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec"))).toEqual(execArgs);
+  });
+
   it("derives three restart checkpoints from request history without server counters", async () => {
     const server = await startMockServer();
     const prompt =
       "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
-    const recoveryPrompt =
-      "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
-    const tools = [
-      {
-        type: "function",
-        name: "exec",
-        parameters: {
-          type: "object",
-          properties: {
-            language: { type: "string" },
-            code: { type: "string" },
-            restartSafe: { type: "boolean" },
-          },
-          required: ["code"],
-        },
-      },
-      {
-        type: "function",
-        name: "wait",
-        parameters: {
-          type: "object",
-          properties: { runId: { type: "string" } },
-          required: ["runId"],
-        },
-      },
-    ];
+    const tools = restartCheckpointTools;
     const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
 
     for (const checkpoint of [1, 2, 3]) {
       const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const execCall = outputToolCall(execPayload, "exec");
       const execArgs = outputToolArgsFromItem(execCall);
-      expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
-      expect(execArgs.code).toContain("qa_restart_wait");
-      expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
-      expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
-
-      const started = createDeferred<void>();
-      const released = createDeferred<void>();
-      let yielded = false;
-      const target = Object.assign(
-        () => {
-          started.resolve();
-          return released.promise;
-        },
-        { toolName: "qa_restart_wait" },
-      );
-      const execution = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
-        catalog: { search: async () => [target] },
-        yield_control: () => {
-          yielded = true;
-        },
-      }) as Promise<unknown>;
-      try {
-        await started.promise;
-        expect(yielded).toBe(true);
-      } finally {
-        released.resolve();
-        await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
-      }
+      await expectRestartCheckpointExecution(execArgs, checkpoint);
 
       const runId = `restart-checkpoint-${checkpoint}`;
       input.push(
@@ -6960,7 +7017,7 @@ Update and merge these partial structured summaries.`,
       const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const waitCall = outputToolCall(waitPayload, "wait");
       expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-      input.push(waitCall, makeUserInput(recoveryPrompt));
+      input.push(waitCall, makeUserInput(restartRecoveryPrompt));
     }
 
     const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
