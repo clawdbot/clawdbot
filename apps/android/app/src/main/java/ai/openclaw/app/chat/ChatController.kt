@@ -1073,6 +1073,8 @@ class ChatController internal constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    color: String? = null,
+    clearColor: Boolean = false,
     pinned: Boolean? = null,
     archived: Boolean? = null,
     unread: Boolean? = null,
@@ -1083,7 +1085,16 @@ class ChatController internal constructor(
       resolveAgentIdFromMainSessionKey(sessionKey)
         ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
-    val hasPatch = clearLabel || label != null || clearCategory || category != null || pinned != null || archived != null || unread != null
+    val hasPatch =
+      clearLabel ||
+        label != null ||
+        clearCategory ||
+        category != null ||
+        clearColor ||
+        color != null ||
+        pinned != null ||
+        archived != null ||
+        unread != null
     if (!hasPatch) return false
     val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
     if (archived != null && lifecycleSessionId == null) {
@@ -1105,6 +1116,11 @@ class ChatController internal constructor(
             put("category", JsonNull)
           } else if (category != null) {
             put("category", JsonPrimitive(category))
+          }
+          if (clearColor) {
+            put("color", JsonNull)
+          } else if (color != null) {
+            put("color", JsonPrimitive(color))
           }
           if (pinned != null) put("pinned", JsonPrimitive(pinned))
           if (archived != null) put("archived", JsonPrimitive(archived))
@@ -6883,6 +6899,13 @@ class ChatController internal constructor(
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
       category = obj["category"].asStringOrNull()?.trim(),
+      color =
+        obj["color"]
+          .asJsonStringOrNull()
+          ?.trim()
+          ?.lowercase()
+          ?.takeIf { it.isNotEmpty() },
+      hasColorMetadata = "color" in obj,
       pinned = obj["pinned"].asBooleanOrNull(),
       archived = obj["archived"].asBooleanOrNull(),
       unread = obj["unread"].asBooleanOrNull(),
@@ -7850,6 +7873,9 @@ internal fun mergeChatSessionEntry(
     displayName = next.displayName ?: existing.displayName,
     label = next.label ?: existing.label,
     category = next.category ?: existing.category,
+    // Omitted metadata preserves the tint; explicit null from another client clears it.
+    color = if (next.hasColorMetadata) next.color else existing.color,
+    hasColorMetadata = existing.hasColorMetadata || next.hasColorMetadata,
     pinned = next.pinned ?: existing.pinned,
     archived = next.archived ?: existing.archived,
     unread = next.unread ?: existing.unread,

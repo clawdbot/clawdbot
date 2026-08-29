@@ -323,7 +323,7 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun sessionRoundTripKeepsRunMetadata() =
+  fun sessionRoundTripKeepsRunMetadataAndColor() =
     runTest {
       saveSessions(
         sessions =
@@ -332,6 +332,7 @@ class RoomChatTranscriptCacheTest {
               key = "main",
               updatedAtMs = 20L,
               status = "done",
+              color = "cyan",
               startedAt = 1_000L,
               endedAt = 5_000L,
               runtimeMs = 4_000L,
@@ -348,6 +349,12 @@ class RoomChatTranscriptCacheTest {
       assertEquals(4_000L, loaded.runtimeMs)
       assertEquals(485L, loaded.outputTokens)
       assertTrue(loaded.hasRunMetadata)
+      assertEquals("cyan", loaded.color)
+
+      saveTranscript(messages = listOf(message("new reply")))
+      assertEquals("cyan", loadSessions().single().color)
+      saveSessions(listOf(loaded.copy(color = null, hasColorMetadata = true)))
+      assertEquals(null, loadSessions().single().color)
     }
 
   @Test

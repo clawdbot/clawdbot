@@ -42,7 +42,7 @@ class ClientDatabasesTest {
 
       withCleanDatabases(names, setOf("gateway-test")) { databases ->
         assertEquals(
-          2,
+          3,
           databases
             .gatewayCacheDatabase()
             .openHelper.writableDatabase.version,
