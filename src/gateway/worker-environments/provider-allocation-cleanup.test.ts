@@ -1,25 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import * as support from "./service.test-support.js";
-import { createWorkerEnvironmentStore } from "./store.js";
-
-async function reopenStore() {
-  await support.testState.service?.stop();
-  support.testState.service = undefined;
-  closeOpenClawStateDatabaseForTest();
-  support.testState.stateDb = openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: support.testState.root },
-  });
-  support.testState.store = createWorkerEnvironmentStore({
-    database: support.testState.stateDb,
-    now: () => support.testState.nowMs,
-  });
-}
 
 describe("worker allocation cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -115,7 +97,7 @@ describe("worker allocation cleanup", () => {
       // Cleanup must use the persisted profile even after the operator removes it.
       support.testState.config.cloudWorkers!.profiles = {};
       if (entrance === "restart") {
-        await reopenStore();
+        await support.reopenWorkerEnvironmentStore();
         service = support.createService(provider);
         await service.reconcileOnce();
       } else {
@@ -125,7 +107,7 @@ describe("worker allocation cleanup", () => {
       const terminal = expectDefined(service.get(pending.environmentId), "terminal environment");
       await expect(service.destroy(pending.environmentId)).resolves.toEqual(terminal);
       await service.reconcileOnce();
-      await reopenStore();
+      await support.reopenWorkerEnvironmentStore();
       service = support.createService(provider);
       await service.reconcileOnce();
       await expect(service.destroy(pending.environmentId)).resolves.toEqual(terminal);
@@ -183,7 +165,7 @@ describe("worker allocation cleanup", () => {
         terminalState,
         lastError: "allocation response lost",
       });
-      await reopenStore();
+      await support.reopenWorkerEnvironmentStore();
       await expect(
         support.createService(provider).destroy(pending.environmentId),
       ).rejects.toMatchObject({
@@ -195,7 +177,7 @@ describe("worker allocation cleanup", () => {
         leaseId,
         teardownTerminalState: terminalState,
       });
-      await reopenStore();
+      await support.reopenWorkerEnvironmentStore();
       await support.createService(provider).reconcileOnce();
       expect(provision).toHaveBeenCalledOnce();
       expect(resolveAllocation).toHaveBeenCalledExactlyOnceWith(

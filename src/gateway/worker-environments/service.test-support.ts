@@ -156,6 +156,19 @@ export function getDevelopmentProfile() {
   );
 }
 
+export async function reopenWorkerEnvironmentStore() {
+  await testState.service?.stop();
+  testState.service = undefined;
+  closeOpenClawStateDatabaseForTest();
+  testState.stateDb = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: testState.root },
+  });
+  testState.store = createWorkerEnvironmentStore({
+    database: testState.stateDb,
+    now: () => testState.nowMs,
+  });
+}
+
 export function createService(
   provider: WorkerProvider,
   serviceOptions: Partial<

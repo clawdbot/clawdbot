@@ -127,23 +127,15 @@ describe("node worker provider provisioning", () => {
         resolveAllocation: async () => ({ leaseId, sharedHost: false }),
         provision: async (_profile, operationId, options) => {
           operationIds.push(operationId);
-          if (operationIds.length === 1) {
-            const enrollment = await options?.beginNodeEnrollment?.();
-            if (enrollment?.mode !== "connect") {
-              throw new Error("expected pending enrollment");
-            }
-            bindCloudWorkerSetupCompletion({
-              db: support.testState.stateDb.db,
-              completion: { setupId: enrollment.setupId, deviceId, completedAtMs: 1_000 },
-            });
-            throw new Error("provider response was lost after node allocation");
+          const enrollment = await options?.beginNodeEnrollment?.();
+          if (enrollment?.mode !== "connect") {
+            throw new Error("expected pending enrollment");
           }
-          return {
-            leaseId,
-            node: { deviceId },
-            sharedHost: false,
-            desktop: support.DESKTOP,
-          };
+          bindCloudWorkerSetupCompletion({
+            db: support.testState.stateDb.db,
+            completion: { setupId: enrollment.setupId, deviceId, completedAtMs: 1_000 },
+          });
+          throw new Error("provider response was lost after node allocation");
         },
         destroy,
       }),

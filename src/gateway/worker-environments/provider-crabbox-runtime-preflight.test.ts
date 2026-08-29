@@ -7,12 +7,7 @@ import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
 import { resolvePluginModuleExport } from "../../plugins/loader-module-runtime.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import * as support from "./service.test-support.js";
-import { createWorkerEnvironmentStore } from "./store.js";
 
 const SETUP_ENV = "OPENCLAW_TEST_REPLAY_SETUP";
 const CLASSLESS_PROFILE = {
@@ -35,19 +30,6 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
     termination: "exit",
     ...overrides,
   };
-}
-
-async function reopenStore() {
-  await support.testState.service?.stop();
-  support.testState.service = undefined;
-  closeOpenClawStateDatabaseForTest();
-  support.testState.stateDb = openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: support.testState.root },
-  });
-  support.testState.store = createWorkerEnvironmentStore({
-    database: support.testState.stateDb,
-    now: () => support.testState.nowMs,
-  });
 }
 
 describe("Crabbox runtime preflight cleanup", () => {
@@ -112,7 +94,7 @@ describe("Crabbox runtime preflight cleanup", () => {
           throw new Error("legacy allocation must not invoke Crabbox");
         });
       const prepareNodeEnrollment = vi.fn();
-      await reopenStore();
+      await support.reopenWorkerEnvironmentStore();
       const provider = await registerProvider();
       const provision = vi.spyOn(provider, "provision");
       const resolveAllocation = vi.spyOn(provider, "resolveAllocation");
@@ -144,7 +126,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       );
       expect(provision).toHaveBeenCalledTimes(entrance === "restart reconciliation" ? 1 : 0);
 
-      await reopenStore();
+      await support.reopenWorkerEnvironmentStore();
       const restartedProvider = await registerProvider();
       const restartedProvision = vi.spyOn(restartedProvider, "provision");
       const restartedResolution = vi.spyOn(restartedProvider, "resolveAllocation");
@@ -254,7 +236,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     expect(original).toMatchObject({ state: "provisioning", leaseId: null });
     expect(live).toBe(true);
 
-    await reopenStore();
+    await support.reopenWorkerEnvironmentStore();
     changed = true;
     if (scenario.kind === "setup-env") {
       vi.stubEnv(SETUP_ENV, undefined);
@@ -286,7 +268,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     });
     expect(live).toBe(true);
 
-    await reopenStore();
+    await support.reopenWorkerEnvironmentStore();
     service = support.createService(await makeProvider(), { prepareNodeEnrollment });
     await service.reconcileOnce();
     expect(support.testState.store.get(original.environmentId)).toMatchObject({
