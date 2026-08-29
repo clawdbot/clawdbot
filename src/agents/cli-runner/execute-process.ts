@@ -18,7 +18,6 @@ import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import type { NodeClaudePlacement } from "./execution-target.js";
 import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -28,7 +27,7 @@ import {
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
 import { createCliOutputFailoverError } from "./output-error.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
 

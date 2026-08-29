@@ -389,9 +389,13 @@ describe("generic plugin-owned live session registry", () => {
 
     const node = buildPreparedCliRunContext({
       backend: { liveSession: "claude-stdio" },
-      sessionEntry: { sessionId: "node-session", updatedAt: 1, execHost: "node" },
+      sessionEntry: {
+        sessionId: "node-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-test",
+      },
     });
-    node.executionTarget = { kind: "node", placement: { nodeId: "node-test" } };
     expect(acceptsCliLiveSession(node)).toBe(false);
 
     eligible.executionTarget = { kind: "process" };
