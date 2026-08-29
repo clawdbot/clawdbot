@@ -9,7 +9,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { persistDevicePairingStoreState } from "./device-pairing-store.js";
+import { seedDevicePairingStoreState } from "./device-pairing-store.test-support.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
@@ -271,10 +271,9 @@ describe("push APNs registration store", () => {
       createdAtMs: 50,
       approvedAtMs: 300,
     };
-    persistDevicePairingStoreState(
+    seedDevicePairingStoreState(
       { pendingById: {}, pairedByDeviceId: { [nodeId]: pairedDevice } },
       baseDir,
-      "paired",
     );
     const generation = resolveNodePairingGeneration(pairedDevice);
     if (!generation) {
@@ -286,7 +285,7 @@ describe("push APNs registration store", () => {
       expectedPairingGeneration: generation.key,
       baseDir,
     });
-    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired", {
+    seedDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, {
       clearApnsNodeIds: [nodeId],
     });
     await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toBeNull();
@@ -308,10 +307,9 @@ describe("push APNs registration store", () => {
         approvedAtMs: 301,
       },
     };
-    persistDevicePairingStoreState(
+    seedDevicePairingStoreState(
       { pendingById: {}, pairedByDeviceId: { [nodeId]: replacementDevice } },
       baseDir,
-      "paired",
     );
     const replacementGeneration = resolveNodePairingGeneration(replacementDevice);
     if (!replacementGeneration) {

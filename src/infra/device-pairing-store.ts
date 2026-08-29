@@ -283,50 +283,12 @@ export function updatePairedDevicePresenceInTransaction<T>(
   });
 }
 
-function writeDevicePairingStoreTables(
-  db: DatabaseSync,
-  state: DevicePairingStoreState,
-  target: DevicePairingStoreTarget,
-  options?: DevicePairingStorePersistOptions,
-): void {
-  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-  if (target !== "paired") {
-    executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
-    const rows = Object.values(state.pendingById).map(toPendingRow);
-    if (rows.length > 0) {
-      executeSqliteQuerySync(db, kysely.insertInto("device_pairing_pending").values(rows));
-    }
-  }
-  if (target !== "pending") {
-    executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_paired"));
-    const rows = Object.values(state.pairedByDeviceId).map(toPairedRow);
-    if (rows.length > 0) {
-      executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(rows));
-    }
-  }
-  for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
-    clearApnsRegistrationFromDatabase(db, nodeId);
-  }
-}
-
-/** Replace the pending and/or paired table contents with the given snapshot. */
-export function persistDevicePairingStoreState(
-  state: DevicePairingStoreState,
-  baseDir: string | undefined,
-  target: DevicePairingStoreTarget,
-  options?: DevicePairingStorePersistOptions,
-): void {
-  runDevicePairingStoreMutation(baseDir, ({ db }) => {
-    writeDevicePairingStoreTables(db, state, target, options);
-    return { mutated: true, value: undefined };
-  });
-}
-
 export function mutateDevicePairingStoreStateInTransaction<T>(
   baseDir: string | undefined,
   mutate: (state: DevicePairingStoreState, persist: DevicePairingStorePersist) => T,
 ): T {
   return runDevicePairingStoreMutation(baseDir, ({ db }) => {
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
     const state = readDevicePairingStoreStateFromDatabase(db);
     let requested: { target: DevicePairingStoreTarget; clearApnsNodeIds: string[] } | undefined;
     const persist: DevicePairingStorePersist = (target, options) => {
@@ -342,9 +304,23 @@ export function mutateDevicePairingStoreStateInTransaction<T>(
     if (!requested) {
       return { mutated: false, value };
     }
-    writeDevicePairingStoreTables(db, state, requested.target, {
-      clearApnsNodeIds: requested.clearApnsNodeIds,
-    });
+    if (requested.target !== "paired") {
+      executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
+      const rows = Object.values(state.pendingById).map(toPendingRow);
+      if (rows.length > 0) {
+        executeSqliteQuerySync(db, kysely.insertInto("device_pairing_pending").values(rows));
+      }
+    }
+    if (requested.target !== "pending") {
+      executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_paired"));
+      const rows = Object.values(state.pairedByDeviceId).map(toPairedRow);
+      if (rows.length > 0) {
+        executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(rows));
+      }
+    }
+    for (const nodeId of new Set(requested.clearApnsNodeIds)) {
+      clearApnsRegistrationFromDatabase(db, nodeId);
+    }
     return { mutated: true, value };
   });
 }

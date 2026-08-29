@@ -16,10 +16,10 @@ import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pa
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
-  loadDevicePairingStoreState,
+  mutateDevicePairingStoreStateInTransaction,
   persistDeviceBootstrapTokenRecords,
-  persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
+import { seedDevicePairingStoreState } from "./device-pairing-store.test-support.js";
 import {
   ensureDeviceToken,
   revokeDeviceToken,
@@ -180,10 +180,11 @@ function mutatePendingRequest(
   requestId: string,
   mutate: (pending: { ts: number; refreshedAtMs?: number; scopes?: string[] }) => void,
 ) {
-  const state = loadDevicePairingStoreState(baseDir);
-  const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
-  mutate(pending);
-  persistDevicePairingStoreState(state, baseDir, "pending");
+  mutateDevicePairingStoreStateInTransaction(baseDir, (state, persist) => {
+    const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
+    mutate(pending);
+    persist("pending");
+  });
 }
 
 async function clearPairedOperatorApprovalBaseline(baseDir: string) {
@@ -209,7 +210,7 @@ describe("device pairing tokens", () => {
   });
 
   beforeEach(() => {
-    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, suiteBaseDir, "both");
+    seedDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, suiteBaseDir);
     persistDeviceBootstrapTokenRecords({}, suiteBaseDir);
   });
 

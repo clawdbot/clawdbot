@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDevicePairSetupCompletion } from "../infra/device-bootstrap.js";
-import {
-  persistDeviceBootstrapTokenRecords,
-  persistDevicePairingStoreState,
-} from "../infra/device-pairing-store.js";
+import { persistDeviceBootstrapTokenRecords } from "../infra/device-pairing-store.js";
+import { seedDevicePairingStoreState } from "../infra/device-pairing-store.test-support.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -43,10 +41,9 @@ describe("device pair setup completion", () => {
       createdAtMs: 1,
       approvedAtMs: 2,
     };
-    persistDevicePairingStoreState(
+    seedDevicePairingStoreState(
       { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
       baseDir,
-      "paired",
     );
     persistDeviceBootstrapTokenRecords(
       {
