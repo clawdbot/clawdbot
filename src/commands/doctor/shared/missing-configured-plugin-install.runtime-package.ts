@@ -89,7 +89,7 @@ function resolveOpenClawCompanionReleaseBase(version: string): string | undefine
   return OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(cohortVersion)?.[1];
 }
 
-export function versionBoundRuntimePackageVersionMatchesReleaseCohort(params: {
+function versionBoundRuntimePackageVersionMatchesReleaseCohort(params: {
   version: string | undefined;
   currentVersion: string;
   updateChannel: UpdateChannel;
