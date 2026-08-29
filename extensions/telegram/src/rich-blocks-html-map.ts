@@ -538,7 +538,45 @@ type TelegramHtmlIsland = {
   start: number;
   end: number;
   blocks: InputRichBlock[];
+  detailsBodyRanges?: Array<{ start: number; end: number }>;
 };
+
+function findDetailsBodyRanges(
+  text: string,
+  contentStart: number,
+  contentEnd: number,
+): Array<{ start: number; end: number }> {
+  const content = text.slice(contentStart, contentEnd);
+  const tags = [...tokenizeHtmlTags(content)];
+  const summaryIndex = tags.findIndex((tag) => !tag.closing && tag.name === "summary");
+  const summary = summaryIndex >= 0 ? tags[summaryIndex] : undefined;
+  if (!summary || summary.selfClosing || VOID_TAGS.has(summary.name)) {
+    return [{ start: contentStart, end: contentEnd }];
+  }
+  let depth = 1;
+  for (let index = summaryIndex + 1; index < tags.length; index += 1) {
+    const tag = tags[index];
+    if (!tag || tag.name !== "summary") {
+      continue;
+    }
+    if (tag.closing) {
+      depth -= 1;
+    } else if (!tag.selfClosing) {
+      depth += 1;
+    }
+    if (depth === 0) {
+      const ranges: Array<{ start: number; end: number }> = [];
+      if (summary.start > 0) {
+        ranges.push({ start: contentStart, end: contentStart + summary.start });
+      }
+      if (tag.end < content.length) {
+        ranges.push({ start: contentStart + tag.end, end: contentEnd });
+      }
+      return ranges;
+    }
+  }
+  return [{ start: contentStart, end: contentEnd }];
+}
 
 /**
  * Find supported block islands inside a text range. Returns non-overlapping
@@ -630,7 +668,14 @@ export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
     }
     const blocks = htmlNodesToBlocks(parseHtmlFragment(text.slice(tag.start, end)));
     if (blocks.length > 0) {
-      islands.push({ start: tag.start, end, blocks });
+      islands.push({
+        start: tag.start,
+        end,
+        blocks,
+        ...(tag.name === "details"
+          ? { detailsBodyRanges: findDetailsBodyRanges(text, contentStart, contentEnd) }
+          : {}),
+      });
     }
     index += 1;
   }

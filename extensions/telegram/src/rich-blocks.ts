@@ -50,7 +50,17 @@ const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;
 
 type InlineStyleKind = "bold" | "italic" | "strikethrough" | "code" | "spoiler";
 
+type StructuralRange = { start: number; end: number };
+type DetailsRichBlock = Extract<InputRichBlock, { type: "details" }>;
+
 type StructuralSegment =
+  | {
+      kind: "details";
+      start: number;
+      end: number;
+      bodyRanges: readonly StructuralRange[];
+      block: DetailsRichBlock;
+    }
   | { kind: "heading"; start: number; end: number; size: 1 | 2 | 3 | 4 | 5 | 6 }
   | { kind: "code_block"; start: number; end: number; language?: string }
   | { kind: "blockquote"; start: number; end: number }
@@ -394,16 +404,48 @@ function collectStructuralSegments(
 ): StructuralSegment[] {
   const segments: StructuralSegment[] = [];
   const htmlIslands = findAuthoredHtmlIslands(ir, 0, ir.text.length);
+  const detailsIslands = htmlIslands.filter(
+    (island): island is typeof island & { detailsBodyRanges: StructuralRange[] } =>
+      island.blocks.length === 1 &&
+      island.blocks[0]?.type === "details" &&
+      island.detailsBodyRanges !== undefined,
+  );
+  const isInsideHtmlIsland = (start: number, end: number) =>
+    htmlIslands.some((island) => start >= island.start && end <= island.end);
+  const isInsideDetailsIsland = (start: number, end: number) =>
+    detailsIslands.some((island) => start >= island.start && end <= island.end);
+  const isUnownedHtmlChild = (start: number, end: number) =>
+    isInsideHtmlIsland(start, end) && !isInsideDetailsIsland(start, end);
+
+  for (const island of detailsIslands) {
+    const block = island.blocks[0];
+    if (block?.type !== "details") {
+      continue;
+    }
+    segments.push({
+      kind: "details",
+      start: island.start,
+      end: island.end,
+      bodyRanges: island.detailsBodyRanges,
+      block,
+    });
+  }
   for (const span of ir.styles) {
     if (span.end <= span.start) {
       continue;
     }
     const headingSize = resolveHeadingSize(span.style);
     if (headingSize) {
+      if (isUnownedHtmlChild(span.start, span.end)) {
+        continue;
+      }
       segments.push({ kind: "heading", start: span.start, end: span.end, size: headingSize });
       continue;
     }
     if (span.style === "code_block") {
+      if (isUnownedHtmlChild(span.start, span.end)) {
+        continue;
+      }
       segments.push({
         kind: "code_block",
         start: span.start,
@@ -413,15 +455,21 @@ function collectStructuralSegments(
       continue;
     }
     if (span.style === "blockquote") {
+      if (isUnownedHtmlChild(span.start, span.end)) {
+        continue;
+      }
       segments.push({ kind: "blockquote", start: span.start, end: span.end });
     }
   }
   for (const table of tables) {
     const offset = Math.max(0, Math.min(table.placeholderOffset, ir.text.length));
+    if (isUnownedHtmlChild(offset, offset)) {
+      continue;
+    }
     segments.push({ kind: "table", start: offset, end: offset, table });
   }
   for (const source of collectMarkdownRichListSources(ir)) {
-    if (htmlIslands.some((island) => source.start >= island.start && source.end <= island.end)) {
+    if (isInsideHtmlIsland(source.start, source.end)) {
       continue;
     }
     segments.push({ kind: "list", start: source.start, end: source.end, source });
@@ -429,7 +477,13 @@ function collectStructuralSegments(
   // Containers sort before their children (start asc, end desc) so emitSegments
   // can consume contained segments recursively instead of double-emitting them.
   const containerRank = (segment: StructuralSegment) =>
-    segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
+    segment.kind === "details"
+      ? -1
+      : segment.kind === "blockquote"
+        ? 0
+        : segment.kind === "list"
+          ? 1
+          : 2;
   return segments.toSorted(
     (left, right) =>
       left.start - right.start ||
@@ -464,6 +518,22 @@ function emitSegments(
     }
     const children = segments.slice(index + 1, next);
     switch (segment.kind) {
+      case "details": {
+        const nested = segment.bodyRanges.flatMap((range) =>
+          emitSegments(
+            ir,
+            children.filter((child) => child.start >= range.start && child.end <= range.end),
+            range.start,
+            range.end,
+            degradationReasons,
+          ),
+        );
+        blocks.push({
+          ...segment.block,
+          blocks: nested.length > 0 ? nested : [{ type: "paragraph", text: "" }],
+        });
+        break;
+      }
       case "heading": {
         const text = irRangeToRichText(ir, segment.start, segment.end);
         if (text !== "") {

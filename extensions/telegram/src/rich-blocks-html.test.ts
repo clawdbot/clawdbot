@@ -48,6 +48,21 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain("<details>");
   });
 
+  it.each([
+    ["headings", "# Steps", "heading"],
+    ["fenced code", "```bash\nopenclaw doctor\n```", "pre"],
+    ["blockquotes", "> quoted output", "blockquote"],
+    ["tables", "| item | done |\n| --- | --- |\n| lint | yes |", "table"],
+  ])("keeps Markdown %s inside <details> islands", (_label, body, type) => {
+    const block = single(`<details><summary>Content</summary>\n\n${body}\n\n</details>`);
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toContain(type);
+    expect(JSON.stringify(block)).not.toContain("<details>");
+  });
+
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',
