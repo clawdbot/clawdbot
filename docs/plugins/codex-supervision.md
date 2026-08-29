@@ -124,6 +124,12 @@ honored for that stdio process. If the Mac config selects `"unix"`,
 capability or command, and a stale direct invocation fails instead of exposing
 the user Codex home or spawning a different local stdio App Server.
 
+The optional `agentId` in native Mac catalog list/read requests identifies the
+Gateway's OpenClaw route owner. It cannot select an agent-specific Codex home;
+the native catalog remains user-home stdio only. Headless node catalog requests
+still resolve `agentId` against that node's configured agents and use the selected
+agent's configured catalog source. This does not map agent IDs between computers.
+
 A newly advertised node command changes the node's approved command surface.
 Approve the update from the Gateway host:
 

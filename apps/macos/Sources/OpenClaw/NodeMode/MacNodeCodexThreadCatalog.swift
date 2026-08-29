@@ -979,23 +979,24 @@ extension MacNodeCodexThreadCatalog {
             .standardizedFileURL
     }
 
-    private static func decodeParams(_ paramsJSON: String?) throws -> ListParams {
+    private static func decodeRequestObject(_ paramsJSON: String?) throws -> [String: Any] {
         guard let paramsJSON, !paramsJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return ListParams()
+            return [:]
         }
-        guard let data = paramsJSON.data(using: .utf8) else {
-            throw CatalogError.invalidParams("parameters must be valid JSON")
+        guard let data = paramsJSON.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw CatalogError.invalidParams("parameters must be a valid JSON object")
         }
-        let raw: Any
-        do {
-            raw = try JSONSerialization.jsonObject(with: data)
-        } catch {
-            throw CatalogError.invalidParams("parameters must be valid JSON")
-        }
-        guard let raw = raw as? [String: Any] else {
-            throw CatalogError.invalidParams("parameters must be an object")
-        }
-        let allowed = Set(["cursor", "limit", "searchTerm", "cwd"])
+        // Native discovery stays in the node user's Codex home. The Gateway's
+        // route owner is context, never an agent-home selector or native RPC field.
+        _ = try self.optionalString(raw, key: "agentId", maxLength: self.maxSessionIdLength)
+        return raw
+    }
+
+    private static func decodeParams(_ paramsJSON: String?) throws -> ListParams {
+        let raw = try self.decodeRequestObject(paramsJSON)
+        let allowed = Set(["agentId", "cursor", "limit", "searchTerm", "cwd"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
             throw CatalogError.invalidParams("unknown Codex session catalog parameter: \(unknown)")
         }
@@ -1021,13 +1022,8 @@ extension MacNodeCodexThreadCatalog {
     }
 
     private static func decodeTurnParams(_ paramsJSON: String?) throws -> TurnParams {
-        guard let paramsJSON,
-              let data = paramsJSON.data(using: .utf8),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            throw CatalogError.invalidParams("parameters must be a valid JSON object")
-        }
-        let allowed = Set(["threadId", "cursor", "limit"])
+        let raw = try self.decodeRequestObject(paramsJSON)
+        let allowed = Set(["agentId", "threadId", "cursor", "limit"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
             throw CatalogError.invalidParams("unknown Codex transcript parameter: \(unknown)")
         }
