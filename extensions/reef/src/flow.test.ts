@@ -160,7 +160,7 @@ describe("ReefMessageFlow inbound", () => {
     expect(classifier.classify).toHaveBeenCalledTimes(2);
     // One durable read observation for the whole park lifecycle — a 30s
     // re-poll cadence must not fill the audit chain with retries.
-    const readEvents = (await audit.entries()).filter((entry) => entry.event.type === "read");
+    const readEvents = (await audit.entries()).filter((row) => row.event.type === "read");
     expect(readEvents).toHaveLength(1);
   });
 
