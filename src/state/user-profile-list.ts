@@ -1,12 +1,16 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { readUserProfileVersion } from "./user-profile-events.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   selectResolvedUserProfileById,
@@ -102,17 +106,43 @@ type UserProfileDisplay = {
   hasAvatar: boolean;
 };
 
+// Profile writers publish a version after commit; handle replacement drops the whole snapshot.
+// Bound callers per handle so lists and broadcasts share facts without retaining past users forever.
+const profileAliasSnapshots = new WeakMap<
+  DatabaseSync,
+  {
+    version: number;
+    callers: Map<string, ReadonlySet<string>>;
+  }
+>();
+
 /** Existing one-hop aliases are identity facts; this read never creates profile storage. */
 export function readUserProfileAliases(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): ReadonlySet<string> {
-  return (
+  const opened = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
+    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
+  );
+  const version = readUserProfileVersion();
+  let snapshot =
+    opened && !opened.db.isTransaction ? profileAliasSnapshots.get(opened.db) : undefined;
+  if (snapshot?.version !== version) {
+    snapshot = undefined;
+  }
+  const cached = snapshot?.callers.get(profileId);
+  if (cached) {
+    return cached;
+  }
+  const aliases =
     withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
       if (!tableExists(db, "user_profiles")) {
         return new Set([profileId]);
       }
-      const canonicalId = selectResolvedUserProfileById(db, profileId)?.id ?? profileId;
+      const canonicalId = selectResolvedUserProfileById(db, profileId)?.id;
+      if (!canonicalId) {
+        return new Set([profileId]);
+      }
       return new Set([
         profileId,
         ...executeSqliteQuerySync(
@@ -125,8 +155,19 @@ export function readUserProfileAliases(
             ),
         ).rows.map((row) => row.id),
       ]);
-    }, options) ?? new Set([profileId])
-  );
+    }, options) ?? new Set([profileId]);
+  if (opened && !opened.db.isTransaction) {
+    snapshot ??= { version, callers: new Map() };
+    snapshot.callers.set(profileId, aliases);
+    if (snapshot.callers.size > 128) {
+      const oldest = snapshot.callers.keys().next().value;
+      if (oldest !== undefined) {
+        snapshot.callers.delete(oldest);
+      }
+    }
+    profileAliasSnapshots.set(opened.db, snapshot);
+  }
+  return aliases;
 }
 
 export function getUserProfileDisplay(

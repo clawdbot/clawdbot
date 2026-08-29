@@ -582,7 +582,7 @@ describe("POST /tools/invoke", () => {
         sessionId: "sysauth-primary-session",
         updatedAt: 1,
         visibility: "shared" as const,
-        createdActor: { type: "human" as const, id: owner.id },
+        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       sessionEntries.set(sessionKey, entry);
@@ -627,7 +627,7 @@ describe("POST /tools/invoke", () => {
         sessionId: "foreign-session",
         updatedAt: 1,
         visibility: "shared" as const,
-        createdActor: { type: "human" as const, id: owner.id },
+        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey: foreignKey }, entry);
       sessionEntries.set(foreignKey, entry);
@@ -683,7 +683,7 @@ describe("POST /tools/invoke", () => {
         sessionId: "foreign-primary-session",
         updatedAt: 1,
         visibility: "shared" as const,
-        createdActor: { type: "human" as const, id: owner.id },
+        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       sessionEntries.set(sessionKey, entry);
@@ -1285,7 +1285,7 @@ describe("POST /tools/invoke", () => {
         sessionId: "shared-secret-owner-session",
         updatedAt: 1,
         visibility: "shared" as const,
-        createdActor: { type: "human" as const, id: owner.id },
+        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       sessionEntries.set(sessionKey, entry);

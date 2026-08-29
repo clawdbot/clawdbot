@@ -146,7 +146,7 @@ async function invokeSessionsList({
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      readPreparedGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
       ...context,
     } as never,
   });
@@ -417,14 +417,16 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const { respond } = await invokeSessionsList({
     requestId: "req-sessions-list-thinking-default",
     context: {
-      readPreparedGatewayModelCatalog: async () => [
-        {
-          provider: "test-provider",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-        },
-      ],
+      readPreparedGatewayModelCatalog: async () => ({
+        entries: [
+          {
+            provider: "test-provider",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: true,
+          },
+        ],
+      }),
     },
   });
 

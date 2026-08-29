@@ -158,10 +158,13 @@ merge_verify() {
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false || return 1
 
-  require_artifact .local/prep.env
+  require_artifact .local/prep.env || return 1
+  require_artifact .local/gates.env || return 1
   # shellcheck disable=SC1091
-  source .local/prep.env
-  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
+  source .local/gates.env || return 1
+  # shellcheck disable=SC1091
+  source .local/prep.env || return 1
+  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" || return 1
 
   local json
   json=$(gh_plain pr view "$pr" --json state,isDraft,headRefOid) || return 1
@@ -190,11 +193,18 @@ merge_verify() {
     exit 1
   fi
 
-  mark_pr_operation_side_effects_started
-  # Wait only for the attached CI workflow here. The direct required-check
-  # query below remains the merge authority, so optional contexts cannot stall it.
-  node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
-    --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
+  mark_pr_operation_side_effects_started || return 1
+  if [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
+    # The stamp selects the owner, not proof. Revalidate before skipping the
+    # PR-only watcher, which cannot observe accepted hosted release gates.
+    derive_prepare_gate_change_plan "$PREP_HEAD_SHA" || return 1
+    run_hosted_prepare_gates "$pr" "$PREP_HEAD_SHA" "$PREPARE_GATE_CHANGELOG_ONLY" || return 1
+  else
+    # Local/Crabbox preparation retains the attached-CI wait. Required checks
+    # below remain merge authority; optional contexts cannot stall this path.
+    node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
+      --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
+  fi
   local checks_json
   local checks_err_file
   local checks_exit_status
@@ -223,21 +233,26 @@ merge_verify() {
     esac
   fi
   rm -f "$checks_err_file"
-  if ! printf '%s\n' "$checks_json" | jq -e 'type == "array"' >/dev/null; then
+  # merge_run calls this function in an OR-list, disabling Bash errexit.
+  # Validate every row so malformed evidence cannot fall through as green.
+  if ! printf '%s\n' "$checks_json" | jq -e '
+    type == "array" and all(.[]; type == "object" and
+      (.bucket | IN("pass", "fail", "pending", "skipping", "cancel")))
+  ' >/dev/null; then
     echo "Merge verify failed: GitHub returned invalid required-check evidence." >&2
     return 1
   fi
   local required_count
-  required_count=$(printf '%s\n' "$checks_json" | jq 'length')
+  required_count=$(printf '%s\n' "$checks_json" | jq 'length') || return 1
   if [ "$required_count" -eq 0 ]; then
     echo "No required checks configured for this PR."
   fi
-  printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"'
+  printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"' || return 1
 
   local failed_required
-  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail" or .bucket=="skipping")] | length')
+  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket!="pass" and .bucket!="pending")] | length') || return 1
   local pending_required
-  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length')
+  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
 
   if [ "$pending_required" -gt 0 ]; then
     echo "Required checks are still pending."
@@ -255,7 +270,7 @@ merge_verify() {
   fi
 
   refresh_main_snapshot || return 1
-  git fetch origin "pull/$pr/head:pr-$pr" --force
+  git fetch origin "pull/$pr/head:pr-$pr" --force || return 1
   if ! git merge-base --is-ancestor "$PR_MAIN_SHA" "refs/heads/pr-$pr"; then
     echo "PR branch is behind main."
     if mainline_drift_requires_sync \
@@ -377,7 +392,7 @@ merge_run() {
 
   validate_review_artifact_data || return 1
   require_ready_review_recommendation || return 1
-  merge_verify "$pr"
+  merge_verify "$pr" || return 1
   # shellcheck disable=SC1091
   source .local/prep.env
 
@@ -425,15 +440,40 @@ merge_run() {
   fi
 
   local crabbox_final_main_sha="" route=immediate
-  merge_outcome_observe "$pr" || return 1
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
-    .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
-    .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
-    .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
-  ' >/dev/null; then
-    merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
-    return 1
-  fi
+  local admission_attempt previous_observation=""
+  # Only fresh admission waits for calculation; retained intent reconciles immediately.
+  # Pin all other facts and each projection as soon as it becomes known.
+  for admission_attempt in 1 2 3; do
+    merge_outcome_observe "$pr" || return 1
+    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" '
+      .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
+      .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
+      .pr.autoMergeRequest == null and .pr.isInMergeQueue == false
+    ' >/dev/null; then
+      merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
+      return 1
+    fi
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+      del(.pr.mergeable,.pr.mergeStateStatus) == ($previous | del(.pr.mergeable,.pr.mergeStateStatus)) and
+      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+    ' >/dev/null; then
+      merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
+      return 1
+    fi
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
+      break
+    fi
+    if [ "$admission_attempt" -eq 3 ]; then
+      merge_outcome_stop "mergeability remained UNKNOWN after 3 observations; stopped before intent/dispatch"
+      return 1
+    fi
+    if [ "$admission_attempt" -eq 1 ]; then
+      echo "Waiting for GitHub mergeability to settle (up to 3 observations, waiting 1 then 2 seconds for UNKNOWN samples)."
+    fi
+    previous_observation="$MERGE_OBSERVATION"
+    sleep "$admission_attempt"
+  done
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
     route="admin"
     merge_args=(--admin "${merge_args[@]}")
@@ -453,6 +493,15 @@ merge_run() {
         ;;
       *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
     esac
+  fi
+  # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
+  # Reject known client-side refusals before recording non-retryable intent.
+  if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
+    .pr | .isMergeQueueEnabled == false and
+    (.mergeStateStatus == "DIRTY" or ($route == "immediate" and (.mergeStateStatus | IN("BLOCKED", "BEHIND"))))
+  ' >/dev/null; then
+    merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
+    return 1
   fi
   local observed_main candidate_tree
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)

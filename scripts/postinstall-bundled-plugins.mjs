@@ -17,8 +17,6 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
-
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
@@ -506,23 +504,6 @@ export function pruneInstalledPackageDist(params = {}) {
     }
   }
   const installedFiles = listInstalledDistFiles(distScanParams);
-  const readFile = params.readFileSync ?? readFileSync;
-  expectedFiles = new Set(
-    expandPackageDistImportClosure({
-      files: installedFiles,
-      seedFiles: [...expectedFiles],
-      readText(relativePath) {
-        try {
-          return readFile(join(packageRoot, relativePath), "utf8");
-        } catch (error) {
-          if (error?.code === "ENOENT") {
-            return "";
-          }
-          throw error;
-        }
-      },
-    }),
-  );
   const removed = [];
 
   for (const relativePath of installedFiles) {

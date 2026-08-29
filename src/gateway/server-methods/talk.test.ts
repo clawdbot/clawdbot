@@ -4282,7 +4282,7 @@ describe("role-required Talk session creation", () => {
           agentId: "main",
           sessionKey: "agent:main:talk-required",
           creation: expect.objectContaining({
-            actor: { type: "human", id: profile.id },
+            actor: { type: "human", source: "profile", id: profile.id },
             sandbox: "required",
           }),
         }),

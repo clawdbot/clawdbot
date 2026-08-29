@@ -5,6 +5,7 @@ import path from "node:path";
 import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
+  collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import {
@@ -779,6 +780,17 @@ const configs = [
     false,
   ),
   workerDeployBuildConfig(),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Keep retained config repairs in their own graph: shared public SDK chunks
+      // otherwise pull state-migration exports into these pre-install artifacts.
+      entry: collectChannelConfigDoctorBuildEntries(),
+      outDir: "dist/config-doctor",
+      deps: unifiedDeps,
+    },
+    false,
+  ),
   workerRsyncReceiverBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>

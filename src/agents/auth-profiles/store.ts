@@ -1282,6 +1282,17 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
   );
 }
 
+/** Whether an agent dir resolves to the shared main auth-profile owner. */
+export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
+  const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
+  if (!effectiveAgentDir) {
+    return true;
+  }
+  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
+  const mainPath = mainAgentDir ? resolveAgentAuthPath(mainAgentDir) : resolveSharedAuthPath();
+  return resolveAgentAuthPath(effectiveAgentDir) === mainPath;
+}
+
 /** Find a persisted credential in the scoped store, falling back to the main store. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
@@ -1301,10 +1312,7 @@ export function findPersistedAuthProfileCredential(params: {
     return requestedProfile;
   }
 
-  const requestedPath = resolveAgentAuthPath(agentDir);
-  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
-  const mainPath = mainAgentDir ? resolveAgentAuthPath(mainAgentDir) : resolveSharedAuthPath();
-  if (requestedPath === mainPath) {
+  if (isSharedMainAuthProfileAgentDir(agentDir)) {
     return requestedProfile;
   }
 
@@ -1326,13 +1334,11 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
     return undefined;
   }
   const requestedStore = loadPersistedAuthProfileStore(agentDir);
-  const requestedPath = resolveAgentAuthPath(agentDir);
-  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
-  const mainPath = mainAgentDir ? resolveAgentAuthPath(mainAgentDir) : resolveSharedAuthPath();
-  if (requestedPath === mainPath) {
+  if (isSharedMainAuthProfileAgentDir(agentDir)) {
     return undefined;
   }
 
+  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
   const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
   const requestedProfile = requestedStore?.profiles[params.profileId];
   if (requestedProfile) {

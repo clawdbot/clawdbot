@@ -9,11 +9,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
-import {
-  addSecretInputStdio,
-  type SpawnStdioEntry,
-  writeSecretInputToChild,
-} from "../../spawn-secret-input.js";
+import { prepareSecretInputStdio, type SpawnStdioEntry } from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -151,7 +147,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     (params.ownedWorker !== undefined || !isServiceManagedRuntime());
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  addSecretInputStdio(stdio, params.secretInput);
+  using secretDelivery = prepareSecretInputStdio(stdio, params.secretInput);
   if (params.ownedWorker !== undefined) {
     stdio.push("ipc");
   }
@@ -387,7 +383,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
 
   if (params.secretInput) {
     try {
-      await writeSecretInputToChild(spawned.child, params.secretInput);
+      await secretDelivery?.deliverTo(spawned.child);
     } catch (error) {
       spawned.child.kill("SIGKILL");
       throw error;

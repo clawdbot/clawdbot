@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -171,7 +170,7 @@ function normalizeSessionToolOverrides(
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  creation?: { via: SessionCreatedVia; actor?: SessionEntry["createdActor"] };
   existingEntry?: SessionEntry;
   isLabelInUse: (label: string) => boolean;
   storeKey: string;
@@ -179,7 +178,7 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   /** Canonical root prepared by the trusted create path; never accepted from public patches. */
   preparedSessionRoot?: string;
-  archivedBy?: SessionCreatedActor;
+  archivedBy?: SessionEntry["archivedBy"];
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */

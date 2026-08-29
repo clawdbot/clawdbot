@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.js";
 import {
   readTranscriptDisplayDelta,
@@ -79,6 +80,7 @@ export function readChatHistoryDelta(params: {
       message: event.message,
       ...(event.messageId ? { messageId: event.messageId } : {}),
       messageSeq: row.messageSeq,
+      transcriptPosition: row.displayPosition,
       projectionState,
       sessionKey: params.sessionKey,
       sessionSnapshot: params.sessionSnapshot,
@@ -95,6 +97,6 @@ export function readChatHistoryDelta(params: {
     activeLeafEntryId: result.activeLeafEntryId,
     deltaCursor: result.cursor,
     kind: "delta",
-    messages,
+    messages: composeTranscriptDisplay(messages, (envelope) => envelope.message),
   };
 }

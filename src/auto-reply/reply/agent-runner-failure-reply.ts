@@ -111,8 +111,10 @@ export function resolveExternalRunFailureTextForConversation(params: {
   sessionCtx: ExternalFailureConversationContext;
   isGenericRunnerFailure: boolean;
   cfg?: OpenClawConfig;
+  visibleReplyDelivered?: boolean;
 }): string {
-  if (!isNonDirectConversationContext(params.sessionCtx)) {
+  // Group silence must not strand an already-visible partial without its terminal failure.
+  if (params.visibleReplyDelivered || !isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
   if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
@@ -318,17 +320,12 @@ export function buildTerminalAgentRunFailureReplyPayload(params: {
   const text = params.isHeartbeat
     ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-  // Once output is visible, hiding its terminal failure leaves a misleading partial reply.
-  // Keep normal group silence only for failures that produced no visible output.
   return markAgentRunFailureReplyPayload({
-    text: params.visibleReplyDelivered
-      ? text
-      : resolveExternalRunFailureTextForConversation({
-          text,
-          sessionCtx: params.sessionCtx,
-          isGenericRunnerFailure: true,
-          cfg: params.cfg,
-        }),
+    text: resolveExternalRunFailureTextForConversation({
+      ...params,
+      text,
+      isGenericRunnerFailure: true,
+    }),
   });
 }
 

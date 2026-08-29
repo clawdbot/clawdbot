@@ -245,7 +245,6 @@ const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
   "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
-  "src/infra/state-migrations.ts",
   "src/infra/state-migrations.acp-replay.ts",
   "src/infra/state-migrations.tui-last-session.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",

@@ -122,7 +122,7 @@ describe("question gateway methods", () => {
           sessionId: "question-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         },
       );
       manager.request({ ...requestParams, id: "foreign-question" });
@@ -184,7 +184,7 @@ describe("question gateway methods", () => {
             sessionId: "question-session",
             updatedAt: 1,
             visibility: "shared",
-            createdActor: { type: "human", id: owner.id },
+            createdActor: { type: "human", source: "profile", id: owner.id },
           },
         );
         manager.request({ ...requestParams, id: "foreign-question" });
@@ -241,7 +241,7 @@ describe("question gateway methods", () => {
           sessionId: "question-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         },
       );
       const cfg: OpenClawConfig = {

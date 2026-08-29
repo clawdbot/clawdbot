@@ -100,6 +100,10 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 export const CHAT_HISTORY_REQUEST_LIMIT = 100;
+// Back-scroll pages are larger than the startup tail: session open stays cheap
+// while older-history reads amortize round trips and prepend/re-anchor cycles.
+// The gateway independently bounds each response (entry cap + byte budget).
+const CHAT_HISTORY_OLDER_PAGE_LIMIT = 400;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const SESSION_MESSAGE_RELEASE_RETRY_MS = 250;
 const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
@@ -1770,7 +1774,7 @@ export async function loadOlderChatHistoryPage(
   const result = await client.request<ChatHistoryResult>("chat.history", {
     sessionKey,
     ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
     offset,
   });
   if (!shouldApplyChatHistoryResult(state, ownership)) {

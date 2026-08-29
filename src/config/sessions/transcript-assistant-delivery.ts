@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
 import {
   parseInlineDirectives,
@@ -14,11 +14,33 @@ type AssistantDirectiveMessage = {
 
 type AssistantDeliveryFacts = {
   audioAsVoice?: true;
-  mediaUrls?: string[];
   replyToCurrent?: true;
   replyToId?: string;
   tts?: AssistantDeliveryTtsFacts;
 };
+
+/** Turn-owned display preparation; source text precedes transcript-only hook rewrites. */
+export type PrepareAssistantTranscriptMessage = (
+  message: AssistantMessage,
+  sourceText: string | undefined,
+) => AssistantMessage;
+
+/** Record display ownership without rewriting bytes used by runtime transcript identity. */
+export function recordAssistantManagedMediaUrls<T extends AssistantDirectiveMessage>(
+  message: T,
+  urls: readonly string[] | undefined,
+): T {
+  const mediaUrls = Array.from(new Set(urls?.map((url) => url.trim()).filter(Boolean) ?? []));
+  if (message.role === "assistant" && mediaUrls.length > 0) {
+    Object.assign(message, {
+      openclawDelivery: {
+        ...(isRecord(message.openclawDelivery) ? message.openclawDelivery : {}),
+        mediaUrls,
+      },
+    });
+  }
+  return message;
+}
 
 function mergeTtsFacts(
   current: AssistantDeliveryTtsFacts | undefined,
@@ -46,9 +68,6 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     return message;
   }
   let facts: AssistantDeliveryFacts | undefined;
-  const managedMediaUrls = Array.from(
-    new Set(options?.managedMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
   for (const block of message.content) {
     if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       continue;
@@ -72,9 +91,6 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
       ...(tts.facts ? { tts: mergeTtsFacts(facts.tts, tts.facts) } : {}),
     });
   }
-  if (managedMediaUrls.length > 0) {
-    facts = { ...facts, mediaUrls: managedMediaUrls };
-  }
   if (facts) {
     const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
     const mergedFacts = { ...currentFacts, ...facts };
@@ -85,5 +101,5 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     }
     Object.assign(message, { openclawDelivery: mergedFacts });
   }
-  return message;
+  return recordAssistantManagedMediaUrls(message, options?.managedMediaUrls);
 }

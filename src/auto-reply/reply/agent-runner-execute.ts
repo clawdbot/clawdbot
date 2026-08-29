@@ -70,6 +70,7 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   checkpointBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["checkpointBeforeAgentReply"];
+  resolveVisibleReplyDelivery: () => Promise<boolean>;
   getActiveIsNewSession: () => boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   isHeartbeat: boolean;
@@ -338,6 +339,7 @@ export async function executePreparedReplyAgentRun(
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
           opts: agentTurnOpts,
+          resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
           typingSignals,
           blockReplyPipeline,
           blockStreamingEnabled,

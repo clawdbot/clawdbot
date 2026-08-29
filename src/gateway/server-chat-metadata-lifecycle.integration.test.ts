@@ -53,6 +53,7 @@ const model = {
   api: "openai-chatgpt-responses" as const,
 };
 const context = {
+  broadcast: vi.fn(),
   getRuntimeConfig: () => config,
   logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 } as unknown as GatewayRequestContext;

@@ -18,7 +18,9 @@ import {
   visitSessionTranscriptProjection,
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
+  hasUnclassifiedSessionTranscriptEvents,
   shouldProjectActiveEvent,
+  transcriptEventContextEligibility,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import {
@@ -78,7 +80,7 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
       .selectFrom("transcript_events")
       .select((eb) => [
         eb.fn.countAll<number>().as("event_count"),
-        eb.fn.sum<number>(eb.fn<number>("length", ["event_json"])).as("event_bytes"),
+        eb.fn.sum<number>(eb.fn<number>("octet_length", ["event_json"])).as("event_bytes"),
       ])
       .where("session_id", "=", sessionId),
   );
@@ -90,7 +92,7 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
     return false;
   }
   for (const event of events) {
-    bytes += JSON.stringify(event).length;
+    bytes += Buffer.byteLength(JSON.stringify(event), "utf8");
     if (bytes > SYNC_REBUILD_MAX_BYTES) {
       return false;
     }
@@ -141,7 +143,12 @@ export function sessionTranscriptIndexNeedsReconcile(db: DatabaseSync, sessionId
     return false;
   }
   const state = readSessionTranscriptProjectionState(db, sessionId);
-  return !state || state.needsRebuild || state.indexedSeq !== latest.seq;
+  return (
+    !state ||
+    state.needsRebuild ||
+    state.indexedSeq !== latest.seq ||
+    hasUnclassifiedSessionTranscriptEvents(db, sessionId)
+  );
 }
 
 function writeWatermark(
@@ -180,6 +187,7 @@ function insertActiveEventRow(
   db: DatabaseSync,
   params: {
     activePosition: number;
+    contextEligible: 0 | 1;
     eventSeq: number;
     messagePosition: number | null;
     sessionId: string;
@@ -190,6 +198,7 @@ function insertActiveEventRow(
     getIndexKysely(db).insertInto("session_transcript_active_events").values({
       session_id: params.sessionId,
       active_position: params.activePosition,
+      context_eligible: params.contextEligible,
       event_seq: params.eventSeq,
       message_position: params.messagePosition,
     }),
@@ -264,8 +273,12 @@ export function indexAppendedTranscriptEventInTransaction(
   if (watermark.needsRebuild) {
     return true;
   }
-  if (params.seq !== watermark.indexedSeq + 1) {
-    // Out-of-band writes bypassed the hook; reconcile recomputes the truth.
+  if (
+    params.seq !== watermark.indexedSeq + 1 ||
+    hasUnclassifiedSessionTranscriptEvents(db, params.sessionId)
+  ) {
+    // Out-of-band or older writers left incomplete projection facts.
+    // Reconcile owns convergence even when their sequence watermark is current.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
     return true;
   }
@@ -325,6 +338,7 @@ function applyForwardIndex(
   if (projectsActiveEvent) {
     insertActiveEventRow(db, {
       activePosition: watermark.activeEventCount,
+      contextEligible: transcriptEventContextEligibility(params.event),
       eventSeq: params.seq,
       messagePosition: projectsMessage ? watermark.activeMessageCount : null,
       sessionId: params.sessionId,
@@ -475,6 +489,13 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
         eb.or([
           eb(eb.fn.coalesce("st.needs_rebuild", eb.val(1)), "!=", 0),
           eb("latest.seq", ">", eb.fn.coalesce("st.indexed_seq", eb.val(-1))),
+          eb.exists(
+            eb
+              .selectFrom("session_transcript_active_events as pending")
+              .select("pending.session_id")
+              .whereRef("pending.session_id", "=", "session_windows.session_id")
+              .where("pending.context_eligible", "is", null),
+          ),
         ]),
       )
       // The transcript PK makes the correlated latest-row lookup one index seek per session.

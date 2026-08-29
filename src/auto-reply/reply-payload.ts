@@ -292,6 +292,8 @@ export type ReplyPayloadMetadata = {
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
+  /** The command owner produced this terminal reply without starting an agent run. */
+  commandReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
@@ -385,13 +387,28 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
 export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {
+  const markPayload = (payload: ReplyPayload): ReplyPayload =>
+    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+      commandReply: true,
+    });
   if (!reply) {
     return reply;
   }
   if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+    return reply.map(markPayload);
   }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
+  return markPayload(reply);
+}
+
+/** Returns true only when a command owner produced every payload in a non-empty reply. */
+export function isCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): boolean {
+  const payloads = Array.isArray(reply) ? reply : reply ? [reply] : [];
+  return (
+    payloads.length > 0 &&
+    payloads.every((payload) => getReplyPayloadMetadata(payload)?.commandReply === true)
+  );
 }
 
 /** Returns true for internal status/notice payloads, not assistant answer content. */

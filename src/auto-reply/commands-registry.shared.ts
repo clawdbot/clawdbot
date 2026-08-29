@@ -43,6 +43,7 @@ type DefineChatCommandInput = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard". */
   tier?: CommandTier;
+  activeRunSafe?: true;
 };
 
 /**
@@ -84,6 +85,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     scope,
     category: command.category,
     tier: command.tier,
+    activeRunSafe: command.activeRunSafe,
   };
 }
 
@@ -258,6 +260,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
+      activeRunSafe: true,
     }),
     defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       args: [
@@ -535,7 +538,9 @@ export function buildBuiltinChatCommands(
       ],
       argsMenu: "auto",
     }),
-    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential"),
+    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
+      activeRunSafe: true,
+    }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
@@ -572,6 +577,7 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
+      activeRunSafe: true,
       args: [
         defineCommandArgument("level", "Thinking level", {
           choices: ({ provider, model, catalog, agentRuntime }) =>

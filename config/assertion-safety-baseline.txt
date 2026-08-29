@@ -78,7 +78,7 @@ extensions/browser/src/browser/extension-native-host.ts	1
 extensions/browser/src/browser/extension-native-protocol.ts	1
 extensions/browser/src/browser/extension-relay/auth-v2.ts	10
 extensions/browser/src/browser/extension-relay/relay-auth.ts	1
-extensions/browser/src/browser/extension-relay/relay-bridge.ts	12
+extensions/browser/src/browser/extension-relay/relay-bridge.ts	9
 extensions/browser/src/browser/extension-relay/relay-protocol.ts	4
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
@@ -561,7 +561,6 @@ extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
-extensions/imessage/doctor-contract-api.ts	2
 extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-chat-guid.ts	1
 extensions/imessage/src/actions-contract.ts	1
@@ -2059,7 +2058,7 @@ src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	4
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
-src/agents/tool-search-transcript.ts	3
+src/agents/tool-search-transcript.ts	1
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
@@ -2704,12 +2703,11 @@ src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	3
-src/config/sessions/session-accessor.sqlite-session-row.ts	1
 src/config/sessions/session-accessor.sqlite-title-probes.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	7
-src/config/sessions/session-accessor.sqlite-transcript-write.ts	7
+src/config/sessions/session-accessor.sqlite-transcript-write.ts	5
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
@@ -2748,7 +2746,7 @@ src/config/zod-schema.channels-config.ts	3
 src/config/zod-schema.core.ts	1
 src/config/zod-schema.ts	2
 src/context-engine/delegate.ts	1
-src/context-engine/registry.ts	10
+src/context-engine/registry.ts	9
 src/context-engine/runtime-settings.ts	2
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
@@ -2852,8 +2850,8 @@ src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
 src/gateway/exec-approval-manager.ts	7
-src/gateway/gateway-cli-backend.live-helpers.ts	4
-src/gateway/gateway-cli-backend.live-probe-helpers.ts	7
+src/gateway/gateway-cli-backend.live-helpers.ts	2
+src/gateway/gateway-cli-backend.live-probe-helpers.ts	4
 src/gateway/health/collector.ts	3
 src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
@@ -3035,7 +3033,7 @@ src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
 src/gateway/session-utils-search.ts	1
-src/gateway/session-utils.fs.ts	10
+src/gateway/session-utils.fs.ts	2
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
@@ -3054,7 +3052,6 @@ src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/inference-store.ts	1
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
-src/gateway/worker-environments/node-workspace-transfer-service.ts	1
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/provider-lifecycle.ts	1
@@ -4095,7 +4092,6 @@ ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	7
 ui/src/pages/chat/components/chat-tool-cards.ts	2
-ui/src/pages/chat/components/chat-transcript-controller.ts	1
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/session-diff-menus.ts	1
 ui/src/pages/chat/components/session-diff-panel.ts	2

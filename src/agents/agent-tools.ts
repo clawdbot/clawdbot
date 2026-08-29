@@ -87,7 +87,10 @@ import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
-import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
+import {
+  resolveSessionPermissionCoreToolPolicy,
+  resolveSessionPermissionExecPolicy,
+} from "./session-permission-exec-mode.js";
 import {
   createCodingTools,
   createEditTool,
@@ -583,7 +586,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
-  const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
+  const effectiveExecPolicy = sessionPermissionPolicy
+    ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
+    : applyExecPolicyLayer(execConfig, options?.exec);
   // A scheduled cap narrows the rebuilt exec tool to its captured policy.
   // Its approval floor outranks a reused full session; the wrapper below
   // prevents caller arguments from weakening either restriction.
@@ -618,9 +623,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     execDefaults: {
       ...execDefaults,
       bypassHostApprovalFloors:
-        scheduledExecTarget?.ask !== "always" && sessionCoreToolPolicy?.bypassHostApprovalFloors,
+        scheduledExecTarget?.ask !== "always" &&
+        sessionCoreToolPolicy?.bypassHostApprovalFloors &&
+        effectiveExecPolicy.security === "full",
       host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
-      mode: effectiveExecPolicy.mode,
+      mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
       ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
       config: execRuntimeConfig,

@@ -68,14 +68,14 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
     },
     async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
         resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests();
-        resetTaskFlowRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -85,8 +85,8 @@ describe("task-flow-registry audit", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("surfaces restore failures as task-flow audit findings", () => {

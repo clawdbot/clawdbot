@@ -191,7 +191,11 @@ export async function persistCliAssistantTranscript(params: {
       storePath: runParams.storePath,
       idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (write) =>
+        runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        }),
       message: buildAssistantMessage({
         model: {
           api: "cli",

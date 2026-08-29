@@ -7,6 +7,7 @@ import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
@@ -224,7 +225,8 @@ export function createGrepToolDefinition(
               return;
             }
 
-            const contextValue = context && context > 0 ? context : 0;
+            // Fractional line indices would omit the matching row.
+            const contextValue = resolveNonNegativeIntegerOption(context, 0);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             const formatPath = (filePath: string): string => {
               if (isDirectory) {

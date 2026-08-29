@@ -394,10 +394,17 @@ describe("lazy protocol validators", () => {
   });
 
   it("accepts selected-agent scope on chat metadata params", () => {
-    expectAccepted(validateChatMetadataParams, [{}, { agentId: "work" }]);
+    expectAccepted(validateChatMetadataParams, [
+      {},
+      { agentId: "work" },
+      { sessionKey: "agent:work:main" },
+      { agentId: "work", sessionKey: "global" },
+    ]);
     expectRejected(validateChatMetadataParams, [
       { agentId: "" },
       { agentId: "work", view: "configured" },
+      { sessionKey: "" },
+      { sessionKey: "agent:work:main", authProfileId: "test:locked" },
     ]);
   });
 

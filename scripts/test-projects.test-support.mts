@@ -1358,6 +1358,11 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
   const unmatched: UnmatchedExplicitTestTarget[] = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const absolute = path.resolve(cwd, targetArg);
+    // Existing exact tests need no inventory scan; lane assignment belongs to the run planner.
+    if (!isGlobTarget(relative) && isTestFileTarget(relative) && fs.existsSync(absolute)) {
+      continue;
+    }
     if (
       resolveVitestConfigTargetKind(relative) ||
       (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
@@ -1378,7 +1383,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
       continue;
     }
 
-    const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
       if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
         continue;
@@ -1390,10 +1394,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
           ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
           : {}),
       });
-      continue;
-    }
-
-    if (isTestFileTarget(relative)) {
       continue;
     }
 
@@ -2422,7 +2422,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/write-plugin-sdk-entry-dts\.ts$/u,
-    ["build-all", "prepare-extension-package-boundary-artifacts"],
+    ["build-all", "declaration-stage", "tsdown-build"],
   ],
   [/^scripts\/pr-lib\/worktree\.sh$/u, ["test/vitest/vitest.tooling.config.ts"]],
   [/^scripts\/dev\/gateway-smoke\.ts$/u, ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
@@ -2619,7 +2619,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [dockerBuild, "docker-e2e-observability", dockerE2e, pluginPrerelease],
   ],
   [
-    /^scripts\/e2e\/mcp-code-mode-gateway-(?:live-)?docker\.sh$/u,
+    /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
     [
       dockerBuild,
       dockerE2e,

@@ -9,6 +9,10 @@ import type {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  sessionCreatorProfileId,
+  type SessionActor,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
@@ -57,23 +61,8 @@ function projectParticipant(
   };
 }
 
-/** Required delegation preserves the profile creator, not evidence of their input. */
-export function hasSessionCreatorProfileProvenance(entry: SessionEntry | undefined): boolean {
-  switch (entry?.createdVia) {
-    case "operator":
-    case "run":
-      return true;
-    case "spawn":
-    case "talk":
-    case "cron":
-      return entry.sandbox === "required";
-    default:
-      return false;
-  }
-}
-
 export function projectSessionActor(
-  actor: SessionEntry["createdActor"],
+  actor: SessionActor | undefined,
   profiles: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
   cfg?: OpenClawConfig,
   profileProvenance = true,
@@ -91,13 +80,13 @@ export function projectSessionActor(
       : actor.type === "human" && profileProvenance
         ? { type: "profile", id }
         : { type: "legacy", actorType: actor.type, source: null, id };
-  // Original actor fields remain authorization inputs; only display identity canonicalizes aliases.
+  // Keep original attribution in the display; authority reads the qualified canonical actor.
   return { type: actor.type, id, ...projectParticipant(identity, profiles, cfg) };
 }
 
 /** Projects an identity only when it can own a session durably. */
 export function projectAssignableSessionOwner(
-  actor: SessionEntry["createdActor"],
+  actor: SessionActor | undefined,
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
   cfg: OpenClawConfig,
   configuredAgentIds?: ReadonlySet<string>,
@@ -137,7 +126,7 @@ export function projectSessionOwner(
     identities,
     cfg,
     configuredAgentIds,
-    Boolean(persisted?.actor || hasSessionCreatorProfileProvenance(entry)),
+    Boolean(persisted?.actor || sessionCreatorProfileId(entry?.createdActor)),
   );
   if (!actor) {
     return undefined;
@@ -178,7 +167,7 @@ export function projectSessionPeople(
       entry.createdActor,
       identities,
       cfg,
-      hasSessionCreatorProfileProvenance(entry),
+      Boolean(sessionCreatorProfileId(entry.createdActor)),
     ),
   ];
   const people = new Map<string, SessionPerson>();

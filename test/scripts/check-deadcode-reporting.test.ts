@@ -87,10 +87,13 @@ const barrier = setInterval(() => {
       for (const [index, outcome] of outcomes.entries()) {
         expect(readFileSync(path.join(root, `${index}.completed`), "utf8")).toBe(outcome);
         const scanArgs = ["--config", configs[index]];
-        if (index === 0) scanArgs.push("--production");
-        if (index === 2) scanArgs.push("--include-entry-exports");
+        if (index === 0) {
+          scanArgs.push("--production");
+        }
+        if (index === 2) {
+          scanArgs.push("--include-entry-exports");
+        }
         expect(JSON.parse(readFileSync(path.join(root, `${index}.started`), "utf8"))).toEqual([
-          "--config.minimum-release-age=0",
           "dlx",
           "--package",
           "knip@6.32.2",

@@ -13,7 +13,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
+import {
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+} from "./state-migrations.doctor.js";
 
 describe("managed worktree path state migrations", () => {
   beforeEach(() => {

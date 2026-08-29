@@ -498,7 +498,7 @@ PROMPT
 
 echo "Running Codex progress follow-through regression turn..."
 OPENCLAW_PACKAGE_ROOT="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
-if node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
+if openclaw_e2e_run_command node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
   "$OPENCLAW_PACKAGE_ROOT" \
   "$FOLLOWTHROUGH_SESSION_ID" \
   "$MODEL_REF" \
@@ -512,6 +512,7 @@ else
   followthrough_status=$?
 fi
 echo "followthrough_agent_status: $followthrough_status stdout_bytes=$(wc -c </tmp/openclaw-codex-followthrough.json 2>/dev/null || printf 0) stderr_bytes=$(wc -c </tmp/openclaw-codex-followthrough.err 2>/dev/null || printf 0)"
+openclaw_e2e_print_log /tmp/openclaw-codex-followthrough.log
 if [ "$followthrough_status" -ne 0 ]; then
   dump_debug_logs "$followthrough_status"
   exit "$followthrough_status"

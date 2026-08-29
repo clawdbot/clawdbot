@@ -1,5 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
+import { VERSION } from "../version.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -200,8 +201,9 @@ export function createLazyPluginRuntime(params: {
     return resolvedRuntime;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
-    if (prop === "state" && !resolvedRuntime) {
-      return state;
+    // Reading prepared metadata must not initialize runtime services.
+    if (!resolvedRuntime && (prop === "state" || prop === "version")) {
+      return prop === "state" ? state : VERSION;
     }
     return receiver.length === 0
       ? Reflect.get(resolveRuntime(), prop)

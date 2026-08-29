@@ -3,15 +3,8 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import type { RunCliAgentParams } from "./types.js";
-
-const SESSION_PERMISSION_BY_EXEC_MODE = {
-  deny: "read-only",
-  allowlist: "guarded",
-  ask: "guarded",
-  auto: "workspace",
-  full: "full",
-} as const;
 
 export function normalizeOptionalMcpContextValue(value: string | undefined): string | undefined {
   return value?.trim() || undefined;

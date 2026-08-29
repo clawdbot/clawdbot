@@ -16,6 +16,7 @@ import type {
 import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
+import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
@@ -315,12 +316,28 @@ export async function executeRemoteExecTurn(params: {
     timeoutMs: params.turn.timeoutMs,
   });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(params.turn);
+  const attachmentNote = await prepareWorkerTurnAttachments({
+    turn: params.turn,
+    tunnel,
+    remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
+    assertCurrent: () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud attachment transfer lost its turn claim");
+      }
+    },
+  });
   params.placements.markWorkspaceResultPending(params.turnClaim);
   params.onHandoff();
   let result: EmbeddedAgentRunResult | undefined;
   let executionError: unknown;
   let executionActive = true;
+  const originalPrompt = params.turn.prompt;
+  const originalTranscriptPrompt = params.turn.transcriptPrompt;
   try {
+    if (attachmentNote) {
+      params.turn.transcriptPrompt ??= originalPrompt;
+      params.turn.prompt = `${originalPrompt}\n\n${attachmentNote}`;
+    }
     result = await withPluginRuntimeGatewayRequestScope(
       {
         isWebchatConnect: () => false,
@@ -365,6 +382,8 @@ export async function executeRemoteExecTurn(params: {
     executionError = error;
   } finally {
     executionActive = false;
+    params.turn.prompt = originalPrompt;
+    params.turn.transcriptPrompt = originalTranscriptPrompt;
   }
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
     placement: params.placement,

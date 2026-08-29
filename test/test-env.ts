@@ -383,10 +383,6 @@ function sanitizeLiveConfig(raw: string): string {
 }
 
 function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void {
-  const agentsDir = path.join(realStateDir, "agents");
-  if (!fs.existsSync(agentsDir)) {
-    return;
-  }
   const liveAuthStageScript = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "helpers",

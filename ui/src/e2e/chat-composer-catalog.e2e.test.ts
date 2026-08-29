@@ -13,6 +13,62 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it.each(["config.changed", "chat.metadata.changed"])(
+    "recovers the retained composer after %s without reloading",
+    async (event) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.6-luna",
+          models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+          historyMessages: [
+            { role: "assistant", content: [{ type: "text", text: "Earlier reply" }] },
+          ],
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: { model: model.id, modelProvider: model.provider },
+              sessions: [
+                {
+                  key: "main",
+                  kind: "direct",
+                  model: model.id,
+                  modelProvider: model.provider,
+                  status: "error",
+                  lastRunError: "No route-compatible authentication source is configured",
+                  updatedAt: Date.now(),
+                },
+              ],
+              path: "",
+              ts: Date.now(),
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        await expect.poll(() => textarea.isDisabled()).toBe(true);
+        const startupCount = (await gateway.getRequests("chat.startup")).length;
+        const socketCount = await gateway.getSocketCount();
+
+        await gateway.deferNext("chat.metadata");
+        await gateway.setMethodResponse("chat.metadata", {
+          commands: [],
+          models: [{ ...model, available: true }],
+        });
+        await gateway.emitGatewayEvent(event, {});
+        await gateway.waitForRequest("chat.metadata");
+        expect(await textarea.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("chat.metadata");
+        await expect.poll(() => textarea.isDisabled()).toBe(false);
+        await expect.poll(() => page.getByText("Earlier reply", { exact: true }).count()).toBe(1);
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(startupCount);
+        expect(await gateway.getRequests("models.list")).toHaveLength(0);
+        expect(await gateway.getSocketCount()).toBe(socketCount);
+      });
+    },
+  );
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -333,6 +389,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         models: [startupModel],
         methodResponses: {
+          "chat.metadata": { commands: [], models: [startupModel, discoveredModel] },
           "models.list": {
             sequence: [
               {
@@ -388,6 +445,12 @@ suite.define(() => {
         agentModel: "openai/gpt-5.6-luna",
         models: [routedModel],
         methodResponses: {
+          "chat.metadata": {
+            sequence: [
+              { commands: [], models: [] },
+              { commands: [], models: [routedModel] },
+            ],
+          },
           "models.list": {
             sequence: [{ models: [] }, { models: [routedModel] }],
           },
@@ -458,6 +521,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         models: [existingModel],
         methodResponses: {
+          "chat.metadata": {
+            sequence: [
+              { commands: [], models: [existingModel] },
+              { commands: [], models: [existingModel, newlyAvailableModel] },
+            ],
+          },
           "models.list": {
             sequence: [
               { models: [existingModel] },

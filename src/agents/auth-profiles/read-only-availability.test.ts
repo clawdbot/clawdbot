@@ -11,6 +11,40 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 describe("resolveStoredCredentialReadOnlyAvailability", () => {
+  it.each([
+    {
+      name: "present selected env",
+      selected: true,
+      env: { COLLISION_KEY: "synthetic-key" },
+      expected: true,
+    },
+    { name: "missing selected env", selected: true, env: {}, expected: undefined },
+    {
+      name: "non-default mismatch",
+      selected: false,
+      env: { COLLISION_KEY: "synthetic-key" },
+      expected: false,
+    },
+  ])("preserves availability for $name under a file collision", ({ selected, env, expected }) => {
+    expect(
+      resolveStoredCredentialReadOnlyAvailability({
+        credential: {
+          type: "api_key",
+          provider: "test",
+          key: "retained-inline-key",
+          keyRef: { source: "env", provider: "selected", id: "COLLISION_KEY" },
+        },
+        cfg: {
+          secrets: {
+            defaults: selected ? { env: "selected" } : undefined,
+            providers: { selected: { source: "file", path: "/unused" } },
+          },
+        },
+        env,
+      }),
+    ).toBe(expected);
+  });
+
   it("keeps an implicit store ref unknown until runtime resolution", () => {
     expect(
       resolveStoredCredentialReadOnlyAvailability({

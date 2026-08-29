@@ -7,28 +7,10 @@ import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-
-type NodeClaudePlacement = { nodeId: string; cwd?: string };
-
-export function resolveNodeClaudeTarget(
-  context: PreparedCliRunContext,
-): NodeClaudePlacement | null {
-  const entry = context.params.sessionEntry;
-  const nodeId = entry?.execNode?.trim();
-  // For claude-cli, the session placement tuple owns both agent turns and
-  // their exec tools so the CLI, auth, transcript, and commands stay together.
-  if (context.backendResolved.id !== "claude-cli" || entry?.execHost !== "node") {
-    return null;
-  }
-  if (!nodeId) {
-    throw new Error("node-placed Claude CLI session is missing execNode");
-  }
-  return { nodeId, ...(entry.execCwd?.trim() ? { cwd: entry.execCwd.trim() } : {}) };
-}
 
 const NODE_CLI_OMIT_BARE_ARGS = new Set([
   "--strict-mcp-config",

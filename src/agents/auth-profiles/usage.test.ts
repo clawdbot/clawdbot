@@ -27,17 +27,25 @@ import { testing as authProfileUsageTesting } from "./usage.test-support.js";
 const WHAM_HALF_OPEN_REPROBE_INTERVAL_MS = 45 * 60 * 1000;
 
 const storeMocks = vi.hoisted(() => ({
+  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
+    (params: { agentDir?: string }) => params.agentDir,
+  ),
   saveAuthProfileStore: vi.fn(),
   updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
 }));
 const fetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./store.js", () => ({
+  resolvePersistedAuthProfileOwnerAgentDir: storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
   updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
   saveAuthProfileStore: storeMocks.saveAuthProfileStore,
 }));
 
 beforeEach(() => {
+  storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
+  storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
+    (params: { agentDir?: string }) => params.agentDir,
+  );
   storeMocks.saveAuthProfileStore.mockReset();
   storeMocks.updateAuthProfileStoreWithLock.mockReset();
   fetchMock.mockReset();

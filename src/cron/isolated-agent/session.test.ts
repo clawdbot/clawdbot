@@ -281,7 +281,11 @@ describe("resolveCronSession", () => {
       const provenance = {
         createdAt: NOW_MS - 86_400_000,
         createdVia: "cron" as const,
-        createdActor: { type: "human" as const, id: "profile-cron-creator" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "profile-cron-creator",
+        },
         sandbox: "required" as const,
       };
       const result = resolveWithStoredEntry({

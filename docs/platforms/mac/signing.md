@@ -15,7 +15,7 @@ title: "macOS signing"
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity in this order: Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
 - `SIGN_IDENTITY` also accepts a certificate SHA-1 hash to distinguish certificates with the same common name.
 - `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps for Developer ID Application signatures selected by name or certificate hash. Set `on`/`off` to force either way.
-- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit` (short hash, `unknown` if unavailable) so the About tab can show build, git, and debug/release channel.
+- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit` (full 40-character hexadecimal commit, or `unknown` for local builds when unavailable) so the About tab can show build, git, and debug/release channel.
 - Runs a Team ID audit after signing and fails if any Mach-O inside the bundle has a different Team ID. Set `SKIP_TEAM_ID_CHECK=1` to bypass.
 
 ## Usage

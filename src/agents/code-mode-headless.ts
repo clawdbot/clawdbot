@@ -32,6 +32,7 @@ import {
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
   createCodeModeBridgeDispatchState,
+  createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -219,7 +220,8 @@ export async function runCodeModeScriptHeadless(params: {
     MAX_HEADLESS_TOOL_CALLS,
   );
   const deadline = performance.now() + wallClockMs;
-  const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
+  const owner = createCodeModeRunOwner(params.ctx);
+  const abortScope = createHeadlessAbortScope(owner.bindCall(params.signal), wallClockMs);
   const output: unknown[] = [];
   let pending: PendingBridgeState[] = [];
   let toolCallCount = 0;
@@ -379,5 +381,6 @@ export async function runCodeModeScriptHeadless(params: {
   } finally {
     cancelPendingBridgeStates(pending);
     abortScope.cleanup();
+    owner.close();
   }
 }

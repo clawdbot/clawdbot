@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInternalSessionEffectsIdentity } from "../../../config/sessions/internal-session-key.js";
+import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
 import {
   runSkillExperienceReview,
@@ -13,6 +14,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -157,7 +159,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
 
     reviewRunEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
       snapshots.push(captureToolSurface(params));
-      return {};
+      return { meta: { durationMs: 1 } };
     });
     const reviewCandidate: ExperienceReviewCandidate = {
       ctx: {
@@ -352,6 +354,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     ]);
   });
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {
+    const sessionManager = SessionManager.inMemory();
     const executed: string[] = [];
     const tool = (name: string): AnyAgentTool =>
       ({
@@ -403,6 +406,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       attemptOverrides: {
         config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
         disableTools: false,
+        sessionManager,
         sessionPersistence: "detached",
         toolExecutionAllow: ["skill_workshop"],
       },
@@ -413,5 +417,25 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(String((outcomes[0] as PromiseRejectedResult).reason)).toContain(
       "Unavailable during skill review",
     );
+    const activities = sessionManager.getEntries().flatMap((entry) => {
+      const activity = entry.type === "message" && readNestedToolActivity(entry.message);
+      return activity ? [activity.details] : [];
+    });
+    expect(activities).toHaveLength(2);
+    expect(activities.find((activity) => activity.toolName === "read")).toMatchObject({
+      parentToolCallId: "call-read",
+      isError: true,
+      result: {
+        details: {
+          status: "error",
+          error: expect.stringContaining("Unavailable during skill review"),
+        },
+      },
+    });
+    expect(activities.find((activity) => activity.toolName === "skill_workshop")).toMatchObject({
+      parentToolCallId: "call-workshop",
+      isError: false,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
   });
 });

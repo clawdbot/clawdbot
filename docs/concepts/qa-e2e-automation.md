@@ -1099,12 +1099,19 @@ QA Lab acquires an exclusive lease, heartbeats it for the duration of the
 run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
 `"slack"`, `"telegram"`, and `"whatsapp"`.
 
-The suite owns its Gateway lifecycle before startup begins, including startup
-retries and replacement processes. Transport adapters drain their driver work in
+The suite owns its Gateway lifecycle before startup begins, including packaged
+auth and plugin-repair commands, startup retries, replacement processes, and
+commands run against the active Gateway. Each CLI command has a two-minute
+execution limit. Stop closes admission immediately and settles all owned process
+groups; leader exit does not bypass shutdown or the bounded wait for inherited
+stdio to close. On POSIX, CLI commands use their own process groups, so concurrent
+commands do not replace the active Gateway's identity.
+
+Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
 `cleanupAfterGatewayStop()`. The suite runs that second phase only when no
-Gateway was spawned or process-group termination was confirmed. A readiness
-failure or an exited group leader is not shutdown proof.
+subprocess was spawned or all owned process groups were confirmed stopped. A
+readiness failure or an exited group leader is not shutdown proof.
 
 Failed startup or replacement settles the process without finalizing its logs
 or staging directory. The caller retains the lifecycle owner and always calls

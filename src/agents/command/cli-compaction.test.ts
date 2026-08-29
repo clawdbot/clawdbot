@@ -8,6 +8,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { resolveCliBackendConfig } from "../cli-backends.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
@@ -1183,29 +1184,34 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
   });
 
-  it("skips compaction when backend declares ownsNativeCompaction and has no harness endpoint", async () => {
-    const compactAgentHarnessSession = vi.fn();
-    const scenario = await prepareCompactionScenario({
-      suffix: "claude-owns-compaction",
-      tmpDir,
-      deps: {
-        maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-        resolveCliBackendConfig: () => ({
-          id: "claude-cli",
-          config: { command: "claude" },
-          bundleMcp: true,
-          ownsNativeCompaction: true,
-        }),
-      },
-    });
-    const { compactCalls, recordCliCompactionInStore, sessionEntry } = scenario;
-    const updatedEntry = await scenario.run();
+  it.each(["claude-cli", "google-gemini-cli"])(
+    "preserves %s native history and resume binding under compaction pressure",
+    async (provider) => {
+      const backend = resolveCliBackendConfig(provider);
+      expect(backend).not.toBeNull();
+      const compactAgentHarnessSession = vi.fn();
+      const scenario = await prepareCompactionScenario({
+        suffix: `${provider}-owns-compaction`,
+        tmpDir,
+        provider,
+        sessionEntry: {
+          cliSessionBindings: { [provider]: { sessionId: "native-session" } },
+        },
+        deps: {
+          maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+          resolveCliBackendConfig: () => backend,
+        },
+      });
+      const { compactCalls, recordCliCompactionInStore, sessionEntry } = scenario;
+      const updatedEntry = await scenario.run();
 
-    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
-    expect(compactCalls).toHaveLength(0);
-    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
-    expect(updatedEntry).toBe(sessionEntry);
-  });
+      expect(compactAgentHarnessSession).not.toHaveBeenCalled();
+      expect(compactCalls).toHaveLength(0);
+      expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+      expect(updatedEntry).toBe(sessionEntry);
+      expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
+    },
+  );
 
   it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
     const scenario = await prepareCompactionScenario({

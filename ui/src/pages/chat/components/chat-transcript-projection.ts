@@ -55,12 +55,12 @@ import {
 } from "./chat-thread-interactions.ts";
 import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
+import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -70,7 +70,7 @@ type ChatTranscriptProjection = {
   isEmpty: boolean;
   showLoadingSkeleton: boolean;
   searchOpen: boolean;
-  renderRows: (overlay?: unknown) => TemplateResult;
+  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
 };
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
@@ -711,13 +711,14 @@ export function projectChatTranscript(
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,
-    renderRows: (overlay: unknown = nothing) =>
+    renderRows: (overlay: unknown = nothing, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
+        header,
       ),
   };
 }

@@ -4,10 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { icons } from "../../components/icons.ts";
-import {
-  renderChatPaneComposerControls,
-  resolveChatModelCatalogState,
-} from "./chat-pane-session-controls.ts";
+import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
@@ -22,118 +19,91 @@ function iconMarkup(icon: unknown): string | undefined {
   return container.querySelector("svg")?.innerHTML;
 }
 
-describe("chat model catalog state", () => {
-  const cachedCatalog = [
-    {
-      id: "gpt-5.6-luna",
-      name: "GPT-5.6 Luna",
-      provider: "openai",
-      available: false,
-    },
-  ];
-
+describe("chat pane composer controls", () => {
   it.each([
-    {
-      label: "ready",
-      state: {
-        chatModelCatalog: [],
-        chatModelCatalogError: null,
-        chatModelsLoading: false,
-        connected: true,
-      },
-      expected: { hasSnapshot: true, status: "ready" },
-    },
-    {
-      label: "ready with a cached snapshot",
-      state: {
-        chatModelCatalog: cachedCatalog,
-        chatModelCatalogError: null,
-        chatModelsLoading: false,
-        connected: true,
-      },
-      expected: { hasSnapshot: true, status: "ready" },
-    },
-    {
-      label: "loading without a cached snapshot",
-      state: {
-        chatModelCatalog: [],
-        chatModelCatalogError: null,
-        chatModelsLoading: true,
-        connected: true,
-      },
-      expected: { hasSnapshot: false, status: "loading" },
-    },
+    { label: "empty", cached: false, connected: true, error: null, message: "No models available" },
     {
       label: "offline",
-      state: {
-        chatModelCatalog: cachedCatalog,
-        chatModelCatalogError: null,
-        chatModelsLoading: false,
-        connected: false,
-      },
-      expected: { hasSnapshot: true, status: "offline" },
+      cached: true,
+      connected: false,
+      error: "metadata unavailable",
+      message: "Offline",
     },
     {
-      label: "error",
-      state: {
-        chatModelCatalog: cachedCatalog,
-        chatModelCatalogError: "metadata unavailable",
-        chatModelsLoading: false,
-        connected: true,
-      },
-      expected: { hasSnapshot: true, status: "error" },
-    },
-  ])("resolves $label", ({ state, expected }) => {
-    expect(resolveChatModelCatalogState(state)).toEqual(expected);
-  });
-});
-
-describe("chat pane composer controls", () => {
-  it("assembles model and permission controls as separate footer inputs", () => {
-    const container = document.createElement("div");
-    const state = {
-      chatRunId: null,
+      label: "failed with a snapshot",
+      cached: true,
       connected: true,
-      client: {},
-      chatLoading: false,
-      chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch: vi.fn() },
-      chatModelSwitchPromises: {},
-      sessionKey: "main",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
-    } as unknown as ChatPageHost;
-    const onModelSetup = vi.fn();
-    const toastAnchor = document.createElement("div");
+      error: "metadata unavailable",
+      message: null,
+    },
+    {
+      label: "failed without a snapshot",
+      cached: false,
+      connected: true,
+      error: "metadata unavailable",
+      message: "Models unavailable",
+    },
+  ])(
+    "renders separate footer inputs with a $label catalog",
+    ({ cached, connected, error, message }) => {
+      const container = document.createElement("div");
+      const state = {
+        chatRunId: null,
+        connected,
+        client: {},
+        chatLoading: false,
+        chatModelCatalog: cached
+          ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
+          : [],
+        chatModelCatalogError: error,
+        sessions: { state: { modelOverrides: {} }, think: () => undefined, patch: vi.fn() },
+        chatModelSwitchPromises: {},
+        sessionKey: "main",
+        chatModelsLoading: false,
+        chatSending: false,
+        sessionsResult: null,
+        chatStream: null,
+      } as unknown as ChatPageHost;
+      const onModelSetup = vi.fn();
+      const toastAnchor = document.createElement("div");
 
-    const controls = renderChatPaneComposerControls({
-      state,
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      toastAnchor,
-      onModelSetup,
-    });
-    render(controls.composerControls, container);
+      const controls = renderChatPaneComposerControls({
+        state,
+        selectedSession: undefined,
+        agentDefaultModel: undefined,
+        modelAccess: { allowed: true, requiredScope: "operator.write" },
+        effortAccess: { allowed: true, requiredScope: "operator.write" },
+        permissionAccess: { allowed: true, requiredScope: "operator.write" },
+        canSelectFull: true,
+        toastAnchor,
+        onModelSetup,
+      });
+      render(controls.composerControls, container);
 
-    expect(Array.from(container.children).map((node) => node.className)).toEqual([
-      "chat-composer-model-control",
-    ]);
-    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
-    expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-    const permissionContainer = document.createElement("div");
-    render(renderChatPermissionPicker(controls.permissionPicker), permissionContainer);
-    expect(
-      permissionContainer.querySelector('[data-chat-permission-select="true"]'),
-    ).not.toBeNull();
-    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
-  });
+      expect(Array.from(container.children).map((node) => node.className)).toEqual([
+        "chat-composer-model-control",
+      ]);
+      expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
+      expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
+      const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
+      if (message) {
+        expect(catalogMessage?.textContent).toContain(message);
+      } else {
+        expect(catalogMessage).toBeNull();
+      }
+      expect(
+        container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
+      ).toBe(String(!connected));
+      expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
+      const permissionContainer = document.createElement("div");
+      render(renderChatPermissionPicker(controls.permissionPicker), permissionContainer);
+      expect(
+        permissionContainer.querySelector('[data-chat-permission-select="true"]'),
+      ).not.toBeNull();
+      container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+      expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
+    },
+  );
 
   it("renders a distinct active icon for every permission mode", () => {
     const activeIcons = new Set<string>();

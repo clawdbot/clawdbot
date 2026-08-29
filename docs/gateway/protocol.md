@@ -516,6 +516,13 @@ Each client connection keeps its own per-client sequence number, so broadcasts
 stay monotonically ordered on that socket even when different clients see
 different scope-filtered subsets of the event stream.
 
+`hello-ok.features.capabilities` advertises additive wire contracts. Native clients
+send `sessionKey` in `chat.metadata` only when `session-scoped-chat-metadata` is present;
+otherwise they retain the agent-only request supported by stable `v2026.7.1-2`.
+That older response describes agent-wide availability, not a session's selected
+profile. Retire this negotiation only when the minimum supported Gateway contract
+guarantees session-scoped metadata. Method or event presence alone is insufficient.
+
 ## RPC method families
 
 `hello-ok.features.methods` is a conservative discovery list built from

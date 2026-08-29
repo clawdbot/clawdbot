@@ -18,6 +18,7 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -533,6 +534,7 @@ export async function handleDirectiveOnly(
       });
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
+      emitSessionLifecycleEvent({ sessionKey, agentId: activeAgentId, reason: "patch" });
       triggerSessionPatchHook({
         cfg: params.cfg,
         sessionEntry: appliedSessionEntry,

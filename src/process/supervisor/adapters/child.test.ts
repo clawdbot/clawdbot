@@ -271,50 +271,6 @@ describe("createChildAdapter", () => {
     }
   });
 
-  it("waits for an owned worker's secret descriptor to close after delivery", async () => {
-    vi.useFakeTimers();
-    setPlatform("darwin");
-    const { child, emitExit } = createStubChild();
-    const secretStream = new Writable({
-      autoDestroy: false,
-      write(_chunk, _encoding, callback) {
-        callback();
-      },
-    });
-    Object.defineProperty(child, "stdio", {
-      value: [child.stdin, child.stdout, child.stderr, secretStream, null],
-      configurable: true,
-    });
-    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
-    const transient = Buffer.from("synthetic-secret");
-    const adapter = await createChildAdapter({
-      argv: ["node", "worker"],
-      ownedWorker: true,
-      secretInput: { fd: 3, createData: () => transient },
-    });
-    const settled = vi.fn();
-    const wait = adapter.wait();
-    void wait.then(settled);
-
-    try {
-      expect(secretStream.writableFinished).toBe(true);
-      expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
-      adapter.closeStartGate?.();
-      emitExit(0);
-      child.stdout?.emit("close");
-      child.stderr?.emit("close");
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).not.toHaveBeenCalled();
-      secretStream.destroy();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toHaveBeenCalledExactlyOnceWith({ code: 0, signal: null });
-      await expect(wait).resolves.toEqual({ code: 0, signal: null });
-    } finally {
-      secretStream.destroy();
-      adapter.dispose();
-    }
-  });
-
   it("keeps ordinary children supervised through repeated operational errors", async () => {
     const { child, emitClose, emitExit } = createStubChild(7865);
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
@@ -412,6 +368,7 @@ describe("createChildAdapter", () => {
   );
 
   it("preserves startup failure when a worker error arrives during secret delivery", async () => {
+    setPlatform("win32");
     const { child, killMock } = createStubChild();
     const deliveryError = new Error("secret delivery failed");
     const secretStream = new Writable({
@@ -444,6 +401,7 @@ describe("createChildAdapter", () => {
   });
 
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
+    setPlatform("win32");
     const { child } = createStubChild();
     const secretStream = new PassThrough();
     const chunks: Buffer[] = [];
@@ -480,6 +438,7 @@ describe("createChildAdapter", () => {
   });
 
   it("captures child close while secret input delivery is still pending", async () => {
+    setPlatform("win32");
     const { child, emitClose } = createStubChild();
     const secretStream = new Writable({
       write(_chunk, _encoding, callback) {

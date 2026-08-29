@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
+  type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -23,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
     (scope?: { agentId?: string; clone?: boolean; projection?: "full" | "list" }) => Array<{
       sessionKey: string;
       entry: {
-        createdActor?: { type: "human" | "agent" | "system"; id?: string };
+        createdActor?: SessionCreatedActor;
         updatedAt?: number;
       };
     }>
@@ -113,7 +114,11 @@ describe("session catalog entry snapshots", () => {
           sessionKey: session.sessionKey,
           entry: {
             createdVia: "operator",
-            createdActor: { type: "human" as const, id: index === 0 ? "person" : "missing" },
+            createdActor: {
+              type: "human" as const,
+              source: "profile" as const,
+              id: index === 0 ? "person" : "missing",
+            },
           },
         })),
       ),
@@ -123,9 +128,13 @@ describe("session catalog entry snapshots", () => {
         cfg: {},
         fallbackAgentId: "main",
       });
-      return hosts.map((host) =>
-        snapshot.projectHostCreatedActors(host).sessions.map((session) => session.createdActor),
-      );
+      return hosts.map((host) => {
+        const instances = new Map();
+        snapshot.captureHostInstances(host, instances);
+        return snapshot
+          .projectHostCreatedActors(host, instances)
+          .sessions.map((session) => session.createdActor);
+      });
     };
     const expectedActors = () => [
       {
@@ -146,7 +155,7 @@ describe("session catalog entry snapshots", () => {
     expect(display).toHaveBeenCalledTimes(4);
   });
 
-  it("shares one flattened entry snapshot across catalogs and creator projection", async () => {
+  it("shares provider planning entries while projecting all final catalogs from a fresh index", async () => {
     hoisted.listSessionEntriesReadOnly.mockReturnValue([
       {
         sessionKey: "agent:main:alpha-adopted",
@@ -184,7 +193,7 @@ describe("session catalog entry snapshots", () => {
       context: { getRuntimeConfig: () => ({}) },
     } as never);
 
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(2);
     expect(flattenedEntries).toHaveLength(2);
     expect(flattenedEntries[0]).toBe(flattenedEntries[1]);
     expect(respond).toHaveBeenCalledWith(true, {
@@ -264,7 +273,7 @@ describe("session catalog entry snapshots", () => {
     const creation = buildSessionCreationStamp({
       via: "spawn",
       ...inheritSessionCreationPolicy(
-        { createdActor: { type: "human", id: "former" }, sandbox: "required" },
+        { createdActor: { type: "human", source: "profile", id: "former" }, sandbox: "required" },
         { type: "agent", id: "research" },
       ),
       now: 1,
@@ -273,12 +282,20 @@ describe("session catalog entry snapshots", () => {
       { sessionKey: "agent:main:child", entry: { ...creation, updatedAt: 1 } },
       {
         sessionKey: "agent:main:channel",
-        entry: { ...creation, createdVia: "channel", updatedAt: 1 },
+        entry: {
+          ...buildSessionCreationStamp({
+            via: "channel",
+            actor: { type: "human", source: "channel", id: "former" },
+            sandbox: "required",
+            now: 1,
+          }),
+          updatedAt: 1,
+        },
       },
     ];
     hoisted.listSessionEntriesReadOnly.mockReturnValue(entries);
     const snapshot = createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main" });
-    const projected = snapshot.projectHostCreatedActors({
+    const host: Parameters<typeof snapshot.projectHostCreatedActors>[0] = {
       hostId: "gateway:fixture",
       label: "Fixture",
       kind: "gateway",
@@ -292,7 +309,10 @@ describe("session catalog entry snapshots", () => {
         canArchive: false,
         createdActor: { type: "human", id: "provider-spoof" },
       })),
-    });
+    };
+    const instances = new Map();
+    snapshot.captureHostInstances(host, instances);
+    const projected = snapshot.projectHostCreatedActors(host, instances);
     expect(projected.sessions.map((session) => session.createdActor)).toEqual([
       {
         type: "human",

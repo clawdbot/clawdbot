@@ -25,15 +25,17 @@ import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import {
+  CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
+  renderChatHistoryBoundary,
+} from "./chat-history-boundary.ts";
+import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import {
-  ChatTranscriptController,
-  type ChatTranscriptSession,
-} from "./chat-transcript-controller.ts";
+import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
 
 const markdownTableOwnerRefs = new WeakMap<
@@ -78,16 +80,28 @@ function renderTranscriptShell(
 ): TemplateResult {
   const projection = projectChatTranscript(props, transcript);
   // The sentinel is an out-of-flow IntersectionObserver target pinned over the
-  // virtualized rows; any content here paints on top of real messages. The
-  // floating "Show earlier" pill owns the loading affordance.
-  const historySentinel = props.historySentinel
+  // virtualized rows; it stays empty because content here paints on top of real
+  // messages. The visible affordance is the in-flow history boundary header.
+  const historySentinel = props.historyPagination
     ? html`<div class="chat-history-sentinel"></div>`
     : nothing;
+  // The boundary renders above the virtualized block and is charged to the
+  // virtualizer as scrollMargin, so prepends re-anchor on message rows and the
+  // viewport never follows the boundary itself.
+  const historyHeader = props.historyPagination
+    ? {
+        template: renderChatHistoryBoundary(props.historyPagination),
+        height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
+      }
+    : null;
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
           <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
             ${historySentinel}
+            ${projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+              ? historyHeader.template
+              : nothing}
             ${projection.showLoadingSkeleton
               ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
               : nothing}
@@ -97,7 +111,7 @@ function renderTranscriptShell(
               : nothing}
           </div>
         `
-      : projection.renderRows(historySentinel);
+      : projection.renderRows(historySentinel, historyHeader);
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"

@@ -864,10 +864,10 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
     await fs.rm(normalizedPath, { force: true });
     await run(
       "tar",
-      ["-czf", path.basename(normalizedPath), "-C", stageDir, ...stageRootEntries],
+      ["--no-xattrs", "-czf", path.basename(normalizedPath), "-C", stageDir, ...stageRootEntries],
       path.dirname(normalizedPath),
       {
-        // macOS bsdtar must not add AppleDouble (._*) sidecar entries.
+        // BSD tar has separate PAX xattr and AppleDouble (._*) metadata paths.
         env: { ...process.env, COPYFILE_DISABLE: "1" },
         timeoutMs,
       },

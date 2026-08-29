@@ -58,7 +58,7 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
-  const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
+  const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
@@ -202,6 +202,7 @@ export async function runEmbeddedFallbackCandidate(
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
         onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         toolResultFormat: (() => {
           const channel = resolveMessageChannel(turn.sessionCtx.Surface, turn.sessionCtx.Provider);
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
