@@ -50,6 +50,12 @@ type PendingOutputChunk = {
   text: string;
 };
 
+type PendingPollDelivery = {
+  output: string;
+  outputDropped: boolean;
+  scope: object;
+};
+
 /** One process record from execution through completed retention. */
 export interface ProcessSession {
   id: string;
@@ -97,6 +103,8 @@ export interface ProcessSession {
   pendingStderrChars: number;
   /** Output was dropped from the pending poll buffers since their last drain. */
   pendingOutputDropped: boolean;
+  /** Output prepared for a poll but not yet attached to the agent transcript. */
+  pendingPollDelivery?: PendingPollDelivery;
   aggregated: string;
   tail: string;
   exitCode?: number | null;
@@ -228,7 +236,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 }
 
 /** Drains pending chunks in producer callback order for a process poll. */
-export function drainSession(session: ProcessSession) {
+function drainSession(session: ProcessSession) {
   const pending = session.pendingOutput;
   const output =
     typeof pending === "string" ? pending : pending.map((chunk) => chunk.text).join("");
@@ -239,6 +247,43 @@ export function drainSession(session: ProcessSession) {
   session.pendingStderrChars = 0;
   session.pendingOutputDropped = false;
   return { output, outputDropped };
+}
+
+/** Stages one poll result until the agent transcript acknowledges its attachment. */
+export function prepareSessionPoll(session: ProcessSession, scope: object | undefined) {
+  if (!scope) {
+    return { ...drainSession(session), acknowledge() {} };
+  }
+  const pending = session.pendingPollDelivery;
+  if (pending) {
+    // Parallel polls from one assistant turn must not receive the same staged bytes.
+    if (pending.scope === scope) {
+      return { output: "", outputDropped: false, acknowledge() {} };
+    }
+    return {
+      output: pending.output,
+      outputDropped: pending.outputDropped,
+      acknowledge() {
+        if (session.pendingPollDelivery === pending) {
+          session.pendingPollDelivery = undefined;
+        }
+      },
+    };
+  }
+  const drained = drainSession(session);
+  if (drained.output.length === 0 && !drained.outputDropped) {
+    return { ...drained, acknowledge() {} };
+  }
+  const delivery = { ...drained, scope };
+  session.pendingPollDelivery = delivery;
+  return {
+    ...drained,
+    acknowledge() {
+      if (session.pendingPollDelivery === delivery) {
+        session.pendingPollDelivery = undefined;
+      }
+    },
+  };
 }
 
 /** Moves a session to finished state and records exit metadata. */
