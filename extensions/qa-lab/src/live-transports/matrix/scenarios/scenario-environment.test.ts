@@ -16,10 +16,14 @@ vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
-import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
+import {
+  createMatrixQaScenarioClient,
+  type MatrixQaScenarioContext,
+} from "./scenario-runtime-shared.js";
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("matrix scenario environment", () => {
@@ -73,8 +77,12 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
-        driver: { accessToken: "fixture", userId: "@driver:test" },
-        observer: { accessToken: "fixture", userId: "@observer:test" },
+        driver: { accessToken: "driver-primary", userId: "@driver:test" },
+        observer: { accessToken: "observer-primary", userId: "@observer:test" },
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         roomId: "!room:test",
         sut: { accessToken: "fixture", userId: "@sut:test" },
         topology: { rooms: [] },
@@ -93,16 +101,79 @@ describe("matrix scenario environment", () => {
     const syncState: MatrixQaScenarioContext["syncState"] = first.scenarioContext.syncState;
     syncState.driver = "s1";
     syncState.observer = "s2";
-    first.scenarioContext.syncStreams!.driver = { prime: vi.fn() } as never;
-    first.scenarioContext.syncStreams!.observer = { prime: vi.fn() } as never;
+    const staleObserver = { prime: vi.fn() } as never;
+    first.scenarioContext.syncStreams!.driver = staleObserver;
+    first.scenarioContext.syncStreams!.observer = staleObserver;
 
     const second = await environment.prepareFlow(input);
 
     expect(second.scenarioContext.syncState).toEqual({});
-    expect(second.scenarioContext.syncStreams).toEqual({});
+    expect(second.scenarioContext.syncStreams!.driver).not.toBe(staleObserver);
+    expect(second.scenarioContext.syncStreams!.observer).not.toBe(staleObserver);
     expect(second.scenarioContext.timeoutMs).toBe(8_000);
     expect(input.waitForConfigRestartSettle).not.toHaveBeenCalled();
     expect(runMatrixQaCanary).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
+
+    // Matrix acknowledges device messages when the next /sync uses next_batch.
+    // Room observation must not consume the encrypted client's verification event.
+    const done = { type: "m.key.verification.done", content: { transaction_id: "qr-fixture" } };
+    const pending = new Map([
+      ["driver-primary", [done]],
+      ["observer-primary", [done]],
+    ]);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const token = new Headers(init?.headers).get("authorization")?.replace("Bearer ", "") ?? "";
+      if (url.searchParams.get("since") === `${token}-delivered`) {
+        pending.delete(token);
+      }
+      return Response.json({
+        next_batch: `${token}-delivered`,
+        to_device: { events: pending.get(token) ?? [] },
+        rooms: {
+          join: {
+            "!room:test": {
+              timeline: {
+                events: [
+                  {
+                    event_id: "$reply",
+                    sender: "@sut:test",
+                    type: "m.room.message",
+                    content: { body: "reply", msgtype: "m.text" },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+    };
+    vi.stubGlobal("fetch", fetchImpl);
+    for (const actorId of ["driver", "observer"] as const) {
+      const accessToken = second.scenarioContext[`${actorId}AccessToken`];
+      const client = createMatrixQaScenarioClient({
+        accessToken,
+        actorId,
+        baseUrl: second.scenarioContext.baseUrl,
+        observedEvents: second.scenarioContext.observedEvents,
+        syncState: second.scenarioContext.syncState,
+        syncStreams: second.scenarioContext.syncStreams,
+      });
+      await client.primeRoom();
+      await client.waitForRoomEvent({
+        observedEvents: [],
+        predicate: (event) => event.eventId === "$reply",
+        roomId: "!room:test",
+        timeoutMs: 1_000,
+      });
+      const sdkSync = await fetchImpl(
+        "http://127.0.0.1:8008/_matrix/client/v3/sync?since=sdk-before",
+        {
+          headers: { authorization: `Bearer ${accessToken}` },
+        },
+      );
+      expect((await sdkSync.json()).to_device.events).toEqual([done]);
+    }
   });
 
   it("restores ordered override-heavy config to defaults from fresh current config", async () => {
@@ -321,6 +392,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -506,6 +581,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -626,6 +705,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -705,6 +788,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -806,6 +893,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -915,6 +1006,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
