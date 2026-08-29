@@ -215,31 +215,6 @@ enum MacNodeCodexThreadCatalog {
             client: client)
     }
 
-    static func turns(
-        paramsJSON: String?,
-        executable: String,
-        arguments: [String]? = nil,
-        cwd: URL? = nil,
-        clearEnv: [String] = [],
-        timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
-        maxLineBytes: Int = 20 * 1024 * 1024) async throws -> String
-    {
-        let params = try decodeTurnParams(paramsJSON)
-        let client = CodexAppServerThreadClient()
-        return try await self.withEphemeralClient(client) {
-            try await self.turns(
-                params: params,
-                invocation: ResolvedInvocation(
-                    executable: executable,
-                    arguments: arguments ?? self.defaultArguments,
-                    cwd: cwd,
-                    clearEnv: clearEnv),
-                client: client,
-                timeoutSeconds: timeoutSeconds,
-                maxLineBytes: maxLineBytes)
-        }
-    }
-
     private static func turns(
         params: TurnParams,
         invocation: ResolvedInvocation,
