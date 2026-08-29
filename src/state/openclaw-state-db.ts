@@ -62,6 +62,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertSupportedSchemaVersion,
   markCurrentStateSchemaVersion,
+  migrateConversationBindingTargets,
   migrateCronCreatorNamespaces,
   openClawStateMigrationAssertions,
   resolveDatabasePath,
@@ -215,6 +216,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           }
           if (migrateCronCreatorNamespaces(db, previousVersion)) {
             applied.push("Qualified historical cron creator attribution as unknown (v14)");
+          }
+          if (migrateConversationBindingTargets(db, previousVersion)) {
+            applied.push("Removed redundant conversation binding target projections (v15)");
           }
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
@@ -399,6 +403,7 @@ function ensureSchema(
         ensureAdditiveStateColumns(db);
         migrateJsonCanonicalWideRowsV13(db, previousVersion);
         migrateCronCreatorNamespaces(db, previousVersion);
+        migrateConversationBindingTargets(db, previousVersion);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
         executeCanonicalStateSchema(db, {

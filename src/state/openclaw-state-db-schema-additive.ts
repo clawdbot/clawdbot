@@ -459,8 +459,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "managed_outgoing_image_records",
     "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
   );
-  ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(
     db,
     "current_conversation_bindings",

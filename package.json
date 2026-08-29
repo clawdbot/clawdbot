@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 14,
+      "state": 15,
       "agent": 19
     }
   },

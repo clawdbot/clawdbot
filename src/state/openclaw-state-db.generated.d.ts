@@ -413,9 +413,7 @@ export interface CurrentConversationBindings {
   parent_conversation_id: string | null;
   record_json: string;
   status: string;
-  target_agent_id: string;
   target_kind: string;
-  target_session_id: string | null;
   target_session_key: string;
   updated_at: number;
 }

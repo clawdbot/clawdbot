@@ -2294,7 +2294,9 @@ describe("openclaw state database", () => {
       }
 
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(14);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(collectSqliteSchemaShape(migrated.db).gateway_origin_device_tokens).toEqual(
         createInitialStateSchemaShape().gateway_origin_device_tokens,
       );
@@ -2625,7 +2627,7 @@ describe("openclaw state database", () => {
       });
       closeOpenClawStateDatabaseForTest();
       expect(readSqliteNumberPragma(openOpenClawStateDatabase(options).db, "user_version")).toBe(
-        14,
+        OPENCLAW_STATE_SCHEMA_VERSION,
       );
     },
   );
@@ -2893,7 +2895,7 @@ describe("openclaw state database", () => {
             }).db,
             "user_version",
           ),
-        ).toBe(14);
+        ).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
       },
     );
   });
@@ -2929,7 +2931,7 @@ describe("openclaw state database", () => {
         db.prepare("UPDATE cron_jobs SET state_json = '[]'").run();
         expect(() => db.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL)).toThrow(/CHECK constraint/);
         db.exec("ROLLBACK");
-        expect(readSqliteNumberPragma(db, "user_version")).toBe(14);
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         expect(db.prepare("SELECT state_json FROM cron_jobs").get()).toEqual({ state_json: "[]" });
         db.close();
       },
@@ -2957,7 +2959,7 @@ describe("openclaw state database", () => {
     legacy.close();
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(14);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db
         .prepare(
@@ -3289,6 +3291,7 @@ describe("openclaw state database", () => {
       { kind: "singleton-state-foldin-v12", path: fixture.databasePath },
       { kind: "state-consolidation-v13", path: fixture.databasePath },
       { kind: "creator-namespace-v14", path: fixture.databasePath },
+      { kind: "conversation-binding-targets-v15", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -3306,6 +3309,7 @@ describe("openclaw state database", () => {
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Removed redundant conversation binding target projections (v15)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
