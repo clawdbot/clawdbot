@@ -3114,99 +3114,121 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
   );
 
-  it("rejects a retained version-bound updater payload outside the current release cohort", async () => {
-    const installDir = path.join(
-      tempDirs.make("openclaw-plugin-stub-repair-"),
-      "node_modules",
-      "codex",
-    );
-    fs.mkdirSync(installDir, { recursive: true });
-    createColdPluginFixture({
-      rootDir: installDir,
-      pluginId: "codex",
-      packageName: "@openclaw/codex",
-      packageVersion: VERSION,
-    });
-    const rejectedTargetDir = tempDirs.make("openclaw-doctor-rejected-runtime-");
-    fs.writeFileSync(
-      path.join(rejectedTargetDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/codex", version: "2026.5.2" }),
-    );
-    const records = {
-      codex: {
-        source: "npm" as const,
-        spec: "@openclaw/codex",
-        resolvedName: "@openclaw/codex",
-        resolvedSpec: `@openclaw/codex@${VERSION}`,
-        resolvedVersion: VERSION,
-        version: VERSION,
-        integrity: "sha512-old-codex",
-        installPath: installDir,
-      },
-    };
-    const pluginMetadata = {
-      id: "codex",
-      packageName: "@openclaw/codex",
-      packageVersion: VERSION,
-      providers: ["codex"],
-      channels: [],
-      origin: "global" as const,
-      rootDir: installDir,
-      packageDependencies: { "@example/required-runtime": "^1.0.0" },
-    };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [pluginMetadata],
-      diagnostics: [],
-      byPluginId: new Map([["codex", pluginMetadata]]),
-    });
-    mocks.updateNpmInstalledPlugins.mockResolvedValueOnce({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            codex: {
-              source: "npm",
-              spec: "@openclaw/codex",
-              resolvedName: "@openclaw/codex",
-              resolvedSpec: "@openclaw/codex@2026.5.2",
-              resolvedVersion: "2026.5.2",
-              version: "2026.5.2",
-              installPath: rejectedTargetDir,
+  it.each([
+    {
+      name: "a stale payload",
+      status: "updated" as const,
+      targetVersion: "2026.5.2",
+      reuseActiveRoot: false,
+      expectedWarning: "release cohort",
+    },
+    {
+      name: "an unchanged active root",
+      status: "unchanged" as const,
+      targetVersion: VERSION,
+      reuseActiveRoot: true,
+      expectedWarning: "fresh managed generation",
+    },
+  ])(
+    "rejects a retained version-bound updater result with $name",
+    async ({ status, targetVersion, reuseActiveRoot, expectedWarning }) => {
+      const installDir = path.join(
+        tempDirs.make("openclaw-plugin-stub-repair-"),
+        "node_modules",
+        "codex",
+      );
+      fs.mkdirSync(installDir, { recursive: true });
+      createColdPluginFixture({
+        rootDir: installDir,
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        packageVersion: VERSION,
+      });
+      const rejectedTargetDir = reuseActiveRoot
+        ? installDir
+        : tempDirs.make("openclaw-doctor-rejected-runtime-");
+      if (!reuseActiveRoot) {
+        fs.writeFileSync(
+          path.join(rejectedTargetDir, "package.json"),
+          JSON.stringify({ name: "@openclaw/codex", version: targetVersion }),
+        );
+      }
+      const records = {
+        codex: {
+          source: "npm" as const,
+          spec: "@openclaw/codex",
+          resolvedName: "@openclaw/codex",
+          resolvedSpec: `@openclaw/codex@${VERSION}`,
+          resolvedVersion: VERSION,
+          version: VERSION,
+          integrity: "sha512-old-codex",
+          installPath: installDir,
+        },
+      };
+      const pluginMetadata = {
+        id: "codex",
+        packageName: "@openclaw/codex",
+        packageVersion: VERSION,
+        providers: ["codex"],
+        channels: [],
+        origin: "global" as const,
+        rootDir: installDir,
+        packageDependencies: { "@example/required-runtime": "^1.0.0" },
+      };
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [pluginMetadata],
+        diagnostics: [],
+        byPluginId: new Map([["codex", pluginMetadata]]),
+      });
+      mocks.updateNpmInstalledPlugins.mockResolvedValueOnce({
+        changed: status === "updated",
+        config: {
+          plugins: {
+            installs: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex",
+                resolvedName: "@openclaw/codex",
+                resolvedSpec: `@openclaw/codex@${targetVersion}`,
+                resolvedVersion: targetVersion,
+                version: targetVersion,
+                installPath: rejectedTargetDir,
+              },
             },
           },
         },
-      },
-      outcomes: [{ pluginId: "codex", status: "updated", message: "Updated codex." }],
-    });
+        outcomes: [{ pluginId: "codex", status, message: `${status} codex.` }],
+      });
 
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+            },
           },
         },
-      },
-      env: {},
-    });
+        env: {},
+      });
 
-    expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
-      pluginIds: ["codex"],
-      skipDisabledPlugins: true,
-    });
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(hasRetainedManagedNpmInstallMarker(installDir)).toBe(false);
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(result.changes).toEqual([]);
-    expect(result.repairedPluginIds).toBeUndefined();
-    expect(result.pluginInventoryChanged).toBeUndefined();
-    expect(result.failedPluginIds).toEqual(["codex"]);
-    expect(result.records).toBe(records);
-    expect(result.warnings).toEqual([expect.stringContaining("release cohort")]);
-  });
+      expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
+        pluginIds: ["codex"],
+        skipDisabledPlugins: true,
+      });
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(hasRetainedManagedNpmInstallMarker(installDir)).toBe(false);
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      expect(result.changes).toEqual([]);
+      expect(result.repairedPluginIds).toBeUndefined();
+      expect(result.pluginInventoryChanged).toBeUndefined();
+      expect(result.failedPluginIds).toEqual(["codex"]);
+      expect(result.records).toBe(records);
+      expect(result.warnings).toEqual([expect.stringContaining(expectedWarning)]);
+    },
+  );
 
   it.each([
     {
