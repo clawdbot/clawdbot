@@ -140,7 +140,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
   });
 
-  it("labels a DM topic opened by captionless media from the inbound envelope", async () => {
+  it("labels a DM topic opened by a captionless photo from the inbound envelope", async () => {
     const sessionKey = "agent:default:telegram:direct:123";
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "s1", updatedAt: 1 },
@@ -160,6 +160,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
           RawBody: "",
           BodyForAgent: "",
           Body: inboundEnvelope,
+          media: [{ kind: "image" }],
         } as TelegramMessageContext["ctxPayload"],
       }),
       telegramCfg: { autoTopicLabel: true },
