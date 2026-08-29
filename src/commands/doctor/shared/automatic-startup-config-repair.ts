@@ -107,8 +107,23 @@ function planStartupConfigRepairPreview(
   return buildStartupConfigRepairPlan(snapshot, config, changes);
 }
 
+/**
+ * Repairable-snapshot trust check for callers that run before startup state admission
+ * (gateway pre-bootstrap selection, backup discovery). The full planner covers
+ * plugin-contract migrations but reads the installed-plugin registry from the shared
+ * state database; when that store is unreachable, fall back to the state-free preview
+ * so core-key repairs stay reachable and everything else keeps today's fail-closed
+ * refusal. The preflight committer and canonical-write matcher stay authoritative.
+ */
 export function resolveStartupConfigSnapshot(snapshot: ConfigFileSnapshot) {
-  return snapshot.valid ? snapshot : planStartupConfigRepairPreview(snapshot)?.snapshot;
+  if (snapshot.valid) {
+    return snapshot;
+  }
+  try {
+    return planStartupConfigRepair(snapshot)?.snapshot;
+  } catch {
+    return planStartupConfigRepairPreview(snapshot)?.snapshot;
+  }
 }
 
 /** Matches only the canonical writer result for a previously admitted startup repair. */

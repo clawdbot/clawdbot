@@ -129,6 +129,22 @@ describe("automatic startup config repair", () => {
     ).toBe(false);
   });
 
+  it("admits a config whose only migration is plugin-owned", () => {
+    // Regression: the pre-bootstrap trust check must reach plugin doctor contracts
+    // (here the bundled Active Memory retired-QMD removal), not only core migrations.
+    const snapshot = invalidSnapshot({
+      config: {
+        plugins: { entries: { "active-memory": { config: { qmd: { enabled: true } } } } },
+      } as OpenClawConfig,
+      issuePaths: ["plugins.entries.active-memory.config.qmd"],
+    });
+
+    const resolved = resolveStartupConfigSnapshot(snapshot);
+
+    expect(resolved?.valid).toBe(true);
+    expect(resolved?.sourceConfig.plugins?.entries?.["active-memory"]?.config).toEqual({});
+  });
+
   it("previews repairable snapshots without touching the shared state database", async () => {
     // Backup discovery and gateway pre-bootstrap resolve before state-database admission;
     // a broken store (here: a directory at the canonical path) must not break the preview.
