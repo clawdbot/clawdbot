@@ -54,7 +54,8 @@ enum AuthenticatedControlUI {
     static func authUserScript(
         config: GatewayConnectConfig?,
         pageURL: URL?,
-        storedOperatorToken: String?) -> String?
+        storedOperatorToken: String?,
+        usesNativeNavigationChrome: Bool = false) -> String?
     {
         guard let config, let pageURL else { return nil }
         var payload: [String: Any] = ["gatewayUrl": config.url.absoluteString]
@@ -114,6 +115,12 @@ enum AuthenticatedControlUI {
                 `openclaw.device.auth.v1:${scope}`,
                 JSON.stringify(deviceAuthSeed.authorization));
               localStorage.removeItem("openclaw.device.auth.v1");
+            }
+            if (\(usesNativeNavigationChrome)) {
+              Object.defineProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__", {
+                value: true,
+                configurable: true,
+              });
             }
             Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
               value: \(json),

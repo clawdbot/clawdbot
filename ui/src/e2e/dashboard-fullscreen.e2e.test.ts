@@ -179,6 +179,50 @@ suite.define(() => {
     });
   });
 
+  it("leaves dashboard dismissal to the native navigation host", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 393, height: 852 } },
+      async ({ page }) => {
+        await page.addInitScript(() => {
+          Object.defineProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__", {
+            value: true,
+            configurable: true,
+          });
+        });
+        await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.resolve": {
+              ok: true,
+              key: sessionKey,
+              agentId: "main",
+              displayName: sessionRow.displayName,
+              boardFace: sessionRow.boardFace,
+            },
+            "sessions.describe": { session: sessionRow },
+            "board.get": boardSnapshot,
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
+        const document = page.locator("openclaw-board-document");
+        await document.locator("openclaw-board-view").waitFor();
+
+        expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+        expect(await document.getByRole("button", { name: "Close dashboard" }).count()).toBe(0);
+        const horizontalOverflow = await page.evaluate(() => {
+          const board = document.querySelector("openclaw-board-view");
+          return {
+            document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            board: board ? board.scrollWidth - board.clientWidth : null,
+          };
+        });
+        expect(horizontalOverflow).toEqual({ document: 0, board: 0 });
+      },
+    );
+  });
+
   it("shows the board fullscreen control in split and dashboard faces", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const hiddenDockSnapshot = {

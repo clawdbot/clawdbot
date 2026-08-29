@@ -6,6 +6,7 @@ import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import {
+  BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
   toCssPlacement,
@@ -66,6 +67,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
+  @property({ type: Boolean }) fitAutoContent = false;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -418,7 +420,12 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     // the user manipulates the quantized rect they will actually commit.
     const exactHeightPx = this.dragging
       ? undefined
-      : exactBoardWidgetHeightPx(widget, this.contentHeightPx, boardChromeRowPx());
+      : exactBoardWidgetHeightPx(
+          widget,
+          this.contentHeightPx,
+          boardChromeRowPx(),
+          this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+        );
     const exactHeightStyle =
       exactHeightPx === undefined ? "" : ` height: ${exactHeightPx}px; align-self: start;`;
     return html`

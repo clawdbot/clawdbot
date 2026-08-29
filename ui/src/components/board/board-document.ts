@@ -271,6 +271,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     } satisfies BoardViewCallbacks;
     return html`<openclaw-board-view
       .active=${true}
+      .fitAutoContent=${true}
       .snapshot=${snapshot}
       .activeTabId=${this.activeTabId}
       .widgetFrameUrl=${(name: string, revision: number) => provider.widgetFrameUrl(name, revision)}
@@ -283,15 +284,17 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   override render() {
     return html`
       <main class="board-document" aria-label=${t("board.label")}>
-        <button
-          class="btn btn--ghost btn--icon board-document__close"
-          type="button"
-          aria-label=${t("dashboardDocument.close")}
-          title=${t("dashboardDocument.close")}
-          @click=${() => this.onDocumentClose?.()}
-        >
-          ${icons.x}
-        </button>
+        ${this.onDocumentClose
+          ? html`<button
+              class="btn btn--ghost btn--icon board-document__close"
+              type="button"
+              aria-label=${t("dashboardDocument.close")}
+              title=${t("dashboardDocument.close")}
+              @click=${this.onDocumentClose}
+            >
+              ${icons.x}
+            </button>`
+          : nothing}
         <div class="board-document__content">${this.renderState()}</div>
       </main>
     `;
