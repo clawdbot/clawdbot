@@ -42,11 +42,12 @@ openclaw plugins install ./path/to/local/line-plugin
 https://gateway-host/line/webhook
 ```
 
-The Gateway answers LINE's webhook verification (GET). For signed inbound events
-(POST), it writes each event to the durable ingress queue before returning `200`;
-agent processing continues asynchronously. Failed delivery is retried from the
-queue, including after a Gateway restart, and poison events become failed queue
-records after bounded retries. If durable persistence fails, the request returns
+The Gateway answers LINE's signed webhook verification request: a `POST` with an
+empty `events` list. For signed inbound events, it writes each event to the durable
+ingress queue before returning `200`; agent processing continues asynchronously.
+Failed delivery is retried from the queue, including after a Gateway restart, and
+poison events become failed queue records after bounded retries. If durable
+persistence fails, the request returns
 `500` instead of acknowledging an event that could be lost.
 Delivery is at least once across the queue-to-agent boundary: a Gateway shutdown or
 crash during an active delivery can replay the turn. Message events deduplicate by
