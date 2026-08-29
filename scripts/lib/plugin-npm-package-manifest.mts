@@ -12,10 +12,7 @@ import {
 } from "../generate-npm-package-lock.mts";
 import { resolveNpmRunner } from "../npm-runner.mts";
 import type { NpmRunnerParams } from "../npm-runner.mts";
-import {
-  listPluginNpmRuntimeBuildOutputs,
-  resolvePluginNpmRuntimeBuildPlan,
-} from "./plugin-npm-runtime-build.mts";
+import { resolvePluginNpmRuntimeBuildPlan } from "./plugin-npm-runtime-build.mts";
 import type { PluginNpmRuntimeBuildPlan, PluginPackageJson } from "./plugin-npm-runtime-build.mts";
 import { isRecord } from "./record-shared.mjs";
 
@@ -56,18 +53,6 @@ function readJsonFile(filePath: string): PluginPackageJson {
 
 function writeJsonFile(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function resolvePackageDir(repoRoot: string, packageDir: string) {
-  return path.isAbsolute(packageDir) ? packageDir : path.resolve(repoRoot, packageDir);
-}
-
-function resolvePackageJsonPath(packageDir: string) {
-  return path.join(packageDir, "package.json");
-}
-
-function packageRelativePathExists(packageDir: string, relativePath: string) {
-  return fs.existsSync(path.join(packageDir, relativePath));
 }
 
 function normalizePackPath(value: string) {
@@ -121,7 +106,7 @@ function assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan: PluginNpmR
     return;
   }
 
-  for (const requiredPath of listPluginNpmRuntimeBuildOutputs(plan)) {
+  for (const requiredPath of plan.runtimeBuildOutputs) {
     for (const exclusion of exclusions) {
       if (packFilePatternMatchesPath(exclusion, requiredPath)) {
         throw new Error(
@@ -133,8 +118,8 @@ function assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan: PluginNpmR
 }
 
 function assertPluginNpmRuntimeBuildExists(plan: PluginNpmRuntimeBuildPlan) {
-  const missing = listPluginNpmRuntimeBuildOutputs(plan).filter(
-    (runtimePath) => !packageRelativePathExists(plan.packageDir, runtimePath.replace(/^\.\//u, "")),
+  const missing = plan.runtimeBuildOutputs.filter(
+    (runtimePath) => !fs.existsSync(path.join(plan.packageDir, runtimePath.replace(/^\.\//u, ""))),
   );
   if (missing.length > 0) {
     const packageName =
@@ -149,21 +134,20 @@ function assertPluginNpmRuntimeBuildExists(plan: PluginNpmRuntimeBuildPlan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
-function resolvePackagedChannelStateMetadata(
+function resolvePackagedRuntimeMetadata(
   metadata: unknown,
   metadataKey: string,
   plan: PluginNpmRuntimeBuildPlan,
 ) {
-  if (
-    !metadata ||
-    !isRecord(metadata) ||
-    typeof metadata.specifier !== "string" ||
-    !metadata.specifier.trim()
-  ) {
+  if (!isRecord(metadata) && typeof metadata !== "string") {
+    return metadata;
+  }
+  const specifier = typeof metadata === "string" ? metadata : metadata.specifier;
+  if (typeof specifier !== "string" || !specifier.trim()) {
     return metadata;
   }
 
-  const normalizedSpecifier = normalizePackPath(metadata.specifier);
+  const normalizedSpecifier = normalizePackPath(specifier);
   const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
   const runtimeSpecifier = plan.runtimeBuildOutputs.find((runtimePath) => {
     const normalizedRuntimePath = normalizePackPath(runtimePath);
@@ -174,16 +158,14 @@ function resolvePackagedChannelStateMetadata(
   });
   if (!runtimeSpecifier) {
     throw new Error(
-      `channel ${metadataKey} specifier '${metadata.specifier}' has no package-local runtime output for ${plan.pluginDir}`,
+      `${metadataKey} '${specifier}' has no package-local runtime output for ${plan.pluginDir}`,
     );
   }
 
-  // Published plugins omit source files; installed channel probes must load
-  // the exact ESM or CommonJS sidecar emitted by the package runtime build.
-  return {
-    ...metadata,
-    specifier: runtimeSpecifier,
-  };
+  // Published plugins omit source files, so metadata must target the emitted sidecar.
+  return typeof metadata === "string"
+    ? runtimeSpecifier
+    : { ...metadata, specifier: runtimeSpecifier };
 }
 
 function resolvePackagedChannelMetadata(plan: PluginNpmRuntimeBuildPlan) {
@@ -195,9 +177,9 @@ function resolvePackagedChannelMetadata(plan: PluginNpmRuntimeBuildPlan) {
   const packagedChannel: JsonRecord = { ...channel };
   for (const metadataKey of ["configuredState", "persistedAuthState"]) {
     if (Object.hasOwn(channel, metadataKey)) {
-      packagedChannel[metadataKey] = resolvePackagedChannelStateMetadata(
+      packagedChannel[metadataKey] = resolvePackagedRuntimeMetadata(
         channel[metadataKey],
-        metadataKey,
+        `channel ${metadataKey} specifier`,
         plan,
       );
     }
@@ -539,7 +521,7 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
   }
 
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
-  const packageJsonPath = resolvePackageJsonPath(params.packageDir);
+  const packageJsonPath = path.join(params.packageDir, "package.json");
   const packedPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
   const installPackageJsonBase = {
     ...params.packageJson,
@@ -610,8 +592,8 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
  */
 export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
-  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
-  const packageJsonPath = resolvePackageJsonPath(packageDir);
+  const packageDir = path.resolve(repoRoot, params.packageDir);
+  const packageJsonPath = path.join(packageDir, "package.json");
   if (!fs.existsSync(packageJsonPath)) {
     return {
       packageJsonPath,
@@ -777,7 +759,7 @@ export function mergeGeneratedChannelConfigs(
  */
 export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
-  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
+  const packageDir = path.resolve(repoRoot, params.packageDir);
   const manifestPath = path.join(packageDir, "openclaw.plugin.json");
   if (!fs.existsSync(manifestPath)) {
     return {
@@ -793,14 +775,24 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
-  const augmentedManifest = mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs);
+  const augmentedManifest = { ...mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) };
+  if (typeof manifest.providerCatalogEntry === "string") {
+    const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir });
+    if (plan) {
+      augmentedManifest.providerCatalogEntry = resolvePackagedRuntimeMetadata(
+        manifest.providerCatalogEntry,
+        "providerCatalogEntry",
+        plan,
+      );
+    }
+  }
   const changed = JSON.stringify(augmentedManifest) !== JSON.stringify(manifest);
   return {
     manifestPath,
     pluginId,
     changed,
     manifest: augmentedManifest,
-    reason: changed ? "generated-channel-configs" : "unchanged",
+    reason: changed ? "generated-manifest-metadata" : "unchanged",
   };
 }
 
@@ -820,8 +812,8 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   callback: (context: ManifestOverlayContext) => T,
 ): T {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
-  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
-  const packageJsonPath = resolvePackageJsonPath(packageDir);
+  const packageDir = path.resolve(repoRoot, params.packageDir);
+  const packageJsonPath = path.join(packageDir, "package.json");
   const packageJsonForBundlePolicy = fs.existsSync(packageJsonPath)
     ? readJsonFile(packageJsonPath)
     : undefined;
@@ -862,7 +854,7 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
       : undefined;
   if (resolvedManifest.changed && resolvedManifest.manifest) {
     console.error(
-      `[plugin-npm-publish] overlaying generated channel config metadata for ${resolvedManifest.pluginId}`,
+      `[plugin-npm-publish] overlaying generated manifest metadata for ${resolvedManifest.pluginId}`,
     );
     writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
   }

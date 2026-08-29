@@ -409,6 +409,11 @@ describe("plugin npm package manifest staging", () => {
   it("overlays package-local runtime metadata while packing and restores source package json", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-");
     const packageDir = writePublishablePluginPackage(repoDir);
+    writeJsonFile(join(packageDir, "openclaw.plugin.json"), {
+      id: "diffs",
+      providers: ["diffs"],
+      providerCatalogEntry: "./provider-discovery.ts",
+    });
     const sourcePackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
     sourcePackageJson.openclaw.channel = {
       id: "diffs",
@@ -422,8 +427,10 @@ describe("plugin npm package manifest staging", () => {
       join(packageDir, "configured-state.ts"),
       "export function hasConfiguredChannelState() {}\n",
     );
+    writeFileText(join(packageDir, "provider-discovery.ts"), "export default {};\n");
     writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "provider-discovery.js"), "export default {};\n");
     writeFileText(
       join(packageDir, "dist", "configured-state.js"),
       "export function hasConfiguredChannelState() { return true; }\n",
@@ -471,6 +478,7 @@ describe("plugin npm package manifest staging", () => {
     });
 
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    const originalManifest = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
     withAugmentedPluginNpmManifestForPackage(
       { repoRoot: repoDir, packageDir, bundleDependencies: true },
       () => {
@@ -491,14 +499,25 @@ describe("plugin npm package manifest staging", () => {
         expect(stagedPackageJson.files).toContain("skills/**");
         expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
         expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);
+        expect(
+          JSON.parse(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"))
+            .providerCatalogEntry,
+        ).toBe("./dist/provider-discovery.js");
       },
     );
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+    expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalManifest);
   });
 
-  it("packs and loads both mapped channel-state probes from one package artifact", () => {
+  it("packs and loads mapped provider and channel entries from one package artifact", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
     const packageDir = writePublishablePluginPackage(repoDir);
+    writeJsonFile(join(packageDir, "openclaw.plugin.json"), {
+      id: "diffs",
+      providers: ["diffs"],
+      providerCatalogEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
     const sourcePackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
     sourcePackageJson.openclaw.build = { runtimeFormat: "cjs" };
     sourcePackageJson.openclaw.channel = {
@@ -521,6 +540,7 @@ describe("plugin npm package manifest staging", () => {
       join(packageDir, "auth-presence.ts"),
       "export function hasPersistedChannelAuth() {}\n",
     );
+    writeFileText(join(packageDir, "provider-discovery.ts"), "export default { id: 'diffs' };\n");
     writeFileText(join(packageDir, "dist", "index.cjs"), "module.exports = {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.cjs"), "module.exports = {};\n");
     writeFileText(
@@ -531,8 +551,13 @@ describe("plugin npm package manifest staging", () => {
       join(packageDir, "dist", "auth-presence.cjs"),
       "exports.hasPersistedChannelAuth = () => true;\n",
     );
+    writeFileText(
+      join(packageDir, "dist", "provider-discovery.cjs"),
+      "module.exports = { id: 'diffs', auth: [], catalog: { run: () => ({ models: [] }) } };\n",
+    );
 
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    const originalManifest = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
     withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
       const stagedPackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
       expect(stagedPackageJson.openclaw.channel.configuredState).toEqual({
@@ -570,8 +595,10 @@ describe("plugin npm package manifest staging", () => {
       const packedFiles = packedPackage.files.map((file) => file.path);
       expect(packedFiles).toContain("dist/configured-state.cjs");
       expect(packedFiles).toContain("dist/auth-presence.cjs");
+      expect(packedFiles).toContain("dist/provider-discovery.cjs");
       expect(packedFiles).not.toContain("configured-state.ts");
       expect(packedFiles).not.toContain("auth-presence.ts");
+      expect(packedFiles).not.toContain("provider-discovery.ts");
 
       const extract = spawnSync(
         "tar",
@@ -587,13 +614,36 @@ describe("plugin npm package manifest staging", () => {
       const load = spawnSync(
         process.execPath,
         [
+          "--import",
+          tsxImport,
           "--input-type=module",
           "--eval",
           `
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { loadPluginManifestRegistryCore } from ${JSON.stringify(new URL("../src/plugins/manifest-registry.ts", import.meta.url).href)};
+import { resolvePluginDiscoveryProvidersRuntime } from ${JSON.stringify(new URL("../src/plugins/provider-discovery.runtime.ts", import.meta.url).href)};
 const root = ${JSON.stringify(packageRoot)};
 const pkg = JSON.parse(fs.readFileSync(root + "/package.json", "utf8"));
+const manifest = JSON.parse(fs.readFileSync(root + "/openclaw.plugin.json", "utf8"));
+const provider = await import(new URL(manifest.providerCatalogEntry, pathToFileURL(root + "/")));
+if (provider.default?.id !== "diffs") throw new Error("packed provider discovery failed");
+const config = { plugins: { entries: { diffs: { enabled: true } } } };
+const registry = loadPluginManifestRegistryCore({
+  config,
+  installRecords: {},
+  candidates: [{ idHint: "diffs", source: root + "/dist/index.cjs", rootDir: root, origin: "global" }],
+});
+const index = { plugins: [{ pluginId: "diffs", rootDir: root, origin: "global", enabled: true }], installRecords: {} };
+const discovered = resolvePluginDiscoveryProvidersRuntime({
+  config,
+  env: {},
+  discoveryEntriesOnly: true,
+  pluginMetadataSnapshot: { index, manifestRegistry: registry },
+});
+if (discovered.length !== 1 || discovered[0].id !== "diffs") {
+  throw new Error("packed provider discovery registry failed");
+}
 for (const key of ["configuredState", "persistedAuthState"]) {
   const state = pkg.openclaw.channel[key];
   const loaded = await import(new URL(state.specifier, pathToFileURL(root + "/")));
@@ -605,6 +655,7 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
         {
           cwd: packageRoot,
           encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: join(process.cwd(), "tsconfig.json") },
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
@@ -612,6 +663,7 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
       expect(load.stdout).toBe("PACKED_PLUGIN_CHANNEL_STATE_OK\n");
     });
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+    expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalManifest);
   });
 
   it("stages portable bundled dependencies without polluting pack output", () => {
