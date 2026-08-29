@@ -1940,6 +1940,17 @@ describe("resolveTsdownBuildInvocation", () => {
     await expectPathMissing(outputDir);
   });
 
+  it("refuses an output root containing checkout artifact ownership", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-owner-clean-");
+    const owner = path.join(rootDir, ".artifacts/dist-artifacts.lock/owner.json");
+    await fsPromises.mkdir(path.dirname(owner), { recursive: true });
+    await fsPromises.writeFile(owner, "owned");
+    expect(() => cleanTsdownOutputRoots({ cwd: rootDir, roots: [".artifacts"] })).toThrow(
+      "Cannot clean the checkout's dist artifact ownership location",
+    );
+    expect(await fsPromises.readFile(owner, "utf8")).toBe("owned");
+  });
+
   it("refuses to clean the working directory and leaves it intact", async () => {
     const rootDir = createTempDir("openclaw-tsdown-cwd-clean-");
     const keepFile = path.join(rootDir, "keep.js");
@@ -2508,10 +2519,10 @@ describe("runTsdownBuildInvocation", () => {
         ].join("");
         const runnerScript = [
           `import { runTsdownBuildInvocation } from ${JSON.stringify(scriptUrl)};`,
-          "await runTsdownBuildInvocation(",
+          "const result = await runTsdownBuildInvocation(",
           `  { command: process.execPath, args: ['-e', ${JSON.stringify(parentScript)}], options: { stdio: ['ignore', 'pipe', 'pipe'], shell: false, env: process.env } },`,
           "  { env: { ...process.env, OPENCLAW_TSDOWN_HEARTBEAT_MS: '0' } },",
-          ");",
+          "); process.exitCode = result.status ?? 1;",
         ].join("\n");
 
         runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
@@ -2526,8 +2537,8 @@ describe("runTsdownBuildInvocation", () => {
         runner.kill("SIGTERM");
 
         await expect(waitForChildClose(runner)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
+          code: 143,
+          signal: null,
         });
         await waitForDead(childPid, 2_000);
       } finally {

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { build } from "tsdown";
 import { discoverDeclarationSources } from "./lib/declaration-source-index.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   buildPluginSdkEntrySources,
   listPluginSdkDeclarationOutputs,
@@ -50,78 +52,86 @@ function copyFlatDeclarations(fromDir: string, toDir: string): void {
   }
 }
 
-const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
-const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
-  ? pluginSdkEntrypoints
-  : productionPluginSdkEntrypoints;
-const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
+export async function writePluginSdkEntryDts() {
+  const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
+  const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+  const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
+    ? pluginSdkEntrypoints
+    : productionPluginSdkEntrypoints;
+  const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
-if (USE_CANONICAL_DECLARATIONS) {
-  for (const relativePath of listPluginSdkDeclarationOutputs(flatDeclarationEntrypoints)) {
-    const declarationPath = path.resolve(process.cwd(), relativePath);
-    if (!fs.existsSync(declarationPath)) {
-      throw new Error(
-        `Missing canonical plugin SDK declaration: ${path.relative(process.cwd(), declarationPath)}`,
-      );
-    }
-  }
-} else {
-  const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
-  try {
-    const entry = buildPluginSdkEntrySources(flatDeclarationEntrypoints);
-    const tsconfig = "tsconfig.plugin-sdk.dts.json";
-    const files = discoverDeclarationSources(tsconfig, Object.values(entry));
-    await build({
-      clean: true,
-      config: false,
-      deps: { neverBundle: (id) => isBareImportSpecifier(id) },
-      // Eager reuse checks source root membership, including transitive emit requests.
-      dts: { emitDtsOnly: true, eager: true, tsconfigRaw: { files, include: [] } },
-      entry,
-      failOnWarn: false,
-      fixedExtension: false,
-      format: "esm",
-      logLevel: "error",
-      outDir: flatDeclarationTempDir,
-      outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
-      platform: "node",
-      report: false,
-      tsconfig,
-    });
-
-    for (const name of flatDeclarationEntrypoints) {
-      if (!fs.existsSync(path.join(flatDeclarationTempDir, `${name}.d.ts`))) {
-        throw new Error(`Missing plugin SDK declaration: ${name}.d.ts`);
+  if (USE_CANONICAL_DECLARATIONS) {
+    for (const relativePath of listPluginSdkDeclarationOutputs(flatDeclarationEntrypoints)) {
+      const declarationPath = path.resolve(process.cwd(), relativePath);
+      if (!fs.existsSync(declarationPath)) {
+        throw new Error(
+          `Missing canonical plugin SDK declaration: ${path.relative(process.cwd(), declarationPath)}`,
+        );
       }
     }
-    removeExistingFlatDeclarations(distPluginSdkDir);
-    copyFlatDeclarations(flatDeclarationTempDir, distPluginSdkDir);
-  } finally {
-    fs.rmSync(flatDeclarationTempDir, { recursive: true, force: true });
+  } else {
+    const flatDeclarationTempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"),
+    );
+    try {
+      const entry = buildPluginSdkEntrySources(flatDeclarationEntrypoints);
+      const tsconfig = "tsconfig.plugin-sdk.dts.json";
+      const files = discoverDeclarationSources(tsconfig, Object.values(entry));
+      await build({
+        clean: true,
+        config: false,
+        deps: { neverBundle: (id) => isBareImportSpecifier(id) },
+        // Eager reuse checks source root membership, including transitive emit requests.
+        dts: { emitDtsOnly: true, eager: true, tsconfigRaw: { files, include: [] } },
+        entry,
+        failOnWarn: false,
+        fixedExtension: false,
+        format: "esm",
+        logLevel: "error",
+        outDir: flatDeclarationTempDir,
+        outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
+        platform: "node",
+        report: false,
+        tsconfig,
+      });
+
+      for (const name of flatDeclarationEntrypoints) {
+        if (!fs.existsSync(path.join(flatDeclarationTempDir, `${name}.d.ts`))) {
+          throw new Error(`Missing plugin SDK declaration: ${name}.d.ts`);
+        }
+      }
+      removeExistingFlatDeclarations(distPluginSdkDir);
+      copyFlatDeclarations(flatDeclarationTempDir, distPluginSdkDir);
+    } finally {
+      fs.rmSync(flatDeclarationTempDir, { recursive: true, force: true });
+    }
   }
+
+  // The root npm package ships flat bundled declarations under `dist/plugin-sdk`.
+  // The private workspace package keeps source-shaped declaration paths for local
+  // package-boundary projects, so bridge them back to the packaged flat entries.
+  for (const entry of pluginSdkEntrypoints) {
+    if (!flatDeclarationEntrypointSet.has(entry)) {
+      continue;
+    }
+
+    const packageTypeOut = path.join(
+      process.cwd(),
+      `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+    );
+    fs.mkdirSync(path.dirname(packageTypeOut), { recursive: true });
+    fs.writeFileSync(
+      packageTypeOut,
+      `export * from "../../../../../dist/plugin-sdk/${entry}.js";\n`,
+      "utf8",
+    );
+  }
+
+  const stampPath = path.join(process.cwd(), "dist/plugin-sdk/.boundary-entry-shims.stamp");
+  fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+  fs.writeFileSync(stampPath, `${new Date().toISOString()}\n`, "utf8");
 }
 
-// The root npm package ships flat bundled declarations under `dist/plugin-sdk`.
-// The private workspace package keeps source-shaped declaration paths for local
-// package-boundary projects, so bridge them back to the packaged flat entries.
-for (const entry of pluginSdkEntrypoints) {
-  if (!flatDeclarationEntrypointSet.has(entry)) {
-    continue;
-  }
-
-  const packageTypeOut = path.join(
-    process.cwd(),
-    `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-  );
-  fs.mkdirSync(path.dirname(packageTypeOut), { recursive: true });
-  fs.writeFileSync(
-    packageTypeOut,
-    `export * from "../../../../../dist/plugin-sdk/${entry}.js";\n`,
-    "utf8",
-  );
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  await withDistArtifactOwnership(process.cwd(), () => writePluginSdkEntryDts());
 }
-
-const stampPath = path.join(process.cwd(), "dist/plugin-sdk/.boundary-entry-shims.stamp");
-fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-fs.writeFileSync(stampPath, `${new Date().toISOString()}\n`, "utf8");

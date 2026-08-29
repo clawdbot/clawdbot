@@ -387,7 +387,7 @@ describe("resolveBuildAllSteps", () => {
 
   it.each(["full", "package", "ciArtifacts"])(
     "refuses %s before any build step or cache work when memory is insufficient",
-    (profile) => {
+    async (profile) => {
       const runStep = vi.fn(() => ({ status: 0 }));
       const resolveCacheState = vi.fn(() => ({
         cacheable: false,
@@ -398,7 +398,7 @@ describe("resolveBuildAllSteps", () => {
       const finalizeCache = vi.fn();
       const logger = { error: vi.fn(), warn: vi.fn() };
 
-      const result = runBuildAllSteps(profile, {
+      const result = await runBuildAllSteps(profile, {
         env: {},
         logger,
         memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
@@ -420,94 +420,97 @@ describe("resolveBuildAllSteps", () => {
     },
   );
 
-  it.each(["full", "package"])("admits %s once and freezes its heap for every child", (profile) => {
-    const tsdownSteps = resolveBuildAllSteps(profile).filter((step) =>
-      step.label.startsWith("tsdown-"),
-    );
-    const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
-    const executionOrder: string[] = [];
-    const restoreCache = vi.fn();
-    const result = runBuildAllSteps(profile, {
-      cacheEnabled: true,
-      env: {},
-      finalizeCache: vi.fn(),
-      logger: { error: vi.fn(), warn: vi.fn() },
-      memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
-      now: () => 0,
-      resolveCacheState(step) {
-        executionOrder.push(`cache:${step.label}`);
-        return step.label === "tsdown-packages"
-          ? {
-              cacheable: true,
-              fresh: true,
-              restorable: true,
-              reason: "fresh-cache",
-              signature: "test-signature",
-              outputRoot: "/test/cache",
-              stampPath: "/test/cache-stamp.json",
-              inputFiles: 1,
-              outputFiles: 1,
-              relativeOutputFiles: ["dist/test.js"],
-              stampedOutputs: ["dist/test.js"],
-            }
-          : { cacheable: false, fresh: false, reason: "no-cache" };
-      },
-      restoreCache,
-      runStep(invocation) {
-        executionOrder.push(
-          `run:${expectDefined(tsdownSteps[tsdownInvocations.length], "next tsdown step").label}`,
-        );
-        tsdownInvocations.push(invocation);
-        return { status: 0 };
-      },
-      steps: tsdownSteps,
-    });
+  it.each(["full", "package"])(
+    "admits %s once and freezes its heap for every child",
+    async (profile) => {
+      const tsdownSteps = resolveBuildAllSteps(profile).filter((step) =>
+        step.label.startsWith("tsdown-"),
+      );
+      const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const executionOrder: string[] = [];
+      const restoreCache = vi.fn();
+      const result = await runBuildAllSteps(profile, {
+        cacheEnabled: true,
+        env: {},
+        finalizeCache: vi.fn(),
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        now: () => 0,
+        resolveCacheState(step) {
+          executionOrder.push(`cache:${step.label}`);
+          return step.label === "tsdown-packages"
+            ? {
+                cacheable: true,
+                fresh: true,
+                restorable: true,
+                reason: "fresh-cache",
+                signature: "test-signature",
+                outputRoot: "/test/cache",
+                stampPath: "/test/cache-stamp.json",
+                inputFiles: 1,
+                outputFiles: 1,
+                relativeOutputFiles: ["dist/test.js"],
+                stampedOutputs: ["dist/test.js"],
+              }
+            : { cacheable: false, fresh: false, reason: "no-cache" };
+        },
+        restoreCache,
+        runStep(invocation) {
+          executionOrder.push(
+            `run:${expectDefined(tsdownSteps[tsdownInvocations.length], "next tsdown step").label}`,
+          );
+          tsdownInvocations.push(invocation);
+          return { status: 0 };
+        },
+        steps: tsdownSteps,
+      });
 
-    expect(result.exitCode).toBe(0);
-    expect(tsdownInvocations).toHaveLength(3);
-    for (const invocation of tsdownInvocations) {
-      expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
-      expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
-    }
-    expect(restoreCache).toHaveBeenCalledOnce();
-    expect(executionOrder).toEqual([
-      "cache:tsdown-ai",
-      "run:tsdown-ai",
-      "cache:tsdown-packages",
-      "run:tsdown-packages",
-      "cache:tsdown-unified",
-      "run:tsdown-unified",
-    ]);
+      expect(result.exitCode).toBe(0);
+      expect(tsdownInvocations).toHaveLength(3);
+      for (const invocation of tsdownInvocations) {
+        expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
+        expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+      }
+      expect(restoreCache).toHaveBeenCalledOnce();
+      expect(executionOrder).toEqual([
+        "cache:tsdown-ai",
+        "run:tsdown-ai",
+        "cache:tsdown-packages",
+        "run:tsdown-packages",
+        "cache:tsdown-unified",
+        "run:tsdown-unified",
+      ]);
 
-    const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
-    runBuildAllSteps("ciArtifacts", {
-      env: { OPENCLAW_BUILD_CACHE: "0" },
-      memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
-      finalizeCache: vi.fn(),
-      logger: { error: vi.fn(), warn: vi.fn() },
-      now: () => 0,
-      resolveCacheState: () => ({
-        cacheable: true,
-        fresh: true,
-        reason: "fresh",
-        restorable: false,
-        signature: "test-signature",
-        outputRoot: "/test/cache",
-        stampPath: "/test/cache-stamp.json",
-        inputFiles: 1,
-        outputFiles: 1,
-        relativeOutputFiles: ["dist/test.js"],
-        stampedOutputs: ["dist/test.js"],
-      }),
-      runStep: cacheDisabledRunner,
-      steps: [expectDefined(tsdownSteps[0], "first tsdown step")],
-    });
-    expect(cacheDisabledRunner).toHaveBeenCalledOnce();
-  });
+      const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
+      await runBuildAllSteps("ciArtifacts", {
+        env: { OPENCLAW_BUILD_CACHE: "0" },
+        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        finalizeCache: vi.fn(),
+        logger: { error: vi.fn(), warn: vi.fn() },
+        now: () => 0,
+        resolveCacheState: () => ({
+          cacheable: true,
+          fresh: true,
+          reason: "fresh",
+          restorable: false,
+          signature: "test-signature",
+          outputRoot: "/test/cache",
+          stampPath: "/test/cache-stamp.json",
+          inputFiles: 1,
+          outputFiles: 1,
+          relativeOutputFiles: ["dist/test.js"],
+          stampedOutputs: ["dist/test.js"],
+        }),
+        runStep: cacheDisabledRunner,
+        steps: [expectDefined(tsdownSteps[0], "first tsdown step")],
+      });
+      expect(cacheDisabledRunner).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"])(
     "skips heap admission for partial profile %s",
-    (profile) => {
+    async (profile) => {
       const partialEnv = { MARKER: "unchanged", NODE_OPTIONS: "--max-old-space-size=256" };
       expect(
         resolveBuildAllTsdownPlan(profile, partialEnv, {
@@ -517,7 +520,7 @@ describe("resolveBuildAllSteps", () => {
       const runStep = vi.fn<
         (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number }
       >(() => ({ status: 0 }));
-      const result = runBuildAllSteps(profile, {
+      const result = await runBuildAllSteps(profile, {
         env: partialEnv,
         logger: { error: vi.fn(), warn: vi.fn() },
         memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
@@ -563,10 +566,10 @@ describe("resolveBuildAllSteps", () => {
     },
   ])(
     "hands the cold ciArtifacts writer an effective child heap from $label",
-    ({ env, cgroupGiB, heapMb, nodeOptions, warns }) => {
+    async ({ env, cgroupGiB, heapMb, nodeOptions, warns }) => {
       const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
       const logger = { error: vi.fn(), warn: vi.fn() };
-      const result = runBuildAllSteps("ciArtifacts", {
+      const result = await runBuildAllSteps("ciArtifacts", {
         env,
         logger,
         memoryLimit: {
@@ -874,41 +877,44 @@ describe("resolveBuildAllSteps", () => {
         runtimeOnly: false,
         skipDts: "0",
       },
-    ])("honors $name in selected steps and compiler children", ({ env, runtimeOnly, skipDts }) => {
-      const originalEnv = { ...env };
-      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
-      const result = runBuildAllSteps(profile, {
-        cacheEnabled: false,
-        env,
-        logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
-        now: () => 0,
-        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
-        runStep(invocation) {
-          invocations.push(invocation);
-          return { status: 0 };
-        },
-      });
+    ])(
+      "honors $name in selected steps and compiler children",
+      async ({ env, runtimeOnly, skipDts }) => {
+        const originalEnv = { ...env };
+        const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+        const result = await runBuildAllSteps(profile, {
+          cacheEnabled: false,
+          env,
+          logger: { error: vi.fn(), warn: vi.fn() },
+          memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+          now: () => 0,
+          resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+          runStep(invocation) {
+            invocations.push(invocation);
+            return { status: 0 };
+          },
+        });
 
-      expect(result.exitCode).toBe(0);
-      const labels = result.timings.map((timing) => timing.label);
-      expect(labels).toEqual(
-        resolveBuildAllSteps(profile, {
-          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
-        }).map((step) => step.label),
-      );
-      expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
-      expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
-      expect(labels.includes("clean:dist")).toBe(profile === "package");
-      const compilers = invocations.filter((call) =>
-        call.args.includes("scripts/tsdown-build.mts"),
-      );
-      expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
-      for (const compiler of compilers) {
-        expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
-      }
-      expect(env).toEqual(originalEnv);
-    });
+        expect(result.exitCode).toBe(0);
+        const labels = result.timings.map((timing) => timing.label);
+        expect(labels).toEqual(
+          resolveBuildAllSteps(profile, {
+            OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
+          }).map((step) => step.label),
+        );
+        expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
+        expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
+        expect(labels.includes("clean:dist")).toBe(profile === "package");
+        const compilers = invocations.filter((call) =>
+          call.args.includes("scripts/tsdown-build.mts"),
+        );
+        expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
+        for (const compiler of compilers) {
+          expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+        }
+        expect(env).toEqual(originalEnv);
+      },
+    );
   });
 
   it("uses a source performance profile with QA assets and immutable build provenance", () => {

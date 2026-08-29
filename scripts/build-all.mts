@@ -11,6 +11,11 @@ import prettyMilliseconds from "pretty-ms";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
+import {
   listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
@@ -1003,7 +1008,7 @@ export function formatBuildAllTimingSummary(timings: BuildAllTiming[]) {
   return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
 }
 
-export function runBuildAllSteps(
+export async function runBuildAllSteps(
   profile: string,
   params: {
     cacheEnabled?: boolean;
@@ -1014,7 +1019,9 @@ export function runBuildAllSteps(
     now?: () => number;
     resolveCacheState?: typeof resolveBuildAllStepCacheState;
     restoreCache?: typeof restoreBuildAllStepCacheOutputs;
-    runStep?: (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number | null };
+    runStep?: (
+      invocation: ReturnType<typeof resolveBuildAllStep>,
+    ) => { status: number | null } | Promise<{ status: number | null }>;
     steps?: BuildAllStep[];
   } = {},
 ) {
@@ -1032,8 +1039,26 @@ export function runBuildAllSteps(
   const finalizeCache = params.finalizeCache ?? finalizeBuildAllStepCache;
   const runStep =
     params.runStep ??
-    ((invocation: ReturnType<typeof resolveBuildAllStep>) =>
-      spawnSync(invocation.command, invocation.args, invocation.options));
+    (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {
+      const script = invocation.args[2];
+      const entry =
+        script === "scripts/tsdown-build.mts"
+          ? "runTsdownBuild"
+          : script === "scripts/write-plugin-sdk-entry-dts.ts"
+            ? "writePluginSdkEntryDts"
+            : undefined;
+      return {
+        status: await runManagedCommand({
+          bin: invocation.command,
+          args:
+            script && entry
+              ? distArtifactEntryArgs(script, entry, invocation.args.slice(3))
+              : invocation.args,
+          ...invocation.options,
+          requireProcessTreeExit: process.platform !== "win32",
+        }),
+      };
+    });
   const timings: BuildAllTiming[] = [];
   let exitCode = 0;
   if (heapShortfall) {
@@ -1064,7 +1089,7 @@ export function runBuildAllSteps(
     }
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
-    const result = runStep(invocation);
+    const result = await runStep(invocation);
     const durationMs = cacheDurationMs + now() - startedAt;
     if (typeof result.status === "number") {
       if (result.status !== 0) {
@@ -1102,7 +1127,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const result = runBuildAllSteps(args.profile);
+    const result = await withDistArtifactOwnership(process.cwd(), () =>
+      runBuildAllSteps(args.profile),
+    );
     if (result.exitCode !== 0) {
       process.exit(result.exitCode);
     }

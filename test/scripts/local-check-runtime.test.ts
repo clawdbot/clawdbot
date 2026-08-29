@@ -383,7 +383,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
 `;
       fs.writeFileSync(
         path.join(scriptsDir, "prepare-extension-package-boundary-artifacts.mts"),
-        `import fs from "node:fs";\nconst step = "prep";\n${captureSource}`,
+        `import fs from "node:fs";\nexport async function prepareExtensionPackageBoundaryArtifacts() { const step = "prep";\n${captureSource} }`,
         "utf8",
       );
       fs.writeFileSync(

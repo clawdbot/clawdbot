@@ -7,7 +7,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  acquireBoundaryCheckLock,
   appendBoundedStepOutput,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
@@ -17,7 +16,6 @@ import {
   installCanaryArtifactCleanup,
   isBoundaryCompileFresh,
   resolveCompileConcurrency,
-  resolveBoundaryCheckLockPath,
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
   runNodeStepsWithConcurrency,
@@ -29,6 +27,7 @@ import {
   waitForFile,
   waitForPidFile,
 } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 
 const tempRoots = new Set<string>();
 
@@ -45,14 +44,6 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   fs.writeFileSync(canaryPath, "export {};\n", "utf8");
   fs.writeFileSync(tsconfigPath, '{ "extends": "./tsconfig.json" }\n', "utf8");
   return { canaryPath, tsconfigPath };
-}
-
-function createMockPipe() {
-  const pipe = new EventEmitter() as EventEmitter & {
-    setEncoding: (encoding: string) => void;
-  };
-  pipe.setEncoding = () => {};
-  return pipe;
 }
 
 afterEach(() => {
@@ -125,37 +116,6 @@ describe("check-extension-package-tsc-boundary", () => {
         resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
       ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
     }
-  });
-
-  it("blocks concurrent boundary checks in the same checkout", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const processObject = new EventEmitter();
-    const release = acquireBoundaryCheckLock({ processObject, rootDir });
-
-    let thrownError = null;
-    try {
-      acquireBoundaryCheckLock({ rootDir });
-    } catch (error) {
-      thrownError = error;
-    }
-
-    expect(thrownError).toBeInstanceOf(Error);
-    if (!(thrownError instanceof Error)) {
-      throw new Error("expected boundary lock contention to throw an Error");
-    }
-    expect(thrownError.message).toContain("kind: lock-contention");
-    expect(thrownError.message).toContain(
-      "another extension package boundary check is already running",
-    );
-    expect((thrownError as { fullOutput?: unknown }).fullOutput).toContain(
-      "another extension package boundary check is already running",
-    );
-    expect((thrownError as { kind?: unknown }).kind).toBe("lock-contention");
-
-    release();
-
-    const lockPath = resolveBoundaryCheckLockPath(rootDir);
-    expect(fs.existsSync(lockPath)).toBe(false);
   });
 
   it("summarizes long failure output with the useful tail", () => {
@@ -401,25 +361,18 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("keeps async node step failure output bounded", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      kill: (signal?: NodeJS.Signals | number) => boolean;
-      stderr: ReturnType<typeof createMockPipe>;
-      stdout: ReturnType<typeof createMockPipe>;
-    };
-    child.stdout = createMockPipe();
-    child.stderr = createMockPipe();
-    child.kill = () => true;
-
-    const failure = await runNodeStepAsync("noisy-plugin", ["--eval", "process.exit(2)"], 20_000, {
-      spawnImpl() {
-        setImmediate(() => {
-          child.stdout.emit("data", `stdout-begin-${"x".repeat(300_000)}-stdout-end`);
-          child.stderr.emit("data", `stderr-begin-${"y".repeat(300_000)}-stderr-end`);
-          child.emit("close", 2);
-        });
-        return child;
-      },
-    }).then(
+    const failure = await runNodeStepAsync(
+      "noisy-plugin",
+      [
+        "--eval",
+        [
+          "process.stdout.write('stdout-begin-' + 'x'.repeat(300000) + '-stdout-end');",
+          "process.stderr.write('stderr-begin-' + 'y'.repeat(300000) + '-stderr-end');",
+          "process.exitCode = 2;",
+        ].join("\n"),
+      ],
+      20_000,
+    ).then(
       () => {
         throw new Error("expected noisy-plugin step to fail");
       },
@@ -443,62 +396,6 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fullOutput.length).toBeLessThan(600_000);
   }, 30_000);
 
-  it("hard-kills timed out async node steps", async () => {
-    const processSignals: Array<[number, NodeJS.Signals | number | undefined]> = [];
-    let processGroupAlive = true;
-    const child = new EventEmitter() as EventEmitter & {
-      kill: (signal?: NodeJS.Signals | number) => boolean;
-      pid: number;
-      stderr: ReturnType<typeof createMockPipe>;
-      stdout: ReturnType<typeof createMockPipe>;
-    };
-    child.pid = 1234;
-    child.stdout = createMockPipe();
-    child.stderr = createMockPipe();
-    child.kill = () => true;
-
-    const failure = await runNodeStepAsync(
-      "hung-plugin",
-      ["--eval", "setTimeout(() => {}, 60_000)"],
-      5,
-      {
-        spawnImpl(command: string, args: string[]) {
-          expect(command).toBe(process.execPath);
-          expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
-          return child;
-        },
-        killProcess(pid: number, signal?: NodeJS.Signals | number) {
-          if (signal === "SIGKILL") {
-            processGroupAlive = false;
-          }
-          if (signal === 0 && !processGroupAlive) {
-            processSignals.push([pid, signal]);
-            throw Object.assign(new Error("gone"), { code: "ESRCH" });
-          }
-          processSignals.push([pid, signal]);
-          return true;
-        },
-        platform: "darwin",
-      },
-    ).then(
-      () => {
-        throw new Error("expected hung-plugin step to time out");
-      },
-      (error: unknown) => error,
-    );
-
-    expect(processSignals).toEqual([
-      [-1234, "SIGKILL"],
-      [-1234, 0],
-    ]);
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected timeout failure to reject with an Error");
-    }
-    expect(failure.message).toContain("hung-plugin timed out after 5ms");
-    expect((failure as { kind?: unknown }).kind).toBe("timeout");
-  });
-
   it.skipIf(process.platform === "win32")(
     "waits for timed-out async node step process groups",
     async () => {
@@ -517,25 +414,17 @@ describe("check-extension-package-tsc-boundary", () => {
         "setInterval(() => {}, 1000);",
       ].join("");
 
+      const releaseAndWait = startProcessWatchdogFixture(() =>
+        runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100),
+      );
       try {
-        const failurePromise = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100, {
-          spawnImpl(command: string, args: string[], options: unknown) {
-            return spawn(command, args, options as Parameters<typeof spawn>[2]);
-          },
-        }).then(
-          () => {
-            throw new Error("expected hung-step-group to time out");
-          },
-          (error: unknown) => error,
-        );
-
         childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
-        const failure = await failurePromise;
-        expect(failure).toBeInstanceOf(Error);
+        await expect(releaseAndWait()).rejects.toThrow("hung-step-group timed out after 100ms");
         await waitForDead(childPid, 2_000);
       } finally {
+        await releaseAndWait().catch(() => undefined);
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
@@ -667,9 +556,9 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
       const runnerScript = [
         `import { runNodeStepAsync } from ${JSON.stringify(scriptUrl)};`,
-        `await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
+        `try { await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
           parentScript,
-        )}], 60_000);`,
+        )}], 60_000); } catch { if (process.exitCode !== 143) process.exitCode = 1; }`,
       ].join("\n");
 
       try {
@@ -685,8 +574,8 @@ describe("check-extension-package-tsc-boundary", () => {
         runner.kill("SIGTERM");
 
         await expect(waitForChildClose(runner)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
+          code: 143,
+          signal: null,
         });
         await waitForDead(childPid, 2_000);
       } finally {
