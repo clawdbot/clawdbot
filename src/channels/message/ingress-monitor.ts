@@ -16,42 +16,6 @@ import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
-type ChannelIngressErrorClass<TError extends Error, TArgs extends unknown[]> = {
-  new (...args: TArgs): TError;
-  readonly name: string;
-  readonly prototype: TError;
-};
-
-export function createChannelIngressError(
-  name: string,
-): ChannelIngressErrorClass<Error, [message: string, options?: ErrorOptions]>;
-export function createChannelIngressError<TReason extends string>(
-  name: string,
-  options: { withReason: true },
-): ChannelIngressErrorClass<
-  Error & { readonly reason: TReason },
-  [reason: TReason, message: string, errorOptions?: ErrorOptions]
->;
-export function createChannelIngressError(
-  name: string,
-  options?: { withReason?: boolean },
-): unknown {
-  const IngressError = class extends Error {
-    declare readonly reason?: string;
-
-    constructor(first: string, second?: string | ErrorOptions, third?: ErrorOptions) {
-      const reasoned = options?.withReason === true;
-      super(reasoned ? (second as string) : first, reasoned ? third : (second as ErrorOptions));
-      this.name = name;
-      if (reasoned) {
-        this.reason = first;
-      }
-    }
-  };
-  Object.defineProperty(IngressError, "name", { configurable: true, value: name });
-  return IngressError;
-}
-
 /** Stable identity and serialization lane extracted before durable admission. */
 export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 
@@ -64,6 +28,7 @@ export type ChannelIngressMonitorLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
+  onDeferredHeartbeat?: () => void;
   onAdoptionFinalizing: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
   onCancelled?: () => void | Promise<void>;
@@ -432,10 +397,19 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (result?.kind === "failed-retryable") {
           return result;
         }
-        if (isAborted() || lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: createStoppedError() };
-        }
+        // Terminal and handoff outcomes must reach the drain even when stop
+        // races the return: the drain settles terminal results under abort and
+        // keeps deferred claims for their owner. Rewriting them to
+        // failed-retryable here would release claims whose side effects already
+        // ran, replaying delivered work on restart.
         if (result?.kind === "completed") {
+          // A deferred handoff recorded during delivery stays authoritative:
+          // the drain already placed the claim in deferred and only settles a
+          // completed result from dispatching, so a conflicting terminal return
+          // would strand the claim until later recovery.
+          if (deferredHandoff) {
+            return { kind: "deferred" };
+          }
           return result;
         }
         if (result?.kind === "deferred") {
@@ -444,11 +418,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           return { kind: "deferred" };
         }
+        if (deferredHandoff) {
+          return { kind: "deferred" };
+        }
+        if (isAborted() || lifecycle.abortSignal.aborted) {
+          return { kind: "failed-retryable", error: createStoppedError() };
+        }
         if (!handedOff) {
           // A policy gate or deliberate no-dispatch is terminal for transport replay.
           await wrappedLifecycle.onAdopted();
         }
-        return deferredHandoff ? { kind: "deferred" } : { kind: "completed" };
+        return { kind: "completed" };
       },
     });
     return drain;

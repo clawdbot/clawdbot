@@ -4,10 +4,14 @@ import { describe, expect, test } from "vitest";
 import {
   createQaBusState,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { type CapturedSpan, startLocalOtlpReceiver } from "./otel-test-support.js";
+
+const CODE_MODE_RECONCILIATION_NEEDLE =
+  "The previous Code Mode mutation may have partially applied.";
 
 async function startOtlpReceiver(disallowedBodyNeedles: string[] = []) {
   const receiver = startLocalOtlpReceiver(disallowedBodyNeedles);
@@ -89,14 +93,14 @@ describe("diagnostics-otel gateway runtime", () => {
     let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
     let receiver: Awaited<ReturnType<typeof startOtlpReceiver>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+    const gatewayOwner = createQaGatewayChild();
 
     try {
       bus = await startQaBusServer({ state });
       const activeReceiver = await startOtlpReceiver(["qa-plugin-usage-secret-sentinel"]);
       receiver = activeReceiver;
       mock = await startQaMockOpenAiServer();
-      gateway = await startQaGatewayChild({
+      await gatewayOwner.start({
         repoRoot,
         useRepoCli: true,
         providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -183,41 +187,38 @@ describe("diagnostics-otel gateway runtime", () => {
         `${mock.baseUrl}/debug/requests?after=${requestCursor.cursor}`,
       ).then((response) => response.json())) as Array<{
         allInputText?: string;
-        body?: { input?: Array<Record<string, unknown>>; tools?: unknown[] };
+        body?: { input?: Array<Record<string, unknown>>; tools?: Array<{ name?: string }> };
+        plannedToolCallId?: string;
         plannedToolName?: string;
         plannedWireToolName?: string;
         toolOutputCallId?: string;
       }>;
       const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
       const finalizations = scenarioRequests.filter((request) =>
-        (request.allInputText ?? "").includes(
+        [
           "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
-        ),
+          CODE_MODE_RECONCILIATION_NEEDLE,
+        ].some((needle) => (request.allInputText ?? "").includes(needle)),
       );
       expect(readPlans).toHaveLength(1);
+      expect(readPlans[0]?.plannedToolCallId).toBeTruthy();
       expect(readPlans[0]?.plannedWireToolName).toBe("exec");
       expect(finalizations).toHaveLength(1);
-      expect(finalizations[0]?.body?.tools ?? []).toHaveLength(0);
-      expect(finalizations[0]?.allInputText).toContain(
-        "If a tool failed, say so; never claim completion or success.",
-      );
+      expect(finalizations[0]?.allInputText).toContain(CODE_MODE_RECONCILIATION_NEEDLE);
+      expect(finalizations[0]?.allInputText).toContain("report exactly what applied");
+      expect(finalizations[0]?.body?.tools?.map((tool) => tool.name)).toEqual(["read"]);
       const finalizationInput = finalizations[0]?.body?.input ?? [];
-      const failedExecCalls = finalizationInput.filter(
-        (item) =>
-          item.type === "function_call" &&
-          item.name === "exec" &&
-          JSON.stringify(item.arguments ?? "").includes("qa-failed-terminal-missing-file.txt"),
+      // The failed exec belongs to the host-owned Code Mode surface, so it must not be replayed
+      // into the model transcript; the following OTel assertion carries its failure evidence.
+      expect(
+        finalizationInput.filter(
+          (item) => item.type === "function_call" || item.type === "function_call_output",
+        ),
+      ).toEqual([]);
+      expect(finalizations[0]?.toolOutputCallId).toBeUndefined();
+      expect(scenarioRequests.indexOf(finalizations[0]!)).toBe(
+        scenarioRequests.indexOf(readPlans[0]!) + 1,
       );
-      const failedExecOutputs = finalizationInput.filter(
-        (item) =>
-          item.type === "function_call_output" &&
-          item.call_id === failedExecCalls[0]?.call_id &&
-          /ENOENT|no such file/iu.test(JSON.stringify(item.output ?? "")),
-      );
-      expect(failedExecCalls).toHaveLength(1);
-      expect(failedExecOutputs).toHaveLength(1);
-      expect(finalizations[0]?.toolOutputCallId).toBe(failedExecCalls[0]?.call_id);
-
       const failureEvidence = await waitFor(
         () => {
           const toolError = activeReceiver.capturedSpans.find(
@@ -388,7 +389,7 @@ describe("diagnostics-otel gateway runtime", () => {
     } finally {
       await settleCleanup(
         async () => {
-          await gateway?.stop();
+          await stopQaGatewayFixture(gatewayOwner);
         },
         async () => {
           await mock?.stop();

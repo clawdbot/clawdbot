@@ -5,7 +5,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -13,8 +12,6 @@ import {
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -60,7 +57,12 @@ function contextFor(
   const context = {
     basePath: "",
     gateway: {
-      snapshot: { phase: "connected", client, hello: null },
+      snapshot: {
+        phase: "connected",
+        client,
+        hello: null,
+        sessionKey: "agent:roboclaw:main",
+      },
       subscribe: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
@@ -77,12 +79,23 @@ function installShortResolver(
     ? { ok: true, key: rows[0].key }
     : { ok: false },
 ) {
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
     if (method === "sessions.resolve") {
-      return resolved;
-    }
-    if (method === "sessions.describe") {
-      return { session: rows.find((candidate) => candidate.key === params.key) ?? null };
+      const present = ({ key }: { key: string }) => {
+        const session = rows.find((candidate) => candidate.key === key);
+        return {
+          key,
+          agentId: session?.agentId ?? key.split(":")[1],
+          ...(session?.displayName ? { displayName: session.displayName } : {}),
+          ...(session?.boardFace ? { boardFace: session.boardFace } : {}),
+        };
+      };
+      return resolved.ok
+        ? { ok: true, ...present(resolved) }
+        : {
+            ok: false,
+            ...(resolved.candidates ? { candidates: resolved.candidates.map(present) } : {}),
+          };
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
@@ -97,26 +110,6 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
-  it("patches a canonical global session on the selected agent", async () => {
-    const patch = vi.fn(async () => ({}));
-    const state = {
-      sessionKey: "global",
-      assistantAgentId: "research",
-      agentsList: null,
-      hello: null,
-    } as ChatPageHost;
-
-    const sessions = { patch } as unknown as Pick<SessionCapability, "patch">;
-
-    await patchChatSessionLabel(state, sessions, "global", "Research thread");
-
-    expect(patch).toHaveBeenCalledWith(
-      "global",
-      { label: "Research thread" },
-      { agentId: "research" },
-    );
-  });
-
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list } = contextFor(({ agentId, search }) =>
@@ -472,44 +465,10 @@ describe("gateway-backed session route resolution", () => {
       agentId: "roboclaw",
       allowMissing: true,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: rows[1]?.key });
-  });
-
-  it("falls back to the prior list resolver when an older gateway rejects shortId", async () => {
-    const storedRow = row({
-      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
-      displayName: "Deploy monitor",
-    });
-    const { context, list } = contextFor(({ search }) =>
-      search === "12345678" ? result([storedRow]) : result([]),
-    );
-    const request = vi.fn(async () => {
-      throw new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "invalid sessions.resolve params: at root: unexpected property 'shortId'",
-      });
-    });
-    (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
-
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/deploy-monitor-123456780a", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-
-    expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
     expect(request).toHaveBeenCalledOnce();
-    expect(list).toHaveBeenCalledWith({
-      agentId: "roboclaw",
-      archivedFilter: "all",
-      includeDerivedTitles: true,
-      limit: 20,
-      search: "12345678",
-    });
   });
 
-  it("does not invoke the list fallback when the gateway resolver succeeds", async () => {
+  it("resolves a cold short route with one gateway request and no session search", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor(() => result([storedRow]));
     const request = installShortResolver(context, [storedRow]);
@@ -522,15 +481,16 @@ describe("gateway-backed session route resolution", () => {
     );
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("does not mask unrelated sessions.resolve validation errors", async () => {
+  it("fails visibly when the gateway rejects authoritative short-id resolution", async () => {
     const { context, list } = contextFor(() => result([]));
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
-      message: "invalid sessions.resolve params: shortId must be hexadecimal",
+      message: "invalid sessions.resolve params: at root: unexpected property 'shortId'",
     });
     const request = vi.fn(async () => {
       throw rejection;
@@ -545,6 +505,35 @@ describe("gateway-backed session route resolution", () => {
         new AbortController().signal,
       ),
     ).rejects.toBe(rejection);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("rejects a short-route result after navigation ownership is aborted", async () => {
+    const storedRow = row({ displayName: "Deploy monitor" });
+    const { context, list } = contextFor(() => result([storedRow]));
+    let finishResolution:
+      | ((result: { ok: true; key: string; agentId: string }) => void)
+      | undefined;
+    const request = vi.fn(
+      async () =>
+        await new Promise<{ ok: true; key: string; agentId: string }>((resolve) => {
+          finishResolution = resolve;
+        }),
+    );
+    (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
+    const controller = new AbortController();
+    const navigation = loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const reason = new Error("navigation superseded");
+    controller.abort(reason);
+    finishResolution?.({ ok: true, key: storedRow.key, agentId: "roboclaw" });
+
+    await expect(navigation).rejects.toBe(reason);
     expect(list).not.toHaveBeenCalled();
   });
 
@@ -616,7 +605,7 @@ describe("gateway-backed session route resolution", () => {
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: currentSession.key });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("prefers the current location key over a residual colliding handoff", async () => {
@@ -678,7 +667,7 @@ describe("gateway-backed session route resolution", () => {
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: expected.key });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("keeps a cold cached short route on the authoritative resolution path", async () => {
@@ -695,7 +684,7 @@ describe("gateway-backed session route resolution", () => {
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("keeps the gateway ambiguity check when cached rows share the uuid and slug", async () => {
@@ -722,7 +711,7 @@ describe("gateway-backed session route resolution", () => {
 
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678" });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("keeps the chooser when the slug matches neither or both tied sessions", async () => {
@@ -774,8 +763,9 @@ describe("gateway-backed session route resolution", () => {
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
-  it("returns not found when the gateway has no short-id match", async () => {
+  it("routes a missing-session exit to the route agent's main session", async () => {
     const { context, list } = contextFor(() => result([]));
+    context.gateway.snapshot.sessionKey = "agent:main:saved-active-session";
     const request = installShortResolver(context, [], { ok: false });
 
     const loaded = await loadChatRoute(
@@ -785,7 +775,12 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "roboclaw", search: "agent:roboclaw:deadbeef" }),
     );
@@ -916,7 +911,7 @@ describe("gateway-backed session route resolution", () => {
     });
   });
 
-  it("returns not found when neither a literal key nor slug resolves", async () => {
+  it("returns a persistent missing-session state when neither a literal key nor slug resolves", async () => {
     const { context, list } = contextFor(() => result([]));
     const loaded = await loadChatRoute(
       context,
@@ -925,8 +920,36 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a capped slug lookup nonterminal while later matches remain possible", async () => {
+    const exactKey = "agent:roboclaw:unknown-thread";
+    const laterMatch = row({ displayName: "Unknown thread" });
+    const { context, list } = contextFor(({ search, offset = 0 }) => {
+      if (search === exactKey) {
+        return result([]);
+      }
+      return offset === 100
+        ? result([laterMatch], { offset })
+        : result([], { hasMore: true, nextOffset: offset + 20, offset });
+    });
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/unknown-thread", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", candidates: [], truncated: true });
+    expect(list).toHaveBeenCalledTimes(6);
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 100 }));
   });
 
   it("resolves a cached literal without a gateway round-trip", async () => {

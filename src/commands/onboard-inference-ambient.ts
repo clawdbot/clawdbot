@@ -1,6 +1,5 @@
 import os from "node:os";
 import {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   resolveCodexCliHomePath,
 } from "../agents/cli-credentials.js";
@@ -60,18 +59,6 @@ export function detectAmbientInferenceBackends(
   // fall through to another process user's home or prompt a keychain.
   const homedir = env === process.env ? os.homedir : () => "";
   const homeDir = resolveOsHomeDir(env, homedir);
-  const claudeCredential = homeDir
-    ? readClaudeCliCredentialsCached({ homeDir, allowKeychainPrompt: false, ttlMs: 0 })
-    : null;
-  if (claudeCredential && claudeCredential.type !== "api_key_helper") {
-    candidates.push({
-      kind: "claude-cli",
-      modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
-      label: "Claude Code",
-      detail: "credential file found",
-      credentials: true,
-    });
-  }
   try {
     const codexHome =
       homeDir || env.CODEX_HOME?.trim() ? resolveCodexCliHomePath(undefined, env) : undefined;

@@ -2,16 +2,20 @@ import type { IncomingHttpHeaders } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import { resolveCachedGitHubIdentity } from "../state/user-profile-github-identity.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
 import { syncGitHubIdentity } from "../state/user-profiles.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   ControlUiGitHubError,
+  fetchGitHubApi,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
   GITHUB_REQUEST_TIMEOUT_MS,
   readBoundedResponse,
+  readGitHubJsonResponse,
+  readOptionalGitHubString,
 } from "./control-ui-github-api.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
@@ -22,7 +26,7 @@ const ACCESS_ASSERTION_MAX_BYTES = 16 * 1024;
 const ACCESS_IDENTITY_MAX_BYTES = 64 * 1024;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
-type ResolvedGitHubUserIdentity = { accountId: number; login: string };
+type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
 type AuthenticatedGitHubIdentitySyncResult = { profileId: string; updatedAt: number };
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
 
@@ -132,28 +136,13 @@ async function resolveGitHubUserIdentityByLogin(
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
   const accountId = payload.id;
-  const login = typeof payload.login === "string" ? normalizeGitHubLogin(payload.login) : undefined;
   if (!Number.isSafeInteger(accountId) || typeof accountId !== "number" || accountId <= 0) {
     throw new ControlUiGitHubError(502, "GitHub response omitted a valid account id");
   }
-  if (!login) {
-    throw new ControlUiGitHubError(502, "GitHub response omitted a valid login");
-  }
-  return { accountId, login };
+  return parseGitHubUserIdentity(accountId, payload);
 }
 
-async function resolveGitHubUserIdentityById(
-  accountId: number,
-): Promise<ResolvedGitHubUserIdentity> {
-  let payload: unknown;
-  try {
-    payload = await fetchGitHubJson(`${GITHUB_API_ORIGIN}/user/${accountId}`, fetch, undefined);
-  } catch (error) {
-    if (error instanceof ControlUiGitHubError) {
-      throw error;
-    }
-    throw new ControlUiGitHubError(502, "GitHub request failed");
-  }
+function parseGitHubUserIdentity(accountId: number, payload: unknown): ResolvedGitHubUserIdentity {
   if (!isRecord(payload) || payload.id !== accountId) {
     throw new ControlUiGitHubError(502, "GitHub account id did not match");
   }
@@ -161,7 +150,7 @@ async function resolveGitHubUserIdentityById(
   if (!login) {
     throw new ControlUiGitHubError(502, "GitHub response omitted a valid login");
   }
-  return { accountId, login };
+  return { accountId, login, name: readOptionalGitHubString(payload, "name") };
 }
 
 function retryableConnectionSync(
@@ -246,7 +235,35 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       access.assertion,
       access.principal,
     );
-    const identity = await resolveGitHubUserIdentityById(accessIdentity.accountId);
+    let response: Response | undefined;
+    let payload: unknown;
+    try {
+      response = await fetchGitHubApi(
+        `${GITHUB_API_ORIGIN}/user/${accessIdentity.accountId}`,
+        fetch,
+      );
+      payload = await readGitHubJsonResponse(response);
+    } catch (error) {
+      const retryable = response
+        ? response.status === 429 ||
+          response.status >= 500 ||
+          (error instanceof ControlUiGitHubError && error.statusCode === 429)
+        : !(error instanceof ControlUiGitHubError);
+      if (retryable) {
+        // Retry failures may reuse only the exact verified email + immutable-account binding.
+        const cached = resolveCachedGitHubIdentity({
+          accountId: accessIdentity.accountId,
+          email: access.principal,
+        });
+        if (cached) {
+          return cached;
+        }
+      }
+      throw error instanceof ControlUiGitHubError
+        ? error
+        : new ControlUiGitHubError(502, "GitHub request failed");
+    }
+    const identity = parseGitHubUserIdentity(accessIdentity.accountId, payload);
     const profile = syncGitHubIdentity({
       identity,
       authenticationAlias: { kind: "email", email: access.principal },

@@ -391,6 +391,8 @@ async function saveSessionMemoryNow(
       workspaceDir,
       resolveOriginClass: () =>
         transcript.status === "available" ? transcript.originClass : "agent",
+      sessionId: currentSessionId,
+      sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
     const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });

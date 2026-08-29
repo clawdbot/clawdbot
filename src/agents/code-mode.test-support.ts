@@ -11,7 +11,12 @@ import {
 } from "./code-mode-state.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
-import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  type ToolSearchCatalogRef,
+  type ToolSearchToolContext,
+} from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 export const testing = {
@@ -115,6 +120,26 @@ export function resultDetails(result: { details?: unknown }): Record<string, unk
   return result.details as Record<string, unknown>;
 }
 
+export function createHeadlessCodeModeHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean } = {},
+): ToolSearchToolContext {
+  const config = {
+    tools: {
+      codeMode: { enabled: false, timeoutMs: 60_000 },
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
+  } as never;
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  return {
+    config,
+    runtimeConfig: config,
+    agentId: "main",
+    catalogRef,
+  };
+}
+
 export function createCodeModeHarness(
   params: {
     agentId?: string;
@@ -147,15 +172,22 @@ export async function runUntilCompleted(params: {
   language?: "javascript" | "typescript";
   restartSafe?: boolean;
 }) {
-  // Code Mode may return a waiting state before completion; tests poll through
-  // the public wait tool instead of reaching into activeRuns.
-  let details = resultDetails(
+  const details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,
       language: params.language,
       restartSafe: params.restartSafe,
     }),
   );
+  return await waitUntilCompleted({ details, waitTool: params.waitTool });
+}
+
+export async function waitUntilCompleted(params: {
+  details: Record<string, unknown>;
+  waitTool: AnyAgentTool;
+}) {
+  // Resume the existing run through public waits; never replay its actions.
+  let details = params.details;
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
     const runId = details.runId;
     expect(typeof runId).toBe("string");

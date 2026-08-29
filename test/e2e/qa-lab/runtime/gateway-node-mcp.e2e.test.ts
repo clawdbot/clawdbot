@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSessionMcpRuntime } from "../../../../src/agents/agent-bundle-mcp-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   MCP_SERVERS,
@@ -36,6 +37,7 @@ import {
 } from "./gateway-node-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const QA_AGENT_ID = "qa";
 
 describe("Gateway and node-host MCP live process parity", () => {
   it(
@@ -64,6 +66,7 @@ describe("Gateway and node-host MCP live process parity", () => {
 
       let sessionHttpFixture: HttpFixture | undefined;
       let nodeHttpFixture: HttpFixture | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let node: CapturedChild | undefined;
       let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
@@ -108,7 +111,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
         phase = "starting Gateway";
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -129,7 +132,19 @@ describe("Gateway and node-host MCP live process parity", () => {
             return {
               ...withoutPlugins,
               mcp: { servers: sessionMcpServers },
-              tools: { ...cfg.tools, profile: "full" },
+              agents: {
+                ...cfg.agents,
+                entries: {
+                  ...cfg.agents?.entries,
+                  [QA_AGENT_ID]: {
+                    ...cfg.agents?.entries?.[QA_AGENT_ID],
+                    tools: {
+                      ...cfg.agents?.entries?.[QA_AGENT_ID]?.tools,
+                      profile: "full",
+                    },
+                  },
+                },
+              },
               gateway: {
                 ...cfg.gateway,
                 nodes: {
@@ -189,7 +204,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         phase = "loading session MCP catalog";
         sessionRuntime = createSessionMcpRuntime({
           sessionId: `qa-mcp-parity-${randomUUID()}`,
-          sessionKey: `agent:main:qa-mcp-parity-${randomUUID()}`,
+          sessionKey: `agent:${QA_AGENT_ID}:qa-mcp-parity-${randomUUID()}`,
           workspaceDir: sessionWorkspace,
           cfg: { plugins: { enabled: false }, mcp: { servers: sessionMcpServers } },
         });
@@ -366,7 +381,7 @@ describe("Gateway and node-host MCP live process parity", () => {
 
         phase = "reading effective MCP inventory";
         const created = (await gateway.call("sessions.create", {
-          agentId: "main",
+          agentId: QA_AGENT_ID,
           label: "QA MCP parity inventory",
         })) as { key?: string };
         if (!created.key) {
@@ -479,7 +494,7 @@ describe("Gateway and node-host MCP live process parity", () => {
             ...(node ? [stopChild(node)] : []),
           ])),
           ...(await Promise.allSettled([
-            ...(gateway ? [Promise.resolve(gateway.stop())] : []),
+            stopQaGatewayFixture(gatewayOwner),
             ...(sessionHttpFixture ? [stopChild(sessionHttpFixture)] : []),
             ...(nodeHttpFixture ? [stopChild(nodeHttpFixture)] : []),
           ])),

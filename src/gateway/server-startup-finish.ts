@@ -129,7 +129,6 @@ export async function finishGatewayStartup(params: {
     chatMetadataLifecycle,
     gatewayRequestContext,
     gatewayInstanceRuntime,
-    residentRegistry,
     getPluginMetadataSnapshot,
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
@@ -184,20 +183,6 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
-  let databaseVerifierHandle: { stop: () => void | Promise<void> } | null = null;
-  const databaseIntegrityResident = residentRegistry.register({
-    name: "database-integrity-verifier",
-    start: async () => {
-      if (minimalTestGateway) {
-        return;
-      }
-      const { startOpenClawDatabaseIntegrityVerifier } =
-        await import("../state/openclaw-database-verify.js");
-      databaseVerifierHandle = startOpenClawDatabaseIntegrityVerifier({ env: process.env });
-      kernel.addGatewayLifetimeSidecar(databaseVerifierHandle);
-    },
-    stop: async () => await databaseVerifierHandle?.stop(),
-  });
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
@@ -205,44 +190,37 @@ export async function finishGatewayStartup(params: {
     () => import("./server-runtime-services.js"),
     { cacheRejections: true },
   );
-  const scheduledServicesResident = residentRegistry.register({
-    name: "scheduled-services",
-    start: () => {
-      if (
-        lifecycle.closePreludeStarted ||
-        !postAttachRuntimeReturned ||
-        !startupState.sidecarsReady ||
-        scheduledServicesActivated
-      ) {
+  const activateScheduledServicesWhenReady = () => {
+    if (
+      lifecycle.closePreludeStarted ||
+      !postAttachRuntimeReturned ||
+      !startupState.sidecarsReady ||
+      scheduledServicesActivated
+    ) {
+      return;
+    }
+    scheduledServicesActivated = true;
+    void loadScheduledServicesModule().then((gatewayRuntimeServices) => {
+      if (lifecycle.closePreludeStarted) {
         return;
       }
-      scheduledServicesActivated = true;
-      void loadScheduledServicesModule().then((gatewayRuntimeServices) => {
-        if (lifecycle.closePreludeStarted) {
-          return;
-        }
-        const activated = gatewayRuntimeServices.activateGatewayScheduledServices({
-          minimalTestGateway,
-          cfgAtStart,
-          deps,
-          sessionDeliveryRecoveryMaxEnqueuedAt,
-          cronState: runtimeState.cronState,
-          cronReconciliation,
-          startCron: false,
-          logCron,
-          log,
-          resolveGatewayContext: resolvePluginGatewayContext,
-        });
-        kernel.setScheduledServiceHandles(activated);
+      const activated = gatewayRuntimeServices.activateGatewayScheduledServices({
+        minimalTestGateway,
+        cfgAtStart,
+        deps,
+        sessionDeliveryRecoveryMaxEnqueuedAt,
+        cronState: runtimeState.cronState,
+        cronReconciliation,
+        startCron: false,
+        logCron,
+        log,
+        resolveGatewayContext: resolvePluginGatewayContext,
       });
-    },
-    stop: async () => {
-      await runtimeState.stopOutboundDeliveryRecovery();
-      runtimeState.heartbeatRunner.stop();
-    },
-  });
-  const activateScheduledServicesWhenReady = scheduledServicesResident.start;
+      kernel.setScheduledServiceHandles(activated);
+    });
+  };
   const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
+  const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
   const postAttachHandles = await startupTrace.measure("runtime.post-attach", () =>
     loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
       startGatewayPostAttachRuntime({
@@ -347,8 +325,7 @@ export async function finishGatewayStartup(params: {
         startupTrace,
         sidecarStartup,
         waitForPostReadyWork: params.waitForPostReadyWork,
-        activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
-        residentRegistry,
+        activeWorkInspectors,
         providerAuthPrewarm: {
           getConfig: getRuntimeConfig,
         },
@@ -363,7 +340,9 @@ export async function finishGatewayStartup(params: {
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (!minimalTestGateway) {
-    await databaseIntegrityResident.start();
+    const { startOpenClawDatabaseIntegrityVerifier } =
+      await import("../state/openclaw-database-verify.js");
+    kernel.addGatewayLifetimeSidecar(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
@@ -450,98 +429,72 @@ export async function finishGatewayStartup(params: {
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   };
-  const configReloaderResident = residentRegistry.register({
-    name: "config-reloader",
-    start: () => startManagedGatewayConfigReloader(configReloaderParams),
-    stop: async () => await runtimeState.configReloader.stop(),
-  });
-  kernel.setConfigReloaderHandle(configReloaderResident.start());
+  kernel.setConfigReloaderHandle(startManagedGatewayConfigReloader(configReloaderParams));
   await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
     log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
   });
   if (!minimalTestGateway) {
     const gatewayRuntimeServices = await loadScheduledServicesModule();
-    const maintenanceResident = residentRegistry.register({
-      name: "post-ready-maintenance",
-      start: () => {
-        postReadyState.maintenanceTimer =
-          gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
-            delayMs: POST_READY_MAINTENANCE_DELAY_MS,
-            isClosing: () => lifecycle.closePreludeStarted,
-            onStarted: () => {
-              postReadyState.maintenanceTimer = null;
-            },
-            startMaintenance: async () => {
-              if (lifecycle.closePreludeStarted) {
-                return null;
-              }
-              return earlyRuntime.startMaintenance();
-            },
-            applyMaintenance: async (maintenance) => {
-              if (lifecycle.closePreludeStarted) {
-                clearInterval(maintenance.tickInterval);
-                clearInterval(maintenance.healthInterval);
-                clearInterval(maintenance.dedupeCleanup);
-                await maintenance.stopMediaCleanup();
-                clearInterval(maintenance.worktreeCleanup);
-                maintenance.skillCuratorCleanup();
-                return;
-              }
-              // Publish the stop owner before cleanup can touch SQLite or state paths;
-              // shutdown may begin immediately after this synchronous handoff.
-              kernel.setMaintenanceHandles(maintenance);
-              maintenance.startMediaCleanup();
-            },
-            shouldStartCron: () => !lifecycle.closePreludeStarted && !cronStartState.handled,
-            markCronStartHandled: () => {
-              cronStartState.handled = true;
-            },
-            cronState: runtimeState.cronState,
-            cronReconciliation,
-            cronConfig: cfgAtStart,
-            logCron,
-            log,
-            recordPostReadyMemory: () => {
-              startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
-            },
-          });
+    postReadyState.maintenanceTimer = gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
+      delayMs: POST_READY_MAINTENANCE_DELAY_MS,
+      isClosing: () => lifecycle.closePreludeStarted,
+      onStarted: () => {
+        postReadyState.maintenanceTimer = null;
       },
-      stop: () => {
-        if (postReadyState.maintenanceTimer) {
-          clearTimeout(postReadyState.maintenanceTimer);
-          postReadyState.maintenanceTimer = null;
+      startMaintenance: async () => {
+        if (lifecycle.closePreludeStarted) {
+          return null;
         }
+        return earlyRuntime.startMaintenance(activeWorkInspectors);
+      },
+      applyMaintenance: async (maintenance) => {
+        if (lifecycle.closePreludeStarted) {
+          await gatewayRuntimeServices.clearGatewayMaintenanceHandles(maintenance);
+          return;
+        }
+        // Publish the stop owner before cleanup can touch SQLite or state paths;
+        // shutdown may begin immediately after this synchronous handoff.
+        kernel.setMaintenanceHandles(maintenance);
+        maintenance.startMediaCleanup();
+      },
+      shouldStartCron: () => !lifecycle.closePreludeStarted && !cronStartState.handled,
+      markCronStartHandled: () => {
+        cronStartState.handled = true;
+      },
+      cronState: runtimeState.cronState,
+      cronReconciliation,
+      cronConfig: cfgAtStart,
+      logCron,
+      log,
+      recordPostReadyMemory: () => {
+        startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
       },
     });
-    maintenanceResident.start();
-    // The loop closes the previous server before this generation starts, so retired
-    // plugin installs are safe to remove. Wait for an idle window and resolve current
-    // install paths at execution time so cleanup cannot remove active code or delay a turn.
-    const retainedPluginCleanupResident = residentRegistry.register({
-      name: "retained-plugin-cleanup",
-      start: () => {
-        postReadyState.retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask(
-          {
-            delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-            retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-            isClosing: () => lifecycle.closePreludeStarted,
-            isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-            run: async () => {
-              const { cleanupRetainedPluginInstallGenerations } =
-                await import("./server-retained-plugin-cleanup.js");
-              await cleanupRetainedPluginInstallGenerations({ log });
-            },
-            log,
-            errorMessage: "retained npm generation cleanup failed",
-          },
-        );
+    // This Gateway may still import boot-generation code after an install retires
+    // it. Capture those paths before the idle delay; cleanup also protects the new ledger.
+    const startupInstallPaths = [
+      ...Object.values(pluginMetadataSnapshot?.index.installRecords ?? {}).flatMap((record) =>
+        record.installPath ? [record.installPath] : [],
+      ),
+      ...(pluginMetadataSnapshot?.plugins.flatMap((record) =>
+        record.setupSource
+          ? [record.rootDir, record.source, record.setupSource]
+          : [record.rootDir, record.source],
+      ) ?? []),
+    ];
+    postReadyState.retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask({
+      delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
+      retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
+      isClosing: () => lifecycle.closePreludeStarted,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run: async () => {
+        const { cleanupRetainedPluginInstallGenerations } =
+          await import("./server-retained-plugin-cleanup.js");
+        await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths });
       },
-      stop: () => {
-        postReadyState.retainedPluginCleanupHandle?.stop();
-        postReadyState.retainedPluginCleanupHandle = null;
-      },
+      log,
+      errorMessage: "retained npm generation cleanup failed",
     });
-    retainedPluginCleanupResident.start();
   } else {
     startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
   }

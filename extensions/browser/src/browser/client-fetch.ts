@@ -4,7 +4,7 @@
  * Sends requests to either an absolute HTTP browser-control URL or the local
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
-import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import {
   extractErrorCode,
   formatErrorMessage,
@@ -25,7 +25,9 @@ import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   parseBrowserErrorPayload,
-  type BrowserNoDisplayErrorMetadata,
+  type BrowserActErrorCode,
+  type BrowserErrorPayload,
+  type BrowserErrorMetadata,
   type BrowserNoDisplayErrorDetails,
 } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
@@ -34,15 +36,19 @@ import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
 export class BrowserServiceError extends Error {
   readonly status?: number;
-  readonly reason?: BrowserNoDisplayErrorMetadata["reason"];
+  readonly code?: BrowserActErrorCode;
+  readonly unrecognizedCode?: true;
+  readonly reason?: BrowserErrorMetadata["reason"];
   readonly details?: BrowserNoDisplayErrorDetails;
 
-  constructor(message: string, metadata?: BrowserNoDisplayErrorMetadata, status?: number) {
+  constructor(message: string, metadata?: BrowserErrorPayload, status?: number) {
     super(message);
     this.name = "BrowserServiceError";
     this.status = status;
-    this.reason = metadata?.reason;
-    this.details = metadata?.details;
+    this.code = metadata?.code;
+    this.unrecognizedCode = metadata?.unrecognizedCode;
+    this.reason = metadata && "reason" in metadata ? metadata.reason : undefined;
+    this.details = metadata && "details" in metadata ? metadata.details : undefined;
   }
 }
 
@@ -56,7 +62,7 @@ function browserServiceErrorFromPayload(
   const modelHint = resolveBrowserServiceModelHint(message, status);
   return new BrowserServiceError(
     modelHint ? appendBrowserToolModelHint(message, modelHint) : message,
-    parsed && "reason" in parsed ? parsed : undefined,
+    parsed ?? undefined,
     status,
   );
 }

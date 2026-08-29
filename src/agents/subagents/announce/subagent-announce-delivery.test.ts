@@ -1,9 +1,21 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
+import { buildSessionHistorySnapshot } from "../../../gateway/session-history-state.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -42,6 +54,7 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
+import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -56,6 +69,8 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   releaseSessionDeliveryClaim: vi.fn(async () => {}),
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../completion/subagent-completion-delivery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../completion/subagent-completion-delivery.js")>()),
@@ -108,6 +123,40 @@ function createPayloadGatewayMock(...payloads: Record<string, unknown>[]) {
 
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+}
+
+function createRoleRestrictedInProcessGatewayMock(response: Record<string, unknown>) {
+  const cfg = {
+    gateway: {
+      roles: {
+        default: "restricted",
+        definitions: {
+          restricted: {
+            agents: [],
+            scopes: ["operator.write"],
+            sessions: { others: "none" },
+          },
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  const dispatchGatewayMethodInProcess = vi.fn(
+    async (
+      _method: string,
+      _agentParams: Record<string, unknown>,
+      options?: Parameters<typeof runtimeDispatchGatewayMethodInProcess>[2],
+    ) => {
+      const actor = options?.operatorRoleActor;
+      const authorizationError = actor
+        ? authorizeGatewaySessionCreation({ cfg, agentId: "main", actor })
+        : authorizeGatewaySessionCreation({ cfg, agentId: "main", profileId: undefined });
+      if (authorizationError) {
+        throw new Error(`${authorizationError.code}: ${authorizationError.message}`);
+      }
+      return response;
+    },
+  ) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+  return { cfg, dispatchGatewayMethodInProcess };
 }
 
 function createSendMessageMock() {
@@ -183,6 +232,41 @@ function createQueueOutcomeSequenceMock(
           gatewayHealth: "live",
         };
   });
+}
+
+async function createRequesterTranscriptFixture(sessionId: string) {
+  const dir = tempDirs.make("openclaw-subagent-announce-transcript-");
+  const sessionKey = "agent:main:slack:channel:C123:thread:171.222";
+  const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  const entry: SessionEntry = {
+    sessionId,
+    sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+    updatedAt: Date.now(),
+  };
+  await replaceSessionEntry({ storePath, sessionKey }, entry);
+  return { agentId: "main", entry, sessionId, sessionKey, storePath };
+}
+
+async function readRequesterTranscriptMessages(fixture: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<Array<Record<string, unknown>>> {
+  return (
+    await loadTranscriptEvents({
+      agentId: fixture.agentId,
+      sessionId: fixture.sessionId,
+      sessionKey: fixture.sessionKey,
+      storePath: fixture.storePath,
+    })
+  )
+    .map((event) => (event as { message?: unknown }).message)
+    .filter(
+      (message): message is Record<string, unknown> =>
+        Boolean(message) && typeof message === "object" && !Array.isArray(message),
+    );
 }
 
 const longChildCompletionOutput = [
@@ -275,18 +359,43 @@ async function deliverSlackThreadAnnouncement(params: {
   requesterAbandoned?: boolean;
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
+  requesterSessionActivity?: () => { sessionId: string; isActive: boolean };
+  requesterTranscriptFixture?:
+    | Awaited<ReturnType<typeof createRequesterTranscriptFixture>>
+    | (() => Awaited<ReturnType<typeof createRequesterTranscriptFixture>>);
 }) {
   // Slack thread delivery exercises all origins because direct, session, and
   // completion routing can differ after a child run outlives its requester.
+  const requesterTranscriptFixture = params.requesterTranscriptFixture;
+  const resolveRequesterTranscriptFixture =
+    typeof requesterTranscriptFixture === "function"
+      ? requesterTranscriptFixture
+      : () => requesterTranscriptFixture;
   testing.setDepsForTest({
     callGateway: params.callGateway,
-    getRequesterSessionActivity: () => ({
-      sessionId: params.sessionId ?? "requester-session-4",
-      isActive: params.isActive === true,
-    }),
+    getRequesterSessionActivity:
+      params.requesterSessionActivity ??
+      (() => ({
+        sessionId: params.sessionId ?? "requester-session-4",
+        isActive: params.isActive === true,
+      })),
     isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
+    ...(params.requesterTranscriptFixture
+      ? {
+          loadRequesterSessionEntry: (sessionKey: string) => {
+            const fixture = resolveRequesterTranscriptFixture();
+            return {
+              cfg: {} as never,
+              entry: fixture?.entry,
+              canonicalKey: sessionKey,
+              agentId: fixture?.agentId,
+              storePath: fixture?.storePath,
+            };
+          },
+        }
+      : {}),
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
       : {}),
@@ -1303,8 +1412,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expectRecordFields(result, {
         delivered: fallsBack,
         path: fallsBack ? "direct" : "none",
+        ...(fallsBack ? {} : { reason: "steer_dropped" }),
         phases: [
-          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          {
+            phase: "steer-primary",
+            delivered: false,
+            path: "none",
+            error: undefined,
+            ...(fallsBack ? {} : { reason: "steer_dropped" }),
+          },
           ...(fallsBack
             ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
             : []),
@@ -1318,13 +1434,27 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 describe("deliverSubagentAnnouncement completion delivery", () => {
   it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
     const callGateway = createGatewayMock();
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const transcript = await createRequesterTranscriptFixture("requester-session-1");
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn<QueueEmbeddedAgentMessageWithOutcome>(
+      async (sessionId, _text, options) => {
+        await options?.userTurnTranscriptRecorder?.persistApproved();
+        return {
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+          enqueuedAtMs: 4_100,
+          deliveredAtMs: 4_200,
+        };
+      },
+    );
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sessionId: "requester-session-1",
       isActive: true,
       directIdempotencyKey: "announce-1",
       queueEmbeddedAgentMessageWithOutcome,
+      requesterTranscriptFixture: transcript,
     });
 
     expectRecordFields(result, {
@@ -1336,14 +1466,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-1",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(callGateway).not.toHaveBeenCalled();
+
+    const rawMessages = await readRequesterTranscriptMessages(transcript);
+    expect(rawMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "child done",
+        provenance: expect.objectContaining({
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+        }),
+      }),
+    ]);
+    const assistantReply = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Created." },
+        {
+          type: "image" as const,
+          source: { type: "url" as const, url: "/api/chat/media/outgoing/generated.png" },
+        },
+      ],
+      __openclaw: { seq: 2 },
+    };
+    expect(
+      buildSessionHistorySnapshot({ rawMessages: [...rawMessages, assistantReply] }).history
+        .messages,
+    ).toEqual([assistantReply]);
   });
 
   it("waits through compaction on the completion handoff wake (86566)", async () => {
@@ -1880,9 +2038,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("uses in-process agent dispatch for dormant completion requesters", async () => {
+  it("delivers dormant child completion under restrictive gateway roles", async () => {
     const callGateway = createGatewayMock();
-    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       result: {
         payloads: [{ text: "requester voice completion" }],
       },
@@ -1894,7 +2052,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sessionId: "requester-session-local",
         isActive: false,
       }),
-      getRuntimeConfig: () => ({}) as never,
+      getRuntimeConfig: () => cfg,
     });
 
     const ownerContext = { owner: "gateway-a" } as never;
@@ -1935,6 +2093,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(dispatchOptions).toMatchObject({
       expectFinal: true,
       forceSyntheticClient: true,
+      operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: {
         sourceSessionKey: "agent:main:subagent:child",
         sourceSessionId: "child-session-local",
@@ -1945,6 +2104,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       timeoutMs: 120_000,
       resolveGatewayContext,
     });
+  });
+
+  it("wakes settled descendant runs under restrictive gateway roles", async () => {
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
+      runId: "descendant-wake-run",
+    });
+    const resolveGatewayContext: GatewayContextResolver = () => undefined;
+    const replaceSubagentRunAfterSteer = vi.fn(async () => true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
+    });
+
+    const woke = await runDescendantWake({
+      runId: "nested-parent-run",
+      childSessionKey: "agent:main:subagent:nested-parent",
+      taskLabel: "collect descendant findings",
+      findings: "The descendant completed successfully.",
+      announceId: "descendant-completion",
+      isChildSessionEffectsAllowed: () => true,
+      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null,
+      resolveGatewayContext,
+      deps: {
+        callGateway: createGatewayMock(),
+        dispatchGatewayMethodInProcess,
+        getRuntimeConfig: () => cfg,
+        replaceSubagentRunAfterSteer,
+      },
+    });
+
+    expect(woke).toBe(true);
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      resolveGatewayContext,
+    });
+    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: "nested-parent-run",
+        nextRunId: "descendant-wake-run",
+      }),
+    );
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
@@ -2434,22 +2634,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       1,
       "requester-session-4",
       "child done",
-      {
+      expect.objectContaining({
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
         waitForTranscriptCommit: true,
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       2,
       "requester-session-4",
       "child done",
-      {
+      expect.objectContaining({
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -2505,6 +2707,157 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(callGateway).toHaveBeenCalledTimes(4);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+      reason: "visible_reply_missing",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
+    });
+    expect(result.terminal).toBeUndefined();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("persists fallback-steered completion provenance after the requester session rotates", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      const transcriptA = await createRequesterTranscriptFixture("requester-session-direct");
+      const transcriptB = await createRequesterTranscriptFixture("requester-session-fallback");
+      let currentTranscript = transcriptA;
+      let activityReadCount = 0;
+      const callGateway = vi.fn(async () => {
+        throw new Error("UNAVAILABLE: gateway lost final output");
+      }) as unknown as typeof runtimeCallGateway;
+      let firstRecorder: unknown;
+      let queueCallCount = 0;
+      const queueEmbeddedAgentMessageWithOutcome = vi.fn<QueueEmbeddedAgentMessageWithOutcome>(
+        async (sessionId, _text, options) => {
+          queueCallCount += 1;
+          if (queueCallCount === 1) {
+            expect(sessionId).toBe(transcriptA.sessionId);
+            firstRecorder = options?.userTurnTranscriptRecorder;
+            currentTranscript = transcriptB;
+            return {
+              queued: false,
+              sessionId,
+              reason: "not_streaming",
+              gatewayHealth: "live",
+            };
+          }
+          expect(sessionId).toBe(transcriptB.sessionId);
+          expect(options?.userTurnTranscriptRecorder).not.toBe(firstRecorder);
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+          return {
+            queued: true,
+            sessionId,
+            target: "embedded_run",
+            gatewayHealth: "live",
+          };
+        },
+      );
+
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        isActive: true,
+        directIdempotencyKey: "announce-retryable-direct-fallback",
+        queueEmbeddedAgentMessageWithOutcome,
+        requesterSessionActivity: () => ({
+          sessionId: activityReadCount++ === 0 ? transcriptA.sessionId : transcriptB.sessionId,
+          isActive: true,
+        }),
+        requesterTranscriptFixture: () => currentTranscript,
+        internalEvents: taskCompletionEvents({
+          childSessionId: "child-session-id",
+          taskLabel: "fallback persistence smoke",
+        }),
+      });
+
+      expectRecordFields(result, {
+        delivered: true,
+        path: "steered",
+        phases: [
+          {
+            phase: "direct-primary",
+            delivered: false,
+            path: "direct",
+            error: "UNAVAILABLE: gateway lost final output",
+          },
+          {
+            phase: "steer-fallback",
+            delivered: true,
+            path: "steered",
+            error: undefined,
+          },
+        ],
+      });
+      expect(callGateway).toHaveBeenCalledTimes(4);
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+
+      expect(await readRequesterTranscriptMessages(transcriptA)).toEqual([]);
+      const rawMessages = await readRequesterTranscriptMessages(transcriptB);
+      expect(rawMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "child done",
+          provenance: expect.objectContaining({
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+          }),
+        }),
+      ]);
+      const assistantReply = {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "visible final reply" }],
+        __openclaw: { seq: 2 },
+      };
+      const history = buildSessionHistorySnapshot({
+        rawMessages: [...rawMessages, assistantReply],
+      }).history.messages;
+      expect(history).toEqual([assistantReply]);
+      expect(JSON.stringify(history)).not.toContain("child done");
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
   });
 
   it("reports failure for Telegram DMs when announce-agent delivery fails", async () => {
@@ -2591,12 +2944,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-telegram",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 10,
-      },
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
@@ -4299,7 +4653,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
     });
-    expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
+    expect(agentParams.sourceReplyDeliveryMode).toBe(requireVisibleReply ? "automatic" : undefined);
   });
 
   it.each([

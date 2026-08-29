@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("chat pane typing presence", () => {
-  it("clears only the exact structured user sender and expires remaining actors", () => {
+  it("sender provenance clears only the exact profile sender and expires remaining actors", () => {
     vi.useFakeTimers();
     const { pane, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -75,6 +75,28 @@ describe("chat pane typing presence", () => {
     pane.clearTypingActorForSessionMessage(
       event({ role: "user", __openclaw: { senderId: aliceId } }),
     );
+    pane.clearTypingActorForSessionMessage(
+      event({
+        role: "user",
+        __openclaw: {
+          senderId: aliceId,
+          senderIdentity: {
+            type: "observation",
+            id: aliceId,
+            pluginId: "channel",
+            accountId: null,
+            senderKind: "unknown",
+          },
+        },
+      }),
+    );
+    expect([...pane.typingActors.keys()]).toEqual([aliceId, "bob"]);
+    pane.clearTypingActorForSessionMessage(
+      event({
+        role: "user",
+        __openclaw: { senderId: aliceId, senderIdentity: { type: "profile", id: aliceId } },
+      }),
+    );
     expect([...pane.typingActors.keys()]).toEqual(["bob"]);
 
     vi.advanceTimersByTime(2_500);
@@ -98,8 +120,7 @@ describe("chat pane typing presence", () => {
       "Alice is typing…",
     );
     expect(container.querySelectorAll(".agent-chat__typing-bubble > span")).toHaveLength(3);
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Alice, Bob are typing…");
-    expect(container.querySelector('[role="status"]')?.textContent).not.toContain("Hello");
+    expect(container.querySelector(".sr-only")?.textContent).toBe("Alice, Bob are typing…");
   });
 
   it("sends only the last 300 draft code points and omits previews when typing stops", () => {

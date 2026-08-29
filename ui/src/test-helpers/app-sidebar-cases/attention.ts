@@ -180,11 +180,13 @@ describe("AppSidebar session attention", () => {
       sessionsHarness.sessions,
     );
 
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    await sidebar.updateComplete;
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
-  it("collapses hidden previews to one line without hiding attention", async () => {
+  it("defaults to one line without hiding attention", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
       {
@@ -199,9 +201,6 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
-
-    sidebar.sessionOrganizer.setSessionsShowPreview(false);
-    await sidebar.updateComplete;
 
     const previewRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(previewRow?.textContent).not.toContain("Deploying to staging");

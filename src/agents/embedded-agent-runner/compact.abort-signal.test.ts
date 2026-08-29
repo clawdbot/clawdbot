@@ -1,5 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    cleanup();
+  }),
+);
 
 vi.mock("../model-fallback-candidates.js", () => ({
   resolveModelCandidateChain: (params: { provider: string; model: string }) => [
@@ -66,18 +76,21 @@ import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 const runMock = vi.mocked(runWithModelFallback);
 const compactOnceMock = vi.mocked(compactEmbeddedAgentSessionDirectOnce);
 
-const baseParams = {
-  sessionId: "test-session",
-  sessionKey: "agent:main:test-session",
-  sessionFile: "agent:main:test-session",
-  sessionTarget: {
-    agentId: "main",
+function baseParams() {
+  const workspaceDir = tempDirs.make("openclaw-compact-abort-");
+  return {
     sessionId: "test-session",
     sessionKey: "agent:main:test-session",
-    storePath: "/tmp/sessions.json",
-  },
-  workspaceDir: "/tmp",
-};
+    sessionFile: "agent:main:test-session",
+    sessionTarget: {
+      agentId: "main",
+      sessionId: "test-session",
+      sessionKey: "agent:main:test-session",
+      storePath: join(workspaceDir, "sessions.json"),
+    },
+    workspaceDir,
+  };
+}
 
 function configWithFallbacks(fallbacks: string[]): OpenClawConfig {
   return {
@@ -102,7 +115,7 @@ describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
     const controller = new AbortController();
 
     await compactEmbeddedAgentSessionDirect({
-      ...baseParams,
+      ...baseParams(),
       config: configWithFallbacks(["anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"]),
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -116,7 +129,7 @@ describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
 
   it("passes undefined when no abortSignal is set (back-compat)", async () => {
     await compactEmbeddedAgentSessionDirect({
-      ...baseParams,
+      ...baseParams(),
       config: configWithFallbacks(["anthropic/claude-haiku-4-5"]),
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -132,7 +145,7 @@ describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
     { source: "auto" as const, expected: undefined },
   ])("forwards only $source auth profiles as user locks", async ({ source, expected }) => {
     await compactEmbeddedAgentSessionDirect({
-      ...baseParams,
+      ...baseParams(),
       config: configWithFallbacks(["anthropic/claude-haiku-4-5"]),
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -145,7 +158,7 @@ describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
 
   it("preserves a user auth pin across BytePlus compaction fallback aliases", async () => {
     await compactEmbeddedAgentSessionDirect({
-      ...baseParams,
+      ...baseParams(),
       config: configWithFallbacks(["byteplus-plan/ark-code-latest"]),
       provider: "byteplus",
       model: "dola-seed-2-1-turbo-260628",

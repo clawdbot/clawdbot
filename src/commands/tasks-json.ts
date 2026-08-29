@@ -7,7 +7,12 @@ import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskAuditFindings } from "../tasks/task-registry.audit.js";
-import { TASK_RUNTIMES, TASK_STATUSES, type TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  matchesTaskStatusFilter,
+  TASK_RUNTIMES,
+  TASK_STATUS_FILTERS,
+  type TaskRecord,
+} from "../tasks/task-registry.types.js";
 import {
   TASK_SYSTEM_AUDIT_CODES,
   TASK_SYSTEM_AUDIT_SEVERITIES,
@@ -56,12 +61,12 @@ function toSystemAuditFindings(params: {
 
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
-  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUSES);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUS_FILTERS);
   const tasks = listTaskJsonRecords().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
     }
-    if (statusFilter && task.status !== statusFilter) {
+    if (statusFilter && !matchesTaskStatusFilter(task, statusFilter)) {
       return false;
     }
     return true;

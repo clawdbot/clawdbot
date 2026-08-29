@@ -1,5 +1,6 @@
 // Verifies guarded session managers emit transcript update events with stable sequence ids.
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -380,8 +381,27 @@ describe("guardSessionManager transcript updates", () => {
       timestamp: Date.now(),
     } as AgentMessage);
 
+    expect(
+      sm
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => ({
+          role: entry.message.role,
+          runId: asNullableRecord(asNullableRecord(entry.message)?.["__openclaw"])?.runId,
+        })),
+    ).toEqual([
+      { role: "user", runId: undefined },
+      { role: "assistant", runId: "run-owning-final" },
+      { role: "toolResult", runId: "run-owning-final" },
+      { role: "assistant", runId: "run-owning-final" },
+    ]);
     expect(getBranchSpy).toHaveBeenCalledTimes(1);
     expect(updates.map((update) => update.messageSeq)).toEqual([2, 4]);
+    expect(
+      updates.map(
+        (update) => asNullableRecord(asNullableRecord(update.message)?.["__openclaw"])?.runId,
+      ),
+    ).toEqual(["run-owning-final", "run-owning-final"]);
     expect(updates.map((update) => update.runId)).toEqual([undefined, "run-owning-final"]);
     getBranchSpy.mockRestore();
   });

@@ -45,6 +45,79 @@ function insertEmptyAlias(params: {
 
 describe("doctor transcript owner repair", () => {
   it.each([
+    { sourceAgentId: "main", requiredAlias: true, requiredCanonical: false },
+    { sourceAgentId: "ops", requiredAlias: true, requiredCanonical: false },
+    { sourceAgentId: "main", requiredAlias: true, requiredCanonical: true },
+    { sourceAgentId: "main", requiredAlias: false, requiredCanonical: false },
+  ])("preserves required creation provenance during canonical repair: %o", async (fixture) => {
+    await withStateDirEnv("openclaw-doctor-canonical-creation-stamp-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const destinationStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+      const sourceStore = resolveSessionStorePathCore(storeTemplate, {
+        agentId: fixture.sourceAgentId,
+        env,
+      });
+      const canonicalKey = "agent:main:work";
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        session: { mainKey: "work", store: storeTemplate },
+      };
+      const canonicalStamp = {
+        createdVia: "operator" as const,
+        createdActor: { type: "human" as const, id: "profile-canonical" },
+        createdAt: 10,
+        ...(fixture.requiredCanonical ? { sandbox: "required" as const } : {}),
+      };
+      const aliasStamp = {
+        createdVia: "channel" as const,
+        createdActor: { type: "human" as const, id: "profile-alias" },
+        createdAt: 20,
+        ...(fixture.requiredAlias ? { sandbox: "required" as const } : {}),
+      };
+      insertLegacySession({
+        agentId: "main",
+        entry: {
+          ...canonicalStamp,
+          sessionId: "canonical-session",
+          updatedAt: fixture.requiredCanonical ? 10 : 30,
+        },
+        env,
+        sessionKey: canonicalKey,
+        storePath: destinationStore,
+      });
+      insertLegacySession({
+        agentId: fixture.sourceAgentId,
+        entry: { ...aliasStamp, sessionId: "alias-session", updatedAt: 20 },
+        env,
+        sessionKey: "agent:main:main",
+        storePath: sourceStore,
+      });
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 1,
+        repairedGroups: 1,
+      });
+      const repaired = loadExactSessionEntryReadOnly({
+        agentId: "main",
+        env,
+        sessionKey: canonicalKey,
+        storePath: destinationStore,
+      })?.entry;
+      const expectedStamp =
+        fixture.requiredAlias && !fixture.requiredCanonical ? aliasStamp : canonicalStamp;
+      expect(repaired).toMatchObject({
+        ...expectedStamp,
+        sessionId: fixture.requiredCanonical ? "alias-session" : "canonical-session",
+        updatedAt: fixture.requiredCanonical ? 20 : 30,
+      });
+      if (!fixture.requiredAlias && !fixture.requiredCanonical) {
+        expect(repaired).not.toHaveProperty("sandbox");
+      }
+    });
+  });
+
+  it.each([
     { label: "replaces a stale same-store owner", sourceAgentId: "main", winnerOwned: true },
     { label: "clears a stale same-store owner", sourceAgentId: "main", winnerOwned: false },
     { label: "lazily restores cross-store owner columns", sourceAgentId: "ops", winnerOwned: true },

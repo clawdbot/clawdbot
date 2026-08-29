@@ -2,6 +2,7 @@
  * Builds embedded-agent payload objects from attempt inputs and outcomes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildCodexLoginRecovery } from "../../../auto-reply/codex-login-recovery.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
@@ -33,6 +34,7 @@ import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../../../shared/text/assistant-visible-text.js";
+import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -42,6 +44,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
+import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -52,6 +55,7 @@ import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
+import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
@@ -156,6 +160,7 @@ export function buildEmbeddedRunPayloads(params: {
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
+  deferAssistantTimeoutError?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
@@ -216,19 +221,25 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
+  const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
+  const codexLoginRecovery = buildCodexLoginRecovery({
+    provider: oauthRefreshFailure?.provider ?? params.provider,
+    oauthReason: oauthRefreshFailure?.reason,
+  });
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
-          ? formatUserFacingAssistantErrorText(assistantForPayload, {
+          ? (codexLoginRecovery?.hint ??
+            formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
-            })
+            }))
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
@@ -253,8 +264,17 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
-  if (errorText) {
-    replyItems.push({ text: errorText, isError: true });
+  const deferAssistantTimeoutError =
+    params.deferAssistantTimeoutError === true &&
+    rawErrorMessage !== undefined &&
+    isTimeoutErrorMessage(rawErrorMessage) &&
+    errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
+  if (errorText && !deferAssistantTimeoutError) {
+    replyItems.push({
+      text: errorText,
+      isError: true,
+      ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+    });
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
@@ -446,6 +466,12 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.media?.length) {
         payload.mediaUrls = item.media;
+      }
+      if (item.attachments?.length) {
+        payload.attachments = item.attachments;
+      }
+      if (item.trustedLocalMedia !== undefined) {
+        payload.trustedLocalMedia = item.trustedLocalMedia;
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;

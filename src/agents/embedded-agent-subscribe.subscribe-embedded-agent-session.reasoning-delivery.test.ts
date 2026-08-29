@@ -150,6 +150,75 @@ type AssistantMessageWithPhase = AssistantMessage & {
 };
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it("projects commentary deltas into one cumulative keyed preamble", async () => {
+    const onAgentEvent = vi.fn();
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onAgentEvent,
+      onBlockReply,
+      onPartialReply,
+    });
+    const commentaryMessage = {
+      role: "assistant",
+      api: "openai-responses",
+      content: [
+        {
+          type: "text",
+          text: "Checking files",
+          textSignature: JSON.stringify({ v: 1, id: "item-commentary", phase: "commentary" }),
+        },
+      ],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: commentaryMessage });
+    emit({
+      type: "message_update",
+      message: commentaryMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Checking ",
+        partial: commentaryMessage,
+      },
+    });
+    emit({
+      type: "message_update",
+      message: commentaryMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "files",
+        partial: commentaryMessage,
+      },
+    });
+    await subscription.waitForPendingEvents();
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "item-commentary",
+          phase: "update",
+          progressText: "Checking",
+        },
+      },
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "item-commentary",
+          phase: "update",
+          progressText: "Checking files",
+        },
+      },
+    ]);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
   it("suppresses commentary-phase assistant messages before tool use", () => {
     const onBlockReply = vi.fn();
     const onPartialReply = vi.fn();

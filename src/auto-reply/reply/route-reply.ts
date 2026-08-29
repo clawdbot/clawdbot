@@ -38,6 +38,12 @@ const messageRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/message/runtime.js"),
 );
 
+const BLOCK_REPLY_COMPLETION_RETENTION = {
+  idPrefix: "block-reply:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
+
 function loadDeliverRuntime() {
   return messageRuntimeLoader.load();
 }
@@ -105,6 +111,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** @internal Stable producer-owned block delivery intent. */
+  deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
 };
@@ -123,6 +131,7 @@ type RouteReplyResult = {
     | "reasoning_payload_not_external"
     | "channel_transform"
     | "adapter_returned_no_identity"
+    | "adapter_returned_no_send"
     | "cancelled_by_message_sending_hook"
     | "cancelled_by_reply_payload_sending_hook"
     | "empty_after_message_sending_hook"
@@ -354,6 +363,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
+      ...(params.deliveryIntentId
+        ? {
+            deliveryIntentId: params.deliveryIntentId,
+            reusePendingDeliveryIntent: true,
+            completionRetention: BLOCK_REPLY_COMPLETION_RETENTION,
+            durability: "required" as const,
+          }
+        : {}),
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
@@ -381,6 +398,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     if (
       send.status === "suppressed" &&
       (send.reason === "cancelled_by_message_sending_hook" ||
+        send.reason === "adapter_returned_no_send" ||
         send.reason === "cancelled_by_reply_payload_sending_hook" ||
         send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")

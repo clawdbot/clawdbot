@@ -91,7 +91,12 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       run: async (ctx) => {
         const configured = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
         return configured?.localService
-          ? { provider: buildLlamaCppProviderConfig(configured) }
+          ? {
+              provider: buildLlamaCppProviderConfig({
+                existing: configured,
+                modelInventory: configured.models,
+              }),
+            }
           : await discoverLlamaServerProvider(ctx);
       },
     },

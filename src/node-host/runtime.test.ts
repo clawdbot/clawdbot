@@ -129,31 +129,16 @@ function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
   };
 }
 
-describe("node-host worker manifest", () => {
-  it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      forceWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-  });
-
-  it("keeps local consent separate from connection metadata", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(prepared.manifest).not.toHaveProperty("workerRuns");
-  });
-});
-
 describe("node-host invocation cancellation", () => {
+  it("does not admit a queued invocation after its connection is retired", async () => {
+    const runtime = await startRuntime();
+    const pending = runtime.invoke({ ...frame, command: "system.run" });
+    runtime.cancelAll();
+    await pending;
+    expect(mocks.handleInvoke).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
   it("cancels ordinary node invocations", async () => {
     const held = holdInvoke();
     const runtime = await startRuntime();

@@ -2263,60 +2263,73 @@ describe("device pairing tokens", () => {
     await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
 
-  test("clears APNs only when a node reapproval changes installation identity", async () => {
-    const baseDir = await makeDevicePairingDir();
-    await setupPairedNodeDevice(baseDir);
-    const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
-    await approveNodePairing(
-      nodePairing.request.requestId,
-      { callerScopes: ["operator.pairing"] },
-      baseDir,
-    );
-    await registerApnsRegistration({
-      nodeId: "node-1",
-      transport: "direct",
-      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      baseDir,
-    });
+  test.each(["owner", "bootstrap"] as const)(
+    "clears APNs only when a $approval reapproval changes installation identity",
+    async (approval) => {
+      const baseDir = await makeDevicePairingDir();
+      await setupPairedNodeDevice(baseDir);
+      const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
+      await approveNodePairing(
+        nodePairing.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+      await registerApnsRegistration({
+        nodeId: "node-1",
+        transport: "direct",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        baseDir,
+      });
+      const approve = async (requestId: string) =>
+        approval === "owner"
+          ? await approveDevicePairing(requestId, { callerScopes: [] }, baseDir)
+          : await approveBootstrapDevicePairing(
+              requestId,
+              PAIRING_SETUP_BOOTSTRAP_PROFILE,
+              baseDir,
+            );
 
-    const sameInstallationRepair = await requestDevicePairing(
-      {
-        deviceId: "node-1",
-        publicKey: "public-key-node-1",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    await expect(
-      approveDevicePairing(sameInstallationRepair.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toMatchObject({
-      status: "approved",
-      nodePairingGenerationChanged: true,
-    });
-    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
-      token: "abcd1234abcd1234abcd1234abcd1234",
-    });
+      const sameInstallationRepair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "public-key-node-1",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await expect(approve(sameInstallationRepair.request.requestId)).resolves.toMatchObject({
+        status: "approved",
+        nodePairingGenerationChanged: true,
+      });
+      expect(
+        (await listDevicePairing(baseDir)).pending.map((request) => request.requestId),
+      ).not.toContain(sameInstallationRepair.request.requestId);
+      await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
+        token: "abcd1234abcd1234abcd1234abcd1234",
+      });
 
-    const replacementRepair = await requestDevicePairing(
-      {
-        deviceId: "node-1",
-        publicKey: "public-key-node-1-replacement",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    await expect(
-      approveDevicePairing(replacementRepair.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toMatchObject({
-      status: "approved",
-      nodePairingGenerationChanged: true,
-    });
-    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
-  });
+      const replacementRepair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "public-key-node-1-replacement",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await expect(approve(replacementRepair.request.requestId)).resolves.toMatchObject({
+        status: "approved",
+        nodePairingGenerationChanged: true,
+      });
+      expect(
+        (await listDevicePairing(baseDir)).pending.map((request) => request.requestId),
+      ).not.toContain(replacementRepair.request.requestId);
+      await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
+    },
+  );
 
   test("clears generation-owned node bins on public-key replacement", async () => {
     const baseDir = await makeDevicePairingDir();

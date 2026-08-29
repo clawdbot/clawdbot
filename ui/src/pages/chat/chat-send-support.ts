@@ -1,5 +1,6 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -12,10 +13,11 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 type ChatSendSupportHost = ChatState & {
   sessionsResult?: SessionsListResult | null;
@@ -23,6 +25,21 @@ type ChatSendSupportHost = ChatState & {
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+// Hello permits RPCs before account recovery has claimed any retained first turn.
+// This holds ordinary admission, not offline queuing or stop/approval controls.
+export function chatSendHoldReason(
+  host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
+  sessionKey: string,
+  initialTurnPending = false,
+): string | null {
+  if (host.connected && host.client && !host.client.recoveryScopeReady) {
+    return t("chat.queue.connectionPending");
+  }
+  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+    ? t("chat.queue.initialTurnPending")
+    : null;
+}
 
 export function formatTerminalChatSendAckError(
   ack: TerminalFailureChatSendAck,
@@ -83,19 +100,17 @@ export function preserveQueuedUserTurn(state: ChatSendSupportHost, item: ChatQue
   if (!runId) {
     return;
   }
-  const content = buildUserChatMessageContentBlocks(
-    item.text,
-    durableDeliveredAttachments(item.attachments),
-  );
-  if (!content.length) {
+  const userMessage = buildLocalUserMessage({
+    text: item.text,
+    attachments: durableDeliveredAttachments(item.attachments),
+    createdAt: item.createdAt,
+    runId,
+    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
+    ...(item.sender ? { sender: item.sender } : {}),
+  });
+  if (!userMessage) {
     return;
   }
-  const userMessage = {
-    role: "user",
-    content,
-    timestamp: item.createdAt,
-    __openclaw: { idempotencyKey: `${runId}:user` },
-  };
   if (visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
       const scope = readChatSessionProjectionScope(state, {
@@ -132,11 +147,12 @@ export function surfaceChatDeliveryFailure(
   sessionKey: string,
   agentId: string | undefined,
   error: string,
+  options: { inline?: boolean } = {},
 ): void {
   const message = formatUiError(error);
   if (visibleSessionMatches(host, sessionKey, agentId)) {
-    host.lastError = message;
-    host.chatError = message;
+    host.lastError = options.inline ? null : message;
+    host.chatError = options.inline ? null : message;
     return;
   }
   const scopedAgentId = agentId ? normalizeAgentId(agentId) : undefined;

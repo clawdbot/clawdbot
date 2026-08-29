@@ -1,5 +1,6 @@
 // Canonical shared-SQLite store for Web Push subscriptions and VAPID identity.
 import type { Insertable, Selectable } from "kysely";
+import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -13,7 +14,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-export const WEB_PUSH_VAPID_KEY_ID = "default";
+export const WEB_PUSH_VAPID_STATE_KEY = "webPush.vapidKeys";
 export const DEFAULT_WEB_PUSH_VAPID_SUBJECT = "https://openclaw.ai";
 const WEB_PUSH_MAX_ENDPOINT_LENGTH = 2048;
 const WEB_PUSH_MAX_KEY_LENGTH = 512;
@@ -42,11 +43,10 @@ export function createWebPushVapidKeyPair(
 
 export type WebPushDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "web_push_subscriptions" | "web_push_vapid_keys"
+  "config_machine_state" | "web_push_subscriptions"
 >;
 type WebPushSubscriptionRow = Selectable<WebPushDatabase["web_push_subscriptions"]>;
 type WebPushSubscriptionInsert = Insertable<WebPushDatabase["web_push_subscriptions"]>;
-type WebPushVapidKeyInsert = Insertable<WebPushDatabase["web_push_vapid_keys"]>;
 
 function webPushStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir
@@ -95,19 +95,6 @@ export function webPushSubscriptionToRow(params: {
     auth: params.subscription.keys.auth,
     created_at_ms: params.subscription.createdAtMs,
     updated_at_ms: params.subscription.updatedAtMs,
-  };
-}
-
-export function webPushVapidKeyPairToRow(params: {
-  keyPair: VapidKeyPair;
-  nowMs: number;
-}): WebPushVapidKeyInsert {
-  return {
-    key_id: WEB_PUSH_VAPID_KEY_ID,
-    public_key: params.keyPair.publicKey,
-    private_key: params.keyPair.privateKey,
-    subject: params.keyPair.subject,
-    updated_at_ms: params.nowMs,
   };
 }
 
@@ -230,15 +217,12 @@ export function deleteWebPushSubscriptionIfCurrent(params: {
 }
 
 export function readPersistedVapidKeyPair(stateDir?: string): VapidKeyPair | null {
-  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<WebPushDatabase>(database.db)
-      .selectFrom("web_push_vapid_keys")
-      .selectAll()
-      .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
+  return (
+    readConfigMachineState<VapidKeyPair>(
+      WEB_PUSH_VAPID_STATE_KEY,
+      webPushStateDatabaseOptions(stateDir),
+    ) ?? null
   );
-  return row ? createWebPushVapidKeyPair(row.public_key, row.private_key, row.subject) : null;
 }
 
 /** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */
@@ -247,24 +231,9 @@ export function insertVapidKeyPairIfAbsent(params: {
   nowMs: number;
   stateDir?: string;
 }): VapidKeyPair {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
-    const existing = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb
-        .selectFrom("web_push_vapid_keys")
-        .selectAll()
-        .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
-    );
-    if (existing) {
-      return createWebPushVapidKeyPair(existing.public_key, existing.private_key, existing.subject);
-    }
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .insertInto("web_push_vapid_keys")
-        .values(webPushVapidKeyPairToRow({ keyPair: params.candidate, nowMs: params.nowMs })),
-    );
-    return params.candidate;
-  }, webPushStateDatabaseOptions(params.stateDir));
+  return updateConfigMachineState<VapidKeyPair>(
+    WEB_PUSH_VAPID_STATE_KEY,
+    (current) => current ?? params.candidate,
+    webPushStateDatabaseOptions(params.stateDir),
+  );
 }

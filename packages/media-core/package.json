@@ -67,7 +67,7 @@
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "file-type": "22.0.1"
+    "file-type": "22.0.2"
   },
   "scripts": {
     "build": "tsdown src/index.ts src/attachment-classify.ts src/base64.ts src/constants.ts src/content-length.ts src/file-name.ts src/inbound-path-policy.ts src/inline-image-data-url.ts src/media-source-url.ts src/mime.ts src/read-byte-stream-with-limit.ts --no-config --platform node --format esm --dts --out-dir dist --clean"

@@ -85,6 +85,7 @@ vi.mock("../plugins/provider-runtime.js", () => {
   return {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
+    resolveProviderDeprecatedAuthProfileIds: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
     }) => params.context?.resolvedApiKey === "synthetic-defer",

@@ -14,16 +14,19 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
-import {
-  configureChannelAdmissionEvidenceCollection,
-  registerChannelAdmissionEvidenceOwner,
-} from "../../channels/message-access/admission-evidence.js";
+import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
+import { registerChannelIngressHostOwner } from "../../channels/message-access/ingress-host-owner.js";
 import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  listSessionParticipantsReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   resolveAgentTurnAttachments,
@@ -344,6 +347,7 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
 async function runDispatch(params: {
   bodyForAgent: string;
   runId?: string;
+  onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -379,6 +383,7 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
+    onAgentRunStart: params.onAgentRunStart,
     sessionKey: targetSessionKey,
     images: params.images,
     abortSignal: params.abortSignal,
@@ -485,6 +490,25 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 }
 
 describe("tryDispatchAcpReplyCore", () => {
+  it("records an accepted channel input in the canonical participant store", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await upsertSessionEntryCore(
+        { agentId: "codex-acp", env: state.env, sessionKey },
+        {
+          sessionId: "acp-participant-session",
+          updatedAt: 1,
+        },
+      );
+      setReadyAcpResolution();
+      await runDispatch({ bodyForAgent: "hello", ctxOverrides: { SenderId: "participant" } });
+      await Promise.resolve();
+      expect(
+        listSessionParticipantsReadOnly({ agentId: "codex-acp", env: state.env, sessionKey }).get(
+          sessionKey,
+        ),
+      ).toHaveLength(1);
+    });
+  });
   beforeEach(() => {
     auditMocks.emitAcpLifecycleStart.mockReset();
     auditMocks.emitAcpRuntimeEvent.mockReset();
@@ -545,7 +569,7 @@ describe("tryDispatchAcpReplyCore", () => {
       return true;
     });
     const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelAdmissionEvidenceOwner(owner);
+    const clearOwner = registerChannelIngressHostOwner(owner);
     try {
       setReadyAcpResolution();
       const channelIngress = await resolveStableChannelMessageIngress({
@@ -874,17 +898,36 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
-  it("keeps caller-owned run ids on the shared lifecycle path", async () => {
+  it.each<{
+    name: string;
+    onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+    accepted?: boolean;
+  }>([
+    { name: "no observer", onAgentRunStart: undefined },
+    { name: "void observer", onAgentRunStart: () => {} },
+    { name: "legacy boolean result", onAgentRunStart: () => true },
+    {
+      name: "legacy object result",
+      onAgentRunStart: () => ({ completionSource: "reply-dispatch" }),
+    },
+    { name: "asynchronous result", onAgentRunStart: () => Promise.resolve("reply-dispatch") },
+    { name: "completion owner", onAgentRunStart: () => "reply-dispatch", accepted: true },
+  ])("requires a synchronous completion acknowledgement from $name", async (scenario) => {
     setReadyAcpResolution();
 
-    await runDispatch({ bodyForAgent: "audit this turn", runId: "caller-run" });
+    await runDispatch({
+      bodyForAgent: "audit this turn",
+      runId: "caller-run",
+      onAgentRunStart: scenario.onAgentRunStart,
+    });
 
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
-    );
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
-    );
+    const expected = expect.objectContaining({
+      runId: "caller-run",
+      auditOnly: false,
+      completionSource: scenario.accepted ? "reply-dispatch" : undefined,
+    });
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
   });
 
   it("keeps audit run ids unique when channel message ids repeat", async () => {
@@ -1888,7 +1931,10 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(normalizeAttachments).not.toHaveBeenCalled();
   });
 
-  it("does not inject recent history images when the current turn already has an image", async () => {
+  it.each([
+    { name: "resolved", described: false, expectedAttachments: 1 },
+    { name: "already described", described: true, expectedAttachments: 0 },
+  ])("does not inject recent image history when the current image is $name", async (testCase) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-current-"));
     const currentPath = path.join(tempDir, "current.png");
     const historyPath = path.join(tempDir, "history.png");
@@ -1901,6 +1947,18 @@ describe("tryDispatchAcpReplyCore", () => {
           Provider: "discord",
           Surface: "discord",
           media: [{ path: currentPath, contentType: "image/png" }],
+          ...(testCase.described
+            ? {
+                MediaUnderstanding: [
+                  {
+                    kind: "image.description",
+                    attachmentIndex: 0,
+                    text: "An already described current image.",
+                    provider: "imageModel",
+                  },
+                ],
+              }
+            : {}),
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1932,7 +1990,7 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       });
 
-      expect(result.attachments).toHaveLength(1);
+      expect(result.attachments).toHaveLength(testCase.expectedAttachments);
       expect(result.recentHistoryImages).toEqual([]);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -2547,6 +2605,111 @@ describe("tryDispatchAcpReplyCore", () => {
         data: pdfPage.data,
       },
     ]);
+  });
+
+  it("omits described images while retaining first-read undescribed attachment bytes", async () => {
+    setReadyAcpResolution();
+    const describedPath = "/tmp/openclaw-described-current.png";
+    const undescribedPath = "/tmp/openclaw-undescribed-current.jpg";
+    const pdfPage = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("pdf-page").toString("base64"),
+      attachmentIndex: 2,
+    };
+    acpAttachmentBuffers.set(describedPath, ACP_PNG_IMAGE_BYTES);
+    acpAttachmentBuffers.set(undescribedPath, ACP_JPEG_IMAGE_BYTES);
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockImplementationOnce(async (params) => {
+      const ctx = (params as { ctx: { MediaUnderstanding?: unknown[] } }).ctx;
+      const description = {
+        kind: "image.description" as const,
+        attachmentIndex: 0,
+        text: "A described image.",
+        provider: "imageModel",
+      };
+      ctx.MediaUnderstanding = [description];
+      acpAttachmentBuffers.delete(undescribedPath);
+      return {
+        outputs: [description],
+        decisions: [],
+        extractedFileImages: [pdfPage],
+        appliedImage: true,
+        appliedAudio: false,
+        appliedVideo: false,
+        appliedFile: true,
+      };
+    });
+
+    await runDispatch({
+      bodyForAgent: "compare described, undescribed, and extracted images",
+      ctxOverrides: {
+        media: [
+          { path: describedPath, contentType: "image/png", kind: "image" },
+          { path: undescribedPath, contentType: "image/jpeg", kind: "image" },
+        ],
+      },
+    });
+
+    expect(runTurnCall().attachments).toEqual([
+      { mediaType: "image/jpeg", data: ACP_JPEG_IMAGE_BYTES.toString("base64") },
+      { mediaType: "image/png", data: pdfPage.data },
+    ]);
+  });
+
+  it.each([
+    { name: "resolved", currentBytes: ACP_PNG_IMAGE_BYTES, deliveredIndexes: [0] },
+    { name: "unreadable", currentBytes: undefined, deliveredIndexes: [1] },
+  ])("drops recent image history after a $name current image is described", async (testCase) => {
+    setReadyAcpResolution();
+    const currentPath = "/tmp/openclaw-described-history-current.png";
+    const historyPath = "/tmp/openclaw-described-history-previous.jpg";
+    if (testCase.currentBytes) {
+      acpAttachmentBuffers.set(currentPath, testCase.currentBytes);
+    }
+    acpAttachmentBuffers.set(historyPath, ACP_JPEG_IMAGE_BYTES);
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockImplementationOnce(async (params) => {
+      const ctx = (params as { ctx: { MediaUnderstanding?: unknown[]; agentText: string } }).ctx;
+      const description = {
+        kind: "image.description" as const,
+        attachmentIndex: 0,
+        text: "The current image was already described.",
+        provider: "imageModel",
+      };
+      ctx.MediaUnderstanding = [description];
+      ctx.agentText = `${ctx.agentText}\n\n[Image 1]\n${description.text}`;
+      return {
+        outputs: [description],
+        decisions: [],
+        extractedFileImages: [],
+        appliedImage: true,
+        appliedAudio: false,
+        appliedVideo: false,
+        appliedFile: false,
+      };
+    });
+
+    await runDispatch({
+      bodyForAgent: "describe the current image",
+      ctxOverrides: {
+        Timestamp: 1_700_000_060_000,
+        media: [{ path: currentPath, contentType: "image/png", kind: "image" }],
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            media: [{ path: historyPath, contentType: "image/jpeg", kind: "image" }],
+          },
+        ],
+      },
+    });
+
+    expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveredImageIndexes: new Set(testCase.deliveredIndexes) }),
+    );
+    expect(runTurnCall().text).toContain("The current image was already described.");
+    expect(runTurnCall().text).not.toContain("Recent image 1");
+    expect(runTurnCall().attachments).toBeUndefined();
   });
 
   it("preserves chat.send inline image attachments over recent history images", async () => {
@@ -3503,6 +3666,73 @@ describe("tryDispatchAcpReplyCore", () => {
       text: "Partial reply before cancellation.",
     });
   });
+
+  it.each(["direct", "routed"] as const)(
+    "never leaks a marked private inbound prompt across ACP live text deltas via %s delivery",
+    async (deliveryPath) => {
+      setReadyAcpResolution();
+      const marker = "[Current message - respond to this]";
+      const conversationContext = `${marker}\nPrivate secret. Keep hidden.`;
+      const directBlockTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload, info) => {
+          if (info.kind === "block" && payload.text) {
+            directBlockTexts.push(payload.text);
+          }
+        },
+      });
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: sessionKey,
+        Body: conversationContext,
+        BodyForAgent: conversationContext,
+      });
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({
+            type: "text_delta",
+            text: "Visible answer before. ",
+            tag: "agent_message_chunk",
+          });
+          await onEvent({
+            type: "text_delta",
+            text: `${marker}\nPrivate secret. `,
+            tag: "agent_message_chunk",
+          });
+          await onEvent({
+            type: "text_delta",
+            text: "Keep hidden. Visible answer after.",
+            tag: "agent_message_chunk",
+          });
+          await onEvent({ type: "done", status: "completed" });
+        },
+      );
+
+      await runDispatch({
+        bodyForAgent: conversationContext,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+        }),
+        ctx,
+        dispatcher,
+        shouldRouteToOriginating: deliveryPath === "routed",
+        originatingChannel: "discord",
+      });
+
+      const deliveredTexts =
+        deliveryPath === "direct"
+          ? directBlockTexts
+          : routeMocks.routeReply.mock.calls.map((_, index) => String(routePayload(index).text));
+      expect(deliveredTexts.join("")).toContain("Visible answer before.");
+      expect(deliveredTexts.join("")).toContain("Visible answer after.");
+      for (const text of deliveredTexts) {
+        expect(text).not.toContain(marker);
+        expect(text).not.toContain("Private secret.");
+        expect(text).not.toContain("Keep hidden.");
+      }
+    },
+  );
 
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {
     setReadyAcpResolution();

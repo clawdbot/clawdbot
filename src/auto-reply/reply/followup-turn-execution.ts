@@ -194,9 +194,6 @@ export async function executeFollowupTurn(params: {
     disableTools: turn.queued.disableTools,
     commentaryPayloadsEnabled,
     runId: turn.runId,
-    onAgentRunStart: (runId, executionIdentityToken) => {
-      sourceOpts?.onAgentRunStart?.(runId, executionIdentityToken);
-    },
     onBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
@@ -350,8 +347,6 @@ export async function executeFollowupTurn(params: {
             activeSessionEntry: session.current(),
             activeSessionStore: turn.sessionStore,
             storePath: session.storePath,
-            messageThreadId:
-              sessionCtx.MessageThreadId != null ? String(sessionCtx.MessageThreadId) : undefined,
             followupRun: turn.queued,
             onActiveSessionEntry: (entry) => {
               session.adopt(entry);

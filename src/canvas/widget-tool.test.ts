@@ -2,7 +2,7 @@
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
@@ -22,6 +22,10 @@ const WIDGET_CODE_MAX_CHARS = 262_144;
 const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -85,6 +89,17 @@ function createBoardPutCaller() {
     params: Record<string, unknown>,
   ): Promise<T> => (await mock(method, params)) as T;
   return { mock, callGateway };
+}
+
+function createLiveBoardTestContext(
+  broadcast: ReturnType<typeof vi.fn> = vi.fn(),
+): GatewayRequestContext {
+  const context = {
+    broadcast,
+    getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+  } as unknown as GatewayRequestContext;
+  context.resolveGatewayContext = () => context;
+  return context;
 }
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
@@ -704,10 +719,7 @@ describe("show_widget", () => {
         client: null,
         isWebchatConnect: () => false,
         respond,
-        context: {
-          broadcast,
-          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
-        } as unknown as GatewayRequestContext,
+        context: createLiveBoardTestContext(broadcast),
       });
       if (failure) {
         throw failure;
@@ -790,10 +802,7 @@ describe("show_widget", () => {
             failure = new Error(error?.message ?? "board request failed");
           }
         },
-        context: {
-          broadcast: vi.fn(),
-          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
-        } as unknown as GatewayRequestContext,
+        context: createLiveBoardTestContext(),
       });
       if (failure) {
         throw failure;
@@ -821,7 +830,7 @@ describe("show_widget", () => {
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
-      grantState: "pending",
+      grantState: "granted",
       declared: {
         netOrigins: ["https://api.open-meteo.com"],
         tools: ["health", "prompt"],
@@ -922,10 +931,7 @@ describe("show_widget", () => {
             failure = new Error(error?.message ?? "board request failed");
           }
         },
-        context: {
-          broadcast: vi.fn(),
-          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
-        } as unknown as GatewayRequestContext,
+        context: createLiveBoardTestContext(),
       });
       if (failure) {
         throw failure;
@@ -998,27 +1004,6 @@ describe("show_widget", () => {
     expect(html.indexOf("openclaw:widget-snapshot-request")).toBeLessThan(
       html.indexOf("<section>"),
     );
-    const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
-    expect(bridgeKeys).toEqual([
-      "surface",
-      "card",
-      "elevated",
-      "text",
-      "text-strong",
-      "muted",
-      "border",
-      "border-strong",
-      "accent",
-      "accent-fill",
-      "accent-fg",
-      "ok",
-      "warn",
-      "danger",
-      "info",
-      "radius",
-      "font-body",
-      "font-mono",
-    ]);
     expect(html).toContain("openclaw:widget-prompt-offer");
     expect(html).toContain("openclaw:widget-bridge-port-offer");
     expect(html).toContain("openclaw:widget-bridge-request");

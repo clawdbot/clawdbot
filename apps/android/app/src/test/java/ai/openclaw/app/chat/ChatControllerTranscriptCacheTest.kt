@@ -240,7 +240,7 @@ class ChatControllerTranscriptCacheTest {
 
       val owner = ChatComposerOwner("gateway-a", "work", "agent:work:node-test")
       assertEquals("agent:work:node-test", controller.sessionKey.value)
-      assertTrue(controller.canSendForOwner(owner))
+      assertTrue(controller.isCurrentComposerOwner(owner))
     }
 
   @Test
@@ -280,7 +280,7 @@ class ChatControllerTranscriptCacheTest {
       val cache = FakeTranscriptCache()
       cache.transcripts[TranscriptKey("gateway-a", "main", "main")] =
         listOf(
-          cachedMessage("cached hello", role = "user", timestampMs = 10),
+          cachedMessage("cached hello", role = "user", timestampMs = 10).copy(senderLabel = "Alex (Slack)"),
           cachedMessage("stale line", role = "assistant", timestampMs = 11),
         )
       val historyGate = CompletableDeferred<Unit>()
@@ -293,7 +293,7 @@ class ChatControllerTranscriptCacheTest {
               {
                 "sessionId": "session-1",
                 "messages": [
-                  { "role": "user", "content": "cached hello", "timestamp": 10 },
+                  { "role": "user", "content": "cached hello", "timestamp": 10, "senderLabel": "Alex (Slack)" },
                   { "role": "assistant", "content": "fresh reply", "timestamp": 20 }
                 ]
               }
@@ -312,6 +312,7 @@ class ChatControllerTranscriptCacheTest {
         listOf("cached hello", "stale line"),
         controller.messages.value.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null), controller.messages.value.map { it.senderLabel })
       val cachedFirstMessageId =
         controller.messages.value
           .first()
@@ -325,6 +326,7 @@ class ChatControllerTranscriptCacheTest {
         listOf("cached hello", "fresh reply"),
         controller.messages.value.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null), controller.messages.value.map { it.senderLabel })
       // Existing reconciliation keeps stable ids for rows the live history confirms.
       val liveFirstMessageId =
         controller.messages.value
@@ -340,6 +342,7 @@ class ChatControllerTranscriptCacheTest {
         listOf("cached hello", "fresh reply"),
         savedTranscript.messages.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null), savedTranscript.messages.map { it.senderLabel })
     }
 
   @Test
@@ -834,6 +837,7 @@ class ChatControllerTranscriptCacheTest {
                 "archived": false,
                 "unread": true,
                 "lastReadAt": 10,
+                "markedUnreadAt": 15,
                 "lastActivityAt": 20
               }]
             }
@@ -851,6 +855,7 @@ class ChatControllerTranscriptCacheTest {
       assertEquals(false, session.archived)
       assertEquals(true, session.unread)
       assertEquals(10L, session.lastReadAt)
+      assertEquals(15L, session.markedUnreadAt)
       assertEquals(20L, session.lastActivityAt)
     }
 

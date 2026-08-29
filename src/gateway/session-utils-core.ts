@@ -88,13 +88,16 @@ export function resolvePositiveNumber(value: number | null | undefined): number 
 export function deriveSessionUnread(
   entry?: Pick<
     SessionEntry,
-    "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
+    "createdAt" | "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
   >,
 ): boolean {
+  // Creation starts unread tracking for modern rows without lighting up legacy
+  // rows that predate durable creation provenance.
+  const unreadBaselineAt = entry?.lastReadAt ?? entry?.createdAt;
   return (
     entry?.markedUnreadAt !== undefined ||
-    (entry?.lastReadAt !== undefined &&
-      Math.max(entry.lastInteractionAt ?? 0, entry.lastActivityAt ?? 0) > entry.lastReadAt)
+    (unreadBaselineAt !== undefined &&
+      Math.max(entry?.lastInteractionAt ?? 0, entry?.lastActivityAt ?? 0) > unreadBaselineAt)
   );
 }
 

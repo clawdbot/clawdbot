@@ -136,9 +136,32 @@ The extension excludes incognito tabs, internal pages such as `chrome://` and
 `chrome-extension://`, and tabs without a usable current URL. `file://` access
 also requires Chrome's **Allow access to file URLs** setting.
 
+An agent-created tab may start at `about:blank` while a CDP client initializes
+it before navigating. The extension allows that specific initial tab, keeps it
+in the OpenClaw group, and applies the same pause and access-mode controls.
+Existing blank tabs, manually grouped blanks, and other `about:` pages remain
+unavailable. Navigating away, replacing the tab, or restarting or reconnecting
+the extension ends the initial blank admission; returning to `about:blank`
+does not restore it.
+
+If creation fails before the extension returns the target, it attempts to close
+the tab only while it still owns it. Tabs you paused, moved, or navigated during
+creation are left alone. A redirect, lost connection, or worker shutdown can
+leave a tab behind; close it manually if needed.
+
+An explicitly commanded main-frame navigation of an authorized tab can also
+use exact `about:blank`, for example during a performance trace reset. Chrome
+must confirm the root frame and loader on the same attachment. An iframe
+navigation or a blank URL alone does not grant access.
+
+That temporary admission ends on the next nonblank document, debugger detach,
+access-mode change, pause, group or window change, tab closure or replacement,
+reconnect, or extension restart. Failed navigation never closes an existing
+tab or restores a URL over your navigation.
+
 ## Automatic setup controls
 
-Settings shows redacted relay/native bootstrap status and an **Use automatic
+Settings shows redacted relay/native bootstrap status and the **Use automatic
 local setup** switch.
 
 - Turning automatic setup off preserves a valid existing pairing but prevents
@@ -177,6 +200,13 @@ Inspect the installation without printing credentials:
 openclaw browser extension status
 openclaw browser extension status --json
 ```
+
+An `owned` registration is not necessarily launchable. Status reports a filesystem
+readiness snapshot of its registered runtime and native entry. It does not execute
+either target or verify that its code will run successfully. If an upgrade removes
+either target, rerun `openclaw browser extension install` to repair the owned
+registration. Ownership checks still refuse foreign or malformed manifests and
+launchers.
 
 Remove only OpenClaw-owned native-host manifests and launchers:
 
@@ -223,6 +253,15 @@ path without a path-rewriting proxy prefix.
 ## External CDP clients
 
 The relay supports Browser Relay Authentication v2 clients such as mcporter.
+OpenClaw and an external client can stay connected together; a newly connected
+client receives the current execution contexts without resetting the first
+client's Runtime session. They still share the underlying tabs, so navigation
+or page changes can invalidate another client's snapshot refs.
+
+If the extension connection drops, its debugger attachments retire before the
+replacement connection reattaches. This does not change the access mode or
+paused tabs. Take a fresh snapshot after reconnecting before using element refs.
+
 Print non-secret endpoint metadata:
 
 ```bash
@@ -301,6 +340,9 @@ openclaw doctor
   development fallback after the command says native bootstrap is ready.
 - **Extension was loaded before native setup:** restart Chrome once to clear its
   cached native-host miss, then rerun the ordered install flow.
+- **Extension version mismatch:** reload the unpacked OpenClaw extension from
+  `chrome://extensions`, then rerun browser doctor. Fully restart Chrome if the
+  running and bundled versions still differ.
 - **Waiting for local OpenClaw:** run `extension status`; install or repair the
   owned native host.
 - **Automatic setup disabled:** enable it in Settings or click **Use local

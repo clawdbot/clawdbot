@@ -33,6 +33,7 @@ import type {
   TaskSuggestionDeliveryMode,
   TurnAdoptionLifecycle,
 } from "../../get-reply-options.types.js";
+import type { ReplyPayload } from "../../reply-payload.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -66,6 +67,17 @@ export type EnqueueFollowupRunOptions = {
 };
 
 export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
+
+export type QueuedFollowupReplyBatch = {
+  kind: "queued-followup";
+  runId: string;
+  originatingChannel: string | undefined;
+  payloads: ReplyPayload[];
+};
+
+type QueuedFollowupReplyDisposition =
+  | { kind: "deliver"; deliver: (batch: QueuedFollowupReplyBatch) => Promise<void> | void }
+  | { kind: "drop"; reason: "source-unavailable" };
 
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
@@ -104,6 +116,8 @@ export type FollowupRun = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
+  /** Keep delivery bound to the source that owned admission, not later runner defaults. */
+  queuedFollowupReplyDisposition?: QueuedFollowupReplyDisposition;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -163,6 +177,7 @@ export type FollowupRun = {
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
+    conversationRoutePeerId?: string;
     conversationToolPolicy?: GroupToolPolicyConfig;
     groupId?: string;
     groupChannel?: string;

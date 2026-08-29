@@ -144,6 +144,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(validation.run).toContain(
       "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
     );
+    expect(validation.run).toContain("repository: .repository.full_name");
     expect(validation.run).toContain(
       'EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
     );
@@ -241,8 +242,8 @@ describe("Plugin ClawHub New workflow", () => {
     });
     const uses = (publish.steps ?? []).flatMap((entry) => (entry.uses ? [entry.uses] : []));
     expect(uses).toEqual([
-      "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
-      "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]);
 
@@ -327,11 +328,11 @@ describe("Plugin ClawHub New workflow", () => {
   });
 
   it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
-    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.1" });
+    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.3" });
     expect(clawhubCliLock.packages?.["node_modules/clawhub"]).toMatchObject({
       integrity:
-        "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==",
-      version: "0.23.1",
+        "sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ==",
+      version: "0.23.3",
     });
     expect(materializerSource).toContain("npm ci");
     expect(materializerSource).toContain('cd "${destination}"');
@@ -339,7 +340,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(
-      "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816",
+      "9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83",
     );
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");

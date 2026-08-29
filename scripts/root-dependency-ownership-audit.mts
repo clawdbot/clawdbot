@@ -427,13 +427,17 @@ function printTextReport(records: AuditRecord[]) {
     console.log(`\n## ${category}`);
     for (const record of grouped.get(category) ?? []) {
       const details = [`sections=${record.sections.join(",") || "-"}`, `files=${record.fileCount}`];
+      const spec =
+        typeof record.spec === "string"
+          ? record.spec
+          : (JSON.stringify(record.spec) ?? "<undefined>");
       if (record.declaredInExtensions.length > 0) {
         details.push(`extensions=${record.declaredInExtensions.join(",")}`);
       }
       if (record.internalizedBundledRuntimeOwners.length > 0) {
         details.push(`internalized=${record.internalizedBundledRuntimeOwners.join(",")}`);
       }
-      console.log(`- ${record.depName}@${record.spec} :: ${details.join(" | ")}`);
+      console.log(`- ${record.depName}@${spec} :: ${details.join(" | ")}`);
       console.log(`  ${record.recommendation}`);
     }
   }

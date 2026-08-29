@@ -18,7 +18,13 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { BEAM_MAX_BODY_BYTES, BEAM_MAX_ITEM_CHARS, BEAM_MAX_ITEMS } from "./types.js";
+import {
+  BEAM_MAX_BODY_BYTES,
+  BEAM_MAX_ITEM_CHARS,
+  BEAM_MAX_ITEMS,
+  BEAM_MAX_SESSIONS,
+  BEAM_RETENTION_MS,
+} from "./types.js";
 
 const MIRROR_CONFIG_PATH = "plugins.entries.beam.config.mirror";
 const MIRROR_TOKEN_PATH = `${MIRROR_CONFIG_PATH}.token`;
@@ -31,6 +37,9 @@ const MIRROR_READ_LIMIT = 50;
 // Bounds concurrent remote rows and per-tick reads; oldest active sessions
 // beyond the cap simply wait until newer ones go idle.
 const MIRROR_MAX_SESSIONS = 32;
+// Keeping twice the receiver capacity prevents independent clocks and foreign
+// writers from making the sender under-retain retry ownership.
+const MIRROR_RETRY_CAP = 2 * BEAM_MAX_SESSIONS;
 // Leaves headroom below the receiver's hard body cap for JSON overhead drift.
 const MIRROR_BODY_BUDGET_BYTES = BEAM_MAX_BODY_BYTES - 2_048;
 // One warning per source per interval keeps a broken endpoint from flooding logs.
@@ -256,9 +265,14 @@ function hostCandidates(
   return out;
 }
 
+function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
+  return `${candidate.catalogId}\0${candidate.hostId}\0${candidate.threadId}`;
+}
+
 type TrackedMirrorSession = {
   candidate: BeamMirrorCandidate;
   fingerprint: string;
+  expiresAt: number;
 };
 
 type BeamMirrorRunner = {
@@ -267,7 +281,7 @@ type BeamMirrorRunner = {
 };
 
 export function createBeamMirrorRunner(params: {
-  runtime: PluginRuntime;
+  runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
@@ -281,6 +295,7 @@ export function createBeamMirrorRunner(params: {
   const controller = new AbortController();
   const { signal } = controller;
   let lastWarnAt = 0;
+  let warnedProcessHomeIsolation = false;
   let redirectBlockedEndpoint: string | undefined;
   let activeTick: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
@@ -302,6 +317,29 @@ export function createBeamMirrorRunner(params: {
       return await Promise.race([operation, aborted]);
     } finally {
       signal.removeEventListener("abort", abort);
+    }
+  };
+
+  // Retry state keeps a bounded sender-owned superset until the receiver's TTL.
+  // The extra capacity prevents independent clocks from dropping a live row.
+  const trackSuccessfulUpload = (
+    key: string,
+    candidate: BeamMirrorCandidate,
+    fingerprint: string,
+  ) => {
+    tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
+    if (tracked.size <= MIRROR_RETRY_CAP) {
+      return;
+    }
+    // Never discard the upload just accepted by the receiver, even after a clock rollback.
+    let oldest: [string, TrackedMirrorSession] | undefined;
+    for (const item of tracked) {
+      if (item[0] !== key && (!oldest || item[1].expiresAt < oldest[1].expiresAt)) {
+        oldest = item;
+      }
+    }
+    if (oldest) {
+      tracked.delete(oldest[0]);
     }
   };
 
@@ -458,8 +496,18 @@ export function createBeamMirrorRunner(params: {
           // would otherwise re-mirror each other's rows forever.
           catalog.id !== "beam" && mirror.catalogs.includes(catalog.id),
       );
+      if (
+        !warnedProcessHomeIsolation &&
+        catalogs.some((catalog) => !catalog.processHomeFallbackAllowed)
+      ) {
+        warnedProcessHomeIsolation = true;
+        params.logger.warn(
+          "beam mirror process-HOME fallback disabled: isolated state; only explicit catalog roots can be mirrored",
+        );
+      }
       const catalogById = new Map(catalogs.map((catalog) => [catalog.id, catalog]));
       const candidates: BeamMirrorCandidate[] = [];
+      const fullyObservedHosts = new Set<string>();
       for (const catalog of catalogs) {
         signal.throwIfAborted();
         try {
@@ -468,17 +516,28 @@ export function createBeamMirrorRunner(params: {
           );
           signal.throwIfAborted();
           candidates.push(...hostCandidates(catalog.id, hosts, activeSinceMs));
+          for (const host of hosts) {
+            if (
+              host.kind === "gateway" &&
+              host.connected &&
+              !host.error &&
+              host.nextCursor === undefined
+            ) {
+              fullyObservedHosts.add(`${catalog.id}\0${host.hostId}`);
+            }
+          }
         } catch (error) {
           signal.throwIfAborted();
           warnThrottled(`beam mirror list failed for ${catalog.id}: ${String(error)}`);
         }
       }
       candidates.sort((left, right) => right.recencyAt - left.recencyAt);
+      const activeKeys = new Set(candidates.map(mirrorCandidateKey));
       const selected = candidates.slice(0, MIRROR_MAX_SESSIONS);
       const selectedKeys = new Set<string>();
       for (const candidate of selected) {
         signal.throwIfAborted();
-        const key = `${candidate.catalogId}\0${candidate.hostId}\0${candidate.threadId}`;
+        const key = mirrorCandidateKey(candidate);
         selectedKeys.add(key);
         const catalog = catalogById.get(candidate.catalogId);
         if (!catalog) {
@@ -494,7 +553,7 @@ export function createBeamMirrorRunner(params: {
           const uploaded = await upload(mirror.endpoint, token, payload);
           signal.throwIfAborted();
           if (uploaded) {
-            tracked.set(key, { candidate, fingerprint });
+            trackSuccessfulUpload(key, candidate, fingerprint);
           }
         } catch (error) {
           signal.throwIfAborted();
@@ -503,22 +562,44 @@ export function createBeamMirrorRunner(params: {
       }
       // Sessions that left the active window get one final completed upload so
       // remote rows flip from live to completed instead of lingering until TTL.
+      const tickNow = now();
+      const terminalEntries: Array<[string, TrackedMirrorSession]> = [];
       for (const [key, entry] of tracked) {
         signal.throwIfAborted();
         if (selectedKeys.has(key)) {
           continue;
         }
-        tracked.delete(key);
-        const catalog = catalogById.get(entry.candidate.catalogId);
-        if (!catalog) {
+        const confirmedInactive =
+          fullyObservedHosts.has(`${entry.candidate.catalogId}\0${entry.candidate.hostId}`) &&
+          !activeKeys.has(key);
+        if (!confirmedInactive) {
           continue;
         }
-        try {
-          const payload = await buildUpload(agentId, catalog, entry.candidate, true);
-          signal.throwIfAborted();
-          await upload(mirror.endpoint, token, payload);
-        } catch {
-          // The session store may already be gone; the receiver TTL cleans up.
+        // A terminal retry cannot update a receiver row after this shared deadline.
+        if (entry.expiresAt <= tickNow) {
+          tracked.delete(key);
+        } else if (terminalEntries.length < MIRROR_MAX_SESSIONS) {
+          terminalEntries.push([key, entry]);
+        }
+      }
+      for (const [key, entry] of terminalEntries) {
+        signal.throwIfAborted();
+        let uploaded = false;
+        const catalog = catalogById.get(entry.candidate.catalogId);
+        if (catalog) {
+          try {
+            const payload = await buildUpload(agentId, catalog, entry.candidate, true);
+            signal.throwIfAborted();
+            uploaded = await upload(mirror.endpoint, token, payload);
+            signal.throwIfAborted();
+          } catch {
+            signal.throwIfAborted();
+          }
+        }
+        tracked.delete(key);
+        if (!uploaded) {
+          // Move failed work behind later entries so one broken session cannot starve them.
+          tracked.set(key, entry);
         }
       }
     } catch (error) {

@@ -9,24 +9,23 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { runPreflightCompactionIfNeeded as runPreflightCompactionIfNeededRaw } from "./agent-runner-memory.js";
+import { runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw } from "./agent-runner-memory.js";
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 const compactEmbeddedAgentSessionMock = vi.fn();
 
-type PreflightCompactionTestParams = Parameters<typeof runPreflightCompactionIfNeededRaw>[0] & {
+type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
   modelContextTokens?: number;
 };
 
-async function runPreflightCompactionIfNeeded(params: PreflightCompactionTestParams) {
+async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runPreflightCompactionIfNeededRaw({
+  return await runSessionCompactionIfNeededRaw({
     ...runParams,
     cfg: withTestModelContextTokens({
       cfg: runParams.cfg,
@@ -37,39 +36,11 @@ async function runPreflightCompactionIfNeeded(params: PreflightCompactionTestPar
   });
 }
 
-function createReplyOperation(): ReplyOperation {
-  return {
-    key: "test",
-    sessionId: "session",
-    abortSignal: new AbortController().signal,
-    resetTriggered: false,
-    phase: "queued",
-    result: null,
-    startedAtMs: Date.now(),
-    lastActivityAtMs: Date.now(),
-    recordActivity: vi.fn(),
-    setPhase: vi.fn(),
-    updateSessionId: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    freezeAbort: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
-  } as unknown as ReplyOperation;
-}
-
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
-describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
+describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
   let rootDir = "";
 
   beforeEach(async () => {
@@ -104,7 +75,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
   });
 
   async function runWithEntry(sessionEntry: SessionEntry, sessionFile: string) {
-    return await runPreflightCompactionIfNeeded({
+    return await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
@@ -118,7 +89,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       sessionKey: "agent:main:main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      abortSignal: new AbortController().signal,
     });
   }
 
@@ -174,6 +145,53 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards the routed account id into preflight compaction", async () => {
+    // Group session keys carry no account identity, so if this launcher drops the
+    // account the compaction path resolves the root history limit after prompt
+    // preparation already used the account limit.
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
+
+    await runSessionCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentAccountId: "work",
+        conversationRoutePeerId: "peer",
+        chatType: "direct",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      agentAccountId: "work",
+      conversationRoutePeerId: "peer",
+      chatType: "direct",
+    });
+  });
+
   it.each([
     {
       name: "the configured roster default for an embedded provider",
@@ -227,7 +245,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       };
       await writeTestSessionStore(storePath, "main", sessionEntry);
 
-      const result = await runPreflightCompactionIfNeeded({
+      const result = await runSessionCompactionIfNeeded({
         cfg: {
           agents: {
             list: [{ id: "ops", default: true }, { id: "worker" }],
@@ -249,7 +267,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
         sessionKey: "main",
         storePath,
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        abortSignal: new AbortController().signal,
       });
 
       expect(result).toBe(sessionEntry);

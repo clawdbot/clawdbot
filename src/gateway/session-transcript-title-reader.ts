@@ -94,13 +94,13 @@ function findFirstTitleUserMessage(
 }
 
 function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
-  return (
-    entries
-      .toReversed()
-      .map(sqliteMessageEventWithSeq)
-      .map((message) => projectSessionDisplayMessage(message, { flattenMarkdown: true }))
-      .find(Boolean)?.text ?? null
-  );
+  let text: string | null = null;
+  entries.findLast((entry) => {
+    const message = sqliteMessageEventWithSeq(entry);
+    text = projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text ?? null;
+    return text !== null;
+  });
+  return text;
 }
 
 function readSqliteTitleFields(

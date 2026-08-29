@@ -159,7 +159,7 @@ tools.media.models.*.request.auth.token tools.profile tools.sessions
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey
-ui.assistant.avatar ui.assistant.name ui.prefs.accent ui.prefs.chatFollowUpMode
+ui.prefs.accent ui.prefs.chatFollowUpMode
 ui.prefs.chatPersistCommentary ui.prefs.chatSendShortcut ui.prefs.chatShowThinking
 ui.prefs.chatShowToolCalls ui.prefs.locale
 ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel

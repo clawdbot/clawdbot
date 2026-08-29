@@ -12,12 +12,18 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  resolveDistArtifactLockPath,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import { toErrorObject } from "./lib/error-format.mts";
 import {
   inspectManagedProcessGroup,
+  signalExitCode,
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
@@ -98,16 +104,13 @@ export type MemoryLimitParams = {
   processResidentMemoryBytes?: number;
   procMeminfoPath?: string;
   procMemTotalBytes?: number;
-  procSelfCgroupPath?: string;
-  procSelfLimitsPath?: string;
-  procSelfMountinfoPath?: string;
-  procSelfStatusPath?: string;
-  resolvedMaxOldSpaceMb?: number;
 };
 
 type CgroupMount = { mountPoint: string; observed: boolean; root: string };
 
-type TsdownBuildParams = MemoryLimitParams & {
+type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
+
+type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
   comSpec?: string;
   nodeExecPath?: string;
@@ -187,6 +190,9 @@ function assertTsdownCleanOutputRoots(params: OutputRootParams = {}) {
         "Cannot clean the current working directory or one of its ancestors. Please specify a dedicated output directory.",
       );
     }
+    if (isPathInside(rootPath, resolveDistArtifactLockPath(cwd))) {
+      throw new Error("Cannot clean the checkout's dist artifact ownership location.");
+    }
     // A safe final component is insufficient: recursive removal follows symlinked parents.
     // Validate every component below the nearest common ancestor before any mutation begins.
     let candidatePath = rootPath;
@@ -216,6 +222,8 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
       ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
+    // Vite owns and cleans this subtree; runtime-only builds cannot recreate it.
+    path.resolve(cwd, "dist/control-ui"),
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths(cwd, env, fsImpl),
   ]);
@@ -264,7 +272,7 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
         fsImpl.rmSync(entryPath, { force: true });
       }
     } catch {
-      // Keep best-effort semantics; protected declaration children can keep a directory non-empty.
+      // Keep best-effort semantics; protected children can keep a directory non-empty.
     }
   }
 }
@@ -593,15 +601,16 @@ function parseCgroupMemoryLimitBytes(value: string) {
   return Number(parsed);
 }
 
+function isMissingFileError(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
 function readProcessRlimitMemoryBytes(params: MemoryLimitParams) {
   if ((params.platform ?? process.platform) !== "linux") {
     return null;
   }
   try {
-    const rawLimits = (params.fs ?? fs).readFileSync(
-      params.procSelfLimitsPath ?? PROC_SELF_LIMITS_PATH,
-      "utf8",
-    );
+    const rawLimits = (params.fs ?? fs).readFileSync(PROC_SELF_LIMITS_PATH, "utf8");
     let tightestLimitBytes: number | null = null;
     for (const match of rawLimits.matchAll(
       /^Max (?:address space|data size)\s+(?<soft>\d+|unlimited)\s+/gmu,
@@ -635,7 +644,7 @@ function readProcessResidentMemoryBytes(params: MemoryLimitParams) {
   }
   try {
     const match = (params.fs ?? fs)
-      .readFileSync(params.procSelfStatusPath ?? PROC_SELF_STATUS_PATH, "utf8")
+      .readFileSync(PROC_SELF_STATUS_PATH, "utf8")
       .match(/^VmRSS:\s+(\d+)\s+kB$/mu);
     const bytes = match?.[1] ? BigInt(match[1]) * 1024n : null;
     return bytes !== null && bytes <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bytes) : null;
@@ -651,10 +660,7 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
   const fsImpl = params.fs ?? fs;
   let rawMountinfo = "";
   try {
-    rawMountinfo = fsImpl.readFileSync(
-      params.procSelfMountinfoPath ?? PROC_SELF_MOUNTINFO_PATH,
-      "utf8",
-    );
+    rawMountinfo = fsImpl.readFileSync(PROC_SELF_MOUNTINFO_PATH, "utf8");
   } catch {
     // Unreadable off Linux; the documented defaults still apply.
   }
@@ -737,7 +743,7 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   let rawCgroup = "";
   let cgroupRecordReadFailed = false;
   try {
-    rawCgroup = fsImpl.readFileSync(params.procSelfCgroupPath ?? PROC_SELF_CGROUP_PATH, "utf8");
+    rawCgroup = fsImpl.readFileSync(PROC_SELF_CGROUP_PATH, "utf8");
   } catch {
     cgroupRecordReadFailed = (params.platform ?? process.platform) === "linux";
   }
@@ -956,13 +962,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
         tightestLimitBytes = availableBytes;
       }
     } catch (error) {
-      const missing =
-        (typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "ENOENT") ||
-        (error instanceof Error && error.message.startsWith("ENOENT"));
-      if (!missing) {
+      if (!isMissingFileError(error)) {
         sawUnreadableControllerFile = true;
         continue;
       }
@@ -977,13 +977,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
           .filter(Boolean);
         sawDisabledV2MemoryController ||= !controllers.includes("memory");
       } catch (controllerError) {
-        const controllerMissing =
-          (typeof controllerError === "object" &&
-            controllerError !== null &&
-            "code" in controllerError &&
-            controllerError.code === "ENOENT") ||
-          (controllerError instanceof Error && controllerError.message.startsWith("ENOENT"));
-        sawUnreadableControllerFile ||= !controllerMissing;
+        sawUnreadableControllerFile ||= !isMissingFileError(controllerError);
       }
     }
   }
@@ -1060,7 +1054,7 @@ function readHostAvailableMemoryBytes(params: MemoryLimitParams) {
   return null;
 }
 
-function resolveTsdownMemoryBudget(params: MemoryLimitParams = {}) {
+function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   if (params.resolvedMaxOldSpaceMb !== undefined) {
     return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
   }
@@ -1104,7 +1098,7 @@ function resolveTsdownMemoryBudget(params: MemoryLimitParams = {}) {
   };
 }
 
-const resolveTsdownMaxOldSpaceMb = (params: MemoryLimitParams = {}) =>
+const resolveTsdownMaxOldSpaceMb = (params: ResolvedMemoryLimitParams = {}) =>
   resolveTsdownMemoryBudget(params).maxOldSpaceMb;
 
 /**
@@ -1124,7 +1118,7 @@ const MEASURED_MIN_TSDOWN_HEAP_MB = 4352;
  * failing, which starves every other process on the machine.
  */
 export function describeInsufficientTsdownHeap(
-  params: MemoryLimitParams = {},
+  params: ResolvedMemoryLimitParams = {},
   budget = resolveTsdownMemoryBudget(params),
 ) {
   const { maxOldSpaceMb } = budget;
@@ -1186,7 +1180,7 @@ function normalizeMaxOldSpaceSizeMb(value: unknown, maxOldSpaceMb: number) {
   return Math.min(parsed, maxOldSpaceMb);
 }
 
-function normalizeTsdownNodeOptions(nodeOptions: string, params: MemoryLimitParams = {}) {
+function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
   const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized: string[] = [];
@@ -1228,7 +1222,7 @@ function normalizeTsdownNodeOptions(nodeOptions: string, params: MemoryLimitPara
 
 function resolveTsdownEnv(
   env: NodeJS.ProcessEnv,
-  params: MemoryLimitParams = {},
+  params: ResolvedMemoryLimitParams = {},
 ): NodeJS.ProcessEnv {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
   return {
@@ -1494,6 +1488,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
     resolvedMaxOldSpaceMb: maxOldSpaceMb,
   };
   return {
+    env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
     maxOldSpaceMb,
     heapShortfall:
       budget.unresolvedCgroupMemory || isFullTsdownBuildPlan(params.args ?? [])
@@ -1565,6 +1560,7 @@ export async function runTsdownBuildInvocation(
     parseNonNegativeIntegerEnv(env.OPENCLAW_TSDOWN_HEARTBEAT_MS, "OPENCLAW_TSDOWN_HEARTBEAT_MS") ??
     DEFAULT_HEARTBEAT_MS;
   let timedOut = false;
+  let parentSignal: NodeJS.Signals | undefined;
   let settled = false;
   let lastOutputAt = Date.now();
   let forceKillAt: number | null = null;
@@ -1605,10 +1601,9 @@ export async function runTsdownBuildInvocation(
 
   function relayParentSignal(signal: NodeJS.Signals) {
     const handler = () => {
+      parentSignal ??= signal;
       signalChild(signal);
       signalChild("SIGKILL");
-      cleanupParentSignalHandlers();
-      process.kill(process.pid, signal);
     };
     parentSignalHandlers.push({ signal, handler });
     process.once(signal, handler);
@@ -1707,43 +1702,59 @@ export async function runTsdownBuildInvocation(
       });
     });
     child.once("close", (status, signal) => {
+      let exitStatus = status;
       function finish() {
         settled = true;
         cleanupParentSignalHandlers();
         clearInterval(heartbeat ?? undefined);
         clearTimeout(timeout ?? undefined);
         resolve({
-          status,
-          signal,
+          status: parentSignal ? signalExitCode(parentSignal) : exitStatus,
+          signal: parentSignal ?? signal,
           timedOut,
           error: null,
           ...scanner.finish(),
         });
       }
 
-      if (timedOut) {
-        void finishTimedOutProcessTree().then(finish, finish);
-        return;
-      }
-
-      finish();
+      void (async () => {
+        if (timedOut || parentSignal) {
+          await finishTimedOutProcessTree();
+        } else if (processTreeAlive()) {
+          signalChild("SIGKILL");
+          await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+          exitStatus = 1;
+        }
+        if (processTreeAlive()) {
+          // Keep ownership when the group could still mutate output after close.
+          throw Object.assign(new Error("tsdown process group did not exit"), {
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "live",
+          });
+        }
+        finish();
+      })().catch((error: unknown) => {
+        settled = true;
+        cleanupParentSignalHandlers();
+        clearInterval(heartbeat ?? undefined);
+        clearTimeout(timeout ?? undefined);
+        resolve({
+          status: 1,
+          signal,
+          timedOut,
+          error: toErrorObject(error, "tsdown cleanup failed"),
+          ...scanner.finish(),
+        });
+      });
     });
   });
 }
 
-function isMainModule() {
-  const argv1 = process.argv[1];
-  if (!argv1) {
-    return false;
-  }
-  return import.meta.url === pathToFileURL(argv1).href;
-}
-
-if (isMainModule()) {
-  const args = parseTsdownBuildArgs(process.argv.slice(2));
+export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
+  const args = parseTsdownBuildArgs(argv);
   if (args.help) {
     console.log(tsdownBuildUsage());
-    process.exit(0);
+    return 0;
   }
   const plan = prepareTsdownBuildExecution(
     { args: args.forwardedArgs },
@@ -1758,12 +1769,15 @@ if (isMainModule()) {
     },
   );
   if (!plan) {
-    process.exit(1);
+    return 1;
   }
   let result: TsdownBuildResult | undefined;
   for (const [index, invocation] of plan.invocations.entries()) {
     const startedAt = performance.now();
     result = await runTsdownBuildInvocation(invocation);
+    if (result.error) {
+      throw result.error;
+    }
     // Per-invocation timing separates the AI-declarations pass from the main
     // graph in CI logs; the combined step is otherwise a single opaque cost.
     console.log(
@@ -1775,30 +1789,37 @@ if (isMainModule()) {
   }
 
   if (!result) {
-    process.exit(1);
+    return 1;
   }
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(
       "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
     );
-    process.exit(1);
+    return 1;
   }
 
   if (result.status === 0 && result.fatalUnresolvedImport) {
     console.error(
       `Build emitted [UNRESOLVED_IMPORT] outside extensions: ${result.fatalUnresolvedImport}`,
     );
-    process.exit(1);
+    return 1;
   }
 
   if (result.timedOut) {
-    process.exit(124);
+    return 124;
   }
 
   if (typeof result.status === "number") {
-    process.exit(result.status);
+    return result.status;
   }
 
-  process.exit(1);
+  return 1;
+}
+
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const argv = process.argv.slice(2);
+  process.exitCode = parseTsdownBuildArgs(argv).help
+    ? await runTsdownBuild(argv)
+    : await withDistArtifactOwnership(process.cwd(), () => runTsdownBuild(argv));
 }

@@ -88,6 +88,44 @@ describe("projectSettledCodexMessages", () => {
     ]);
   });
 
+  it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
+    const name = "codex_apps.slack.slack_send";
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name, arguments: { channel: "C1" } }],
+        }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: name,
+          content: [{ type: "text", text: "Sent." }],
+        }),
+      ]),
+    ).toEqual([
+      { type: "function_call", call_id: "call-1", name, arguments: '{"channel":"C1"}' },
+      { type: "function_call_output", call_id: "call-1", output: "Sent." },
+    ]);
+  });
+
+  it("rejects tool names outside the projectable charset and names the offender", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "bad tool", arguments: {} }],
+        }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "bad tool",
+          content: [{ type: "text", text: "failed" }],
+        }),
+      ]),
+    ).toThrow("invalid tool name: bad tool");
+  });
+
   it("preserves failed tool-result status in the projected output", () => {
     expect(
       projectSettledCodexMessages([

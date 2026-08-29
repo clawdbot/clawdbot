@@ -7,15 +7,10 @@ import {
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import { danger } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  addGatewayClientOptions,
-  callGatewayFromCli,
-  type GatewayRpcOpts,
-} from "../gateway-rpc.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
@@ -27,8 +22,12 @@ import {
   resolveCronEditScheduleRequest,
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
-import { getCronChannelOptions, warnIfCronSchedulerDisabled } from "./shared.js";
-import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
+import {
+  getCronChannelOptions,
+  handleCronCliError,
+  warnIfCronSchedulerDisabled,
+} from "./shared.js";
+import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
 type CronJobForEdit = CronJob & { configRevision?: string };
@@ -151,10 +150,10 @@ export function registerCronEditCommand(cron: Command) {
             );
           }
           const hasExplicitChatDelivery =
+            parseCronThreadIdOption(opts.threadId) !== undefined ||
             typeof opts.channel === "string" ||
             typeof opts.to === "string" ||
-            typeof opts.account === "string" ||
-            typeof opts.threadId === "string";
+            typeof opts.account === "string";
           if (
             sessionTarget === "main" &&
             typeof opts.systemEvent === "string" &&
@@ -439,8 +438,7 @@ export function registerCronEditCommand(cron: Command) {
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(formatErrorMessage(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );

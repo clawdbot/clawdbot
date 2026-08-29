@@ -25,7 +25,7 @@ comes from the normal environment/config endpoint. Combine it with
 
 ## App profiles
 
-Launch a fully isolated app instance with the same profile name used by the CLI:
+Launch a separately configured app instance with the same profile name used by the CLI:
 
 ```bash
 OPENCLAW_PROFILE=work /Applications/OpenClaw.app/Contents/MacOS/OpenClaw
@@ -48,6 +48,19 @@ service or OpenClaw login item while a profile is active. The runtime child node
 still runs in process as usual. App relocation, Sparkle updates, and post-update
 service repair are disabled in profile mode; update the installed app through
 the normal default-profile workflow.
+
+Profiles are not test sandboxes. PortGuardian intentionally shares its tunnel
+ledger and orphan cleanup across app instances, and port reservation inspects
+other profiles' Gateway service claims. Use a clean test account or VM when
+validation must not access or change operator state.
+
+## Native tests
+
+Run the full app suite only in disposable macOS CI or a VM without operator
+credentials or a live Gateway. A test filter or temporary `HOME` is not enough:
+preferences and Keychain use system services, and AppKit/WebKit tests can open
+windows and helper processes. Local subsets need a verified OS sandbox as well
+as test-owned resources. See [native test safety](https://docs.openclaw.ai/platforms/mac/dev-setup#run-native-tests-safely).
 
 ## Packaging flows
 

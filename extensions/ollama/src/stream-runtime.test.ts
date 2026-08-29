@@ -424,6 +424,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           api: "ollama",
           provider,
           id,
+          input: ["text"],
           contextWindow,
           ...(reasoning === undefined ? {} : { reasoning }),
           ...(params ? { params } : {}),
@@ -535,6 +536,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           api: "ollama",
           provider: "ollama-spark",
           id: "ollama-spark/qwen3:32b",
+          input: ["text"],
           contextWindow: 131072,
         };
 
@@ -572,6 +574,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           api: "ollama",
           provider: "ollama",
           id: "qwen3:32b",
+          input: ["text"],
           contextWindow: 131072,
         };
 
@@ -1329,6 +1332,62 @@ describe("parseNdjsonStream", () => {
     expect(ollamaStreamWarnMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "corrupted bytes inside an NDJSON record",
+      bytes: new Uint8Array([
+        ...new TextEncoder().encode('{"message":{"role":"assistant","content":"'),
+        0xff,
+        ...new TextEncoder().encode('"},"done":false}\n'),
+      ]),
+    },
+    {
+      name: "an incomplete UTF-8 sequence after the terminal record",
+      bytes: new Uint8Array([
+        ...new TextEncoder().encode(
+          '{"message":{"role":"assistant","content":"ok"},"done":true}\n',
+        ),
+        0xc3,
+      ]),
+    },
+  ])("rejects $name", async ({ bytes }) => {
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }).getReader();
+
+    await expect(async () => {
+      for await (const chunk of parseNdjsonStream(reader)) {
+        // Drain the response so decoder finalization runs at real EOF.
+        void chunk;
+      }
+    }).rejects.toThrow(/utf-8/i);
+  });
+
+  it("preserves valid UTF-8 characters split across transport chunks", async () => {
+    const bytes = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"héllo"},"done":true}\n',
+    );
+    const split = bytes.indexOf(0xc3) + 1;
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    }).getReader();
+    const chunks = [];
+
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.message.content).toBe("héllo");
+  });
+
   it.each(["null", "[]", "42"])("rejects non-object NDJSON records: %s", async (record) => {
     await expect(expectNoParsedChunks(mockNdjsonReader([record]))).rejects.toThrow(
       "OpenClaw transport error: malformed_streaming_fragment",
@@ -1612,6 +1671,7 @@ async function createOllamaTestStream(params: {
       id: "qwen3:32b",
       api: "ollama",
       provider: "custom-ollama",
+      input: ["text"],
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
@@ -1651,6 +1711,7 @@ async function createManagedOllamaTestStream(params: {
       id: "qwen3:32b",
       api: "ollama",
       provider: params.providerId ?? "custom-ollama",
+      input: ["text"],
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
@@ -2116,7 +2177,7 @@ describe("createOllamaStreamFn streaming events", () => {
       ],
       {
         baseUrl: "http://ollama-host:11434",
-        model: { id: "llava" },
+        model: { id: "llava", input: ["text", "image"] },
         context: {
           messages: [{ role: "user", content: [{ type: "image", data: "a".repeat(400) }] }],
         },
@@ -2800,6 +2861,67 @@ describe("createOllamaStreamFn streaming events", () => {
 });
 
 describe("createOllamaStreamFn", () => {
+  it.each([
+    {
+      input: ["text"],
+      expectedUserImages: undefined,
+      expectedToolImages: undefined,
+      expectsOmissionMarkers: true,
+    },
+    {
+      input: ["text", "image"],
+      expectedUserImages: ["dXNlci1pbWFnZQ=="],
+      expectedToolImages: ["dG9vbC1pbWFnZQ=="],
+      expectsOmissionMarkers: false,
+    },
+  ])("projects historical images for model input $input", async (testCase) => {
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "user caption" },
+            { type: "image", mimeType: "image/png", data: "dXNlci1pbWFnZQ==" },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_inspect",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "tool caption" },
+            { type: "image", mimeType: "image/png", data: "dG9vbC1pbWFnZQ==" },
+          ],
+        },
+      ],
+    };
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        model: { input: testCase.input },
+        context,
+      },
+      ({ body }) => {
+        const messages = body.messages as Array<Record<string, unknown>>;
+        expect(messages[0]?.images).toEqual(testCase.expectedUserImages);
+        expect(messages[1]?.images).toEqual(testCase.expectedToolImages);
+        expect(messages[0]?.content).toContain("user caption");
+        expect(messages[1]?.content).toContain("tool caption");
+        expect(
+          String(messages[0]?.content).includes("(image omitted: model does not support images)"),
+        ).toBe(testCase.expectsOmissionMarkers);
+        expect(
+          String(messages[1]?.content).includes(
+            "(tool image omitted: model does not support images)",
+          ),
+        ).toBe(testCase.expectsOmissionMarkers);
+        expect(messages[1]?.tool_call_id).toBe("call_inspect");
+      },
+    );
+    expect(JSON.stringify(context)).toContain("dXNlci1pbWFnZQ==");
+    expect(JSON.stringify(context)).toContain("dG9vbC1pbWFnZQ==");
+  });
+
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
     const signal = new AbortController().signal;
     await expectSuccessfulOllamaRequest(
@@ -3232,6 +3354,87 @@ describe("createOllamaStreamFn", () => {
     }
   });
 
+  it("redacts a configured header prefix split by the 8 KiB error cap", async () => {
+    const configuredSecret = "stream-boundary-credential-secret";
+    const retainedPrefix = configuredSecret.slice(0, -5);
+    const safeMarker = "bounded stream diagnostic: ";
+    const tracked = cancelTrackedResponse(
+      `${safeMarker}${"x".repeat(8 * 1024 - safeMarker.length - retainedPrefix.length)}${configuredSecret} trailing text`,
+      { status: 503, statusText: "Service Unavailable" },
+    );
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: tracked.response,
+      release: vi.fn(async () => undefined),
+    });
+    try {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        defaultHeaders: { "X-Proxy-Auth": configuredSecret },
+      });
+      const events = await collectStreamEvents(stream);
+      const errorEvent = events.find((event) => event.type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      if (!errorEvent) {
+        throw new Error("expected Ollama stream error event");
+      }
+
+      const message = errorEvent.error.errorMessage ?? "";
+      expect(message).toMatch(/^503\b/);
+      expect(message).toContain(safeMarker);
+      expect(message).not.toContain(retainedPrefix);
+      expect(message).not.toContain(configuredSecret);
+      expect(tracked.wasCanceled()).toBe(true);
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
+  });
+
+  it("redacts reflected configured and bearer credentials from non-2xx response text", async () => {
+    const configuredSecret = "stream-configured-header-secret";
+    const staleAuthorization = "Bearer stale-stream-authorization";
+    const bearerCredential = "stream-bearer-credential-secret";
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          error: "rate limit exceeded",
+          configuredEcho: configuredSecret,
+          bearerEcho: bearerCredential,
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+
+    const stream = await createOllamaTestStream({
+      baseUrl: "http://ollama-host:11434",
+      defaultHeaders: {
+        "X-Proxy-Auth": configuredSecret,
+        Authorization: staleAuthorization,
+      },
+      options: { apiKey: bearerCredential },
+    });
+    const events = await collectStreamEvents(stream);
+    const errorEvent = events.find((event) => event.type === "error") as
+      | { type: "error"; error: { errorMessage?: string } }
+      | undefined;
+    if (!errorEvent) {
+      throw new Error("expected Ollama stream error event");
+    }
+
+    const message = errorEvent.error.errorMessage ?? "";
+    expect(message).toMatch(/^429\b/);
+    expect(message).toContain("rate limit exceeded");
+    expect(message).not.toContain(configuredSecret);
+    expect(message).not.toContain(bearerCredential);
+    expect(requireHeaders(getGuardedFetchCall(fetchWithSsrFGuardMock).init?.headers)).toMatchObject(
+      {
+        "X-Proxy-Auth": configuredSecret,
+        Authorization: `Bearer ${bearerCredential}`,
+      },
+    );
+  });
+
   it("keeps thinking chunks when no final content is emitted", async () => {
     await expectDoneEventContent(
       [
@@ -3346,6 +3549,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               id: "qwen3:32b",
               api: "ollama",
               provider: "ollama-gpu",
+              input: ["text"],
               contextWindow: 131072,
             } as never,
             { messages: [{ role: "user", content: "hello" }] } as never,
@@ -3382,6 +3586,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               id: "qwen3:32b",
               api: "ollama",
               provider: "ollama-gpu",
+              input: ["text"],
               contextWindow: 131072,
             } as never,
             { messages: [{ role: "user", content: "hello" }] } as never,
@@ -3417,6 +3622,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               id: "qwen3:32b",
               api: "ollama",
               provider: "custom-ollama",
+              input: ["text"],
               contextWindow: 131072,
             } as never,
             {

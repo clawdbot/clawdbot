@@ -174,7 +174,8 @@ vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
     pristineStartupMigrationPlan.state(env),
 }));
 
-vi.mock("../../config/paths.js", () => ({
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
@@ -901,7 +902,7 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("admits only the stable-authored retired keys to gateway migration preflight", async () => {
+  it("admits deterministic legacy repairs to gateway preflight and rejects unrelated drift", async () => {
     const selectedStateDir = "/tmp/openclaw-stable-upgrade-state";
     await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
       const stableConfig = {
@@ -915,6 +916,7 @@ describe("gateway run option collisions", () => {
         },
         env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
         gateway: { mode: "local" },
+        session: { idleMinutes: 45 },
       };
       configState.snapshot = {
         config: stableConfig,
@@ -923,6 +925,7 @@ describe("gateway run option collisions", () => {
         issues: [
           { path: "meta", message: "retired" },
           { path: "agents.defaults.heartbeat", message: "retired" },
+          { path: "session.idleMinutes", message: "retired" },
         ],
         legacyIssues: [{ path: "", message: "retired" }],
         parsed: stableConfig,
@@ -944,9 +947,10 @@ describe("gateway run option collisions", () => {
       expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
 
       const repairedConfig = {
-        agents: { entries: { main: {} } },
+        agents: { defaults: {}, entries: { main: {} } },
         env: stableConfig.env,
         gateway: { mode: "local" as const },
+        session: { reset: { mode: "idle", idleMinutes: 45 } },
         meta: {
           lastTouchedVersion: VERSION,
           migrations: { modelPolicyAllowlist: true },
@@ -1757,6 +1761,7 @@ describe("gateway run option collisions", () => {
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
           REMOVED_KEY: "stale-service-value",
           SECRET_REF_KEY: "file-backed-value",
+          OPENAI_API_KEY: "operator-owned-provider-key",
           OPERATOR_KEY: "operator-value",
         },
         async () => {
@@ -1765,6 +1770,7 @@ describe("gateway run option collisions", () => {
           await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
           expect(process.env.REMOVED_KEY).toBeUndefined();
           expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
+          expect(process.env.OPENAI_API_KEY).toBe("operator-owned-provider-key");
           expect(process.env.OPERATOR_KEY).toBe("operator-value");
           await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
         },

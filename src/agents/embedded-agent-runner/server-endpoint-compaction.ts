@@ -1,11 +1,15 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
+  requiresCompactionReplayRefresh,
   resolveOpenAIResponsesCompactEndpointPlan,
 } from "@openclaw/ai/transports";
 import type { Message } from "@openclaw/llm-core";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { redactTranscriptMessage } from "../transcript-redact.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
@@ -28,6 +32,7 @@ export async function attemptServerEndpointCompaction(params: {
   extraParams: Record<string, unknown>;
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
   customInstructions?: string;
+  config?: OpenClawConfig;
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
@@ -42,6 +47,11 @@ export async function attemptServerEndpointCompaction(params: {
         message.role === "user" || message.role === "assistant" || message.role === "toolResult",
     );
     if (messages.at(-1)?.role !== "assistant") {
+      return undefined;
+    }
+    if (requiresCompactionReplayRefresh(messages, params.model, params.requestOptions)) {
+      // The exact old window is gone. Only the durable full-history client
+      // compactor can rebuild it; recent-turn endpoint input cannot.
       return undefined;
     }
     const owner = params.sessionManager
@@ -68,10 +78,18 @@ export async function attemptServerEndpointCompaction(params: {
       compacted.historyMode === "retained-users" ? "retained-users" : replacement.content.length,
       compacted.model,
       compacted.replayMetadata,
+      compacted.output,
     );
+    const redacted = redactTranscriptMessage(replacement, params.config);
+    if (
+      redacted.role !== "assistant" ||
+      !isDeepStrictEqual(redacted.providerReplay, replacement.providerReplay)
+    ) {
+      throw new Error("Responses compact endpoint window requires transcript redaction");
+    }
     const rewritten = rewriteTranscriptEntriesInSessionManager({
       sessionManager: params.sessionManager,
-      replacements: [{ entryId: owner.id, message: replacement }],
+      replacements: [{ entryId: owner.id, message: redacted }],
       preserveReplacementCompactionReplay: true,
     });
     if (

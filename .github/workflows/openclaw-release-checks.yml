@@ -90,6 +90,15 @@ on:
           - qa
           - qa-parity
           - qa-live
+      phase:
+        description: Release check phase to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - independent
+          - candidate
       live_suite_filter:
         description: Optional exact live/E2E suite id, or comma-separated QA live lane ids (qa-live-matrix, qa-live-buzz, qa-live-telegram, qa-live-discord, qa-live-whatsapp, qa-live-slack); blank runs all selected live suites
         required: false
@@ -127,12 +136,13 @@ on:
         type: string
 
 concurrency:
-  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
+  # Keep independent parent coverage independent through child admission too.
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -148,6 +158,7 @@ jobs:
       mode: ${{ steps.inputs.outputs.mode }}
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
+      phase: ${{ steps.inputs.outputs.phase }}
       qa_live_scheduled: ${{ steps.inputs.outputs.qa_live_scheduled }}
       release_check_groups_json: ${{ steps.inputs.outputs.release_check_groups_json }}
       package_required: ${{ steps.inputs.outputs.package_required }}
@@ -285,7 +296,7 @@ jobs:
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -306,7 +317,7 @@ jobs:
 
       - name: Checkout selected ref for reachability fallback
         if: steps.fast_ref.outputs.fallback == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -415,6 +426,7 @@ jobs:
           RELEASE_REF_INPUT: ${{ inputs.ref }}
           RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
           RELEASE_MODE_INPUT: ${{ inputs.mode }}
+          RELEASE_PHASE_INPUT: ${{ inputs.phase }}
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
           RELEASE_FAIL_FAST_INPUT: ${{ inputs.fail_fast }}
@@ -434,6 +446,14 @@ jobs:
           RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
+          phase="$RELEASE_PHASE_INPUT"
+          case "$phase" in
+            all|independent|candidate) ;;
+            *)
+              echo "phase must be one of: all, independent, candidate" >&2
+              exit 1
+              ;;
+          esac
           candidate_artifact_json=""
           release_package_spec=""
           package_acceptance_package_spec=""
@@ -443,10 +463,8 @@ jobs:
             release_package_spec="$RELEASE_PACKAGE_SPEC_INPUT"
           [[ "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT" =~ [^[:space:]] ]] &&
             package_acceptance_package_spec="$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
-          if [[ -n "$candidate_artifact_json" ]] &&
-            { [[ -n "$release_package_spec" ]] ||
-              [[ -n "$package_acceptance_package_spec" ]]; }; then
-            echo "candidate_artifact_json cannot be combined with release package specs." >&2
+          if [[ -n "$candidate_artifact_json" && -n "$release_package_spec" ]]; then
+            echo "candidate_artifact_json cannot be combined with release_package_spec." >&2
             exit 1
           fi
           package_mode=source
@@ -671,11 +689,43 @@ jobs:
           if [[ "$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter" ]]; then
             docker_required=true
           fi
+          case "$phase" in
+            independent)
+              cross_os_scheduled=false
+              docker_required=false
+              package_acceptance_scheduled=false
+              ;;
+            candidate)
+              install_smoke_scheduled=false
+              live_e2e_scheduled=false
+              qa_parity_scheduled=false
+              qa_live_scheduled=false
+              run_maturity_scorecard=false
+              ;;
+          esac
+
           package_required=false
           if [[ "$cross_os_scheduled" == "true" ||
                 "$package_acceptance_scheduled" == "true" ||
                 "$docker_required" == "true" ]]; then
             package_required=true
+          fi
+          if [[ "$phase" == "candidate" && -z "$candidate_artifact_json" ]]; then
+            candidate_artifact_required=false
+            if [[ -z "$release_package_spec" ]] &&
+              { [[ "$cross_os_scheduled" == "true" ]] ||
+                [[ "$docker_required" == "true" ]]; }; then
+              candidate_artifact_required=true
+            fi
+            if [[ "$package_acceptance_scheduled" == "true" &&
+                  -z "$release_package_spec" &&
+                  -z "$package_acceptance_package_spec" ]]; then
+              candidate_artifact_required=true
+            fi
+            if [[ "$candidate_artifact_required" == "true" ]]; then
+              echo "phase=candidate requires candidate_artifact_json unless every selected package path uses a published package spec." >&2
+              exit 1
+            fi
           fi
 
           {
@@ -684,6 +734,7 @@ jobs:
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
+            printf 'phase=%s\n' "$phase"
             printf 'qa_live_scheduled=%s\n' "$qa_live_scheduled"
             printf 'release_check_groups_json=%s\n' "$release_check_groups_json"
             printf 'package_required=%s\n' "$package_required"
@@ -721,6 +772,7 @@ jobs:
           RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
           RELEASE_PROVIDER: ${{ inputs.provider }}
           RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_PHASE: ${{ steps.inputs.outputs.phase }}
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
@@ -746,6 +798,7 @@ jobs:
             echo "- Ref resolution fast path: \`${RELEASE_REF_FAST_PATH}\`"
             echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
+            echo "- Phase: \`${RELEASE_PHASE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Concrete release-check groups: \`${RELEASE_CHECK_GROUPS_JSON}\`"
@@ -809,7 +862,7 @@ jobs:
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1197,6 +1250,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1307,6 +1361,7 @@ jobs:
       package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      prepublish_plugin_registry_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}
       suite_profile: custom
       docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
@@ -1314,7 +1369,7 @@ jobs:
       telegram_mode: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}
       telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       shared_image_artifact_namespace: release-package
-      candidate_artifact_json: ${{ needs.resolve_target.outputs.candidate_artifact_json }}
+      candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}
       shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1326,6 +1381,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1412,7 +1468,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1420,7 +1476,7 @@ jobs:
 
       - name: Checkout trusted QA Anthropic mock tooling
         if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-qa-tooling-trusted
@@ -1566,14 +1622,14 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1704,7 +1760,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1758,7 +1814,7 @@ jobs:
 
       - name: Checkout trusted validator after candidate suite
         if: always()
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1828,7 +1884,7 @@ jobs:
 
       - name: Checkout trusted validator after candidate report
         if: always()
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1906,7 +1962,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -2025,14 +2081,14 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -2131,6 +2187,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: matrix
       run_matrix: true
       fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
     secrets:
@@ -2149,6 +2206,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: buzz
       run_buzz: true
       buzz_scenario: channel-canary,channel-mention-gating
     secrets:
@@ -2290,7 +2348,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2409,7 +2467,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2506,7 +2564,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2616,7 +2674,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -2736,30 +2794,37 @@ jobs:
           RELEASE_CHECK_RUN_ID: ${{ github.run_id }}
           RELEASE_CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RELEASE_PHASE: ${{ needs.resolve_target.outputs.phase }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           failed=0
-          release_check_items=(
-            "resolve_target=${RESOLVE_TARGET_RESULT}"
-            "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
-            "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
-            "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
-            "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
-            "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
-            "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
-            "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
-            "maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"
-            "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
-            "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
-            "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
-            "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
-            "qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"
-            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
-            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
-            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
-            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
-          )
+          release_check_items=("resolve_target=${RESOLVE_TARGET_RESULT}")
+          if [[ "$RELEASE_PHASE" != "candidate" ]]; then
+            release_check_items+=(
+              "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
+              "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
+              "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
+              "maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"
+              "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
+              "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
+              "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
+              "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
+              "qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"
+              "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
+              "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
+              "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
+              "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
+            )
+          fi
+          if [[ "$RELEASE_PHASE" != "independent" ]]; then
+            release_check_items+=(
+              "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
+              "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
+              "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
+              "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
+            )
+          fi
           tideclaw_alpha=false
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha=true

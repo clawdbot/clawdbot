@@ -4,6 +4,66 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes source CLI invocation owners and their native proof to Windows", () => {
+    for (const sourceCliPath of [
+      "src/infra/openclaw-cli-invocation.ts",
+      "src/infra/openclaw-cli-invocation.test.ts",
+      "src/infra/openclaw-cli-invocation.test-support.ts",
+      "src/infra/openclaw-cli-shim.ts",
+      "src/infra/openclaw-cli-shim.test.ts",
+      "src/infra/openclaw-cli-shim.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([sourceCliPath]), sourceCliPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+        runMacos: false,
+        runAndroid: false,
+      });
+    }
+
+    for (const unrelatedPath of [
+      "src/infra/openclaw-root.ts",
+      "src/infra/openclaw-cli-other.test.ts",
+      "src/infra/openclaw-cli-shim-extra.ts",
+    ]) {
+      expect(detectChangedScope([unrelatedPath]).runWindows, unrelatedPath).toBe(false);
+    }
+  });
+
+  it("routes worker bundle producers, archives, installers, and regression coverage to Windows", () => {
+    for (const bundlePath of [
+      "src/shared/worker-bundle-archive.ts",
+      "src/shared/worker-bundle-archive.test.ts",
+      "src/shared/worker-bundle-hash.ts",
+      "src/gateway/worker-environments/bundle.ts",
+      "src/gateway/worker-environments/bundle.test.ts",
+      "src/gateway/worker-environments/bundle-staging.ts",
+      "src/node-host/node-worker-bundle-installer.ts",
+      "src/node-host/node-worker-bundle-installer.test.ts",
+    ]) {
+      expect(detectChangedScope([bundlePath]), bundlePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes paired-worker workspace transfer owners and native regression coverage to Windows", () => {
+    for (const workspacePath of [
+      "src/node-host/node-worker-transfer-client.ts",
+      "src/node-host/node-worker-transfer-client.test.ts",
+      "src/gateway/worker-environments/node-worker-tunnel.ts",
+      "src/gateway/worker-environments/node-worker-tunnel.test.ts",
+      "src/gateway/worker-environments/workspace-sync-scripts.ts",
+      "src/gateway/worker-environments/workspace-sync-manifest.test.ts",
+    ]) {
+      expect(detectChangedScope([workspacePath]), workspacePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SQLite transcript archive changes to Windows", () => {
     for (const archivePath of [
       "src/config/sessions/session-accessor.sqlite-archive.ts",
@@ -288,6 +348,20 @@ describe("detectChangedScope Windows routing", () => {
       "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
     ]) {
       expect(detectChangedScope([memoryPath]), memoryPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes workspace quiescence owners and native coverage to Windows", () => {
+    for (const quiescencePath of [
+      "src/gateway/worker-environments/workspace-quiescence.ts",
+      "src/gateway/worker-environments/workspace-quiescence-scripts.ts",
+      "src/gateway/worker-environments/workspace-quiescence.test.ts",
+      "src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([quiescencePath]), quiescencePath).toMatchObject({
         runNode: true,
         runWindows: true,
       });

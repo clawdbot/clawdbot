@@ -53,7 +53,6 @@ export function createResult(
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
     sdkSessionId?: string;
-    sessionIdUsed?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
     toolMetas?: AgentHarnessAttemptResult["toolMetas"];
@@ -134,7 +133,9 @@ export function createResult(
     messagingToolSentTexts: [],
     replayMetadata,
     sessionFileUsed: readNonEmptyString(params.sessionFile),
-    sessionIdUsed: state.sessionIdUsed ?? readNonEmptyString(params.sessionId) ?? "copilot-session",
+    // Core adopts this identity before its next transcript write; SDK session
+    // identity belongs only in sdkSessionId and must not replace the host id.
+    sessionIdUsed: params.sessionId,
     toolMetas,
     yieldDetected: state.yieldDetected === true,
     ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),

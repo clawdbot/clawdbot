@@ -67,6 +67,62 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `session sharing decodes present unknown and absent actor evidence`() throws {
+        let presentList = try JSONDecoder().decode(
+            SessionMembersListResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"present","addedBy":"profile-ada","addedAt":1}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+        let principalLessList = try JSONDecoder().decode(
+            SessionMembersListEvidenceResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"unknown","addedByState":"unknown","addedAt":2},{"identityId":"absent","addedAt":3}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+
+        #expect(presentList.members[0].addedby == "profile-ada")
+        #expect(principalLessList.members[0].addedby == nil)
+        #expect(principalLessList.members[0].addedbystate == "unknown")
+        #expect(principalLessList.members[1].addedby == nil)
+        #expect(principalLessList.members[1].addedbystate == nil)
+        for member in [
+            #"{"identityId":"unknown","addedByState":"unknown","addedAt":2}"#,
+            #"{"identityId":"absent","addedAt":3}"#,
+        ] {
+            #expect(throws: DecodingError.self) {
+                try JSONDecoder().decode(
+                    SessionMembersListResult.self,
+                    from: Data(
+                        #"{"sessionKey":"main","members":[\#(member)],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                            .utf8))
+            }
+        }
+
+        let present = try JSONDecoder().decode(
+            SessionSharingEvent.self,
+            from: Data(
+                #"{"action":"visibility","sessionKey":"main","agentId":"main","actor":{"type":"human","id":"profile-ada"},"ts":1}"#
+                    .utf8))
+
+        #expect(present.actor.id == "profile-ada")
+
+        let principalLess = try JSONDecoder().decode(
+            [SessionSharingEvidenceEvent].self,
+            from: Data(
+                #"[{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2},{"action":"member-removed","sessionKey":"main","agentId":"main","identityId":"member","ts":3}]"#
+                    .utf8))
+
+        #expect(principalLess[0].actorstate == "unknown")
+        #expect(principalLess[1].actorstate == nil)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                SessionSharingEvent.self,
+                from: Data(
+                    #"{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2}"#
+                        .utf8))
+        }
+    }
+
+    @Test
     func `device pair setup results decode older gateway payloads`() throws {
         let result = try JSONDecoder().decode(
             DevicePairSetupCodeResult.self,

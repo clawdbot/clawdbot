@@ -41,6 +41,7 @@ import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRootsCore,
+  HostReadMediaTypeError,
   LocalMediaAccessError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
@@ -554,7 +555,7 @@ function assertHostReadMediaAllowed(params: {
     ) {
       return;
     }
-    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
+    throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -593,18 +594,16 @@ function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
   ) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
+    throw new HostReadMediaTypeError(
       `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
     );
   }
-  throw new LocalMediaAccessError(
-    "path-not-allowed",
+  throw new HostReadMediaTypeError(
     `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
-function toJpegFileName(fileName?: string): string | undefined {
+function toImageFileName(fileName: string | undefined, mimeType: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
@@ -613,10 +612,10 @@ function toJpegFileName(fileName?: string): string | undefined {
     return fileName;
   }
   const parsed = path.parse(trimmed);
-  if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
-    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
-  }
-  return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
+  const ext = extensionForMime(mimeType);
+  return mimeType !== "image/jpeg" && parsed.ext.toLowerCase() === ext
+    ? fileName
+    : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
 type OptimizedImage = {
@@ -994,7 +993,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
+    fileName: toImageFileName(params.fileName, optimized.mimeType),
   };
 }
 
@@ -1054,7 +1053,7 @@ async function loadWebMediaInternal(
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
+    const fileName = toImageFileName(meta?.fileName, optimized.mimeType);
 
     return {
       buffer: optimized.buffer,

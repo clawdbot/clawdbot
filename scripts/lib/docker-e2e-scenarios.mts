@@ -16,6 +16,7 @@ export type DockerE2eLane = {
   name: string;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
+  prepublishPluginPackages?: string[];
   resources: string[];
   retries: number;
   retryPatterns: RegExp[];
@@ -63,6 +64,12 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
+const npmOnboardLaneOptions = {
+  prepublishPluginPackages: ["@openclaw/codex"],
+  resources: ["service"],
+  stateScenario: "empty",
+  weight: 3,
+} satisfies LaneOptions;
 
 const LIVE_RETRY_PATTERNS = [
   /529\b/i,
@@ -73,7 +80,7 @@ const LIVE_RETRY_PATTERNS = [
   /ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
 ];
 
-function liveDockerScriptCommand(
+export function liveDockerScriptCommand(
   script: string,
   envPrefix = "",
   options: { shellPrelude?: string; skipBuild?: boolean } = {},
@@ -106,6 +113,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
     needsLiveImage: options.needsLiveImage,
+    prepublishPluginPackages: options.prepublishPluginPackages,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
     resources: options.resources ?? [],
@@ -150,7 +158,9 @@ function liveLane(name: string, command: string, options: LaneOptions = {}) {
   return lane(name, command, {
     ...options,
     live: true,
-    needsLiveImage: options.needsLiveImage ?? true,
+    // Package-backed live lanes use their E2E image; live credentials alone do
+    // not require building the separate source live-test image.
+    needsLiveImage: options.needsLiveImage ?? !options.e2eImageKind,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
     retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
     retries: options.retries ?? DEFAULT_LIVE_RETRIES,
@@ -180,10 +190,8 @@ function releaseTypedOnboardingLane() {
     "release-typed-onboarding",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
     {
-      resources: ["npm", "service"],
-      stateScenario: "empty",
+      ...npmOnboardLaneOptions,
       timeoutMs: 20 * 60 * 1000,
-      weight: 3,
     },
   );
 }
@@ -280,7 +288,6 @@ function liveOpenAiChatToolsLane() {
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-chat-tools",
     {
       e2eImageKind: "functional",
-      needsLiveImage: false,
       provider: "openai",
       resources: ["service"],
       stateScenario: "empty",
@@ -325,7 +332,6 @@ function liveMcpCodeModeGatewayLane() {
     {
       cacheKey: "mcp-code-mode-gateway",
       e2eImageKind: "functional",
-      needsLiveImage: false,
       provider: "openai",
       resources: ["npm", "service"],
       stateScenario: "empty",
@@ -431,7 +437,6 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
     e2eImageKind: "functional",
-    needsLiveImage: false,
     provider: "openai",
     resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
@@ -442,6 +447,7 @@ export const mainLanes: DockerE2eLane[] = [
     weight: 2,
   }),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
+    prepublishPluginPackages: ["@openclaw/codex"],
     resources: ["service"],
     stateScenario: "empty",
     weight: 3,
@@ -458,27 +464,30 @@ export const mainLanes: DockerE2eLane[] = [
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   npmLane(
     "npm-onboard-discord-channel-agent",
     "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   npmLane(
     "npm-onboard-slack-channel-agent",
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   // Prerelease validation must pair frozen core bytes with matching target plugin bytes.
-  // Keep the registry-backed lanes above unchanged for published-package proof.
+  // The lanes above leave channel source selection to the published catalog.
   npmLane(
     "npm-onboard-discord-candidate-channel-agent",
     liveDockerScriptCommand(
       "e2e/npm-onboard-channel-agent-docker.sh",
       "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
     ),
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    {
+      ...npmOnboardLaneOptions,
+      prepublishPluginPackages: ["@openclaw/codex", "@openclaw/discord"],
+    },
   ),
   npmLane(
     "npm-onboard-slack-candidate-channel-agent",
@@ -486,7 +495,10 @@ export const mainLanes: DockerE2eLane[] = [
       "e2e/npm-onboard-channel-agent-docker.sh",
       "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
     ),
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    {
+      ...npmOnboardLaneOptions,
+      prepublishPluginPackages: ["@openclaw/codex", "@openclaw/slack"],
+    },
   ),
   npmLane(
     "release-user-journey",
@@ -529,6 +541,10 @@ export const mainLanes: DockerE2eLane[] = [
       weight: 3,
     },
   ),
+  serviceLane("gateway-concurrency", liveDockerScriptCommand("e2e/gateway-concurrency-docker.sh"), {
+    timeoutMs: 10 * 60 * 1000,
+    weight: 3,
+  }),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
     stateScenario: "empty",
@@ -832,7 +848,6 @@ export const publicInstallerLanes: DockerE2eLane[] = [
     ),
     {
       e2eImageKind: "bare",
-      needsLiveImage: false,
       provider: "openai",
       resources: ["npm", "service"],
       timeoutMs: 15 * 60 * 1000,
@@ -848,7 +863,6 @@ export const publicInstallerLanes: DockerE2eLane[] = [
     ),
     {
       e2eImageKind: "bare",
-      needsLiveImage: false,
       provider: "claude",
       resources: ["npm", "service"],
       weight: 3,
@@ -952,7 +966,6 @@ function chunkMatchesReleaseProfile(chunk: string, releaseProfile: DockerE2eRele
 function openWebUILane() {
   return liveLane("openwebui", RELEASE_OPENWEBUI_COMMAND, {
     e2eImageKind: "functional",
-    needsLiveImage: false,
     provider: "openai",
     resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,

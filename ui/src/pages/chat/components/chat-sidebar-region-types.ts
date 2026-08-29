@@ -10,6 +10,7 @@ export type SidebarPanelDefinition = {
   shortcut?: string;
   available: boolean;
   content: TemplateResult | typeof nothing | null;
+  loading: TemplateResult;
   headerAction?: TemplateResult;
   empty: {
     description: string;

@@ -60,8 +60,8 @@ html.openclaw-native-macos
     border-color var(--duration-fast) ease;
 }
 
-.sidebar-update-card__action:hover:not(:disabled),
-.sidebar-update-card__action:focus-visible {
+.sidebar-update-card__action:hover:not(:disabled):not([aria-disabled="true"]),
+.sidebar-update-card__action:focus-visible:not([aria-disabled="true"]) {
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
   background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
 }
@@ -96,7 +96,7 @@ html.openclaw-native-macos
   opacity: 0.66;
 }
 
-.sidebar-update-card__action:disabled {
+.sidebar-update-card__action:is(:disabled, [aria-disabled="true"]) {
   cursor: not-allowed;
   opacity: 0.66;
 }

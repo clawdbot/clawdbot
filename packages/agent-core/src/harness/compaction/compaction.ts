@@ -37,7 +37,7 @@ import {
   extractSummaryText,
   type FileOperations,
   formatFileOperations,
-  getCompactionContentBlockText,
+  getCompactionContent,
   mergeSummaryFileOperations,
   serializeConversation,
   stringifyCompactionValue,
@@ -278,18 +278,16 @@ export function shouldCompact(
 export const IMAGE_BLOCK_TOKENS = 2_000;
 const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
-function countContentBlockChars(
-  content: Array<{ type: string; content?: unknown; text?: string }>,
+function countContentChars(
+  content: string | Array<{ type: string; content?: unknown; text?: string }>,
 ): number {
-  let chars = 0;
-  for (const block of content) {
-    if (block.type === "image") {
-      chars += IMAGE_BLOCK_CHARS;
-    } else {
-      chars += estimateStringChars(getCompactionContentBlockText(block));
-    }
-  }
-  return chars;
+  const { text, omissionText } = getCompactionContent(content);
+  const images =
+    typeof content === "string" ? 0 : content.filter((block) => block.type === "image").length;
+  // Charge the largest role/separator even for mixed text. Any suppressed message's
+  // minimum 56-character charge also covers the serializer's single 55-character overflow.
+  const omissionChars = omissionText ? omissionText.length + "\n\n[Tool result]: ".length : 0;
+  return estimateStringChars(text) + images * IMAGE_BLOCK_CHARS + omissionChars;
 }
 
 /** Estimate token count for one message using a conservative character heuristic. */
@@ -301,17 +299,6 @@ export function estimateTokens(message: AgentMessage): number {
   const harnessMessage = message as HarnessMessage;
 
   switch (harnessMessage.role) {
-    case "user": {
-      const content = (
-        harnessMessage as { content: string | Array<{ type: string; text?: string }> }
-      ).content;
-      if (typeof content === "string") {
-        chars = estimateStringChars(content);
-      } else if (Array.isArray(content)) {
-        chars = countContentBlockChars(content);
-      }
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
-    }
     case "assistant": {
       const assistant = harnessMessage;
       for (const block of assistant.content) {
@@ -327,13 +314,10 @@ export function estimateTokens(message: AgentMessage): number {
       }
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
+    case "user":
     case "custom":
     case "toolResult": {
-      if (typeof harnessMessage.content === "string") {
-        chars = estimateStringChars(harnessMessage.content);
-      } else {
-        chars = countContentBlockChars(harnessMessage.content);
-      }
+      chars = countContentChars(harnessMessage.content);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
@@ -712,6 +696,8 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
+  /** Explicit terminal state of the turn whose prefix was split from its retained suffix. */
+  splitTurnCompleted?: boolean;
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
@@ -722,6 +708,24 @@ export interface CompactionPreparation {
   fileOps: FileOperations;
   /** Settings used to prepare compaction. */
   settings: CompactionSettings;
+}
+
+function latestUserTurnCompleted(messages: AgentMessage[]): boolean {
+  let sawTurnTail = false;
+  let completed = false;
+  for (const message of messages.toReversed()) {
+    if (message.role === "user") {
+      return completed;
+    }
+    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
+      sawTurnTail = true;
+      completed =
+        message.role === "assistant" &&
+        message.stopReason === "stop" &&
+        message.content.some((block) => block.type === "text" && block.text.trim().length > 0);
+    }
+  }
+  return false;
 }
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
@@ -833,12 +837,23 @@ export function prepareCompaction(
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
+  const retainedTurnSuffixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = effectiveEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
+      }
+    }
+    for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
+      const entry = effectiveEntries.at(i);
+      if (!entry || (i > cutPoint.firstKeptEntryIndex && isTurnStartEntry(entry))) {
+        break;
+      }
+      const msg = getMessageFromEntryForCompaction(entry);
+      if (msg) {
+        retainedTurnSuffixMessages.push(msg);
       }
     }
   }
@@ -857,6 +872,14 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
+    ...(cutPoint.isSplitTurn
+      ? {
+          splitTurnCompleted: latestUserTurnCompleted([
+            ...turnPrefixMessages,
+            ...retainedTurnSuffixMessages,
+          ]),
+        }
+      : {}),
     tokensBefore,
     previousSummary,
     previousSummaryDetails,

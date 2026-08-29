@@ -13,6 +13,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
+import { recordAggregateTruncation } from "../prompt-cache-observability.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
@@ -69,7 +70,10 @@ type SteeringLease = {
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
-  attempt: Pick<EmbeddedRunAttemptParams, "sessionId" | "userTurnTranscriptRecorder">;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "promptCacheKey" | "sessionId" | "sessionKey" | "userTurnTranscriptRecorder"
+  >;
   activeSession: PromptSubmissionSession;
   appendContext?: string;
   contextTokenBudget: number;
@@ -111,6 +115,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
         providerPromptHistoryTruncation.messages !== messages
           ? providerPromptHistoryTruncation.messages
           : messages;
+      if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
+        recordAggregateTruncation(attempt);
+      }
       // Mark the current turn sent at provider dispatch so late media appends
       // instead of rewriting its prompt-cache slot (#99495).
       markSessionUserTurnsSent(input.sessionPromptState, providerMessages);

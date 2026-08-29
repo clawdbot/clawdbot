@@ -1,3 +1,4 @@
+import pLimit from "p-limit";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type {
@@ -13,6 +14,7 @@ import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-pr
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
+const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
 type LoadSessionPullRequests = (
   params: ControlUiSessionPullRequestsParams,
@@ -225,30 +227,38 @@ export function createControlUiSessionPullRequestSubscriptions(
     timer.unref?.();
   };
 
+  const loadKeysInParallel = async (
+    sessionKeys: Iterable<string>,
+    loadKey: (sessionKey: string) => Promise<void>,
+  ) => {
+    const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
+    await Promise.all(Array.from(sessionKeys, (sessionKey) => limit(() => loadKey(sessionKey))));
+  };
+
   const pollNow = async () => {
     if (stopped) {
       return;
     }
     // One union pass owns each key once; the loader retains its failure and
     // rate-limit cache, so the poller never creates a second quota policy.
-    for (const sessionKey of watchedKeys()) {
-      if (stopped) {
-        break;
+    await loadKeysInParallel(watchedKeys(), async (sessionKey) => {
+      if (stopped || subscribersForKey(sessionKey).size === 0) {
+        return;
       }
       const snapshot = await loadSnapshot(sessionKey);
       const connIds = subscribersForKey(sessionKey);
       if (connIds.size === 0) {
-        continue;
+        return;
       }
       const hash = snapshotHash(snapshot);
       if (snapshots.get(sessionKey)?.hash === hash) {
-        continue;
+        return;
       }
       snapshots.set(sessionKey, { hash, snapshot });
-      // Publish before awaiting another key; cross-key batching can otherwise
-      // deliver an older poll result after a newer forced refresh.
+      // Publish immediately after each key resolves: cross-key batching can
+      // otherwise deliver an older poll result after a forced refresh.
       push(connIds, sessionKey, snapshot);
-    }
+    });
   };
 
   const replace = async (
@@ -285,27 +295,35 @@ export function createControlUiSessionPullRequestSubscriptions(
     pruneOrphans();
     schedulePoll();
 
+    const pendingKeys: string[] = [];
     for (const sessionKey of next) {
-      if (stopped) {
-        break;
-      }
       const previous = snapshots.get(sessionKey);
       const refresh = refreshSessionKeys.has(sessionKey);
       const cached = refresh ? undefined : previous?.snapshot;
       // A shared cached snapshot does not prove this connection received it.
-      if (cached && delivered.has(sessionKey)) {
+      if (cached) {
+        if (!delivered.has(sessionKey)) {
+          push(new Set([normalizedConnId]), sessionKey, cached);
+        }
         continue;
       }
-      const snapshot = cached ?? (await loadSnapshot(sessionKey, refresh));
+      pendingKeys.push(sessionKey);
+    }
+
+    await loadKeysInParallel(pendingKeys, async (sessionKey) => {
+      if (stopped || replacementTokens.get(normalizedConnId) !== replacementToken) {
+        return;
+      }
+      const previous = snapshots.get(sessionKey);
+      const refresh = refreshSessionKeys.has(sessionKey);
+      const snapshot = await loadSnapshot(sessionKey, refresh);
       // A later replace-set owns the connection immediately; an older async
       // initial load must never publish keys after that ownership changed.
       if (replacementTokens.get(normalizedConnId) !== replacementToken) {
         return;
       }
       const hash = snapshotHash(snapshot);
-      if (!cached) {
-        snapshots.set(sessionKey, { hash, snapshot });
-      }
+      snapshots.set(sessionKey, { hash, snapshot });
       if (refresh && previous?.hash !== hash) {
         push(subscribersForKey(sessionKey), sessionKey, snapshot);
       } else {
@@ -313,7 +331,7 @@ export function createControlUiSessionPullRequestSubscriptions(
         // delay an old cached value past a concurrent refresh.
         push(new Set([normalizedConnId]), sessionKey, snapshot);
       }
-    }
+    });
   };
 
   const unsubscribe = (connId: string) => {

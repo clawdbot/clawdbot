@@ -8,7 +8,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
-  readBooleanToolParam,
+  resolveGenerateAction,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
@@ -43,11 +43,22 @@ function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-describe("readBooleanToolParam", () => {
-  it("parses booleans and true/false string tokens", () => {
-    expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
-    expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
-    expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
+describe("resolveGenerateAction", () => {
+  it.each([
+    { name: "absent action", args: {}, expected: "generate" },
+    { name: "blank action", args: { action: "   " }, expected: "generate" },
+    { name: "non-string action", args: { action: 1 }, expected: "generate" },
+    { name: "generate action", args: { action: "generate" }, expected: "generate" },
+    { name: "normalized status action", args: { action: " STATUS " }, expected: "status" },
+    { name: "list action", args: { action: "list" }, expected: "list" },
+  ])("$name", ({ args, expected }) => {
+    expect(resolveGenerateAction(args)).toBe(expected);
+  });
+
+  it("rejects invalid actions with the ordered contract message", () => {
+    expect(() => resolveGenerateAction({ action: "invalid" })).toThrowError(
+      /^action must be "generate", "status", or "list"$/,
+    );
   });
 });
 

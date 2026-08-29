@@ -1,7 +1,7 @@
 ---
 summary: "Secrets management: SecretRef contract, shared secret store, runtime snapshots, and safe one-way scrubbing"
 read_when:
-  - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
+  - Configuring SecretRefs for provider credentials and SQLite auth-profile refs
   - Storing team-wide secrets and environment values in the shared SQLite store
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
@@ -24,6 +24,7 @@ Plaintext credentials remain agent-readable when they sit in files the agent can
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
 - Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, fail-closed owners, and refs whose runtime owner is not mapped still fail startup.
 - Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
+- Config reload also reconciles channel connections when a secret-provider edit changes resolved credentials. Plugins that support account-scoped reload restart only the affected named accounts; shared, default, removed, or unresolved account changes use the plugin's whole-channel restart policy. Cold accounts stop, eligible stale accounts keep using their last-known-good credentials, and recovery preserves manual stops.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
 - Read-only channel capability discovery evaluates accounts independently. A configured-but-unavailable account does not hide healthy sibling accounts' message actions, while direct sends through the unavailable account still fail closed.
@@ -230,7 +231,8 @@ Provider aliases are source-specific. A matching explicit provider entry wins; i
 
 <Accordion title="Exec provider">
 - Runs the configured absolute binary path directly, no shell.
-- `command` must be a regular file, not a symlink. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
+- `command` must not be a symlink, must not be group- or world-writable, and on POSIX must be owned by the current user. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
+- [`config validate`](/cli/config#config-validate) checks every manual exec command path without executing providers. Config writes and dry runs check only changed or newly referenced providers, so an unrelated inactive provider does not block repairs. These are path trust checks, not proof that a provider can execute or return a secret.
 - Supports `timeoutMs` (default 5000), `noOutputTimeoutMs` (default equals `timeoutMs`), `maxOutputBytes` (default 1 MiB), `env`/`passEnv` allowlist, and `trustedDirs`.
 - `jsonOnly` defaults to `true`. With `jsonOnly: false` and a single requested id, plain non-JSON stdout is accepted as that id's value.
 - Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. Use a command path whose ACLs OpenClaw can verify; there is no provider-level bypass.
@@ -303,6 +305,8 @@ Reference an entry from `openclaw.json` with the `store` source:
 
 Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a config-referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
 
+The agent can also ask you to add an entry with the [`secrets` tool](/tools/secrets): it names the entry and the reason, you type the value into a masked prompt, and the Gateway writes it directly into the store. The value never enters the chat, the transcript, or the model's context, and the same automatic runtime refresh applies.
+
 <Warning>
 Store values are not encrypted at rest. They are stored unencrypted in the shared state SQLite database (`state/openclaw.sqlite`), protected by the same `0600` file and `0700` directory permissions as other credentials in that database. Operators who need stronger storage isolation should use an external exec provider such as the [1Password plugin](/plugins/onepassword) or [Vault SecretRefs](/plugins/vault).
 </Warning>
@@ -348,6 +352,7 @@ Equivalent config:
   secrets: {
     egressProxy: {
       enabled: true,
+      allowedHosts: ["api.openai.com"],
       bypassHosts: ["pinned-api.example.com"],
     },
   },
@@ -373,8 +378,21 @@ The CA is generated once per Gateway start under the state directory. Its direct
 
 `bypassHosts` contains exact hostnames that must remain end-to-end TLS for certificate-pinned clients. Those hosts use an authenticated blind CONNECT tunnel. No substitution is possible inside the tunnel; a sentinel sent there is safe by construction because it is authenticated ciphertext rather than a credential, so the vendor sees an invalid credential and rejects it.
 
+### Traffic allowlist
+
+Destination binding protects secrets, not traffic: a request that carries no sentinel can reach any host once a run holds proxy credentials. Set `secrets.egressProxy.allowedHosts` to also restrict where non-sentinel traffic may go:
+
+```bash
+openclaw config set secrets.egressProxy.allowedHosts '["api.openai.com"]' --strict-json
+```
+
+When the list is present, the proxy forwards only to hostnames in the list, hosts bound to a secret registered for the current agent run, and `bypassHosts`, so an existing `--allow-host` binding keeps working without listing its host twice. A request or CONNECT tunnel to any other host is refused with `Host "<host>" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host <host>, then restart the Gateway.`
+
+An empty array is lockdown mode: only per-secret bound hosts and `bypassHosts` remain reachable. Omitting `allowedHosts` leaves traffic unrestricted. Hostnames follow the same rules as secret bindings: exact lowercase ASCII/punycode match, no wildcards or ports. Restart the Gateway after changing the allowlist.
+
 Current limits:
 
+- The traffic allowlist constrains only cooperating clients that honor the proxy environment (`HTTPS_PROXY` and the CA variables). A subprocess can ignore those variables and open raw sockets, so the allowlist is defense in depth; destination-bound sentinels remain the primary defense because they survive proxy bypass.
 - HTTP/2 upstream connections are not supported; the proxy uses HTTP/1.1 upstream.
 - WebSocket rewriting is not supported.
 - Non-443 HTTPS substitution is not a supported compatibility target.

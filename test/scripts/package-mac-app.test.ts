@@ -73,6 +73,7 @@ function runSwiftToolchainHarness(options: {
   swiftVersion: string;
   selectedDeveloperDir: "command-line-tools" | "custom-xcode" | "invalid" | "xcode";
   developerDirOverride?: "custom-xcode" | "invalid" | "xcode";
+  xcodeVersion?: string;
   xcodebuildFailure?: string;
 }) {
   const root = tempDirs.make("openclaw-package-swift-root-");
@@ -101,7 +102,7 @@ function runSwiftToolchainHarness(options: {
         '[[ "$*" == "-version" ]] || exit 2',
         ...(options.xcodebuildFailure
           ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
-          : ["echo 'Xcode 26.0'"]),
+          : [`echo ${JSON.stringify(`Xcode ${options.xcodeVersion ?? "26.4"}`)}`]),
         "",
       ].join("\n"),
       "utf8",
@@ -1252,13 +1253,13 @@ describe("package-mac-app plist stamping", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
     expect(result.stderr).toContain("Current Swift is 6.0");
   });
 
-  it("rejects Command Line Tools even when they provide Swift 6.2", () => {
+  it("rejects Command Line Tools even when they provide Swift 6.3", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "command-line-tools",
     });
 
@@ -1273,10 +1274,33 @@ describe("package-mac-app plist stamping", () => {
     expect(result.stderr).toContain("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer");
   });
 
-  it("accepts Swift 6.2 from a selected full Xcode developer directory", () => {
+  it("accepts Swift 6.3 from a selected full Xcode developer directory", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "xcode",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects Xcode 26.3 even when it exposes a Swift 6.3 binary", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.3.1",
+      selectedDeveloperDir: "xcode",
+      xcodeVersion: "26.3",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Xcode 26.4+");
+    expect(result.stderr).toContain("current Xcode is 26.3");
+  });
+
+  it("accepts newer major Xcode toolchains that satisfy the Swift floor", () => {
+    const result = runSwiftToolchainHarness({
+      swiftVersion: "6.4.0",
+      selectedDeveloperDir: "xcode",
+      xcodeVersion: "27.0",
     });
 
     expect(result.status).toBe(0);
@@ -1285,7 +1309,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("honors DEVELOPER_DIR when the global selection is Command Line Tools", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "command-line-tools",
       developerDirOverride: "xcode",
     });
@@ -1296,7 +1320,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("accepts usable full Xcode tooling from a custom developer directory", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "custom-xcode",
     });
 
@@ -1306,7 +1330,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("rejects an unusable selected developer directory", () => {
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "invalid",
     });
 
@@ -1317,7 +1341,7 @@ describe("package-mac-app plist stamping", () => {
   it("preserves the native Xcode failure before generic selection guidance", () => {
     const diagnostic = "xcodebuild: error: SDK metadata is unavailable";
     const result = runSwiftToolchainHarness({
-      swiftVersion: "6.2.1",
+      swiftVersion: "6.3.1",
       selectedDeveloperDir: "xcode",
       xcodebuildFailure: diagnostic,
     });
@@ -1668,9 +1692,9 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.19.3");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.21.0");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e",
+      "5e327e58f6ce81d5c117fe5edec5f267e87e1b921e8c5a8aa4f7f21cbcf5f273",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

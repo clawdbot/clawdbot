@@ -129,9 +129,11 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
   const files = [
     "scripts/release-preflight.mjs",
     "scripts/release-preflight.mts",
+    "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/error-format.mts",
     "scripts/lib/failed-trailer.mts",
+    "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-child-process.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
@@ -335,22 +337,63 @@ describe("scripts/release-preflight.mjs", () => {
     );
   });
 
-  it("uses bounded parallelism for independent checks", () => {
+  it.each([1, 2, 3])("uses bounded parallelism for independent checks with jobs=%i", (jobs) => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
-    const env = { OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS: "120" };
+    const commands = [
+      "pnpm config:schema:check",
+      "pnpm config:channels:check",
+      "pnpm config:docs:check",
+    ];
+    const observerPath = join(root, "observe-concurrency.cjs");
+    const resultPath = join(root, "concurrency.json");
+    writeFileSync(
+      observerPath,
+      `const childProcess = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const commands = ${JSON.stringify(commands)};
+const originalSpawn = childProcess.spawn;
+let active = 0;
+let maxActive = 0;
+let total = 0;
+childProcess.spawn = function (...args) {
+  const child = originalSpawn.apply(this, args);
+  if (commands.includes([args[0], ...(args[1] ?? [])].join(" "))) {
+    active += 1;
+    total += 1;
+    maxActive = Math.max(maxActive, active);
+    child.once("close", () => { active -= 1; });
+  }
+  return child;
+};
+syncBuiltinESMExports();
+process.once("exit", () => {
+  if (total > 0) {
+    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ maxActive, total, active }));
+  }
+});
+`,
+    );
 
-    const serialStartedAt = performance.now();
-    const serial = runPreflight(["--scope", "config", "--jobs", "1"], fakePnpm, env, root);
-    const serialMs = performance.now() - serialStartedAt;
+    // Count real managed commands from synchronous admission through close, excluding
+    // loader startup time. Inherited observers with no matching commands write nothing.
+    const result = runPreflight(
+      ["--scope", "config", "--jobs", String(jobs)],
+      fakePnpm,
+      {
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(observerPath)}`,
+      },
+      root,
+    );
 
-    const parallelStartedAt = performance.now();
-    const parallel = runPreflight(["--scope", "config", "--jobs", "3"], fakePnpm, env, root);
-    const parallelMs = performance.now() - parallelStartedAt;
-
-    expect(serial.status).toBe(0);
-    expect(parallel.status).toBe(0);
-    expect(parallelMs).toBeLessThan(serialMs * 0.75);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(resultPath, "utf8"))).toEqual({
+      maxActive: Math.min(jobs, commands.length),
+      total: commands.length,
+      active: 0,
+    });
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(commands.toSorted());
   });
 
   it("accepts base macOS metadata for a beta package version", () => {

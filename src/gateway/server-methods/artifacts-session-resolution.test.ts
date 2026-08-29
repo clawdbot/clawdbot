@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   ArtifactSessionResolutionError,
@@ -20,7 +22,7 @@ vi.mock("../server-session-key.js", () => ({
   resolveSessionKeyForRun: mocks.resolveRunSession,
 }));
 
-function identifiedClient(scopes: string[]): GatewayClient {
+function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {
   return {
     connect: {
       minProtocol: 1,
@@ -31,7 +33,7 @@ function identifiedClient(scopes: string[]): GatewayClient {
     },
     authenticatedUserId: "viewer@example.com",
     authenticatedUserProfile: {
-      profileId: "viewer@example.com",
+      profileId,
       displayName: null,
       hasAvatar: false,
       updatedAt: 1,
@@ -88,6 +90,58 @@ describe("artifact session authorization", () => {
           { sessionKey: "dashboard:incognito-artifacts", agentId: "main" },
           cfg,
           identifiedClient(["operator.admin"]),
+        ),
+      ).toMatchObject({ sessionKey });
+    });
+  });
+
+  it("hides foreign artifact sessions behind direct, run, and task selectors", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const viewerProfile = ensureProfileForEmail("viewer@example.com");
+      const sessionKey = "agent:main:foreign-artifacts";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-foreign-artifacts",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      mocks.getTaskSession.mockReturnValue({
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        ownerKey: sessionKey,
+      });
+      mocks.resolveRunSession.mockReturnValue(sessionKey);
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.read"],
+              },
+            },
+          },
+        },
+      };
+      const viewer = identifiedClient(["operator.read"], viewerProfile.id);
+
+      for (const query of [{ sessionKey }, { taskId: "task-foreign" }, { runId: "run-foreign" }]) {
+        expect(() => resolveAuthorizedArtifactSession(query, cfg, viewer)).toThrow(
+          "no session found for artifact query",
+        );
+      }
+
+      expect(
+        resolveAuthorizedArtifactSession(
+          { runId: "run-foreign" },
+          cfg,
+          identifiedClient(["operator.admin"], viewerProfile.id),
         ),
       ).toMatchObject({ sessionKey });
     });

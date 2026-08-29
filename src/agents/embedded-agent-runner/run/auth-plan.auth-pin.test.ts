@@ -13,7 +13,6 @@ const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
 );
 
 vi.mock("../../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
 }));

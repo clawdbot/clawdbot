@@ -96,6 +96,12 @@ export async function runAgentResetPhase(params: {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
       creation: resolveAgentRunSessionCreation(params.client),
+      ...(params.client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(params.client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: params.client.internal.operatorRoleActor }
+        : {}),
       assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
       onCommitted: (commit) => {
         params.setCommittedResetCompletion({

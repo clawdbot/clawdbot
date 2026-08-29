@@ -98,6 +98,9 @@ export async function persistAbortedPartials(params: {
         runId: snapshot.runId,
       },
     });
+    if (appended.skipped) {
+      continue;
+    }
     if (!appended.ok) {
       const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
       params.context.logGateway.warn(error);
@@ -330,7 +333,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     };
   }
   const snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
-    const text = params.context.chatRunState.resolveBuffer(runId).text;
+    const text = params.context.chatRunState.resolveBuffer(runId, { final: true }).text;
     return text?.trim()
       ? [
           {

@@ -137,7 +137,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
           message: "Unsupported OpenClaw sandbox exec-server method: unsupported/method",
         },
       },
-      { jsonrpc: "2.0", id: 4, result: { processId: "direct-session" } },
+      { jsonrpc: "2.0", id: 4, result: { processId: "direct-session", sandboxType: "none" } },
       {
         jsonrpc: "2.0",
         method: "process/output",

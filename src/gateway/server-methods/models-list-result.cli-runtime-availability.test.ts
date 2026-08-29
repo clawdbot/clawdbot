@@ -1,14 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   listModels,
   providerCatalogEntry,
 } from "./models-list-result.openai-routes.test-support.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const config = {
   agents: {
@@ -25,11 +21,23 @@ const config = {
   },
 } satisfies OpenClawConfig;
 
-async function listClaudeCliModel() {
+async function listClaudeCliModel(
+  params: {
+    authenticated?: boolean;
+    pluginDisabled?: boolean;
+    cfg?: OpenClawConfig;
+  } = {},
+) {
   return await listModels({
     catalog: [],
     staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
-    cfg: config,
+    cfg:
+      params.cfg ??
+      (params.pluginDisabled
+        ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
+        : config),
+    preparedAuthModes:
+      params.authenticated && !params.pluginDisabled ? { "claude-cli": "api_key" } : {},
     view: "configured",
   });
 }
@@ -37,36 +45,48 @@ async function listClaudeCliModel() {
 describe("models.list CLI runtime availability", () => {
   beforeEach(() => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("marks a Claude CLI runtime model available with ambient CLI OAuth", async () => {
-    const homeDir = tempDirs.make("models-list-claude-cli-");
-    const credentialDir = path.join(homeDir, ".claude");
-    fs.mkdirSync(credentialDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      path.join(credentialDir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "test-access",
-          refreshToken: "test-refresh",
-          expiresAt: Date.now() + 3_600_000,
+    // Prepared runtime metadata must not cold-load the plugin's executable setup entry.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
         },
-      }),
-      { mode: 0o600 },
-    );
-    vi.stubEnv("HOME", homeDir);
-
-    await expect(listClaudeCliModel()).resolves.toEqual({
-      models: [expect.objectContaining({ id: "claude-opus-5", available: true })],
+      ],
     });
   });
 
-  it("marks a Claude CLI runtime model unavailable without ambient CLI OAuth", async () => {
-    await expect(listClaudeCliModel()).resolves.toEqual({
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { authenticated: true, pluginDisabled: false, available: true, reason: undefined },
+    { authenticated: false, pluginDisabled: false, available: false, reason: undefined },
+    { authenticated: true, pluginDisabled: true, available: false, reason: "missing-auth" },
+  ])(
+    "reports native login=$authenticated and plugin disabled=$pluginDisabled",
+    async (scenario) => {
+      const result = await listClaudeCliModel(scenario);
+      expect(result).toEqual({
+        models: [expect.objectContaining({ id: "claude-opus-5", available: scenario.available })],
+      });
+      expect(result.models[0]?.unavailableReason).toBe(scenario.reason);
+      expect(result.models[0]?.unavailableUntil).toBeUndefined();
+    },
+  );
+  it("does not use synthetic auth when plugins are globally disabled", async () => {
+    await expect(
+      listClaudeCliModel({
+        cfg: {
+          ...config,
+          plugins: { enabled: false },
+        },
+      }),
+    ).resolves.toEqual({
       models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
     });
   });

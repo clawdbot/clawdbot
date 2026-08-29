@@ -77,6 +77,53 @@ describe("exec GitHub identity", () => {
     }
   });
 
+  it("keeps required sandbox execution isolated from host overrides, elevation, and GitHub credentials", async () => {
+    setTestEnvValue("GH_TOKEN", "ambient-token");
+    setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
+    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    const buildExecSpec = vi.fn(async ({ env }: { env: Record<string, string> }) => ({
+      argv: [process.execPath, "-e", "process.stdout.write('sandbox-ok')"],
+      env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      sandboxRequired: true,
+      sandbox: {
+        containerName: "required-sandbox",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+      elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+      preparedRunEnvironment: prepareGitHubToolEnvironment({
+        config: { tools: { github: { profileId: "ghp_99999999999999999999999999999999" } } },
+        agentId: "main",
+      }),
+    });
+
+    for (const host of ["gateway", "node"] as const) {
+      await expect(
+        tool.execute(`required-denied-${host}`, { command: "echo denied", host }),
+      ).rejects.toThrow(/not allowed/i);
+    }
+    await expect(
+      tool.execute("required-denied-elevation", { command: "echo denied", elevated: true }),
+    ).rejects.toThrow(/requires a sandbox/i);
+
+    const result = await tool.execute("required-sandbox", { command: "echo sandbox-ok" });
+
+    expect(result.details.status).toBe("completed");
+    expect(buildExecSpec).toHaveBeenCalledOnce();
+    const sandboxEnv = buildExecSpec.mock.calls[0]![0].env;
+    expect(sandboxEnv.GH_TOKEN).toBe("");
+    expect(sandboxEnv.GITHUB_TOKEN).toBe("");
+    expect(sandboxEnv).not.toHaveProperty("GH_CONFIG_DIR");
+  });
+
   it.each([
     { previewName: "GH_TOKEN", otherName: "GITHUB_TOKEN" },
     { previewName: "GITHUB_TOKEN", otherName: "GH_TOKEN" },

@@ -350,6 +350,13 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun usageRefreshStaysVisibleBetweenIncompleteRetries() {
+    assertTrue(usageRefreshVisible(requestRefreshing = true, summaryRefreshing = false))
+    assertTrue(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = true))
+    assertFalse(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = false))
+  }
+
+  @Test
   fun approvalCardShowsTheWholeMonospacedCommandBeforeStackedActions() {
     val source = settingsScreensSource()
     val cardStart = source.indexOf("private fun ExecApprovalCard(")

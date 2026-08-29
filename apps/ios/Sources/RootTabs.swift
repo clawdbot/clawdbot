@@ -318,15 +318,12 @@ struct RootTabs: View {
             // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
-                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
-                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerSidebarAction: self.sidebarHeaderAction,
                 dashboardModel: self.sidebarModel,
-                showsHeaderMark: false,
                 openChat: { self.selectSidebarDestination(.chat) },
                 openSettings: { self.selectSidebarDestination(.gateway) },
                 openSessions: { self.selectSidebarDestination(.sessions) },
@@ -410,7 +407,6 @@ struct RootTabs: View {
                 SettingsProTab(
                     directRoute: selectedSettingsRoute,
                     headerSidebarAction: self.sidebarHeaderAction,
-                    ownsNavigationStack: false,
                     navigateToRoute: pushSidebarSettingsRoute,
                     onRouteChange: handleSettingsRouteChange,
                     onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
@@ -419,7 +415,6 @@ struct RootTabs: View {
             } else {
                 SettingsProTab(
                     headerSidebarAction: self.sidebarHeaderAction,
-                    ownsNavigationStack: false,
                     navigateToRoute: pushSidebarSettingsRoute,
                     onRouteChange: handleSettingsRouteChange,
                     onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
@@ -431,7 +426,6 @@ struct RootTabs: View {
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 acceptsGatewaySetupRequests: !self.showOnboarding,
                 headerSidebarAction: self.sidebarHeaderAction,
-                ownsNavigationStack: false,
                 navigateToRoute: pushSidebarSettingsRoute,
                 onRouteChange: handleSettingsRouteChange,
                 onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,

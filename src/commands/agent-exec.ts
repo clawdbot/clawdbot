@@ -328,9 +328,8 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
 function buildExecRunOverlay(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  opts: Pick<AgentExecCliOptions, "localModelLean">;
 }): OpenClawConfig {
-  const codeMode = normalizeCodeMode(params.opts.codeMode);
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
@@ -349,7 +348,6 @@ function buildExecRunOverlay(params: {
     // This process exits after one turn, so live skill invalidation cannot be
     // observed and would leave Chokidar retaining the otherwise-finished CLI.
     skills: { load: { watch: false } },
-    ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
   } as OpenClawConfig;
 }
 
@@ -426,7 +424,7 @@ export async function resolveExecBaseConfig(
 export function buildExecRunConfig(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts?: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  opts?: Pick<AgentExecCliOptions, "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
   const base = stripInheritedAgentLocations(params.base);
@@ -582,6 +580,7 @@ export async function agentExecCommand(
       >
     | undefined;
   try {
+    const codeModeOverride = normalizeCodeMode(opts.codeMode);
     const prompt = await resolveAgentExecPrompt(
       positionalMessage,
       opts.messageFile,
@@ -651,8 +650,9 @@ export async function agentExecCommand(
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
-    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths = await import("../config/paths.js");
+    const storedAuthStateDir = runtimePaths.resolveStateDir();
+    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths.pinRuntimePaths();
     if (opts.stateDir) {
       const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
@@ -709,6 +709,7 @@ export async function agentExecCommand(
           workspaceDir: cwd,
           cwd,
           model: opts.model,
+          codeModeOverride,
           thinking: opts.thinking,
           timeout,
           modelFallbacksOverride: fallbacks.length > 0 ? fallbacks : undefined,
@@ -735,7 +736,11 @@ export async function agentExecCommand(
     const runWithAuthScope = () =>
       opts.authEnvOnly === true
         ? withEnvOnlyAuthProfileStore(runWithPluginInstallRoots)
-        : withAuthProfileStoreAgentDir(storedAuthAgentDir, runWithPluginInstallRoots);
+        : withAuthProfileStoreAgentDir(
+            storedAuthAgentDir,
+            storedAuthStateDir,
+            runWithPluginInstallRoots,
+          );
     const result = await withHostExecInheritedEnvOmitted(
       listKnownProviderAuthEnvVarNames({ env: process.env }),
       runWithAuthScope,

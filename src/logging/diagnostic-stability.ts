@@ -258,14 +258,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       break;
     case "webhook.received":
+    case "webhook.error":
       record.channel = event.channel;
       break;
     case "webhook.processed":
       record.channel = event.channel;
       record.durationMs = event.durationMs;
-      break;
-    case "webhook.error":
-      record.channel = event.channel;
       break;
     case "message.queued":
       record.channel = event.channel;
@@ -273,9 +271,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.queueDepth = event.queueDepth;
       break;
     case "message.received":
-      record.channel = event.channel;
-      record.source = event.source;
-      break;
     case "message.dispatch.started":
       record.channel = event.channel;
       record.source = event.source;
@@ -398,7 +393,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.bytes = event.promptChars;
       record.context =
         event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
-      record.bytes = event.promptChars;
       break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };

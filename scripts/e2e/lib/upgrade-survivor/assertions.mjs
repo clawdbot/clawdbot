@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
@@ -17,6 +18,7 @@ const SCENARIOS = new Set([
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
+  "prerelease-plugin-registry",
   "tilde-log-path",
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
@@ -35,6 +37,18 @@ const PERSONA_FILES = new Map([
 const LEGACY_SESSION_MAIN_ID = "upgrade-main-session";
 const LEGACY_SESSION_DIRECT_ID = "upgrade-direct-session";
 const LEGACY_SESSION_GROUP_ID = "upgrade-group-session";
+const PLUGIN_DECLARED_SURFACE_GROUPS = [
+  "channels",
+  "providers",
+  "tools",
+  "contracts",
+  "hooks",
+  "mcpServers",
+  "cliCommands",
+  "cliBackends",
+  "skills",
+  "dangerousConfigFlags",
+];
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -46,6 +60,24 @@ function requireEnv(name) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function readUpdateJson(file) {
+  const raw = fs.readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    // Published baselines may emit legacy service-control logs before the JSON payload.
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart === -1) {
+      throw error;
+    }
+    return JSON.parse(raw.slice(jsonStart));
+  }
+}
+
+function isCapabilityConsentReason(value) {
+  return typeof value === "string" && value.includes("requires capability consent");
 }
 
 function resolveHomePath(value) {
@@ -391,14 +423,16 @@ function seedState() {
 function assertConfigSurvived() {
   const config = getConfig();
   const coverage = getCoverage();
-  if (getScenario() === "meeting-transcripts-sqlite") {
+  const scenario = getScenario();
+  if (scenario === "meeting-transcripts-sqlite") {
     // This focused migration fixture proves state import/export across one published
     // baseline; the broad base scenario owns unrelated agent/channel config parity.
     return;
   }
 
   if (acceptsIntent(coverage, "update")) {
-    assert(config.update?.channel === "stable", "update.channel was not preserved");
+    const expectedChannel = scenario === "prerelease-plugin-registry" ? "beta" : "stable";
+    assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
     assert(config.gateway?.auth?.mode === "token", "gateway auth mode was not preserved");
@@ -434,7 +468,7 @@ function assertConfigSurvived() {
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
     }
-    if (getScenario() === "codex-allowlist-survival") {
+    if (scenario === "codex-allowlist-survival") {
       assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
     if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
@@ -466,8 +500,14 @@ function assertConfigSurvived() {
   if (acceptsIntent(coverage, "discord-channel")) {
     const discord = config.channels?.discord;
     assert(discord?.enabled === true, "discord enabled flag changed");
-    const discordAllowFrom = discord.allowFrom ?? discord.dm?.allowFrom;
-    const discordDmPolicy = discord.dmPolicy ?? discord.dm?.policy;
+    const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+    const discordAllowFrom =
+      stage === "baseline" ? (discord.allowFrom ?? discord.dm?.allowFrom) : discord.allowFrom;
+    const discordDmPolicy =
+      stage === "baseline" ? (discord.dmPolicy ?? discord.dm?.policy) : discord.dmPolicy;
+    if (stage !== "baseline") {
+      assert(!Object.hasOwn(discord, "dm"), "legacy Discord DM config survived update");
+    }
     assert(discordDmPolicy === "allowlist", "discord DM policy changed");
     assert(
       Array.isArray(discordAllowFrom) && discordAllowFrom.includes("111111111111111111"),
@@ -507,7 +547,7 @@ function assertConfigSurvived() {
     }
   }
 
-  if (getScenario() === "channel-post-core-restore") {
+  if (scenario === "channel-post-core-restore") {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
     assert(
@@ -997,7 +1037,7 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
       String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
       `configured external ${pluginId} plugin npm spec changed`,
     );
-    return;
+    return packageJson;
   }
   assert(
     record.clawhubPackage === packageName,
@@ -1008,6 +1048,79 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     isPathInside(extensionsRoot, installPath),
     `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
+  return packageJson;
+}
+
+function pluginInstallIntegrity(record) {
+  return record.integrity ?? record.npmIntegrity ?? record.clawpackSha256 ?? record.gitCommit;
+}
+
+function acceptedSurfaceHash(surface) {
+  const canonical = Object.fromEntries(
+    PLUGIN_DECLARED_SURFACE_GROUPS.map((group) => [group, surface[group].toSorted()]),
+  );
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+function assertCompanionPluginConsent(record, pluginId, integrity) {
+  assert(
+    record.acceptedSurface && typeof record.acceptedSurface === "object",
+    `${pluginId} plugin accepted surface missing`,
+  );
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
+    assert(
+      Array.isArray(record.acceptedSurface[group]),
+      `${pluginId} plugin accepted surface ${group} missing`,
+    );
+  }
+  assert(
+    record.acceptedSurfaceHash === acceptedSurfaceHash(record.acceptedSurface),
+    `${pluginId} plugin consent hash changed`,
+  );
+  assert(
+    record.acceptedSurfaceIntegrity === integrity,
+    `${pluginId} plugin consent integrity changed`,
+  );
+  assert(
+    typeof record.acceptedSurfaceAt === "string" &&
+      Number.isFinite(Date.parse(record.acceptedSurfaceAt)),
+    `${pluginId} plugin consent timestamp missing`,
+  );
+}
+
+function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
+  assert(expectedVersion, "assert-companion-installs requires <expected-version>");
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "assert-companion-installs requires candidate capability-consent support",
+  );
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  for (const [pluginId, packageName, source] of [
+    ["discord", "@openclaw/discord", "npm"],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
+    ["codex", "@openclaw/codex", "npm"],
+  ]) {
+    const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+    const record = records[pluginId];
+    assert(record.source === source, `${pluginId} plugin source changed: ${record.source}`);
+    const installedVersion = source === "clawhub" ? record.version : record.resolvedVersion;
+    assert(
+      installedVersion === expectedVersion,
+      `${pluginId} plugin version changed: ${String(installedVersion)}`,
+    );
+    assert(
+      packageJson.version === expectedVersion,
+      `${pluginId} installed package version changed: ${String(packageJson.version)}`,
+    );
+    const integrity = pluginInstallIntegrity(record);
+    assert(
+      typeof integrity === "string" && integrity.length > 0,
+      `${pluginId} plugin integrity missing`,
+    );
+    if (capabilityConsentSupported === "1") {
+      assertCompanionPluginConsent(record, pluginId, integrity);
+    }
+  }
 }
 
 function assertConfiguredPluginInstalls() {
@@ -1056,6 +1169,90 @@ function assertStatusJson([file]) {
   assert(status && typeof status === "object", "gateway status JSON was not an object");
   const text = JSON.stringify(status);
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
+}
+
+function assertRecoverableUpdateJson([file, expectedVersion]) {
+  assert(file && expectedVersion, "assert-recoverable-update-json requires a path and version");
+  const result = readUpdateJson(file);
+  const steps = result?.steps;
+  const plugins = result?.postUpdate?.plugins;
+  assert(result?.status === "error", "recoverable update did not report error status");
+  assert(result?.mode === "npm", `recoverable update mode changed: ${String(result?.mode)}`);
+  assert(
+    result?.reason === "post-update-plugins",
+    `update failed before plugin convergence: ${String(result?.reason)}`,
+  );
+  assert(
+    result?.after?.version === expectedVersion,
+    `candidate version was not installed: ${String(result?.after?.version)}`,
+  );
+  assert(Array.isArray(steps) && steps.length > 0, "recoverable update reported no steps");
+  for (const stepName of ["global update", "global install swap"]) {
+    const step = steps.find((entry) => entry?.name === stepName);
+    assert(step?.exitCode === 0, `${stepName} did not complete successfully`);
+  }
+  assert(
+    steps.every((step) => step?.exitCode === 0),
+    "recoverable update contained a failed core step",
+  );
+  assert(plugins?.status === "error", "recoverable update did not fail plugin convergence");
+  assert(
+    plugins?.reason === "post-plugin-doctor-invalid-config",
+    `unexpected plugin convergence failure: ${String(plugins?.reason)}`,
+  );
+  const syncErrors = plugins?.sync?.errors;
+  const npmOutcomes = plugins?.npm?.outcomes;
+  const integrityDrifts = plugins?.integrityDrifts;
+  assert(
+    Array.isArray(syncErrors) && syncErrors.every(isCapabilityConsentReason),
+    "recoverable update contained a non-consent plugin synchronization error",
+  );
+  assert(
+    Array.isArray(npmOutcomes) &&
+      npmOutcomes.every(
+        (outcome) =>
+          outcome?.status !== "error" || outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      ),
+    "recoverable update contained a non-consent failed plugin update",
+  );
+  assert(
+    Array.isArray(integrityDrifts) && integrityDrifts.length === 0,
+    "recoverable update contained a plugin integrity drift",
+  );
+  assert(
+    (Array.isArray(plugins?.warnings) &&
+      plugins.warnings.some((warning) => isCapabilityConsentReason(warning?.reason))) ||
+      syncErrors.some(isCapabilityConsentReason) ||
+      npmOutcomes.some(
+        (outcome) =>
+          outcome?.status === "error" && outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      ),
+    "plugin convergence failure did not require capability consent",
+  );
+}
+
+function assertSuccessfulUpdateJson([file, expectedVersion]) {
+  assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
+  const result = readUpdateJson(file);
+  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  assert(
+    result?.after?.version === expectedVersion,
+    `successful update version changed: ${String(result?.after?.version)}`,
+  );
+  assert(
+    Array.isArray(result?.steps) && result.steps.every((step) => step?.exitCode === 0),
+    "successful update contained a failed core step",
+  );
+}
+
+function assertRepairJson([file]) {
+  assert(file, "assert-repair-json requires a path");
+  const result = readJson(file);
+  assert(result?.status === "ok", `update repair did not report ok: ${String(result?.status)}`);
+  assert(result?.mode === "finalize", `update repair mode changed: ${String(result?.mode)}`);
+  assert(result?.restart === false, "update repair unexpectedly restarted the Gateway");
+  assert(result?.postUpdate?.doctor?.status === "ok", "update repair doctor did not pass");
+  assert(result?.postUpdate?.plugins?.status === "ok", "update repair plugins did not pass");
 }
 
 function parseStableVersion(version) {
@@ -1226,8 +1423,16 @@ if (command === "list-scenarios") {
 } else if (command === "assert-state") {
   assertStateSurvived();
   assertConfiguredPluginInstalls();
+} else if (command === "assert-companion-installs") {
+  assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
+} else if (command === "assert-recoverable-update-json") {
+  assertRecoverableUpdateJson(process.argv.slice(3));
+} else if (command === "assert-successful-update-json") {
+  assertSuccessfulUpdateJson(process.argv.slice(3));
+} else if (command === "assert-repair-json") {
+  assertRepairJson(process.argv.slice(3));
 } else if (command === "assert-update-run-self-upgrade") {
   assertUpdateRunSelfUpgrade(process.argv.slice(3));
 } else {

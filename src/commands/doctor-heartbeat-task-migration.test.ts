@@ -6,12 +6,12 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatMonitorSpecs } from "../cron/heartbeat-monitor.js";
+import { resolveHeartbeatMonitorPlan } from "../cron/heartbeat-monitor.js";
 import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
 import { CronService } from "../cron/service.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { resolveHeartbeatSession } from "../infra/heartbeat-runner.js";
+import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -91,7 +91,7 @@ tasks:
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const cron = createTestCronService(storePath, cfg, nowMs);
-  const spec = resolveHeartbeatMonitorSpecs(cfg, [])[0];
+  const spec = resolveHeartbeatMonitorPlan(cfg, []).specs[0];
   if (!spec) {
     throw new Error("expected heartbeat monitor spec");
   }

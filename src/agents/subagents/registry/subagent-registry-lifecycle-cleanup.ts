@@ -3,6 +3,7 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions
 import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
@@ -46,6 +47,13 @@ import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-re
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
+
+function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
+  // Restart remains one-way; only suspension preserves an admitted cleanup owner.
+  return isGatewayRestartDraining()
+    ? runWithGatewayIndependentRootWorkAdmission(run)
+    : runWithGatewayIndependentRootWorkContinuation(run);
+}
 
 export function scheduleResumeSubagentRun(
   context: SubagentLifecycleCleanupContext,
@@ -110,7 +118,7 @@ export function runDetachedCleanupAttempt(
   // Completion outlives the spawning attempt; inherited lock owners would
   // reject requester transcript writes after that attempt is disposed.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+    void runWithSubagentCleanupWorkAdmission(async () => {
       try {
         await args.run();
         context.clearCleanupFailureCount(args.entry);
@@ -251,7 +259,7 @@ export function retireSupersededCleanupInBackground(
 ): void {
   // Delivery callbacks are synchronous and may arrive after their announce
   // attempt returns. Give the async retirement tail its own snapshot blocker.
-  void runWithGatewayIndependentRootWorkAdmission(async () => {
+  void runWithSubagentCleanupWorkAdmission(async () => {
     await retireSupersededCleanupIfNeeded(context, runId, entry, generation);
   }).catch((error: unknown) => {
     defaultRuntime.log(

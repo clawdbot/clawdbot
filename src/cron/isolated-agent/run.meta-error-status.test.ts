@@ -71,7 +71,6 @@ function mockDeliveryFailure(error: string, deliveryPayloads: unknown[] = []) {
     result: withRunSession({ status: "error", error, deliveryAttempted: true }),
     delivered: false,
     deliveryAttempted: true,
-    cronRunSessionCleanupAttempted: false,
     summary: undefined,
     outputText: undefined,
     synthesizedText: undefined,
@@ -243,7 +242,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         spawnOnlyHandoff: true,
-        skipHeartbeatDelivery: false,
+        skipDelivery: undefined,
         deliveryPayloads: [],
         synthesizedText: undefined,
       }),
@@ -297,7 +296,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
         expect.objectContaining({
           spawnOnlyHandoff: true,
-          skipHeartbeatDelivery: false,
+          skipDelivery: undefined,
           deliveryPayloads: [],
           synthesizedText: undefined,
           summary: undefined,
@@ -341,7 +340,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
         expect.objectContaining({
           spawnOnlyHandoff: false,
-          skipHeartbeatDelivery: true,
+          skipDelivery: "heartbeat",
           deliveryPayloads: payloads,
           synthesizedText: parentReply,
           summary: parentReply,
@@ -393,7 +392,18 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       deliveryPayloads: [mediaPayload],
       deliveryPayloadHasStructuredContent: true,
     });
-    mockDeliveryFailure(error, [mediaPayload]);
+    dispatchCronDeliveryMock.mockResolvedValueOnce({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: error,
+      deliveryState: {
+        status: "not-delivered",
+        delivered: false,
+        error,
+        failureNotification: { status: "not-requested" },
+      },
+      deliveryPayloads: [mediaPayload],
+    });
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 

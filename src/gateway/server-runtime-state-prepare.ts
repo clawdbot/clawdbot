@@ -24,7 +24,6 @@ import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createGatewayResidentRegistry } from "./server-resident-registry.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
@@ -131,7 +130,7 @@ export async function prepareGatewayKernelState(params: {
       ? createDesktopSessionRegistry()
       : undefined;
   const nodeDesktopStreamBroker =
-    nodeDesktopObserveAvailable || workerDesktopObserveAvailable
+    nodeDesktopObserveAvailable || shouldStartWorkerEnvironmentService
       ? (
           await startupTrace.measure(
             "node-desktop.runtime-import",
@@ -157,6 +156,8 @@ export async function prepareGatewayKernelState(params: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
+            getPortalRuntime: () => pluginGatewayContext.current,
+            resolveGatewayContext: () => pluginGatewayContext.current,
             desktopSessionRegistry,
             ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,
@@ -207,7 +208,7 @@ export async function prepareGatewayKernelState(params: {
             getSessionChangeContext: () => pluginGatewayContext.current,
             persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
               // Placement runtime starts before chat state exists; moves invoke this only after startup.
-              const text = connectionState.chatRunState.resolveBuffer(runId).text;
+              const text = connectionState.chatRunState.resolveBuffer(runId, { final: true }).text;
               if (!text.trim()) {
                 return;
               }
@@ -220,6 +221,7 @@ export async function prepareGatewayKernelState(params: {
               });
             },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
+            info: (message) => log.info(message),
             warn: (message) => log.warn(message),
             ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),
           }),
@@ -380,25 +382,13 @@ export async function prepareGatewayKernelState(params: {
   const systemAgentSessions: GatewayRequestContext["systemAgentSessions"] = new Map();
 
   const deps = createDefaultDeps();
-  const residentRegistry = createGatewayResidentRegistry();
   const runtimeStateRef: { current: GatewayServerLiveState | null } = { current: null };
   const cronStartState = { handled: false };
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
     loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const eventLoopHealthState: {
-    current?: ReturnType<typeof createGatewayEventLoopHealthMonitor>;
-  } = {};
-  const eventLoopHealthResident = residentRegistry.register({
-    name: "event-loop-health",
-    start: () => {
-      eventLoopHealthState.current ??= createGatewayEventLoopHealthMonitor();
-      return eventLoopHealthState.current;
-    },
-    stop: () => eventLoopHealthState.current?.stop(),
-  });
-  const readinessEventLoopHealth = eventLoopHealthResident.start();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
@@ -581,7 +571,6 @@ export async function prepareGatewayKernelState(params: {
     purgeWizardSession,
     systemAgentSessions,
     deps,
-    residentRegistry,
     runtimeStateRef,
     cronStartState,
     gatewayTls,

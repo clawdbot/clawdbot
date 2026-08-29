@@ -1278,44 +1278,57 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
     expectDispatchFields({
       deliveryRequested: true,
-      skipHeartbeatDelivery: true,
+      skipDelivery: "heartbeat",
     });
   });
 
-  it("does not dispatch announce delivery for fatal error payloads", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [
-        {
-          text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
-          isError: true,
-        },
-      ],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
+  it.each([
+    { label: "without a prior message", delivered: false },
+    { label: "after a verified message-tool delivery", delivered: true },
+  ])(
+    "does not dispatch announce delivery for fatal error payloads $label",
+    async ({ delivered }) => {
+      mockRunCronFallbackPassthrough();
+      resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+      runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [
+          {
+            text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
+            isError: true,
+          },
+        ],
+        ...(delivered
+          ? {
+              didSendViaMessagingTool: true,
+              messagingToolSentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
+            }
+          : {}),
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
 
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: makeAnnounceMessageToolJob({
-        id: "fatal-error-payload",
-        name: "Fatal Error Payload",
-      }),
-    });
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParams(),
+        job: makeAnnounceMessageToolJob({
+          id: "fatal-error-payload",
+          name: "Fatal Error Payload",
+        }),
+      });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run returned an error payload");
-    expect(result.delivered).toBe(false);
-    expect(result.deliveryAttempted).toBe(false);
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-    expectDeliveryFields(result.delivery, {
-      intended: { channel: "messagechat", to: "123", source: "explicit" },
-      resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
-      fallbackUsed: false,
-      delivered: false,
-    });
-  });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("cron isolated run returned an error payload");
+      expect(result.delivered).toBe(delivered);
+      expect(result.deliveryAttempted).toBe(delivered);
+      expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expectDeliveryFields(result.delivery, {
+        intended: { channel: "messagechat", to: "123", source: "explicit" },
+        resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
+        ...(delivered ? { messageToolSentTo: [{ channel: "messagechat", to: "123" }] } : {}),
+        fallbackUsed: false,
+        delivered,
+      });
+    },
+  );
 
   it("cleans up deleteAfterRun sessions when suppressing fatal error announces", async () => {
     mockRunCronFallbackPassthrough();
@@ -1709,7 +1722,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     const unattendedPreamble =
-      "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly HEARTBEAT_OK. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the automations tool.";
+      "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
     expect(prompt).toContain(unattendedPreamble);
     expect(prompt).not.toContain("Use the message tool");
     expect(prompt).toContain("Your response will be delivered automatically");
@@ -1746,7 +1759,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(prompt.indexOf("<safe-external>")).toBeLessThan(
       prompt.indexOf("This is an unattended scheduled run"),
     );
-    expect(prompt).not.toContain("you may remove it with the automations tool");
+    expect(prompt).not.toContain("If this job is no longer needed");
     expect(prompt).not.toContain("the job's instructions win");
     expect(buildSafeExternalPromptMock).toHaveBeenCalledWith(
       expect.objectContaining({ content: "send a message", jobName: "Message Tool Policy" }),
@@ -1885,6 +1898,10 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
         expectEmbeddedRunFields(expectedFields);
       }
       const prompt = expectEmbeddedRunPrompt(messageToolAvailable);
+      expect(prompt).toContain(
+        "If this job is no longer needed, remove it if your available tools allow.",
+      );
+      expect(prompt).not.toContain("automations tool");
       expect(prompt).toMatch(/write only the exact user-facing message to send/i);
       expect(prompt).toMatch(
         /do not narrate the automatic delivery itself or say things like "Sent the user\.\.\."/i,
@@ -1912,7 +1929,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("This is an unattended scheduled run.");
-    expect(prompt).toContain("reply exactly HEARTBEAT_OK");
+    expect(prompt).toContain("reply exactly NO_REPLY");
     expect(prompt).not.toContain("Return your response as plain text");
     expect(prompt).not.toContain("Your response will be delivered automatically");
     expect(prompt).not.toContain("it will be delivered automatically");
@@ -1964,31 +1981,21 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       hasFatalStructuredErrorPayload: false,
       embeddedRunError: undefined,
     });
-    dispatchCronDeliveryMock.mockImplementationOnce(
-      (params: {
-        withRunSession: (result: {
-          status: "error";
-          summary: string;
-          outputText: string;
-          error: string;
-          deliveryAttempted: true;
-        }) => unknown;
-      }) => ({
-        result: params.withRunSession({
-          status: "error",
-          summary: "Final cron report",
-          outputText: "Final cron report",
-          error: "Message failed",
-          deliveryAttempted: true,
-        }),
+    dispatchCronDeliveryMock.mockResolvedValueOnce({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "Message failed",
+      deliveryState: {
+        status: "not-delivered",
         delivered: false,
-        deliveryAttempted: true,
-        summary: "Final cron report",
-        outputText: "Final cron report",
-        synthesizedText: "Final cron report",
-        deliveryPayloads: [{ text: "Final cron report" }],
-      }),
-    );
+        error: "Message failed",
+        failureNotification: { status: "not-requested" },
+      },
+      summary: "Final cron report",
+      outputText: "Final cron report",
+      synthesizedText: "Final cron report",
+      deliveryPayloads: [{ text: "Final cron report" }],
+    });
 
     const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -2008,6 +2015,12 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // `lastDeliveryError` and emit it on the finished event for CLI/UI/API run
     // logs (#95419) without mislabeling the successful run as a failure.
     expect(result.deliveryError).toBe("Message failed");
+    expect(result.deliveryState).toEqual({
+      status: "not-delivered",
+      delivered: false,
+      error: "Message failed",
+      failureNotification: { status: "not-requested" },
+    });
     // Delivery failure metadata is preserved and decoupled from status.
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(true);

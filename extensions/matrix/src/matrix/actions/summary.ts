@@ -1,7 +1,10 @@
 // Matrix plugin module implements summary behavior.
 import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMatrixNotFoundError } from "../errors.js";
-import { resolveMatrixMessageAttachment } from "../media-text.js";
+import {
+  resolveBundledMatrixReplacementContent,
+  resolveMatrixMessageAttachment,
+} from "../media-text.js";
 import { fetchMatrixPollMessageSummary } from "../poll-summary.js";
 import type { MatrixClient } from "../sdk.js";
 import {
@@ -46,35 +49,6 @@ function parseMatrixRawEvent(value: unknown): MatrixRawEvent | null {
       : {}),
     ...(typeof event.state_key === "string" ? { state_key: event.state_key } : {}),
   };
-}
-
-function resolveBundledMatrixReplacementContent(
-  event: MatrixRawEvent,
-): RoomMessageEventContent | undefined {
-  const rawReplacement = event.unsigned?.["m.relations"]?.["m.replace"];
-  if (!rawReplacement || typeof rawReplacement !== "object" || event.state_key !== undefined) {
-    return undefined;
-  }
-  const replacement = rawReplacement as Partial<MatrixRawEvent>;
-  const content = replacement.content;
-  const relation = content?.["m.relates_to"];
-  const newContent = content?.["m.new_content"];
-  if (
-    replacement.sender !== event.sender ||
-    replacement.type !== event.type ||
-    replacement.state_key !== undefined ||
-    replacement.unsigned?.redacted_because ||
-    !relation ||
-    typeof relation !== "object" ||
-    (relation as { rel_type?: unknown }).rel_type !== "m.replace" ||
-    (relation as { event_id?: unknown }).event_id !== event.event_id ||
-    !newContent ||
-    typeof newContent !== "object" ||
-    Array.isArray(newContent)
-  ) {
-    return undefined;
-  }
-  return newContent as RoomMessageEventContent;
 }
 
 export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSummary {

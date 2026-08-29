@@ -36,11 +36,11 @@ export async function openSidebarFooterProofPage(
     viewport: { height: 900, width: 1440 },
   });
   const page = await context.newPage();
-  await installMockGateway(page, { presenceUsers: [SIDEBAR_PROOF_USER] });
+  const gateway = await installMockGateway(page, { presenceUsers: [SIDEBAR_PROOF_USER] });
   await page.goto(`${suite.server.baseUrl}chat`);
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.locator(".sidebar-identity-card").waitFor();
-  return { context, page, sidebar };
+  return { context, gateway, page, sidebar };
 }
 
 export async function setSidebarProofTheme(page: Page, mode: "dark" | "light") {

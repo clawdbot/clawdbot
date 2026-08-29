@@ -16,10 +16,8 @@ import {
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import {
-  type InternalReplyResolverOptions,
-  createReplyDispatchEvent,
-} from "./dispatch-from-config.events.js";
+import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
@@ -43,6 +41,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     dispatcher,
     failDispatchReplyOperation,
     flushPendingCommentaryProgress,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     hookRunner,
@@ -73,8 +72,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
-  // Bind at the invocation boundary so every public three-argument resolver consumes the same
-  // request-scoped generation without widening its Plugin SDK contract.
+  // Bind at invocation so every public resolver consumes the request generation without widening its Plugin SDK contract.
   const replyResolver = bindPreparedReplyDispatchRuntime(
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
@@ -202,8 +200,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     markInboundDedupeReplayUnsafe();
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
-                    // Tool-error suppression covers visible progress as well as warning text,
-                    // regardless of source delivery mode.
+                    // Tool-error suppression covers visible progress and warnings regardless of source delivery mode.
                     if (
                       payload.isError === true &&
                       replyConfig.messages?.suppressToolErrors === true
@@ -421,6 +418,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
+                    const independentDurableBlock = context?.deliveryIntentId !== undefined;
+                    if (independentDurableBlock && state.suppressAcpChildUserDelivery) {
+                      return;
+                    }
                     if (
                       state.suppressDelivery &&
                       !shouldDeliverDespiteSourceReplySuppression(inputPayload, state)
@@ -452,12 +453,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     // and must not be synthesised into the spoken reply. Display
                     // lanes stay out too: they are presentation, never final text.
                     const isStatusNotice = isReplyPayloadStatusNotice(payload);
-                    if (
-                      payload.text &&
+                    const contributesToFinalReply =
                       !isStatusNotice &&
+                      !independentDurableBlock &&
                       payload.isReasoning !== true &&
-                      payload.isCommentary !== true
-                    ) {
+                      payload.isCommentary !== true;
+                    if (payload.text && contributesToFinalReply) {
                       const joinsBufferedTtsDirective =
                         cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                       if (state.progressState.accumulatedBlockText.length > 0) {
@@ -474,11 +475,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.progressState.blockCount++;
                     }
                     let visiblePayload =
-                      payload.text &&
-                      cleanBlockTtsDirectiveText &&
-                      !isStatusNotice &&
-                      payload.isReasoning !== true &&
-                      payload.isCommentary !== true
+                      payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply
                         ? (() => {
                             const text = cleanBlockTtsDirectiveText.push(payload.text);
                             return copyReplyPayloadMetadata(payload, {
@@ -487,11 +484,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                             });
                           })()
                         : payload;
-                    const deferThisBlock =
-                      deferFinalTtsText &&
-                      !isStatusNotice &&
-                      payload.isReasoning !== true &&
-                      payload.isCommentary !== true;
+                    const deferThisBlock = deferFinalTtsText && contributesToFinalReply;
                     if (deferThisBlock) {
                       const hasNonTextContent = Boolean(
                         visiblePayload.mediaUrl ||
@@ -541,12 +534,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    if (shouldRouteToOriginating) {
+                    if (
+                      shouldRouteToOriginating ||
+                      (independentDurableBlock && state.canRouteDurableBlockReply)
+                    ) {
                       const result = await sendPayloadAsync(
                         normalizedPayload,
                         context?.abortSignal,
                         false,
                         "block",
+                        context?.deliveryIntentId,
                       );
                       state.recordRoutedBlockReplyDelivery(normalizedPayload, result);
                       if (result?.delivered === true && !state.suppressAutomaticSourceDelivery) {
@@ -601,14 +598,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
       );
     }
+    const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     if (
       params.replyOptions?.isHeartbeat === true ||
-      !didDeliverVisiblePartialReply ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply) ||
       isDispatchOperationAborted()
     ) {
       throw error;
     }
     failDispatchReplyOperation(error, "failed");
+    if (!didDeliverVisiblePartialReply) {
+      return undefined;
+    }
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,
@@ -646,7 +647,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     // Command handling prepared a trailing prompt after ACP in-place reset.
     // Route that tail through ACP now (same turn) instead of embedded dispatch.
     ctx.AcpDispatchTailAfterReset = false;
-    if (hookRunner?.hasHooks("reply_dispatch")) {
+    if (hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })) {
       const tailDispatchResult = await runWithDispatchLifecycleAdmission(
         async () =>
           await runWithDispatchAbortSignal(
@@ -678,10 +679,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 }),
                 {
                   cfg,
+                  dispatchKind: state.dispatchKind,
                   dispatcher: state.dispatchHookDispatcher,
                   abortSignal:
                     state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                   onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                   recordProcessed: state.recordProcessed,
                   markIdle: state.markIdle,
                 },

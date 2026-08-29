@@ -249,7 +249,6 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
           <button
             type="button"
             class="btn"
-            aria-label=${copyLabel}
             @click=${(event: Event) =>
               void handleCopyButton(event, authorization.userCode, copyLabel)}
           >

@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 import PackageDescription
 
 let package = Package(
@@ -14,7 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.4"),
-        .package(url: "https://github.com/apple/swift-testing", from: "6.3.1"),
+        .package(url: "https://github.com/apple/swift-testing", from: "6.3.2"),
     ],
     targets: [
         .target(

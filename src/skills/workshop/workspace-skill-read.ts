@@ -42,6 +42,7 @@ type WritableWorkspaceSkillSummary = {
   name: string;
   description?: string;
   filePath: string;
+  userAuthored: boolean;
 };
 
 /**
@@ -63,13 +64,16 @@ export function listWritableWorkspaceSkillSummaries(
     if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
       continue;
     }
-    if (!ownedDirs.has(path.resolve(skill.baseDir))) {
-      continue;
-    }
+    const userAuthored = !ownedDirs.has(path.resolve(skill.baseDir));
     summaries.push(
       skill.description
-        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
-        : { name: skill.skillKey, filePath: skill.filePath },
+        ? {
+            name: skill.skillKey,
+            description: skill.description,
+            filePath: skill.filePath,
+            userAuthored,
+          }
+        : { name: skill.skillKey, filePath: skill.filePath, userAuthored },
     );
   }
   return summaries;

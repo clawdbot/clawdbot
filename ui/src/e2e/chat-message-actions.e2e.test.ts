@@ -166,6 +166,220 @@ describeControlUiE2e("Control UI chat message actions", () => {
     await server?.close();
   });
 
+  it("keeps assistant actions hidden when the user message is last", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "Earlier assistant reply.",
+          timestamp: Date.now() - 4_000,
+          __openclaw: { id: "earlier-assistant", seq: 1 },
+        },
+        {
+          role: "user",
+          content: "A question between replies.",
+          timestamp: Date.now() - 3_000,
+          __openclaw: { id: "middle-user", seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant lead-in.",
+          timestamp: Date.now() - 2_000,
+          __openclaw: { id: "latest-assistant", seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant reply.",
+          timestamp: Date.now() - 1_500,
+          __openclaw: { id: "latest-assistant-final", seq: 4 },
+        },
+        {
+          role: "user",
+          content: "A newer user follow-up.",
+          timestamp: Date.now() - 1_000,
+          __openclaw: { id: "latest-user", seq: 5 },
+        },
+      ],
+    });
+
+    const presentation = (group: Locator) =>
+      group.evaluate((element) => {
+        const footer = element.querySelector<HTMLElement>(".chat-group-footer");
+        const action = element.querySelector<HTMLElement>(".chat-group-footer-actions button");
+        return {
+          actionOpacity: action ? getComputedStyle(action).opacity : null,
+          actionPointerEvents: action ? getComputedStyle(action).pointerEvents : null,
+          footerOpacity: footer ? getComputedStyle(footer).opacity : null,
+          footerPointerEvents: footer ? getComputedStyle(footer).pointerEvents : null,
+        };
+      });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.mouse.move(0, 0);
+      const assistantGroups = page.locator(".chat-group.assistant");
+      await expect.poll(() => assistantGroups.count()).toBe(2);
+      const earlierAssistant = assistantGroups.first();
+      const latestAssistant = assistantGroups.last();
+      await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
+      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      await expect.poll(() => inlineAction.count()).toBe(1);
+
+      await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
+      await expect
+        .poll(() => presentation(earlierAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "0", pointerEvents: "none" });
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await screenshot(page, "latest-assistant-actions-resting-mobile.png");
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
+        });
+      await latestAssistant.locator(".chat-bubble").last().dispatchEvent("pointerup", {
+        button: 0,
+        pointerType: "touch",
+      });
+      await expect
+        .poll(() => presentation(latestAssistant))
+        .toEqual({
+          actionOpacity: "1",
+          actionPointerEvents: "auto",
+          footerOpacity: "1",
+          footerPointerEvents: "auto",
+        });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "1", pointerEvents: "auto" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shares tooltip styling and dismissal across message metadata, actions, and file hints", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      hasTouch: true,
+      locale: "en-US",
+      recordVideo: captureUiProof
+        ? { dir: path.join(artifactDir, "tooltips-video"), size: { height: 900, width: 1440 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Tooltip proof. See /workspace/tooltip-proof.txt." }],
+          timestamp: Date.now() - 5 * 60_000,
+          model: "openai/gpt-5.6-luna",
+          usage: { input: 12_000, output: 300, cost: { total: 0.12 } },
+          __openclaw: { id: "tooltip-proof", seq: 1 },
+        },
+      ],
+    });
+    const openTooltip = page.locator("wa-tooltip[open]");
+    const popupStyle = () =>
+      openTooltip.locator('[part="body"]').evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          background: style.backgroundColor,
+          border: style.border,
+          radius: style.borderRadius,
+          padding: style.padding,
+          fontSize: style.fontSize,
+        };
+      });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const group = page.locator(".chat-group.assistant").filter({ hasText: "Tooltip proof." });
+      await group
+        .locator(".chat-text")
+        .first()
+        .tap({ position: { x: 4, y: 4 } });
+      const timestamp = group.locator(".msg-meta__summary");
+      await timestamp.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const metadataStyle = await popupStyle();
+      expect(await group.locator(".msg-meta__details").textContent()).toContain("gpt-5.6-luna");
+      expect(await group.locator(".msg-meta__cost").textContent()).toContain("$0.12");
+      await screenshot(page, "tooltip-metadata.png");
+
+      await timestamp.click();
+      await page.mouse.move(0, 0);
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      const reply = group.getByRole("button", { name: "Reply to message" });
+      await expectHoverTooltip(reply, "Reply");
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await popupStyle()).toEqual(metadataStyle);
+      await screenshot(page, "tooltip-reply.png");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => openTooltip.count()).toBe(0);
+
+      const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
+      await file.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      expect(await popupStyle()).toEqual(metadataStyle);
+      expect(await file.getAttribute("title")).toBe("");
+      await screenshot(page, "tooltip-file-hint.png");
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const bounds = await openTooltip.locator('[part="body"]').boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+      await screenshot(page, "tooltip-mobile.png");
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps oversized history notices consistent through recovery and message actions", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
@@ -257,9 +471,11 @@ describeControlUiE2e("Control UI chat message actions", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await setThemeMode(page, "dark");
-      const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
+      const applePlatform = process.platform === "darwin";
+      const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
+      const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
+        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
         "New session",
       );
       await expectHoverTooltip(
@@ -268,7 +484,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Collapse sidebar" }),
-        "Collapse sidebar (⌘B)",
+        `Collapse sidebar (${sidebarShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open split view" }),

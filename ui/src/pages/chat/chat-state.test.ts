@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { render, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,7 +11,7 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -25,9 +25,11 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 beforeEach(() => {
@@ -93,6 +95,110 @@ describe("canonical session message recovery", () => {
     });
   }
 
+  it("reconciles live approval events for the selected session", () => {
+    const { state } = createSessionEventState();
+    const approval = {
+      id: "plugin:approval-live",
+      status: "pending" as const,
+      presentation: {
+        kind: "plugin" as const,
+        title: "Run Codex execution on node",
+        description: "Allows node account access",
+        severity: "critical" as const,
+        pluginId: "codex",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"] as const,
+      },
+      urlPath: "/approve/plugin%3Aapproval-live",
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    };
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:main:main",
+        sourceSessionKey: "agent:main:cloud-child",
+        phase: "pending",
+        updatedAtMs: 1_000,
+        approval,
+      },
+      seq: 1,
+    });
+
+    expect(state.chatSessionApprovalQueue).toEqual([
+      expect.objectContaining({
+        id: approval.id,
+        sourceSessionKey: "agent:main:cloud-child",
+      }),
+    ]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:main:main",
+        sourceSessionKey: "agent:main:cloud-child",
+        phase: "terminal",
+        updatedAtMs: 2_000,
+        approval: {
+          ...approval,
+          status: "denied",
+          decision: "deny",
+          reason: "user",
+          resolvedAtMs: 2_000,
+        },
+      },
+      seq: 2,
+    });
+
+    expect(state.chatSessionApprovalQueue).toEqual([]);
+
+    state.sessionKey = "global";
+    state.assistantAgentId = "research";
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:research:global",
+        phase: "pending",
+        updatedAtMs: 3_000,
+        approval,
+      },
+      seq: 3,
+    });
+    expect(state.chatSessionApprovalQueue).toEqual([
+      expect.objectContaining({
+        id: approval.id,
+        request: expect.objectContaining({ sessionKey: "global" }),
+      }),
+    ]);
+
+    for (const [sessionKey, expectedCount] of [
+      ["agent:main:global", 1],
+      ["agent:research:global", 0],
+    ] as const) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.approval",
+        payload: {
+          sessionKey,
+          phase: "terminal",
+          updatedAtMs: 4_000,
+          approval: {
+            ...approval,
+            status: "denied",
+            decision: "deny",
+            reason: "user",
+            resolvedAtMs: 4_000,
+          },
+        },
+      });
+      expect(state.chatSessionApprovalQueue).toHaveLength(expectedCount);
+    }
+  });
+
   it("rejects envelope-only sequence for an incomplete imported user identity", () => {
     const { state } = createSessionEventState({ connected: false });
 
@@ -138,44 +244,51 @@ describe("canonical session message recovery", () => {
     });
   });
 
-  it("retires live commentary when its durable row arrives during an active run", () => {
-    const runId = "active-run";
-    const itemId = "commentary-1";
-    const text = "Checking the workspace.";
-    const { state } = createSessionEventState({
-      connected: false,
-      chatMessages: [],
-      chatRunId: runId,
-      chatStream: null,
-      chatStreamSegments: [{ text, ts: 1, runId, itemId }],
-      chatToolMessages: [],
-    });
+  it.each(["active-run", undefined])(
+    "retires durable mirrored commentary owned by %s",
+    (ownerRunId) => {
+      const runId = "active-run";
+      const itemId = "commentary-1";
+      const text = "Checking the workspace.";
+      const { state } = createSessionEventState({
+        connected: false,
+        chatMessages: [],
+        chatRunId: runId,
+        chatStream: null,
+        chatStreamSegments: [{ text, ts: 1, runId, itemId }],
+        chatToolMessages: [],
+      });
 
-    applySessionMessagePayload(
-      state,
-      {
-        sessionKey: state.sessionKey,
-        messageId: "commentary-message-1",
-        messageSeq: 1,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text }],
-          idempotencyKey: `codex-app-server:thread:turn:commentary:${itemId}`,
-          timestamp: 1,
-          openclawStreamFallback: {
-            replacementText: text,
-            source: "segment",
-            itemId,
+      applySessionMessagePayload(
+        state,
+        {
+          sessionKey: state.sessionKey,
+          messageId: "commentary-message-1",
+          messageSeq: 1,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            idempotencyKey: `codex-app-server:thread:turn:commentary:${itemId}`,
+            __openclaw: {
+              mirrorOrigin: "codex-app-server",
+              ...(ownerRunId ? { runId: ownerRunId } : {}),
+            },
+            timestamp: 1,
+            openclawStreamFallback: {
+              replacementText: text,
+              source: "segment",
+              itemId,
+            },
           },
         },
-      },
-      true,
-      { kind: "history-delta" },
-    );
+        true,
+        { kind: "history-delta" },
+      );
 
-    expect(state.chatStreamSegments).toEqual([]);
-    expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
-  });
+      expect(state.chatStreamSegments).toEqual([]);
+      expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
+    },
+  );
 
   it("retires the complete transient projection when the durable terminal arrives", () => {
     const runId = "active-run";
@@ -279,6 +392,206 @@ describe("canonical session message recovery", () => {
     expect([...(state.activityEventSeqById?.keys() ?? [])]).toEqual([
       `tool:${JSON.stringify([siblingRunId, "tool-2"])}:result`,
     ]);
+  });
+
+  it.each([
+    { persistence: "before-stream", terminal: "final" },
+    { persistence: "between-deltas", terminal: "final" },
+    { persistence: "after-stream", terminal: "final" },
+    { persistence: "after-tool", terminal: "final" },
+    { persistence: "before-stream", terminal: "error" },
+  ])(
+    "renders one durable answer while finishing with persistence $persistence and $terminal",
+    ({ persistence, terminal }) => {
+      const runId = "finishing-run";
+      const text = "The workspace changes are ready.";
+      const partial = "The workspace";
+      const { state, request } = createSessionEventState({
+        chatRunId: runId,
+        chatStream: null,
+        chatStreamSegments: [],
+        chatToolMessages: [],
+      });
+      let agentSeq = 0;
+      const delta = (snapshot: string, deltaText: string) => {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++agentSeq,
+            ts: 1,
+            stream: "assistant",
+            data: { text: snapshot, delta: deltaText },
+          },
+        });
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            state: "delta",
+            deltaText,
+            message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+          },
+        });
+      };
+      const persist = () =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            hasActiveRun: true,
+            messageId: "durable-answer",
+            messageSeq: 2,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              __openclaw: { id: "durable-answer", seq: 2, runId },
+            },
+          },
+        });
+      if (persistence === "before-stream") {
+        persist();
+      }
+      delta(partial, partial);
+      if (persistence === "between-deltas") {
+        persist();
+      }
+      delta(text, text.slice(partial.length));
+      if (persistence === "after-stream") {
+        persist();
+      }
+      if (persistence === "after-tool") {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq: ++agentSeq,
+            ts: 2,
+            stream: "tool",
+            data: { phase: "result", toolCallId: "workspace-tool", name: "read" },
+          },
+        });
+        persist();
+      }
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: ++agentSeq,
+          ts: 3,
+          stream: "lifecycle",
+          data: { phase: "finishing" },
+        },
+      });
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      expect(state.chatRunId).toBe(runId);
+      expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+
+      // Replayed cumulative deltas must not revive the retired projection.
+      delta(text, text.slice(partial.length));
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: terminal,
+          ...(terminal === "error" ? { errorMessage: "Workspace reconciliation failed." } : {}),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
+      });
+      delta(text, text);
+      expect(state.chatRunId).toBeNull();
+      expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
+        { role: "assistant", text },
+      ]);
+      expect(state.chatMessages.filter((message) => extractText(message) === text)).toHaveLength(1);
+      if (terminal === "error") {
+        expect(state.chatRunError?.summary).toContain("Workspace reconciliation failed.");
+      }
+    },
+  );
+
+  it("preserves repeated commentary and distinct answers within the same active run", () => {
+    const runId = "repeated-run";
+    const text = "Checking the workspace.";
+    const { state } = createSessionEventState({
+      connected: false,
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    for (const itemId of ["commentary-one", "commentary-two"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 1,
+          ts: 1,
+          stream: "item",
+          data: { kind: "preamble", itemId, progressText: text },
+        },
+      });
+    }
+    const stream = (snapshot: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+        },
+      });
+    const persist = (id: string, seq: number, itemId?: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          hasActiveRun: true,
+          messageId: id,
+          messageSeq: seq,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            ...(itemId
+              ? { openclawStreamFallback: { itemId, source: "segment", replacementText: text } }
+              : {}),
+          },
+        },
+      });
+    persist("durable-commentary", 1, "commentary-one");
+    stream(text);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
+    persist("first-answer", 2);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
+    stream(`${text} ${text}`);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
+    persist("second-answer", 3);
+    expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatStreamSegments.filter((segment) => segment.itemId)).toHaveLength(1);
   });
 
   it("keeps cumulative assistant output split across an authoritative steer", () => {
@@ -518,21 +831,707 @@ describe("canonical session message recovery", () => {
 
     // Rendering collapses consecutive identical messages behind a count badge,
     // so the transcript itself has to hold exactly one copy of the reply.
-    const canonicalReply = scenario.aborted
-      ? {
-          ...persistedReply,
-          __openclaw: {
-            ...persistedReplyIdentity,
-            idempotencyKey: `${activeRunId}:assistant`,
-          },
-        }
-      : persistedReply;
+    const canonicalReply = {
+      ...persistedReply,
+      __openclaw: {
+        ...persistedReplyIdentity,
+        ...(scenario.producerOwned ? { runId: activeRunId } : {}),
+        ...(scenario.aborted ? { idempotencyKey: `${activeRunId}:assistant` } : {}),
+      },
+    };
     expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
       canonicalReply,
     ]);
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Original prompt" },
       { role: "assistant", text: replyText },
+    ]);
+  });
+
+  it.each([
+    { name: "omitted", terminalMessage: undefined, startsActive: true, pendingReload: false },
+    { name: "null", terminalMessage: null, startsActive: true, pendingReload: false },
+    {
+      name: "omitted for an idle selected session",
+      terminalMessage: undefined,
+      startsActive: false,
+      pendingReload: false,
+    },
+    {
+      name: "omitted while a session-message reload is pending",
+      terminalMessage: undefined,
+      startsActive: true,
+      pendingReload: true,
+    },
+  ])(
+    "recovers the durable reply when the terminal message is $name",
+    async ({ terminalMessage, startsActive, pendingReload }) => {
+      const runId = "run-with-message-less-terminal";
+      const replyText = "The durable reply must appear below Done.";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish the dashboard task" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const persistedReply = {
+        role: "assistant",
+        content: [{ type: "text", text: replyText }],
+        stopReason: "stop",
+        __openclaw: { id: "reply-1", runId, seq: 2 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt, persistedReply],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: startsActive ? runId : null,
+        chatStream: null,
+        chatStreamSegments: [],
+        chatToolMessages: [],
+        pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "final",
+          message: terminalMessage,
+        },
+      });
+
+      expect(state.chatRunId).toBeNull();
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Finish the dashboard task" },
+      ]);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("chat.history", {
+          agentId: "main",
+          sessionKey: state.sessionKey,
+          limit: 100,
+        }),
+      );
+      await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() =>
+        expect(renderedTranscript(state)).toEqual([
+          { role: "user", text: "Finish the dashboard task" },
+          { role: "assistant", text: replyText },
+        ]),
+      );
+
+      request.mockClear();
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "final",
+          message: terminalMessage,
+        },
+      });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("recovers once when history completed the run before its message-less terminal arrives", async () => {
+    const runId = "run-completed-by-history-before-terminal";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish after the tool call" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "The durable final arrived after the snapshot." }],
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [prompt, persistedReply],
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done",
+      },
+    });
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
+
+    const terminalEvent = {
+      type: "event",
+      event: "chat",
+      payload: { sessionKey: state.sessionKey, runId, state: "final" },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+    handlePageGatewayEvent(state, terminalEvent);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(state.chatMessages).toContainEqual(persistedReply));
+
+    request.mockClear();
+    handlePageGatewayEvent(state, terminalEvent);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("stops terminal recovery after a media-only reply becomes durable", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-with-media-only-terminal";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Show the generated image" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const persistedReply = {
+        role: "assistant",
+        content: [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
+        stopReason: "stop",
+        __openclaw: { id: "reply-1", runId, seq: 2 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt, persistedReply],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(state.chatMessages).toContainEqual(persistedReply);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds terminal recovery when no durable reply appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-without-durable-reply";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish without persisting a reply" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Finish without persisting a reply" },
+      ]);
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry terminal recovery after the selected session changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-session-switch";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before I switch sessions" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      state.sessionKey = "agent:main:replacement";
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry terminal recovery after the selected global agent changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-global-agent-switch";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before I switch global agents" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "global",
+          kind: "global",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        sessionKey: "global",
+        assistantAgentId: "main",
+        agentsSelectedId: "main",
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "global",
+          agents: [{ id: "main" }, { id: "work" }],
+        },
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, agentId: "main", runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenLastCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: "global", agentId: "main" }),
+      );
+      state.assistantAgentId = "work";
+      state.agentsSelectedId = "work";
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry terminal recovery after a replacement foreground run starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-replacement";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before the next run starts" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      state.chatRunId = "replacement-run";
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not resume terminal recovery after a replacement foreground run finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-completed-replacement";
+      const replacementRunId = "replacement-run-that-finishes";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before the next run completes" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      state.chatRunId = replacementRunId;
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId: replacementRunId,
+          state: "final",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Replacement finished." }],
+            __openclaw: { id: "replacement-reply", runId: replacementRunId, seq: 2 },
+          },
+        },
+      });
+      expect(state.chatRunId).toBeNull();
+      expect(
+        getChatSessionProjection(state, state.chatMessages).runs[replacementRunId]?.status,
+      ).toBe("completed");
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues terminal recovery when history backfills another run", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-after-history-backfill";
+      const historicalRunId = "older-run-from-history";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish after loading older history" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
+      };
+      const historicalReply = {
+        role: "assistant",
+        content: [{ type: "text", text: "An older durable reply." }],
+        __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
+      };
+      const persistedReply = {
+        role: "assistant",
+        content: [{ type: "text", text: "The current reply is now durable." }],
+        stopReason: "stop",
+        __openclaw: { id: "current-reply", runId, seq: 3 },
+      };
+      const sessionInfo = {
+        key: "agent:main:main",
+        kind: "direct" as const,
+        updatedAt: 3,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done" as const,
+      };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: [historicalReply, prompt],
+          sessionId: "selected-session",
+          sessionInfo,
+        })
+        .mockResolvedValueOnce({
+          messages: [historicalReply, prompt, persistedReply],
+          sessionId: "selected-session",
+          sessionInfo,
+        });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(state.chatMessages).toContainEqual(historicalReply);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(state.chatMessages).toContainEqual(persistedReply);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { name: "without a pending session-message reload", pendingReload: false },
+    { name: "after a pending session-message reload", pendingReload: true },
+  ])("starts a fresh history request $name", async ({ pendingReload }) => {
+    const runId = "run-with-pre-final-history";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish after the stale snapshot" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "The post-final snapshot contains this reply." }],
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
+    const staleHistory = createDeferred<ChatHistoryResult>();
+    const freshHistory = createDeferred<ChatHistoryResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(staleHistory.promise)
+      .mockReturnValueOnce(freshHistory.promise);
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const sessionInfo = {
+      key: state.sessionKey,
+      kind: "direct" as const,
+      updatedAt: 2,
+      hasActiveRun: false,
+      activeRunIds: [],
+      status: "done" as const,
+    };
+
+    const preFinalLoad = loadChatHistory(state);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+      },
+    });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleHistory.resolve({ messages: [prompt], sessionId: "selected-session", sessionInfo });
+    await preFinalLoad;
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Finish after the stale snapshot" },
+    ]);
+
+    freshHistory.resolve({
+      messages: [prompt, persistedReply],
+      sessionId: "selected-session",
+      sessionInfo,
+    });
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Finish after the stale snapshot" },
+      { role: "assistant", text: "The post-final snapshot contains this reply." },
+    ]);
+  });
+
+  it("does not reload for a background run's message-less final", () => {
+    const request = vi.fn();
+    const { state } = createSessionEventState({
+      chatRunId: "foreground-run",
+      chatStream: "The foreground reply is still streaming.",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "background-run",
+        state: "final",
+      },
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.chatRunId).toBe("foreground-run");
+    expect(state.chatStream).toBe("The foreground reply is still streaming.");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+
+  it("does not reload for a yielded message-less final", () => {
+    const runId = "yielded-run";
+    const request = vi.fn();
+    const { state } = createSessionEventState({
+      chatRunId: runId,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+        yielded: true,
+        stopReason: "end_turn",
+      },
+    });
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live final projection without an unnecessary history reload", () => {
+    const runId = "run-with-live-terminal-message";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish the dashboard task" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const request = vi.fn();
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The live reply is already projected." }],
+        },
+      },
+    });
+
+    expect(state.chatRunId).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Finish the dashboard task" },
+      { role: "assistant", text: "The live reply is already projected." },
     ]);
   });
 
@@ -1378,7 +2377,7 @@ describe("ChatStateController render lifecycle", () => {
     return {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -1394,6 +2393,52 @@ describe("ChatStateController render lifecycle", () => {
       sessions: {},
     } as unknown as ApplicationContext;
   }
+
+  it("owns attachment views in Files without replacing Detail content", () => {
+    const state = createPageState(
+      createPageContext(),
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      {
+        getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
+        querySelector: () => null,
+      },
+    );
+    const detailContent = {
+      kind: "markdown" as const,
+      content: "Existing review",
+      rawText: "Existing review",
+    };
+    state.sidebarContent = detailContent;
+    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
+
+    state.handleOpenSidebar({
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "report.pdf",
+      src: "/media/report.pdf",
+    });
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["detail", "workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
+    state.handleCloseSidebar("detail");
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.handleCloseSidebar("workspace");
+
+    expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
+    expect(state.attachmentSidebarContent).toBeNull();
+    expect(state.sidebarContent).toBe(detailContent);
+  });
 
   it("keeps the active observer digest when another run streams in the same session", () => {
     const projectedDigest = {
@@ -1702,7 +2747,7 @@ describe("ChatStateController render lifecycle", () => {
       toolStreamOrder: [],
       toolStreamSyncTimer: null,
       waitingApprovalStatuses: new Map(),
-      sessions: { setModelOverride: vi.fn() },
+      sessions: { refreshReplacement: vi.fn(async () => undefined) },
       chatStreamRenderFrame: null,
       renderLifecycle: { invalidate: requestUpdate },
       requestUpdate,
@@ -1765,7 +2810,7 @@ describe("ChatStateController render lifecycle", () => {
       toolStreamById: new Map(),
       toolStreamOrder: [],
       toolStreamSyncTimer: null,
-      sessions: { setModelOverride: vi.fn() } as never,
+      sessions: { refreshReplacement: vi.fn(async () => undefined) } as never,
     });
     const emitAgent = (seq: number, stream: string, data: Record<string, unknown>) =>
       handlePageGatewayEvent(state, {
@@ -2272,12 +3317,59 @@ describe("session pull request refresh", () => {
 });
 
 describe("image lightbox lifecycle", () => {
+  it("accepts only matching base64 video at the page boundary", () => {
+    const context = {
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+
+    const source = "data:video/mp4;base64,AAAA";
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: { kind: "video", label: "Clip", mimeType: "video/mp4", url: source },
+          },
+        ],
+        { onOpenImage: state.handleOpenImage },
+      ),
+      container,
+    );
+    const player = container.querySelector("openclaw-chat-video-player") as HTMLElement & {
+      onExpand: (src: string) => void;
+    };
+    player.onExpand(source);
+    expect(state.imageLightbox?.src).toBe("data:video/mp4;base64,AAAA");
+
+    state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
+    expect(state.imageLightbox).toBeNull();
+    container.remove();
+  });
+
   it("invalidates immediately when beginning a deferred image open", () => {
     const invalidate = vi.fn();
     const context = {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -2338,7 +3430,7 @@ describe("loadPageAssistantIdentity", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
-      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
       config: {
@@ -2406,41 +3498,51 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
-  it("refreshes session metadata after full model discovery completes", async () => {
-    const refreshSessions = vi.fn().mockResolvedValue(undefined);
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
-      return {
-        models: [
-          {
-            id: "reasoner",
-            name: "Reasoner",
-            provider: "dynamic-router",
-            reasoning: true,
-          },
-        ],
-      };
-    });
-    const state = createMetadataState(request, {
-      sessions: { refresh: refreshSessions } as never,
-    });
+  it.each([
+    {
+      label: "warm",
+      existingModels: [{ id: "cached-model", name: "Cached Model", provider: "openai" }],
+    },
+    { label: "cold", existingModels: [] },
+  ])(
+    "refreshes $label session metadata after full model discovery completes",
+    async ({ existingModels }) => {
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      const discovery = createDeferred<{
+        models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
+      }>();
+      const request = vi.fn((method: string, params?: unknown) => {
+        expect(method).toBe("models.list");
+        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        return discovery.promise;
+      });
+      const state = createMetadataState(request, {
+        chatModelCatalog: existingModels,
+        sessions: { refresh: refreshSessions } as never,
+      });
 
-    await refreshChatModelCatalogOnDemand(state);
+      const refresh = refreshChatModelCatalogOnDemand(state);
+      expect(state.chatModelCatalog).toEqual(existingModels);
+      expect(state.chatModelsLoading).toBe(existingModels.length === 0);
+      discovery.resolve({
+        models: [{ id: "reasoner", name: "Reasoner", provider: "dynamic-router", reasoning: true }],
+      });
+      await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      {
-        id: "reasoner",
-        name: "Reasoner",
-        provider: "dynamic-router",
-        reasoning: true,
-      },
-    ]);
-    expect(refreshSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "work", force: true }),
-    );
-    expect(state.chatModelCatalogError).toBeNull();
-  });
+      expect(state.chatModelCatalog).toEqual([
+        {
+          id: "reasoner",
+          name: "Reasoner",
+          provider: "dynamic-router",
+          reasoning: true,
+        },
+      ]);
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
+      expect(state.chatModelCatalogError).toBeNull();
+    },
+  );
 
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:

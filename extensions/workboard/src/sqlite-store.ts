@@ -209,6 +209,8 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_events_card_idx
+      ON workboard_card_events(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_attempts (
       id TEXT PRIMARY KEY,
@@ -224,6 +226,8 @@ const WORKBOARD_SCHEMA_SQL = `
       run_id TEXT,
       error TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_attempts_card_idx
+      ON workboard_card_attempts(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_comments (
       id TEXT PRIMARY KEY,
@@ -233,6 +237,8 @@ const WORKBOARD_SCHEMA_SQL = `
       created_at INTEGER NOT NULL,
       updated_at INTEGER
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_comments_card_idx
+      ON workboard_card_comments(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_links (
       id TEXT PRIMARY KEY,
@@ -244,6 +250,8 @@ const WORKBOARD_SCHEMA_SQL = `
       url TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_links_card_idx
+      ON workboard_card_links(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_proof (
       id TEXT PRIMARY KEY,
@@ -256,6 +264,8 @@ const WORKBOARD_SCHEMA_SQL = `
       note TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_proof_card_idx
+      ON workboard_card_proof(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_artifacts (
       id TEXT PRIMARY KEY,
@@ -267,6 +277,8 @@ const WORKBOARD_SCHEMA_SQL = `
       mime_type TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_artifacts_card_idx
+      ON workboard_card_artifacts(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_diagnostics (
       card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
@@ -293,6 +305,8 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_notifications_card_idx
+      ON workboard_card_notifications(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_worker_logs (
       id TEXT PRIMARY KEY,
@@ -304,6 +318,8 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_worker_logs_card_idx
+      ON workboard_worker_logs(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_worker_protocol (
       card_id TEXT PRIMARY KEY REFERENCES workboard_cards(id) ON DELETE CASCADE,

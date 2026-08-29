@@ -2,11 +2,11 @@ import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
-import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
@@ -39,7 +39,7 @@ import {
   TRUNCATED_REPLY_NOTICE_TEXT,
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -79,11 +79,6 @@ export function createTerminalToolPresentationTracker() {
     read: () => value,
   };
 }
-
-type TerminalRunParams = RunEmbeddedAgentParams & {
-  authProfileStateMode?: "read-write" | "read-only";
-  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-};
 
 type TerminalResolution =
   | { action: "retry" }
@@ -530,7 +525,10 @@ async function surfaceIncompleteTurn(
         livenessState,
         error: {
           kind: "incomplete_turn",
-          message: "Agent couldn't generate a response.",
+          message:
+            input.attempt.terminal.kind === "failed"
+              ? formatErrorMessage(input.attempt.terminal.error)
+              : "Agent couldn't generate a response.",
           fallbackSafe: input.incompleteTurnFallbackSafe,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         },
@@ -583,6 +581,7 @@ function completeEmbeddedRun(
     pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,
     onSuccessfulAuthBinding: input.runParams.onSuccessfulAuthBinding,
   });
+  input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   const replayInvalid = input.resolveReplayInvalid(null);
   const yieldHasContinuation =
     input.attempt.yieldDetected && hasYieldContinuationEvidence(input.attempt);

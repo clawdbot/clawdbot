@@ -62,6 +62,8 @@ export type ToolSearchCatalogToolExecutor = (params: {
   sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
+  /** Exact registered-instance classification resolved by the catalog owner. */
+  replaySafe?: boolean;
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -102,6 +104,8 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
+  toolExecutionAllow?: readonly string[];
   codeModeSkills?: readonly CodeModeSkill[];
 };
 
@@ -127,10 +131,17 @@ export type ToolSearchCatalogSession = {
   callCount: number;
 };
 
+export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries"> & {
+  catalogSize: number;
+  sources: Record<CatalogSource, number>;
+};
+
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  closedTelemetry?: ToolSearchCatalogTelemetry;
   onChange?: () => void;
-  onDispose?: () => void;
+  disposeObserver?: () => void;
+  onDispose?: Set<() => void>;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

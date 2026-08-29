@@ -1,5 +1,5 @@
 import { render } from "lit";
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { toolIcons } from "./icons-tools.ts";

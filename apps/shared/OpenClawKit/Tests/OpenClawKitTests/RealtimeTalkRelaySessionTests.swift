@@ -250,7 +250,6 @@ private final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private var onFailure: (@MainActor (String) -> Void)?
-    private let started = RealtimeRelayTestSignal<Void>()
 
     func start(
         targetSampleRate: Double,
@@ -260,7 +259,6 @@ private final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.isStarted = true
         self.startCount += 1
         self.onFailure = onFailure
-        self.started.send(())
     }
 
     func stop() {
@@ -271,10 +269,6 @@ private final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
 
     func fail(_ message: String) {
         self.onFailure?(message)
-    }
-
-    func waitUntilStarted() async throws {
-        _ = try await self.started.next("audio capture to start")
     }
 }
 
@@ -592,7 +586,7 @@ struct RealtimeTalkRelaySessionTests {
         #expect(audioCapture.isStarted)
     }
 
-    @Test func `output playback finish clears barge in start time`() {
+    @Test func `output playback finish is idempotent and clears barge in start time`() {
         var speakingStates: [Bool] = []
         let session = RealtimeTalkRelaySession(
             transport: unusedRealtimeRelayTransport(),
@@ -607,12 +601,18 @@ struct RealtimeTalkRelaySessionTests {
         #expect(session._test_outputStartedAtMs() == 100)
 
         session._test_markOutputPlaybackFinished()
+        session._test_markOutputPlaybackFinished()
         #expect(!session._test_isOutputPlaying())
         #expect(session._test_outputStartedAtMs() == nil)
         #expect(speakingStates == [false])
 
         session._test_markOutputAudioStarted(nowMs: 500)
+        #expect(session._test_isOutputPlaying())
         #expect(session._test_outputStartedAtMs() == 500)
+        session._test_markOutputPlaybackFinished()
+        #expect(!session._test_isOutputPlaying())
+        #expect(session._test_outputStartedAtMs() == nil)
+        #expect(speakingStates == [false, false])
     }
 
     @Test func `playback mark is acknowledged after output finishes`() async throws {
@@ -1575,9 +1575,16 @@ extension RealtimeTalkRelaySessionTests {
         #expect(!audioCapture.isStarted)
     }
 
-    @Test func `pre-ready event stream end promptly fails startup and closes created session once`() async throws {
+    @Test(arguments: [true, false])
+    func `pre-ready event stream end fails startup and closes created session once`(
+        processedBeforeRegistration: Bool) async throws
+    {
         let requests = RealtimeRelayStartupRequestLog()
         let eventChannel = AsyncStream<EventFrame>.makeStream()
+        let issueObserved = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        let startupCompleted = RealtimeRelayTestSignal<Result<Void, any Error>>()
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        var endedEventStream = false
         let result = TalkSessionCreateResult(
             sessionid: "talk-session",
             mode: AnyCodable("realtime"),
@@ -1593,8 +1600,19 @@ extension RealtimeTalkRelaySessionTests {
                     return resultData
                 }
                 return Data("{\"ok\":true}".utf8)
+            },
+            isCurrent: { @MainActor () async -> Bool in
+                guard audioCapture.isStarted, !endedEventStream else { return true }
+                endedEventStream = true
+                eventChannel.continuation.finish()
+                // Suspending here lets the pump save the issue before waiter registration.
+                // Otherwise this MainActor segment registers the waiter before the pump can run.
+                if processedBeforeRegistration {
+                    var iterator = issueObserved.stream.makeAsyncIterator()
+                    _ = await iterator.next()
+                }
+                return true
             })
-        let audioCapture = TestRealtimeTalkAudioCapture()
         var issues: [RealtimeTalkRelayIssue] = []
         let session = RealtimeTalkRelaySession(
             transport: transport,
@@ -1602,26 +1620,55 @@ extension RealtimeTalkRelaySessionTests {
             audioCapture: audioCapture,
             pcmPlayer: UnusedPCMStreamingAudioPlayer(),
             onStatus: { _ in },
-            onIssue: { issues.append($0) },
+            onIssue: {
+                issues.append($0)
+                issueObserved.continuation.yield(())
+            },
             onSpeakingChanged: { _ in })
-        let start = Task { @MainActor in try await session.start() }
-        try await audioCapture.waitUntilStarted()
-
-        let disconnectedAt = ContinuousClock.now
-        eventChannel.continuation.finish()
-        do {
-            try await start.value
-            Issue.record("Expected the pre-ready event stream end to throw")
-        } catch {
-            #expect(error.localizedDescription == "Realtime connection ended before it became ready.")
+        let start = Task { @MainActor in
+            do {
+                try await session.start()
+                startupCompleted.send(.success(()))
+            } catch {
+                startupCompleted.send(.failure(error))
+            }
         }
+        defer {
+            issueObserved.continuation.finish()
+            eventChannel.continuation.finish()
+            session.stop()
+            start.cancel()
+        }
+        do {
+            let startupResult = try await startupCompleted.next("relay startup completion after event stream end")
+            await start.value
+            switch startupResult {
+            case .success:
+                Issue.record("Expected the pre-ready event stream end to throw")
+            case let .failure(error):
+                let startupError = error as NSError
+                #expect(startupError.domain == "RealtimeTalkRelay")
+                #expect(startupError.code == 6)
+                #expect(startupError.localizedDescription == "Realtime connection ended before it became ready.")
+            }
 
-        #expect(disconnectedAt.duration(to: .now) < .seconds(1))
-        #expect(issues.map(\.phase) == ["connect"])
-        let recorded = await requests.snapshot()
-        #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
-        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
-        #expect(!audioCapture.isStarted)
+            #expect(issues.map(\.phase) == ["connect"])
+            let recorded = await requests.snapshot()
+            #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+            #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+            #expect(audioCapture.startCount == 1)
+            #expect(!audioCapture.isStarted)
+        } catch {
+            issueObserved.continuation.finish()
+            eventChannel.continuation.finish()
+            session.stop()
+            start.cancel()
+            await start.value
+            if audioCapture.startCount > 0 {
+                try? await requests.waitForRequestCount(2)
+            }
+            throw error
+        }
     }
 
     @Test func `event stream ending during relay creation closes the late relay`() async throws {

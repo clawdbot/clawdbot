@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "markdown-it": "14.3.0",
+    "markdown-it": "15.0.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {

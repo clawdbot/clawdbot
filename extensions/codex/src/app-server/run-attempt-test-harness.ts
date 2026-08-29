@@ -49,6 +49,11 @@ import {
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
+export {
+  extractGenerationFromThreadRequest,
+  extractRelayIdFromThreadRequest,
+} from "./run-attempt-hook-test-support.js";
+
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
@@ -608,11 +613,20 @@ export function createStartedThreadHarness(
     if (override !== undefined) {
       return override;
     }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "config/read") {
+      return { config: {}, origins: {} };
+    }
     if (method === "thread/start") {
       return threadStartResult();
     }
     if (method === "turn/start") {
       return turnStartResult();
+    }
+    if (method === "thread/backgroundTerminals/list") {
+      return { data: [], nextCursor: null };
     }
     return {};
   }, options);
@@ -620,6 +634,12 @@ export function createStartedThreadHarness(
 
 export function createResumeHarness() {
   return createAppServerHarness(async (method, params) => {
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "config/read") {
+      return { config: {}, origins: {} };
+    }
     if (method === "thread/resume") {
       // Resume must echo the requested thread; a different id is rejected as
       // an unsafe subscription.
@@ -630,53 +650,6 @@ export function createResumeHarness() {
     }
     return {};
   });
-}
-
-export function extractRelayIdFromThreadRequest(params: unknown): string {
-  const command = extractNativeHookRelayCommandFromThreadRequest(params);
-  const match = command.match(/--relay-id ([^ ]+)/);
-  if (!match?.[1]) {
-    throw new Error(`relay id missing from command: ${command}`);
-  }
-  return match[1];
-}
-
-export function extractGenerationFromThreadRequest(params: unknown): string {
-  const command = extractNativeHookRelayCommandFromThreadRequest(params);
-  const match = command.match(/--generation ([^ ]+)/);
-  if (!match?.[1]) {
-    throw new Error(`relay generation missing from command: ${command}`);
-  }
-  return match[1];
-}
-
-function extractNativeHookRelayCommandFromThreadRequest(params: unknown): string {
-  const config = (params as { config?: Record<string, unknown> }).config;
-  let command: string | undefined;
-  for (const key of [
-    "hooks.PreToolUse",
-    "hooks.PostToolUse",
-    "hooks.PermissionRequest",
-    "hooks.Stop",
-  ]) {
-    const entries = config?.[key];
-    if (!Array.isArray(entries)) {
-      continue;
-    }
-    for (const entry of entries as Array<{ hooks?: Array<{ command?: string }> }>) {
-      command = entry.hooks?.find((hook) => typeof hook.command === "string")?.command;
-      if (command) {
-        break;
-      }
-    }
-    if (command) {
-      break;
-    }
-  }
-  if (!command) {
-    throw new Error("native hook relay command missing from thread request");
-  }
-  return command;
 }
 
 type RuntimeDynamicToolForTest = Parameters<

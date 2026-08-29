@@ -19,6 +19,7 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import { sleep } from "./chat-history-retry.ts";
 import {
   chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
@@ -44,17 +45,31 @@ import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "./composer-persistence.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
+import { reconcileSessionApprovalEvent } from "./session-approval-projection.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
+import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
+const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
 
 function sessionMessageMatchesChat(
@@ -190,7 +205,8 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-) {
+  supersedeInFlight = false,
+): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
   if (
@@ -200,12 +216,128 @@ function replayPendingSessionMessageReload(
     !areUiSessionKeysEquivalent(payloadSessionKey, state.sessionKey) ||
     state.chatRunId
   ) {
-    return;
+    return false;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
-    state.requestUpdate?.(),
+  void loadChatHistory(state, {
+    deferBranches: !presentation(),
+    supersedeInFlight,
+  }).finally(() => state.requestUpdate?.());
+  return true;
+}
+
+type TerminalRecoveryOwnership = {
+  sessionKey: string;
+  agentId: string;
+  runId: string;
+  client: ChatPageHost["client"];
+  connectionEpoch: number;
+  runLifecycleGeneration: number;
+  initialTerminalReplySignatures: ReadonlySet<string>;
+};
+
+const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, ChatPageHost["client"]>>();
+
+function createTerminalRecoveryOwnership(
+  state: ChatPageHost,
+  payload: ChatEventPayload,
+): TerminalRecoveryOwnership | null {
+  const runId = payload.runId;
+  if (!runId) {
+    return null;
+  }
+  return {
+    sessionKey: payload.sessionKey,
+    agentId: resolveChatAgentId(state),
+    runId,
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
+    initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, runId)
+      .terminalReplySignatures,
+  };
+}
+
+function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryOwnership): boolean {
+  let claims = terminalRecoveryClaimsByPane.get(state);
+  if (!claims) {
+    claims = new Map();
+    terminalRecoveryClaimsByPane.set(state, claims);
+  }
+  const key = [
+    ownership.connectionEpoch,
+    ownership.runLifecycleGeneration,
+    ownership.agentId,
+    ownership.sessionKey,
+    ownership.runId,
+  ].join("\0");
+  if (claims.has(key) && claims.get(key) === ownership.client) {
+    return false;
+  }
+  claims.delete(key);
+  claims.set(key, ownership.client);
+  while (claims.size > MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS) {
+    const oldest = claims.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    claims.delete(oldest);
+  }
+  return true;
+}
+
+function hasRecoveredTerminalReply(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+): boolean {
+  const recovery = readTerminalReplyRecoveryState(state, ownership.runId);
+  return (
+    recovery.acceptedFinal ||
+    [...recovery.terminalReplySignatures].some(
+      (signature) => !ownership.initialTerminalReplySignatures.has(signature),
+    )
   );
+}
+
+function terminalRecoveryStillOwned(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+): boolean {
+  return (
+    state.connected &&
+    state.client === ownership.client &&
+    state.connectionEpoch === ownership.connectionEpoch &&
+    areUiSessionKeysEquivalent(state.sessionKey, ownership.sessionKey) &&
+    resolveChatAgentId(state) === ownership.agentId &&
+    (state.chatRunId === null || state.chatRunId === ownership.runId) &&
+    (state.chatRunLifecycleGeneration ?? 0) === ownership.runLifecycleGeneration &&
+    !hasRecoveredTerminalReply(state, ownership)
+  );
+}
+
+async function recoverMissingTerminalReply(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+  presentation: ChatPanePresentation,
+): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    if (!terminalRecoveryStillOwned(state, ownership)) {
+      return;
+    }
+    await loadChatHistory(state, {
+      deferBranches: !presentation(),
+      supersedeInFlight: true,
+    });
+    state.requestUpdate?.();
+    if (!terminalRecoveryStillOwned(state, ownership)) {
+      return;
+    }
+    const delayMs = MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS[attempt];
+    if (delayMs === undefined) {
+      return;
+    }
+    await sleep(delayMs);
+  }
 }
 
 function handleSessionsChangedEvent(
@@ -240,7 +372,7 @@ function handleSessionsChangedEvent(
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
     state.chatBranchesConnectionEpoch = null;
-    retireSessionWorkspaceCheckout(state, presented);
+    retireSessionWorkspaceCheckout(state);
     if (presented) {
       void loadChatBranches(state);
     }
@@ -375,13 +507,10 @@ function hasVisibleFinalAssistantReply(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
 ): boolean {
-  if (payload?.state !== "final") {
-    return false;
-  }
-  const ownsReply =
-    chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
-    (typeof payload.runId === "string" && payload.runId === state.chatRunId);
-  if (!ownsReply) {
+  if (
+    payload?.state !== "final" ||
+    !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
+  ) {
     return false;
   }
   const finalText = extractText(payload.message);
@@ -423,12 +552,41 @@ export function handlePageGatewayEvent(
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
 ) {
+  if (event.event === "session.approval") {
+    const payload = asNullableRecord(event.payload);
+    if (!payload || typeof payload.sessionKey !== "string") {
+      return;
+    }
+    const queue = reconcileSessionApprovalEvent(
+      state.chatSessionApprovalQueue ?? [],
+      payload,
+      state.sessionKey,
+      resolveChatAgentId(state),
+    );
+    if (queue) {
+      state.chatSessionApprovalQueue = queue;
+      requestChatPageUpdate(state);
+    }
+    return;
+  }
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const sessionMatches = Boolean(
+      payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+    );
+    const recoveryRunId =
+      payload?.state === "final" &&
+      (payload.message === undefined || payload.message === null) &&
+      sessionMatches &&
+      typeof payload.runId === "string" &&
+      (!state.chatRunId || state.chatRunId === payload.runId)
+        ? payload.runId
+        : null;
+    const recoveryScope = recoveryRunId ? readChatSessionProjectionScope(state) : null;
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
-      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) &&
+      sessionMatches &&
       // Same-session background streams cannot clear the foreground run's status.
       (!state.chatRunId || state.chatRunId === payload.runId) &&
       state.observerDigest &&
@@ -436,27 +594,39 @@ export function handlePageGatewayEvent(
     ) {
       state.observerDigest = null;
     }
-    if (
-      payload?.state === "delta" &&
-      typeof payload.deltaText === "string" &&
-      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
-    ) {
+    if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
       refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
     }
     const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
     const shouldRefreshPullRequests =
       shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
-    const terminal =
-      payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
-    const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
+    const terminalPayload =
+      payload &&
+      (payload.state === "final" || payload.state === "aborted" || payload.state === "error")
+        ? payload
+        : undefined;
+    // Missing ownership must not fall back to correlation-only run IDs, which
+    // can collide across sessions.
+    const outboxScope =
+      terminalPayload &&
+      resolveStoredChatOutboxScope(
+        state,
+        terminalPayload.sessionKey,
+        isUiGlobalSessionKey(terminalPayload.sessionKey)
+          ? selectedGlobalEventAgentId(state, terminalPayload.agentId ?? null)
+          : terminalPayload.agentId,
+      );
+    const delivered = outboxScope
+      ? rememberDeliveredQueuedUserTurn(state, terminalPayload.runId, outboxScope)
+      : null;
     if (delivered) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state, payload);
-    if (terminal) {
-      clearPendingQueueItemsForRun(state, payload?.runId);
+    if (terminalPayload && sessionMatches) {
+      clearPendingQueueItemsForRun(state, terminalPayload.runId);
     }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
@@ -464,15 +634,42 @@ export function handlePageGatewayEvent(
     if (shouldRefreshPullRequests) {
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
-    replayPendingSessionMessageReload(state, payload, isPresented);
-    if (terminal) {
-      removeDeliveredQueuedChatSendForRun(state, payload?.runId);
+    const shouldRecoverMissingTerminal = Boolean(
+      recoveryRunId &&
+      recoveryScope &&
+      getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
+        ?.status === "completed",
+    );
+    const recoveryOwnership =
+      shouldRecoverMissingTerminal && payload
+        ? createTerminalRecoveryOwnership(state, payload)
+        : null;
+    const recoveryClaimed = recoveryOwnership
+      ? claimTerminalRecovery(state, recoveryOwnership)
+      : false;
+    if (recoveryOwnership && recoveryClaimed) {
+      state.pendingSessionMessageReloadSessionKey = null;
+      // The first owned message-less terminal recovers history even when an
+      // earlier snapshot already marked the run complete. Replays, yielded, or
+      // background-run terminals must not repeat I/O or disturb the foreground pane.
+      // Persistence can trail the terminal event, so retry bounded authoritative
+      // snapshots until the completed run's reply becomes visible.
+      void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
+        () => undefined,
+      );
+    } else {
+      replayPendingSessionMessageReload(state, payload, isPresented);
+    }
+    if (terminalPayload) {
+      if (outboxScope) {
+        removeDeliveredQueuedChatSendForRun(state, terminalPayload.runId, outboxScope);
+      }
       void resumeStoredChatOutboxes(state);
-      if (chatScopedEventSessionMatches(state, payload?.sessionKey, payload?.agentId)) {
+      if (sessionMatches) {
         if (isPresented()) {
-          refreshSessionWorkspace(state);
+          refreshSessionWorkspace(state, isSidebarSlotVisible(state.sidebarLayout, "workspace"));
         } else {
-          retireSessionWorkspaceCheckout(state, false);
+          retireSessionWorkspaceCheckout(state);
         }
       }
     }
@@ -537,6 +734,7 @@ const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueIte
 function rememberDeliveredQueuedUserTurn(
   state: ChatPageHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): ChatQueueItem | null {
   if (!runId) {
     return null;
@@ -550,10 +748,11 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
-  const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
+  const deliveryKey = `${storedChatOutboxScopeKey(scope)}|${runId}`;
+  const stored = readDeliveredQueuedChatSendForRun(state, runId, scope)?.item;
   if (stored) {
-    turns.delete(runId);
-    turns.set(runId, stored);
+    turns.delete(deliveryKey);
+    turns.set(deliveryKey, stored);
     while (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
       const oldestRunId = turns.keys().next().value;
       if (typeof oldestRunId !== "string") {
@@ -562,5 +761,5 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  return stored ?? turns.get(runId) ?? null;
+  return stored ?? turns.get(deliveryKey) ?? null;
 }

@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // Isolated MLX TTS helper package. Keep this out of apps/macos/Package.swift so
 // normal macOS app tests do not compile the full MLX audio stack.
 

@@ -16,12 +16,24 @@ export type ChatRunProgressSnapshot = {
 export function updateChatRunProgressSnapshot(
   snapshot: ChatRunProgressSnapshot | undefined,
   event: AgentEventPayload,
+  mode: "full" | "summary" = "full",
 ): ChatRunProgressSnapshot | undefined {
   const data = event.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;
   const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
+  const isStartupStatus =
+    event.stream === "run_status" &&
+    [
+      "preparing_workspace",
+      "naming_worktree",
+      "creating_worktree",
+      "running_setup",
+      "provisioning_environment",
+      "preparing_context",
+      "starting_model",
+    ].includes(phase);
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -32,14 +44,38 @@ export function updateChatRunProgressSnapshot(
     event.stream === "tool" &&
     Boolean(toolCallId) &&
     ["start", "input_delta", "update", "review", "result"].includes(phase) &&
-    (phase !== "review" || Boolean(reviewId));
+    (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
+  const isNotice = event.stream === "notice" && phase === "warning";
   const guardianTargetItemId =
     typeof data.targetItemId === "string" ? data.targetItemId.trim() : "";
+  const isGuardian = event.stream === "codex_app_server.guardian";
   const isStandaloneGuardian =
-    event.stream === "codex_app_server.guardian" &&
-    (phase === "warning" || (phase === "completed" && !guardianTargetItemId));
-  if (!isTool && !isPreamble && !isStandaloneGuardian) {
+    isGuardian &&
+    (phase === "warning" ||
+      phase === "strict_review_required" ||
+      ((phase === "started" || phase === "completed") && !guardianTargetItemId));
+  const resolvesStrictReview =
+    isGuardian &&
+    phase === "completed" &&
+    Boolean(guardianTargetItemId) &&
+    snapshot?.events.some(
+      (candidate) =>
+        candidate.stream === event.stream &&
+        candidate.data.phase === "strict_review_required" &&
+        candidate.data.reviewId === data.reviewId,
+    );
+  if (mode === "summary" && !isTool && !isPreamble) {
+    return snapshot;
+  }
+  if (
+    !isTool &&
+    !isPreamble &&
+    !isStartupStatus &&
+    !isStandaloneGuardian &&
+    !isNotice &&
+    !resolvesStrictReview
+  ) {
     return snapshot;
   }
 
@@ -60,6 +96,17 @@ export function updateChatRunProgressSnapshot(
     next.events = next.events.filter((candidate) => !predicate(candidate));
     next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
   };
+
+  if (isStartupStatus) {
+    if (
+      next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
+    ) {
+      return next;
+    }
+    removeWhere((candidate) => candidate.stream === "run_status");
+  } else if (isTool || isPreamble) {
+    removeWhere((candidate) => candidate.stream === "run_status");
+  }
 
   if (isTool) {
     removeWhere((candidate) => {
@@ -85,22 +132,36 @@ export function updateChatRunProgressSnapshot(
     if (!progressText) {
       return next;
     }
+  } else if ((isStandaloneGuardian || resolvesStrictReview) && typeof data.reviewId === "string") {
+    removeWhere(
+      (candidate) =>
+        candidate.stream === event.stream && candidate.data?.reviewId === data.reviewId,
+    );
+    if (resolvesStrictReview) {
+      return next;
+    }
   }
 
   const storedData: Record<string, unknown> = isTool
-    ? {
-        phase,
-        name: typeof data.name === "string" ? data.name : undefined,
-        toolCallId,
-        args: phase === "start" ? data.args : undefined,
-        partialResult: phase === "update" ? data.partialResult : undefined,
-        diff: phase === "input_delta" ? data.diff : undefined,
-        review: phase === "review" ? data.review : undefined,
-        approvalReviewOutcome:
-          phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
-        isError: phase === "result" ? data.isError : undefined,
-        result: phase === "result" ? data.result : undefined,
-      }
+    ? mode === "summary"
+      ? {
+          phase,
+          name: typeof data.name === "string" ? data.name : undefined,
+          toolCallId,
+        }
+      : {
+          phase,
+          name: typeof data.name === "string" ? data.name : undefined,
+          toolCallId,
+          args: phase === "start" ? data.args : undefined,
+          partialResult: phase === "update" ? data.partialResult : undefined,
+          diff: phase === "input_delta" ? data.diff : undefined,
+          review: phase === "review" ? data.review : undefined,
+          approvalReviewOutcome:
+            phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
+          isError: phase === "result" ? data.isError : undefined,
+          result: phase === "result" ? data.result : undefined,
+        }
     : isPreamble
       ? {
           kind: "preamble",

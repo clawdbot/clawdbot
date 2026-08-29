@@ -26,6 +26,12 @@ extension OnboardingView {
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
+    func handleRemoteSelection() {
+        defaultsToLocalGateway = false
+        state.connectionMode = .remote
+        showRemoteChoices.toggle()
+    }
+
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         let shouldResetGatewayState = Self.shouldResetGatewayBoundAIState(
             connectionMode: state.connectionMode,

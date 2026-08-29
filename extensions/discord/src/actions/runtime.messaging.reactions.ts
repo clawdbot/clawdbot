@@ -4,7 +4,7 @@ import {
   readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 

@@ -67,37 +67,95 @@ function boundOutputArray(output: unknown[], maxBytes: number): unknown[] {
   return [truncationMarker(JSON.stringify(output), maxBytes - 2)];
 }
 
-/** Bound cumulative guest output and the final value under one serialized byte budget. */
-export function boundCodeModeResult(params: {
+function boundErrorString(error: string, maxBytes: number): string {
+  if (jsonUtf8Bytes(error) <= maxBytes) {
+    return error;
+  }
+  let low = 0;
+  let high = Math.min(Buffer.byteLength(error, "utf8"), maxBytes);
+  // Escaped characters cost more in JSON than in UTF-8; removing the serialized
+  // overflow from the raw prefix can erase the entire diagnostic.
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = `${truncateUtf8Prefix(error, middle)} [error truncated]`;
+    if (jsonUtf8Bytes(candidate) <= maxBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return `${truncateUtf8Prefix(error, low)} [error truncated]`;
+}
+
+type CodeModeResultInput = {
   output: unknown[];
   value?: unknown;
+  error?: string;
   maxOutputBytes: number;
-}): { output: unknown[]; value?: unknown; truncated: boolean } {
+};
+type BoundedCodeModeResult = {
+  output: unknown[];
+  value?: unknown;
+  error?: string;
+  truncated: boolean;
+  outputTruncated?: boolean;
+};
+
+/** Bound guest output, the final value, and failure text under one serialized byte budget. */
+export function boundCodeModeResult(
+  params: CodeModeResultInput & { error: string },
+): BoundedCodeModeResult & { error: string };
+export function boundCodeModeResult(params: CodeModeResultInput): BoundedCodeModeResult;
+export function boundCodeModeResult(params: CodeModeResultInput): BoundedCodeModeResult {
   const hasValue = Object.hasOwn(params, "value");
   const safeOutput = params.output.map(toCodeModeJsonSafe);
   const safeValue = hasValue ? toCodeModeJsonSafe(params.value) : undefined;
   const outputBytes = safeOutput.length > 0 ? jsonUtf8Bytes(safeOutput) : 0;
   const valueBytes = hasValue ? jsonUtf8Bytes(safeValue) : 0;
-  if (outputBytes + valueBytes <= params.maxOutputBytes) {
-    return { output: safeOutput, ...(hasValue ? { value: safeValue } : {}), truncated: false };
+  const errorBytes = params.error === undefined ? 0 : jsonUtf8Bytes(params.error);
+  const error = params.error === undefined ? {} : { error: params.error };
+  if (outputBytes + valueBytes + errorBytes <= params.maxOutputBytes) {
+    return {
+      output: safeOutput,
+      ...(hasValue ? { value: safeValue } : {}),
+      ...error,
+      truncated: false,
+    };
   }
+  // Failure text stays a string, so callers and the model retain the original
+  // cause even when output competes for space. Short channels donate their share.
+  if (error.error !== undefined) {
+    const reservedOutputBytes = Math.min(
+      outputBytes + valueBytes,
+      Math.floor(params.maxOutputBytes / 2),
+    );
+    error.error = boundErrorString(error.error, params.maxOutputBytes - reservedOutputBytes);
+  }
+  const maxOutputBytes =
+    params.maxOutputBytes - (error.error === undefined ? 0 : jsonUtf8Bytes(error.error));
   if (safeOutput.length === 0) {
     return {
       output: [],
-      ...(hasValue ? { value: boundCodeModeValue(safeValue, params.maxOutputBytes) } : {}),
+      ...(hasValue ? { value: boundCodeModeValue(safeValue, maxOutputBytes) } : {}),
+      ...error,
       truncated: true,
     };
   }
 
   // Preserve both channels when both overflow: reserve half for the final
   // value, then let short values donate their unused share to guest output.
-  const reservedValueBytes = hasValue
-    ? Math.min(valueBytes, Math.floor(params.maxOutputBytes / 2))
-    : 0;
-  const output = boundOutputArray(safeOutput, params.maxOutputBytes - reservedValueBytes);
+  const reservedValueBytes = hasValue ? Math.min(valueBytes, Math.floor(maxOutputBytes / 2)) : 0;
+  const output = boundOutputArray(safeOutput, maxOutputBytes - reservedValueBytes);
+  const outputTruncated = output !== safeOutput;
   if (!hasValue) {
-    return { output, truncated: true };
+    return { output, ...error, truncated: true, outputTruncated };
   }
-  const remainingBytes = params.maxOutputBytes - jsonUtf8Bytes(output);
-  return { output, value: boundCodeModeValue(safeValue, remainingBytes), truncated: true };
+  const remainingBytes = maxOutputBytes - jsonUtf8Bytes(output);
+  return {
+    output,
+    value: boundCodeModeValue(safeValue, remainingBytes),
+    ...error,
+    truncated: true,
+    outputTruncated,
+  };
 }

@@ -81,6 +81,38 @@ describe("unified approval protocol validators", () => {
     }
   });
 
+  it("accepts bounded owner-declared approval scopes and rejects unknown scope fields", () => {
+    const scopes = [
+      {
+        kind: "message-send",
+        target: "email",
+        recipientCount: 3,
+        recipients: ["alice@example.com", "bob@example.com"],
+        audience: "external",
+      },
+      { kind: "payment", amount: "49.99", currency: "EUR", target: "Stripe" },
+      { kind: "external-post", target: "github", visibility: "public" },
+    ] as const;
+
+    for (const scope of scopes) {
+      expect(validateApprovalPresentation({ ...execPresentation, scope })).toBe(true);
+      expect(validateApprovalPresentation({ ...pluginPresentation, scope })).toBe(true);
+      expect(
+        validateApprovalPresentation({ ...pluginPresentation, scope: { ...scope, extra: true } }),
+      ).toBe(false);
+    }
+
+    expect(validateApprovalPresentation({ ...systemAgentPresentation, scope: scopes[0] })).toBe(
+      false,
+    );
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        scope: { ...scopes[0], recipients: Array(6).fill("person@example.com") },
+      }),
+    ).toBe(false);
+  });
+
   it("keeps deny available on every presentation and resolve request", () => {
     expect(
       validateApprovalPresentation({
@@ -213,7 +245,7 @@ describe("unified approval protocol validators", () => {
           sourceSessionKey: "agent:worker:subagent:123",
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       validateApprovalGetResult({
         approval: {

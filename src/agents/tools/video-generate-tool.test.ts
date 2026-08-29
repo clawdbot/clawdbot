@@ -6,10 +6,8 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -186,36 +184,38 @@ function createVideoProviderSnapshot(params: {
             [params.id]: { referenceAudioInputs: params.referenceAudioInputs },
           },
   };
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: params.id,
+        manifestPath: plugin.manifestPath,
+        manifestHash: "test",
+        source: plugin.source,
+        rootDir: plugin.rootDir,
+        origin: params.origin,
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
   return {
     policyHash,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: params.id,
-          manifestPath: plugin.manifestPath,
-          manifestHash: "test",
-          source: plugin.source,
-          rootDir: plugin.rootDir,
-          origin: params.origin,
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-        },
-      ],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
     plugins: [plugin],
@@ -740,6 +740,68 @@ describe("createVideoGenerateTool", () => {
     expect((generateSpy.mock.calls.at(1)![0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
     expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
+  });
+
+  it("runs explicit deployment refs and preserves timeout-only video defaults", async () => {
+    const provider = {
+      id: "video-plugin",
+      models: [],
+      capabilities: {},
+      isConfigured: () => true,
+      generateVideo: vi.fn(async () => ({
+        videos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }],
+      })),
+    };
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      provider,
+    ]);
+    const generateSpy = mockSavedVideoResult("deployment.mp4");
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: { defaults: { videoGenerationModel: { timeoutMs: 180_000 } } },
+        }),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: { videoGenerationProviders: [provider] },
+        } as never,
+      }),
+    );
+
+    const result = await tool.execute("call-explicit-deployment", {
+      prompt: "friendly lobster surfing",
+      model: "video-plugin/deployment",
+    });
+
+    expect(firstMockCallArg(generateSpy)).toMatchObject({
+      modelOverride: "video-plugin/deployment",
+      timeoutMs: 180_000,
+    });
+    expect(resultDetails(result).timeoutMs).toBe(180_000);
+  });
+
+  it("rejects oversized inline reference images before video generation", async () => {
+    mockVideoPluginProvider({ imageToVideo: { enabled: true, maxInputImages: 1 } });
+    const generateSpy = mockSavedVideoResult();
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              mediaMaxMb: 8 / (1024 * 1024),
+              videoGenerationModel: { primary: "video-plugin/vid-v1" },
+            },
+          },
+        }),
+      }),
+    );
+
+    await expect(
+      tool.execute("call-oversized-inline-reference", {
+        prompt: "friendly lobster surfing",
+        image: `data:image/png;base64,${Buffer.alloc(9).toString("base64")}`,
+      }),
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    expect(generateSpy).not.toHaveBeenCalled();
   });
 
   it("uses the video media cap when mediaMaxMb is not configured", async () => {

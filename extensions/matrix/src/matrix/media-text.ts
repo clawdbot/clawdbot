@@ -1,8 +1,14 @@
 // Matrix plugin module implements media text behavior.
 import path from "node:path";
+import {
+  asNullableObjectRecord,
+  asNullableRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   MatrixMessageAttachmentKind,
   MatrixMessageAttachmentSummary,
+  MatrixRawEvent,
+  RoomMessageEventContent,
 } from "./actions/types.js";
 
 const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
@@ -66,6 +72,30 @@ function resolveCaptionOrFilename(params: { body?: string; filename?: string }):
     return { filename: body };
   }
   return { caption: body };
+}
+
+export function resolveBundledMatrixReplacementContent(
+  event: MatrixRawEvent,
+): Partial<RoomMessageEventContent> | undefined {
+  const replacement = asNullableObjectRecord(event.unsigned?.["m.relations"]?.["m.replace"]);
+  if (!replacement || event.state_key !== undefined) {
+    return undefined;
+  }
+  const content = asNullableObjectRecord(replacement.content);
+  const relation = asNullableObjectRecord(content?.["m.relates_to"]);
+  const newContent = content?.["m.new_content"];
+  if (
+    replacement.sender !== event.sender ||
+    replacement.type !== event.type ||
+    replacement.state_key !== undefined ||
+    asNullableObjectRecord(replacement.unsigned)?.redacted_because ||
+    !relation ||
+    relation.rel_type !== "m.replace" ||
+    relation.event_id !== event.event_id
+  ) {
+    return undefined;
+  }
+  return asNullableRecord(newContent) ?? undefined;
 }
 
 type MatrixMessageContentInput = {

@@ -1,5 +1,3 @@
-import net from "node:net";
-import { domainToASCII } from "node:url";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
@@ -18,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { mintSecretSentinel } from "../sentinel.js";
 import {
   classifyHiddenGitHubStoreName,
@@ -100,7 +99,7 @@ function assertSecretStoreMutationName(name: string): void {
   }
 }
 
-function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
+export function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
   const bytes = Buffer.byteLength(value, "utf8");
   if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
     throw new SecretStoreValidationError(
@@ -121,45 +120,14 @@ function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
 }
 
 function normalizeSecretAllowedHost(raw: string): string {
-  const trimmed = raw.trim().toLowerCase().replace(/\.+$/u, "");
-  if (trimmed.includes("*")) {
+  try {
+    return normalizeExactAllowedHost(raw);
+  } catch (error) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_ALLOWED_HOST",
-      `Allowed host "${raw}" cannot contain a wildcard; use one exact hostname.`,
+      error instanceof Error ? error.message : `Allowed host "${raw}" is not a valid hostname.`,
     );
   }
-  const unbracketed =
-    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-  if (net.isIP(unbracketed)) {
-    return unbracketed;
-  }
-  if (!unbracketed || unbracketed.includes(":") || /[\s/?#@]/u.test(unbracketed)) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_INVALID_ALLOWED_HOST",
-      `Allowed host "${raw}" must be a hostname without a scheme, path, wildcard, or port.`,
-    );
-  }
-  const ascii = domainToASCII(unbracketed);
-  if (
-    !ascii ||
-    ascii.length > 253 ||
-    ascii
-      .split(".")
-      .some(
-        (label) =>
-          !label ||
-          label.length > 63 ||
-          label.startsWith("-") ||
-          label.endsWith("-") ||
-          !/^[a-z0-9-]+$/u.test(label),
-      )
-  ) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_INVALID_ALLOWED_HOST",
-      `Allowed host "${raw}" is not a valid hostname.`,
-    );
-  }
-  return ascii;
 }
 
 export function normalizeSecretAllowedHosts(hosts: readonly string[]): string[] {

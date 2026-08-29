@@ -67,8 +67,17 @@ export function createWorkerPlacementMoveService(options: {
     identity: MoveSessionIdentity,
     target: WorkerPlacementMoveTarget,
   ) => Promise<WorkerPlacementMoveDestination | undefined>;
-  onRecoveredTransition?: (placement: WorkerDispatchPlacement) => void;
 }) {
+  const reportTransition = (
+    observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
+    placement: WorkerDispatchPlacement,
+  ): void => {
+    try {
+      observer?.(placement);
+    } catch {
+      // Reporting cannot overturn a durable move transition.
+    }
+  };
   const recordError = (intent: WorkerPlacementMoveIntent, error: unknown): void => {
     options.placements.recordPlacementMoveError({
       operationId: intent.operationId,
@@ -162,11 +171,11 @@ export function createWorkerPlacementMoveService(options: {
         },
       });
       intent = begun.intent;
-      onTransition?.(begun.placement);
+      reportTransition(onTransition, begun.placement);
       const local = request.abandonSource
         ? await options.abandonSource(request, intent, authorize)
         : await options.reclaimSource(request, intent, authorize);
-      onTransition?.(local);
+      reportTransition(onTransition, local);
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
       }
@@ -192,15 +201,12 @@ export function createWorkerPlacementMoveService(options: {
     }
   };
 
-  const recover = async (
-    intent: WorkerPlacementMoveIntent,
-  ): Promise<WorkerDispatchPlacement | undefined> => {
+  const recover = async (intent: WorkerPlacementMoveIntent): Promise<void> => {
     try {
       let placement = options.placements.get(intent.sessionId);
       if (!placement) {
         throw new Error(`Session ${intent.sessionId} placement move lost its session placement`);
       }
-      const initialPlacement = placement;
       const identity = {
         sessionId: placement.sessionId,
         sessionKey: placement.sessionKey,
@@ -217,7 +223,7 @@ export function createWorkerPlacementMoveService(options: {
             operationId: intent.operationId,
             sessionId: intent.sessionId,
           });
-          return placement;
+          return;
         }
         if (
           placement.state !== "active" &&
@@ -229,7 +235,8 @@ export function createWorkerPlacementMoveService(options: {
             `Session ${identity.sessionKey} abandonment recovery is waiting in ${placement.state}`,
           );
         }
-        return await options.abandonSource(identity, intent);
+        await options.abandonSource(identity, intent);
+        return;
       }
       if (placement.state === "failed") {
         if (
@@ -246,7 +253,7 @@ export function createWorkerPlacementMoveService(options: {
           operationId: intent.operationId,
           sessionId: intent.sessionId,
         });
-        return placement;
+        return;
       } else if (placement.state === "draining") {
         const local = await options.reclaimSource(identity, intent);
         if (local.state !== "local") {
@@ -261,7 +268,7 @@ export function createWorkerPlacementMoveService(options: {
           environment.state !== "failed" &&
           environment.state !== "orphaned"
         ) {
-          return undefined;
+          return;
         }
         placement = options.placements.completePlacementMoveSourceToLocal({
           operationId: intent.operationId,
@@ -275,17 +282,18 @@ export function createWorkerPlacementMoveService(options: {
         if (stillSource) {
           throw new Error(`Session ${identity.sessionKey} move recovery found an active source`);
         }
-        return options.placements.completePlacementMoveToWorker({
+        options.placements.completePlacementMoveToWorker({
           operationId: intent.operationId,
           sessionId: intent.sessionId,
           expectedGeneration: placement.generation,
           environmentId: placement.environmentId,
           ownerEpoch: placement.activeOwnerEpoch,
         });
+        return;
       } else if (placement.state !== "local") {
         // Generic dispatch recovery owns requested through starting. A later
         // coordinated sweep either observes active or retries from failed/local.
-        return undefined;
+        return;
       }
       if (intent.target.kind === "gateway") {
         if (options.placements.getPlacementMove(intent.sessionId)) {
@@ -293,11 +301,10 @@ export function createWorkerPlacementMoveService(options: {
             operationId: intent.operationId,
             sessionId: intent.sessionId,
           });
-          return placement;
         }
-        return placement === initialPlacement ? undefined : placement;
+        return;
       }
-      const failed = options.placements.fail({
+      options.placements.fail({
         sessionId: placement.sessionId,
         expectedGeneration: placement.generation,
         recoveryError: RESTART_AUTHORITY_EXPIRED,
@@ -306,7 +313,6 @@ export function createWorkerPlacementMoveService(options: {
         operationId: intent.operationId,
         sessionId: intent.sessionId,
       });
-      return failed;
     } catch (error) {
       recordError(intent, error);
       throw error;
@@ -324,13 +330,7 @@ export function createWorkerPlacementMoveService(options: {
       ) {
         protectedSessions.add(intent.sessionId);
       }
-      await recover(intent)
-        .then((placement) => {
-          if (placement) {
-            options.onRecoveredTransition?.(placement);
-          }
-        })
-        .catch(() => undefined);
+      await recover(intent).catch(() => undefined);
     }
     return protectedSessions;
   };

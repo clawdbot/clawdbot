@@ -267,6 +267,34 @@ describe("lmstudio-runtime", () => {
     });
   });
 
+  it.each([
+    {
+      name: "a configured env marker resolves its concrete credential",
+      apiKey: "GOOGLE_API_KEY",
+      env: { GOOGLE_API_KEY: "direct-env-key" },
+      expected: "direct-env-key",
+    },
+    {
+      name: "a SecretRef resolving to an env marker is not dereferenced again",
+      apiKey: { source: "env", provider: "default", id: "LM_API_TOKEN" },
+      env: { LM_API_TOKEN: "GOOGLE_API_KEY", GOOGLE_API_KEY: "nested-env-key" },
+      expected: undefined,
+    },
+    {
+      name: "a configured synthetic auth marker is suppressed",
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      env: {},
+      expected: undefined,
+    },
+  ])("preserves configured auth semantics when $name", async ({ apiKey, env, expected }) => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({ apiKey }),
+        env,
+      }),
+    ).resolves.toBe(expected);
+  });
+
   it("resolves env-template api keys from config", async () => {
     await expect(
       resolveLmstudioConfiguredApiKey({
@@ -293,15 +321,24 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe("custom-template-lmstudio-key");
   });
 
-  it("throws a path-specific error when an env-template api key cannot be resolved", async () => {
+  it.each([
+    { name: "env template", apiKey: "${LMSTUDIO_API_KEY}" },
+    {
+      name: "SecretRef",
+      apiKey: { source: "env", provider: "default", id: "LMSTUDIO_API_KEY" },
+    },
+  ])("fails closed for an unresolved $name unless explicitly allowed", async ({ apiKey }) => {
+    const options = {
+      config: buildLmstudioConfig({ apiKey }),
+      env: {},
+    };
+
+    await expect(resolveLmstudioConfiguredApiKey(options)).rejects.toThrow(
+      /models\.providers\.lmstudio\.apiKey/i,
+    );
     await expect(
-      resolveLmstudioConfiguredApiKey({
-        config: buildLmstudioConfig({
-          apiKey: "${LMSTUDIO_API_KEY}",
-        }),
-        env: {},
-      }),
-    ).rejects.toThrow(/models\.providers\.lmstudio\.apiKey/i);
+      resolveLmstudioConfiguredApiKey({ ...options, allowUnresolved: true }),
+    ).resolves.toBeUndefined();
   });
 
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {

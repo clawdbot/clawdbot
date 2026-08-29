@@ -12,8 +12,8 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
+  resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -21,6 +21,7 @@ const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+const SQLITE_SNAPSHOT_STAGING_PREFIX = `openclaw-sqlite-readonly-${process.pid}-`;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const pendingTempDirectoryCleanup = new Set<string>();
@@ -48,6 +49,24 @@ type PreparedSqliteReadOnlyLocation = {
 type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
 
 class SqliteSourceChangedError extends Error {}
+
+function sqliteSnapshotStagingError(tempDir: string, cause: unknown, allocation = false): unknown {
+  for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
+    const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
+    // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
+    if (
+      allocation ||
+      ["ENOSPC", "EDQUOT"].includes(code ?? "") ||
+      (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
+      `${errorPath ?? ""}${path.sep}`.startsWith(`${tempDir}${path.sep}`)
+    ) {
+      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+      return new Error(message, { cause });
+    }
+    error = error.cause;
+  }
+  return cause;
+}
 
 function statIfPresent(pathname: string): BigIntStats | undefined {
   try {
@@ -330,12 +349,15 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
 function createStableReadOnlyCopyInTempDirectory(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
-  tempDir: string,
+  existingTempDir?: string,
 ): PreparedSqliteReadOnlyLocation {
-  const snapshotPath = path.join(tempDir, "database.sqlite");
-  const firstPath = path.join(tempDir, "first");
-  const secondPath = path.join(tempDir, "second");
+  let tempDir = existingTempDir;
+  const stagingRoot = tempDir ? path.dirname(tempDir) : resolvePrivateSqliteSnapshotStagingRoot();
   try {
+    tempDir ??= createPrivateSqliteTempDirectorySync(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
+    const snapshotPath = path.join(tempDir, "database.sqlite");
+    const firstPath = path.join(tempDir, "first");
+    const secondPath = path.join(tempDir, "second");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -381,8 +403,19 @@ function createStableReadOnlyCopyInTempDirectory(
     }
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
-    removeTempDirectory(tempDir);
-    throw error;
+    if (tempDir) {
+      removeTempDirectory(tempDir);
+    }
+    throw sqliteSnapshotStagingError(tempDir ?? stagingRoot, error, !tempDir);
+  }
+}
+
+async function createSqliteSnapshotStagingDirectory(): Promise<string> {
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
+  try {
+    return await createPrivateSqliteTempDirectory(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
+  } catch (error) {
+    throw sqliteSnapshotStagingError(stagingRoot, error, true);
   }
 }
 
@@ -390,40 +423,21 @@ async function createStableReadOnlyCopy(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
-  return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
-}
-
-function createStableReadOnlyCopySync(
-  pathname: string,
-  journalMode: Exclude<SourceJournalMode, "unknown">,
-): PreparedSqliteReadOnlyLocation {
-  const tempDir = createPrivateSqliteTempDirectorySync(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  const tempDir = await createSqliteSnapshotStagingDirectory();
   return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
 }
 
 async function createOnlineReadOnlyBackup(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  const tempDir = await createSqliteSnapshotStagingDirectory();
   const snapshotPath = path.join(tempDir, "database.sqlite");
   const sqlite = requireNodeSqlite();
   try {
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
-    const source = openNodeSqliteDatabase(pathname, {
-      readOnly: true,
-    });
+    const source = openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
       source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
       source.prepare("PRAGMA schema_version;").get();
@@ -449,7 +463,7 @@ async function createOnlineReadOnlyBackup(
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw error;
+    throw sqliteSnapshotStagingError(tempDir, error);
   }
 }
 
@@ -563,7 +577,7 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
       continue;
     }
     try {
-      return createStableReadOnlyCopySync(canonicalPath, journalMode);
+      return createStableReadOnlyCopyInTempDirectory(canonicalPath, journalMode);
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;

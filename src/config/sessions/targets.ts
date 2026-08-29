@@ -613,6 +613,24 @@ export function resolveAgentSessionStoreTargetsSync(
   return dedupeTargetsByStorePath(targets);
 }
 
+/** Project configured session-store selection to the exact database migration owners. */
+export function resolveConfiguredAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  params: { env: NodeJS.ProcessEnv },
+): Array<{ agentId: string; path: string }> {
+  return resolveSessionStoreTargets(cfg, { allAgents: true }, params).map((target) => {
+    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+      defaultAgentId: isPerAgentSessionStoreConfig(cfg.session?.store)
+        ? target.agentId
+        : resolveSessionStoreCompatibilityAgentId(cfg),
+      env: params.env,
+    });
+    // Shared stores partition logical agents inside one physical schema owner.
+    return { agentId: resolved.agentId ?? target.agentId, path: resolved.path };
+  });
+}
+
 /** Resolves session store targets from explicit CLI-style selection options. */
 export function resolveSessionStoreTargets(
   cfg: OpenClawConfig,

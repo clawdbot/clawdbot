@@ -11,6 +11,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { materializeRuntimeCapabilities } from "../../agents/prepared-model-runtime.configured-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -58,6 +59,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       skills: [],
       hooks: [],
       origin: "bundled",
+      enabledByDefault: true,
       rootDir: "/test/anthropic",
       source: "/test/anthropic/index.js",
       manifestPath: "/test/anthropic/openclaw.plugin.json",
@@ -101,21 +103,23 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       manifestPath: "/test/github-copilot/openclaw.plugin.json",
     },
   ];
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "models-test-plugin-policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    // A real isolated bundled snapshot has no installed-index rows; bundled
+    // manifest records remain the authoritative graph for this fixture.
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "models-test-plugin-policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "models-test-plugin-policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      // A real isolated bundled snapshot has no installed-index rows; bundled
-      // manifest records remain the authoritative graph for this fixture.
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -355,6 +359,7 @@ function requestModelsList(params: {
       loadGatewayModelCatalogSnapshot,
       logGateway: {
         debug: vi.fn(),
+        warn: vi.fn(),
       },
     } as never,
   });
@@ -1006,6 +1011,7 @@ describe("models.list", () => {
                   source: "implicit",
                 },
                 available: false,
+                unavailableReason: "missing-auth",
                 tags: ["default"],
               },
             ],
@@ -1068,6 +1074,7 @@ describe("models.list", () => {
                   source: "implicit",
                 },
                 available: false,
+                unavailableReason: "missing-auth",
                 tags: ["default"],
               },
             ],
@@ -1121,6 +1128,7 @@ describe("models.list", () => {
                 source: "implicit",
               },
               available: false,
+              unavailableReason: "missing-auth",
               tags: ["default"],
             },
           ],
@@ -1363,7 +1371,15 @@ describe("models.list", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       {
-        models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm", available: false }],
+        models: [
+          {
+            id: "qwen-local",
+            name: "Qwen Local",
+            provider: "vllm",
+            available: false,
+            unavailableReason: "missing-auth",
+          },
+        ],
       },
       undefined,
     );
@@ -1463,6 +1479,7 @@ describe("models.list", () => {
               name: "Claude Test",
               provider: "anthropic",
               available: false,
+              unavailableReason: "missing-auth",
             },
             {
               id: "gpt-5.4",
@@ -1632,94 +1649,82 @@ describe("models.list", () => {
     });
   });
 
-  it("keeps catalog models available through a refresh-owned CLI runtime", async () => {
-    await withoutAnthropicEnvAuth(async () => {
-      await withModelsTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-models-list-cli-runtime-",
-          agentEnv: "main",
-        },
-        async (state) => {
-          const store = {
-            version: 1,
-            profiles: {
-              "anthropic:claude-cli": {
-                type: "oauth",
-                provider: "claude-cli",
-                access: "claude-cli-access",
-                refresh: "claude-cli-refresh",
-                expires: Date.now() - 60_000,
-              },
-            },
-          } as const;
-          await state.writeAuthProfiles(store);
-          replaceRuntimeAuthProfileStoreSnapshots([
-            {
-              agentDir: state.agentDir(),
-              store: Object.assign({}, store, {
-                runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
-              }),
-            },
-          ]);
-
-          const runtimeConfig = {
-            auth: {
-              profiles: {
-                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
-              },
-            },
-            agents: {
-              defaults: {
-                models: {
-                  "anthropic/claude-opus-4-8": {
-                    agentRuntime: { id: "claude-cli" },
+  it.each([
+    { authenticated: true, available: true },
+    { authenticated: false, available: false },
+  ])(
+    "projects native Claude runtime availability when authenticated=$authenticated",
+    async ({ authenticated, available }) => {
+      await withoutAnthropicEnvAuth(async () => {
+        await withModelsTestState(
+          {
+            layout: "state-only",
+            prefix: "openclaw-models-list-cli-runtime-",
+            agentEnv: "main",
+          },
+          async () => {
+            cliBackendsTesting.setDepsForTest({
+              resolveRuntimeCliBackends: () =>
+                [{ id: "claude-cli", modelProvider: "anthropic", pluginId: "anthropic" }] as never,
+            });
+            try {
+              const runtimeConfig = {
+                agents: {
+                  defaults: {
+                    models: {
+                      "anthropic/claude-opus-4-8": {
+                        agentRuntime: { id: "claude-cli" },
+                      },
+                    },
                   },
                 },
-              },
-            },
-          } as unknown as OpenClawConfig;
-          const { request, respond } = requestModelsList({
-            view: "all",
-            runtimeConfig,
-            loadGatewayModelCatalog: vi.fn(() =>
-              Promise.resolve([
-                {
-                  id: "claude-opus-4-8",
-                  name: "Claude Opus 4.8",
-                  provider: "anthropic",
-                },
-              ]),
-            ),
-            reqId: "req-models-list-cli-runtime",
-          });
-          await request;
+              } as unknown as OpenClawConfig;
+              const { request, respond } = requestModelsList({
+                view: "all",
+                runtimeConfig,
+                preparedAuthModes: authenticated ? { "claude-cli": "api_key" } : {},
+                loadGatewayModelCatalog: vi.fn(() =>
+                  Promise.resolve([
+                    {
+                      id: "claude-opus-4-8",
+                      name: "Claude Opus 4.8",
+                      provider: "anthropic",
+                    },
+                  ]),
+                ),
+                reqId: "req-models-list-cli-runtime",
+              });
+              await request;
 
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            {
-              models: [
+              expect(respond).toHaveBeenCalledWith(
+                true,
                 {
-                  id: "claude-opus-4-8",
-                  name: "Claude Opus 4.8",
-                  provider: "anthropic",
-                  agentRuntime: {
-                    id: "claude-cli",
-                    cloudPlacementSupported: false,
-                    devicePlacementSupported: false,
-                    source: "model",
-                  },
-                  available: true,
-                  tags: ["configured"],
+                  models: [
+                    {
+                      id: "claude-opus-4-8",
+                      name: "Claude Opus 4.8",
+                      provider: "anthropic",
+                      agentRuntime: {
+                        id: "claude-cli",
+                        cloudPlacementSupported: false,
+                        devicePlacementSupported: false,
+                        source: "model",
+                      },
+                      available,
+                      tags: ["configured"],
+                    },
+                  ],
                 },
-              ],
-            },
-            undefined,
-          );
-        },
-      );
-    });
-  });
+                undefined,
+              );
+            } finally {
+              cliBackendsTesting.resetDepsForTest();
+            }
+          },
+        );
+      });
+    },
+  );
 
   it("keeps file SecretRef provider availability unknown when read-only auth cannot resolve it", async () => {
     const catalog = [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }];
@@ -2124,7 +2129,8 @@ describe("models.list", () => {
             },
           });
 
-        await writeCooldown(Date.now() + 60_000);
+        const billingCooldownUntil = Date.now() + 60_000;
+        await writeCooldown(billingCooldownUntil);
         const cooled = requestModelsList({
           view: "all",
           runtimeConfig,
@@ -2136,7 +2142,14 @@ describe("models.list", () => {
           true,
           {
             models: [
-              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: false },
+              {
+                id: "qwen-remote",
+                name: "Qwen Remote",
+                provider: "cliproxyapi",
+                available: false,
+                unavailableReason: "cooldown",
+                unavailableUntil: billingCooldownUntil,
+              },
             ],
           },
           undefined,
@@ -2364,6 +2377,7 @@ describe("models.list", () => {
             name: "Demo Model",
             provider: "demo-provider",
             available: false,
+            unavailableReason: "missing-auth",
           },
         ],
       },
@@ -2412,6 +2426,45 @@ describe("models.list", () => {
     expect(payload.models[0]).not.toHaveProperty("compat");
   });
 
+  it.each([
+    { name: "model Fast", modelDefault: true, expected: true },
+    { name: "model Standard", modelDefault: false, expected: false },
+    { name: "model Auto", modelDefault: "auto", expected: "auto" },
+    {
+      name: "agent Fast over model Standard",
+      agentDefault: true,
+      modelDefault: false,
+      expected: true,
+    },
+  ] as const)("projects the $name default", async ({ agentDefault, modelDefault, expected }) => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      agentId: "main",
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.6-luna": { params: { fastMode: modelDefault } } },
+          },
+          list: [
+            {
+              id: "main",
+              default: true,
+              ...(agentDefault === undefined ? {} : { fastModeDefault: agentDefault }),
+            },
+          ],
+        },
+      },
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }]),
+      ),
+      reqId: `req-models-list-fast-mode-${String(expected)}`,
+    });
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as { models: Array<Record<string, unknown>> };
+    expect(payload.models[0]).toMatchObject({ effectiveFastMode: expected });
+  });
+
   it("does not reinterpret context tokens or expose model input metadata", async () => {
     const { request, respond } = requestModelsList({
       view: "all",
@@ -2440,6 +2493,7 @@ describe("models.list", () => {
             name: "Vision Model",
             provider: "demo-provider",
             available: false,
+            unavailableReason: "missing-auth",
             contextWindow: 128_000,
           },
         ],

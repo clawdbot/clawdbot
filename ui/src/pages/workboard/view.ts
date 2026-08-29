@@ -137,6 +137,12 @@ const layoutOptions = [
   ["comfortable", "workboard.layoutComfortable", icons.layoutComfortable],
 ] as const;
 
+const emptyColumnModeOptions = [
+  ["show", "workboard.showEmptyColumns"],
+  ["collapse", "workboard.collapseEmptyColumns"],
+  ["hide", "workboard.hideEmptyColumns"],
+] as const;
+
 export function renderWorkboard(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
 
@@ -208,7 +214,7 @@ export function renderWorkboard(props: WorkboardProps) {
     byStatus.get(card.status)?.push(card);
   }
   const visibleStatuses =
-    state.hideEmptyColumns || state.viewPreset !== "all"
+    state.emptyColumnMode === "hide" || state.viewPreset !== "all"
       ? state.statuses.filter((status) => (byStatus.get(status)?.length ?? 0) > 0)
       : state.statuses;
   const activeFiltering =
@@ -238,6 +244,8 @@ export function renderWorkboard(props: WorkboardProps) {
       label: formatPriorityLabel(priority),
     })),
   ];
+  const emptyColumnOptions: Array<WorkboardSelectOption<WorkboardUiState["emptyColumnMode"]>> =
+    emptyColumnModeOptions.map(([value, labelKey]) => ({ value, label: t(labelKey) }));
   const agentSelectOptions = agentOptions.map((option) => ({
     value: option.id,
     label: option.label,
@@ -355,18 +363,18 @@ export function renderWorkboard(props: WorkboardProps) {
               </div>
               ${renderRefreshStatus(state)}
             </div>
-            <label class="workboard-toggle">
-              <input
-                type="checkbox"
-                name="workboard-hide-empty-columns"
-                .checked=${state.hideEmptyColumns}
-                @change=${(event: Event) => {
-                  state.hideEmptyColumns = (event.currentTarget as HTMLInputElement).checked;
-                  props.onRequestUpdate?.();
-                }}
-              />
-              <span>${t("workboard.hideEmptyColumns")}</span>
-            </label>
+            ${renderWorkboardSelect({
+              value: state.emptyColumnMode,
+              options: emptyColumnOptions,
+              label: t("workboard.emptyColumns"),
+              onChange: (value) => {
+                state.emptyColumnMode = value;
+                state.expandedEmptyStatuses.clear();
+              },
+              requestUpdate: props.onRequestUpdate,
+              className: "workboard-select--toolbar workboard-select--empty-columns",
+              showLabel: false,
+            })}
           </div>
           <div class="workboard-toolbar__actions">
             <button
@@ -433,7 +441,7 @@ export function renderWorkboard(props: WorkboardProps) {
             `
           : html`
               <div
-                class="workboard-board workboard-board--${state.layout} ${visibleStatuses.length ===
+                class="workboard-board workboard-board--page workboard-board--${state.layout} ${visibleStatuses.length ===
                 1
                   ? "workboard-board--single-column"
                   : ""}"

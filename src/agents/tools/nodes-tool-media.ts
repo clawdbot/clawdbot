@@ -12,6 +12,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  type CameraArtifactFacing,
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
@@ -121,23 +122,72 @@ export async function executeNodeMediaAction(
   throw new Error("Unsupported node media action");
 }
 
-async function sanitizeNodePhotoResult(params: {
+function validateNodePhoto(
+  photo: ReturnType<typeof parseCameraSnapPayload>,
+  command: "camera.snap" | "photos.latest",
+) {
+  const format = normalizeLowercaseStringOrEmpty(photo.format);
+  if (format !== "jpg" && format !== "jpeg" && format !== "png") {
+    throw new Error(`unsupported ${command} format: ${photo.format}`);
+  }
+  return { photo, isJpeg: format !== "png" };
+}
+
+type ValidatedNodePhoto = ReturnType<typeof validateNodePhoto> & {
+  facing?: CameraArtifactFacing;
+  createdAt?: unknown;
+};
+
+async function createNodePhotoResult(params: {
   kind: "snaps" | "photos";
-  content: AgentToolResult<unknown>["content"];
-  details: Array<Record<string, unknown>>;
+  photos: ValidatedNodePhoto[];
+  expectedHost?: string;
+  modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
-  if (params.details.length === 0) {
-    params.content.push({ type: "text", text: "No photos found." });
+  const command = params.kind === "snaps" ? "camera.snap" : "photos.latest";
+  const content: AgentToolResult<unknown>["content"] = [];
+  const details: Array<Record<string, unknown> & { path: string }> = [];
+  for (const [index, { photo, facing, createdAt, isJpeg }] of params.photos.entries()) {
+    const filePath = cameraTempPath({
+      kind: "snap",
+      ...(facing ? { facing } : { id: crypto.randomUUID() }),
+      ext: isJpeg ? "jpg" : "png",
+    });
+    await writeCameraPayloadToFile({
+      filePath,
+      payload: photo,
+      expectedHost: params.expectedHost,
+      invalidPayloadMessage: `invalid ${command} payload`,
+    });
+    content.push(
+      params.modelHasVision && photo.base64
+        ? {
+            type: "image",
+            data: photo.base64,
+            mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+          }
+        : {
+            type: "text",
+            text: `${facing ? "Camera" : "Library"} photo saved to ${filePath}.`,
+          },
+    );
+    details.push({
+      ...(facing ? { facing } : { index }),
+      path: filePath,
+      width: photo.width,
+      height: photo.height,
+      ...(typeof createdAt === "string" ? { createdAt } : {}),
+    });
   }
-  const mediaUrls = params.details
-    .map((entry) => entry.path)
-    .filter((entry): entry is string => typeof entry === "string");
+  if (details.length === 0) {
+    content.push({ type: "text", text: "No photos found." });
+  }
+  const mediaUrls = details.map((entry) => entry.path);
   return await sanitizeToolResultImages(
     {
-      content: params.content,
-      details:
-        params.details.length > 0 ? { [params.kind]: params.details, media: { mediaUrls } } : [],
+      content,
+      details: details.length > 0 ? { [params.kind]: details, media: { mediaUrls } } : [],
     },
     params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
     params.imageSanitization,
@@ -181,9 +231,7 @@ async function executeCameraSnap({
     deviceId,
   });
 
-  const content: AgentToolResult<unknown>["content"] = [];
-  const details: Array<Record<string, unknown>> = [];
-
+  const photos: ValidatedNodePhoto[] = [];
   for (const target of targets) {
     const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
       nodeId,
@@ -198,42 +246,19 @@ async function executeCameraSnap({
       },
       idempotencyKey: crypto.randomUUID(),
     });
-    const payload = parseCameraSnapPayload(raw?.payload);
-    const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
-    if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
-      throw new Error(`unsupported camera.snap format: ${payload.format}`);
-    }
-
-    const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
-    const filePath = cameraTempPath({
-      kind: "snap",
+    const photo = parseCameraSnapPayload(raw?.payload, { expectedHost: resolvedNode.remoteIp });
+    photos.push({
+      ...validateNodePhoto(photo, "camera.snap"),
       facing: target.artifactFacing,
-      ext: isJpeg ? "jpg" : "png",
-    });
-    await writeCameraPayloadToFile({
-      filePath,
-      payload,
-      expectedHost: resolvedNode.remoteIp,
-      invalidPayloadMessage: "invalid camera.snap payload",
-    });
-    if (modelHasVision && payload.base64) {
-      content.push({
-        type: "image",
-        data: payload.base64,
-        mimeType: imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
-      });
-    } else {
-      content.push({ type: "text", text: `Camera photo saved to ${filePath}.` });
-    }
-    details.push({
-      facing: target.artifactFacing,
-      path: filePath,
-      width: payload.width,
-      height: payload.height,
     });
   }
-
-  return await sanitizeNodePhotoResult({ kind: "snaps", content, details, imageSanitization });
+  return await createNodePhotoResult({
+    kind: "snaps",
+    photos,
+    expectedHost: resolvedNode.remoteIp,
+    modelHasVision,
+    imageSanitization,
+  });
 }
 
 async function executePhotosLatest({
@@ -276,54 +301,20 @@ async function executePhotosLatest({
     );
   }
 
-  const content: AgentToolResult<unknown>["content"] = [];
-  const details: Array<Record<string, unknown>> = [];
-
-  // Reject every malformed batch member before creating any capture artifact.
+  // Validate the complete native batch before the shared owner writes private artifacts.
   const photos = payload.photos.map((photoRaw) => {
-    const photo = parseCameraSnapPayload(photoRaw);
-    const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
-    if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
-      throw new Error(`unsupported photos.latest format: ${photo.format}`);
-    }
-    return { photoRaw, photo, normalizedFormat };
+    const photo = parseCameraSnapPayload(photoRaw, { expectedHost: resolvedNode.remoteIp });
+    return Object.assign(validateNodePhoto(photo, "photos.latest"), {
+      createdAt: isRecord(photoRaw) ? photoRaw.createdAt : undefined,
+    });
   });
-
-  for (const [index, { photoRaw, photo, normalizedFormat }] of photos.entries()) {
-    const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
-    const filePath = cameraTempPath({
-      kind: "snap",
-      ext: isJpeg ? "jpg" : "png",
-      id: crypto.randomUUID(),
-    });
-    await writeCameraPayloadToFile({
-      filePath,
-      payload: photo,
-      expectedHost: resolvedNode.remoteIp,
-      invalidPayloadMessage: "invalid photos.latest payload",
-    });
-
-    if (modelHasVision && photo.base64) {
-      content.push({
-        type: "image",
-        data: photo.base64,
-        mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
-      });
-    } else {
-      content.push({ type: "text", text: `Library photo saved to ${filePath}.` });
-    }
-
-    const createdAt = isRecord(photoRaw) ? photoRaw.createdAt : undefined;
-    details.push({
-      index,
-      path: filePath,
-      width: photo.width,
-      height: photo.height,
-      ...(typeof createdAt === "string" ? { createdAt } : {}),
-    });
-  }
-
-  return await sanitizeNodePhotoResult({ kind: "photos", content, details, imageSanitization });
+  return await createNodePhotoResult({
+    kind: "photos",
+    photos,
+    expectedHost: resolvedNode.remoteIp,
+    modelHasVision,
+    imageSanitization,
+  });
 }
 
 async function executeCameraClip({

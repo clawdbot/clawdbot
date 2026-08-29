@@ -1534,6 +1534,23 @@ describe("readLatestSessionUsageFromTranscript", () => {
     }
   });
 
+  test.each([
+    { name: "an unattributed assistant", identity: {} },
+    {
+      name: "a delivery mirror",
+      identity: { provider: "openclaw", model: "delivery-mirror" },
+    },
+  ])("retains a meaningful zero-cost artifact snapshot for $name", async ({ identity }) => {
+    const sessionId = "usage-zero-cost-artifact";
+    writeTranscript(tmpDir, sessionId, [
+      { message: { role: "assistant", ...identity, usage: { cost: { total: 0 } } } },
+    ]);
+
+    await expect(
+      readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath),
+    ).resolves.toEqual({ costUsd: 0 });
+  });
+
   test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
     const sessionId = "usage-unavailable-upgrade-sequence";
     const oldCumulative = {

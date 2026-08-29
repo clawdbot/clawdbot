@@ -38,6 +38,8 @@ export type CompactEmbeddedAgentSessionParams = {
   clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
+  /** Raw peer observed by the inbound routing owner, before identity linking. */
+  conversationRoutePeerId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -77,6 +79,8 @@ export type CompactEmbeddedAgentSessionParams = {
   bootstrapWorkspaceDir?: string;
   /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   agentDir?: string;
   config?: OpenClawConfig;
   toolOverrides?: SessionToolOverrides;
@@ -110,7 +114,7 @@ export type CompactEmbeddedAgentSessionParams = {
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "mode" | "security" | "ask" | "node" | "nodeCwd">;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   tokenBudget?: number;

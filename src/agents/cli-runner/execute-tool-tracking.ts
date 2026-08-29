@@ -34,7 +34,7 @@ import {
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
 import { readToolResultDetails } from "../tool-result-error.js";
-import { closeClaudeSession } from "./claude-live-registry.js";
+import { closeCliLiveSession } from "./cli-live-session-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -588,7 +588,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       if (params.useManagedClaudeLiveSession) {
         // The child still holds the process-env capture key. If drain cannot
         // prove idle, kill it so a stale key cannot admit later sends.
-        await closeClaudeSession(context, "mcp-capture-rotation");
+        await closeCliLiveSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
         Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),

@@ -5,12 +5,14 @@ import {
   buildMentionRegexes,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -47,7 +49,8 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { pushMessageLine, replyMessageLine } from "./send.js";
+import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
+import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -59,10 +62,7 @@ type PostbackEvent = webhook.PostbackEvent;
 type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
-interface MediaRef {
-  path: string;
-  contentType?: string;
-}
+type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
 const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "image",
@@ -104,6 +104,14 @@ function resolveLineGroupConfig(params: {
   return resolveLineGroupConfigEntry(params.config.groups, {
     groupId: params.groupId,
     roomId: params.roomId,
+  });
+}
+
+function resolveLineRuntimeGroupPolicy({ cfg, account }: LineHandlerContext) {
+  return resolveAllowlistProviderRuntimeGroupPolicy({
+    providerConfigPresent: cfg.channels?.line !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
   });
 }
 
@@ -183,11 +191,7 @@ async function shouldProcessLineEvent(
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
-    resolveAllowlistProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.line !== undefined,
-      groupPolicy: account.config.groupPolicy,
-      defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
-    });
+    resolveLineRuntimeGroupPolicy(context);
   const groupPolicy: GroupPolicy =
     runtimeGroupPolicy === "disabled"
       ? "disabled"
@@ -343,28 +347,6 @@ async function shouldProcessLineEvent(
   return null;
 }
 
-function getLineMentionees(
-  message: MessageEvent["message"],
-): Array<{ type?: string; isSelf?: boolean }> {
-  if (message.type !== "text") {
-    return [];
-  }
-  const mentionees = (
-    message as Record<string, unknown> & {
-      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
-    }
-  ).mention?.mentionees;
-  return Array.isArray(mentionees) ? mentionees : [];
-}
-
-function isLineBotMentioned(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
-}
-
-function hasAnyLineMention(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).length > 0;
-}
-
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   if (event.type === "message") {
     const msg = event.message;
@@ -396,11 +378,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
+      const displayName = sourceInfo.userId
+        ? await getUserDisplayName(sourceInfo.userId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+            groupId,
+            roomId,
+          })
+        : senderId;
+      // History has one sender string; keep the stable ID when display names collide.
+      const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
-          sender: `user:${senderId}`,
+          sender,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
         },
@@ -437,6 +430,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         allMedia.push({
           path: media.path,
           contentType: media.contentType,
+          // LINE names only file messages; the model needs that name to answer
+          // questions that refer to the attachment by it.
+          ...(originalFilename ? { fileName: originalFilename } : {}),
         });
       } catch (err) {
         if (abortSignal?.aborted) {
@@ -499,9 +495,46 @@ async function handleUnfollowEvent(
   logVerbose(`line: user ${userId ?? "unknown"} unfollowed`);
 }
 
-async function handleJoinEvent(event: JoinEvent, _context: LineHandlerContext): Promise<void> {
-  const { groupId, roomId } = getLineSourceInfo(event.source);
+async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): Promise<void> {
+  const { groupId, roomId, isGroup } = getLineSourceInfo(event.source);
+  const conversationId = groupId ?? roomId;
+  if (!isGroup || !conversationId) {
+    return;
+  }
   logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+  const { cfg, account } = context;
+  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+  // LINE allowlists authorize human senders, not the bot's own join; only
+  // conversation policy and the room's enabled state apply here.
+  const roomAllowed =
+    resolveLineRuntimeGroupPolicy(context).groupPolicy !== "disabled" &&
+    groupConfig?.enabled !== false;
+  await reportChannelRoomJoin({
+    cfg,
+    channel: "line",
+    accountId: account.accountId,
+    conversationId,
+    deliverTo: conversationId,
+    route: resolveAgentRoute({
+      cfg,
+      channel: "line",
+      accountId: account.accountId,
+      peer: { kind: "group", id: conversationId },
+    }),
+    roomAllowed,
+    resolveRoomContext: async () => {
+      // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
+      const roomContext = { historyUnavailable: true };
+      const title = groupId
+        ? await getLineGroupName(groupId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+          })
+        : undefined;
+      return title ? { ...roomContext, title } : roomContext;
+    },
+  });
 }
 
 async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext): Promise<void> {

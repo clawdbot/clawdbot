@@ -225,6 +225,7 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    scope: params.request.request.scope ?? undefined,
     sessionKey: params.request.request.sessionKey ?? null,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,

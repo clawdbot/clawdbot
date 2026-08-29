@@ -1,7 +1,15 @@
+import {
+  SessionsCreateParamsSchema,
+  SessionPermissionModeSchema,
+  SessionToolOverridesSchema,
+} from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
+import { formatUiError } from "../format-error.ts";
 import type { SessionCreateParams } from "./create.ts";
 import {
+  listSessionPlacementRecoveryStorageKeys,
   sessionPlacementRecoveryExactStorageKey,
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
@@ -20,7 +28,7 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   worktree: true;
 };
 
-export type SessionPlacementRecovery = {
+type SessionPlacementSubmission = {
   sessionKey: string;
   messageId: string;
   message: string;
@@ -29,15 +37,29 @@ export type SessionPlacementRecovery = {
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
-  phase: "creating" | "dispatching" | "sending";
   createParams?: SessionPlacementCreateParams;
 };
+
+export type SessionPlacementPendingRecovery = SessionPlacementSubmission & {
+  phase: "creating" | "dispatching" | "sending";
+};
+export type SessionPlacementPausedRecovery = SessionPlacementSubmission & {
+  phase: "paused";
+  reason: "not-sent" | "rejected" | "unconfirmed";
+  error: string;
+};
+export type SessionPlacementRecovery =
+  | SessionPlacementPendingRecovery
+  | SessionPlacementPausedRecovery;
+
+const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
   "model",
+  "contextWindow",
   "thinkingLevel",
   "worktreeBaseRef",
   "worktreeName",
@@ -52,6 +74,9 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "worktree",
   "incognito",
   "visibility",
+  "permissionMode",
+  "fastMode",
+  "toolOverrides",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
 
@@ -72,6 +97,12 @@ export function parseSessionPlacementCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.fastMode !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.fastMode, record.fastMode)) ||
+    (record.permissionMode !== undefined &&
+      !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
+    (record.toolOverrides !== undefined &&
+      !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -150,7 +181,16 @@ function validateSessionPlacementRecovery(
     !parseSessionPlacementTarget(value.target) ||
     !isNonEmptyString(value.agentId) ||
     !sessionPlacementRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
-    (value.phase !== "creating" && value.phase !== "dispatching" && value.phase !== "sending") ||
+    (value.phase !== "creating" &&
+      value.phase !== "dispatching" &&
+      value.phase !== "sending" &&
+      value.phase !== "paused") ||
+    (value.phase === "paused" &&
+      ((value.reason !== "not-sent" &&
+        value.reason !== "rejected" &&
+        value.reason !== "unconfirmed") ||
+        !isNonEmptyString(value.error) ||
+        value.error.length > SESSION_PLACEMENT_ERROR_MAX_LENGTH)) ||
     (value.phase === "creating" &&
       !parseSessionPlacementCreateParams(value.createParams, value.sessionKey, value.agentId))
   ) {
@@ -255,18 +295,8 @@ export function listSessionPlacementRecoveries(
     if (!storage) {
       return [];
     }
-    const scopePrefix = sessionPlacementRecoveryScopeStoragePrefix(gatewayUrl, recoveryScope);
-    const keys: string[] = [];
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index);
-      if (key?.startsWith(scopePrefix)) {
-        keys.push(key);
-      }
-    }
-    const sortedKeys = keys.toSorted();
-
     const recoveries = new Map<string, SessionPlacementRecovery>();
-    for (const key of sortedKeys) {
+    for (const key of listSessionPlacementRecoveryStorageKeys(gatewayUrl, recoveryScope)) {
       const recovery = readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope);
       if (!recovery) {
         continue;
@@ -290,7 +320,12 @@ export function migrateSessionPlacementRecoveryScope(
   for (const recovery of listSessionPlacementRecoveries(gatewayUrl, sourceScope)) {
     const destination = { ...recovery, recoveryScope: destinationScope };
     if (writeSessionPlacementRecoveryIfAvailable(destination)) {
-      clearSessionPlacementRecovery(gatewayUrl, sourceScope, recovery.sessionKey);
+      clearSessionPlacementRecovery(
+        gatewayUrl,
+        sourceScope,
+        recovery.sessionKey,
+        recovery.messageId,
+      );
     }
   }
 }
@@ -316,28 +351,23 @@ export function readSessionPlacementRecovery(
 }
 
 export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery): boolean {
+  const { gatewayUrl, recoveryScope, sessionKey } = recovery;
+  if (
+    !gatewayUrl ||
+    !recoveryScope ||
+    !validateSessionPlacementRecovery(recovery, gatewayUrl, recoveryScope, sessionKey)
+  ) {
+    return false;
+  }
   try {
     const storage = globalThis.sessionStorage;
     if (!storage) {
       return false;
     }
-    if (!recovery.gatewayUrl || !recovery.recoveryScope || !recovery.sessionKey) {
-      return false;
-    }
-    const key = sessionPlacementRecoveryExactStorageKey(
-      recovery.gatewayUrl,
-      recovery.recoveryScope,
-      recovery.sessionKey,
-    );
+    const key = sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey);
     storage.setItem(key, JSON.stringify(recovery));
     return Boolean(
-      readOwnedSessionPlacementRecovery(
-        storage,
-        key,
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
+      readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey),
     );
   } catch {
     return false;
@@ -346,13 +376,14 @@ export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery
 
 export function writeSessionPlacementRecoveryIfAvailable(
   recovery: SessionPlacementRecovery,
+  expectedMessageId = recovery.messageId,
 ): boolean {
   const existing = readSessionPlacementRecovery(
     recovery.gatewayUrl,
     recovery.recoveryScope,
     recovery.sessionKey,
   );
-  if (existing && existing.messageId !== recovery.messageId) {
+  if (existing && existing.messageId !== expectedMessageId) {
     return false;
   }
   return writeSessionPlacementRecovery(recovery);
@@ -363,7 +394,7 @@ export function promoteSessionPlacementRecovery(
   recovery: SessionPlacementRecovery,
 ): boolean {
   if (previousSessionKey === recovery.sessionKey) {
-    return writeSessionPlacementRecovery(recovery);
+    return writeSessionPlacementRecoveryIfAvailable(recovery);
   }
   try {
     const storage = globalThis.sessionStorage;
@@ -384,7 +415,10 @@ export function promoteSessionPlacementRecovery(
       previousSessionKey,
     );
     if (!previousRaw || !previous) {
-      return writeSessionPlacementRecovery(recovery);
+      return writeSessionPlacementRecoveryIfAvailable(recovery);
+    }
+    if (previous.messageId !== recovery.messageId) {
+      return false;
     }
     const key = sessionPlacementRecoveryExactStorageKey(
       recovery.gatewayUrl,
@@ -416,6 +450,7 @@ export function clearSessionPlacementRecovery(
   gatewayUrl: string,
   recoveryScope: string,
   expectedSessionKey?: string,
+  expectedMessageId?: string,
 ): void {
   if (!gatewayUrl || !recoveryScope) {
     return;
@@ -431,6 +466,15 @@ export function clearSessionPlacementRecovery(
         recoveryScope,
         expectedSessionKey,
       );
+      // Async completion may belong to an older submission at this session key.
+      // Unconditional session/scope retirement remains available to intentional deletion.
+      if (
+        expectedMessageId &&
+        parseStoredSessionPlacementRecovery(storage.getItem(key) ?? "")?.messageId !==
+          expectedMessageId
+      ) {
+        return;
+      }
       removeSessionPlacementRecoveryRow(storage, key);
       return;
     }
@@ -445,4 +489,46 @@ export function clearSessionPlacementRecovery(
   } catch {
     // Recovery state is best-effort to remove after the durable operation completes.
   }
+}
+
+/** Paused records cannot be executed by older readers, which reject unknown phases. */
+export function pauseSessionPlacementRecovery(
+  recovery: SessionPlacementRecovery,
+  error: string,
+  persistent: boolean,
+  reason: SessionPlacementPausedRecovery["reason"] = recovery.phase === "paused"
+    ? recovery.reason
+    : recovery.phase === "sending"
+      ? "unconfirmed"
+      : "not-sent",
+): SessionPlacementPausedRecovery {
+  const paused: SessionPlacementPausedRecovery = {
+    ...recovery,
+    phase: "paused",
+    reason,
+    error: formatUiError(error).slice(0, SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+  };
+  if (persistent && !writeSessionPlacementRecoveryIfAvailable(paused)) {
+    // Preserve input in memory without leaving an executable pending row when
+    // storage refuses the paused replacement. Never retire a newer submission.
+    const stored = readSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+    );
+    if (stored?.phase !== "paused") {
+      clearSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+        recovery.messageId,
+      );
+    }
+    paused.error =
+      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`.slice(
+        0,
+        SESSION_PLACEMENT_ERROR_MAX_LENGTH,
+      );
+  }
+  return paused;
 }

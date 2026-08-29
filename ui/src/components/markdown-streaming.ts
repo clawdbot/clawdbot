@@ -294,6 +294,9 @@ const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies
 export function repairStreamingMarkdownTail(tail: string, repairStart = 0): string {
   const repaired =
     tail.slice(0, repairStart) + remend(tail.slice(repairStart), streamingRemendOptions);
+  if (!repaired.includes("<")) {
+    return repaired;
+  }
   const detailsStack: DetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(repaired);
   let openFence: FenceMarker | null = null;

@@ -55,8 +55,10 @@ function renderSidebarMenuRadioItem(params: {
       <span slot="details" class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
-      ${params.owner ? renderSessionOwnerChip(params.owner, "row", "owned") : nothing}
-      <span class="session-menu__text">${params.label}</span>
+      <span class="row session-menu__label">
+        ${params.owner ? renderSessionOwnerChip(params.owner, "row", "owned") : nothing}
+        <span class="session-menu__text">${params.label}</span>
+      </span>
     </wa-dropdown-item>
   `;
 }
@@ -67,7 +69,7 @@ function renderSidebarOwnerFilter(
   involvingMe: boolean,
   selfOwnerId: string | null,
 ) {
-  if (owners.length === 0) {
+  if (owners.length === 0 && ownerFilterId === null && !involvingMe) {
     return nothing;
   }
   return html`
@@ -286,6 +288,7 @@ export function renderSidebarSessionSortMenu(params: {
   }
   const groupingOptions = [
     { grouping: "category", label: t("sessionsView.groupByCategory") },
+    { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
     { grouping: "person", label: t("sessionsView.groupByPerson") },
     { grouping: "none", label: t("sessionsView.groupByNone") },
   ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;

@@ -3,13 +3,14 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
-import { ensureLinkedTaskFlowRegistryReady, isTerminalFlowStatus } from "./task-registry-common.js";
+import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-query.js";
 import {
   cloneTaskDeliveryState,
@@ -46,7 +47,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
     !flow ||
     flow.syncMode !== "managed" ||
     flow.cancelRequestedAt == null ||
-    isTerminalFlowStatus(flow.status)
+    isTerminalTaskFlow(flow)
   ) {
     return;
   }
@@ -75,7 +76,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
       !flow ||
       flow.syncMode !== "managed" ||
       flow.cancelRequestedAt == null ||
-      isTerminalFlowStatus(flow.status)
+      isTerminalTaskFlow(flow)
     ) {
       return;
     }

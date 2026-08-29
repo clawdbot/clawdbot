@@ -6,6 +6,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
 ) {
   return createScopedVitestConfig(
     [
+      "extensions/codex/src/app-server/run-attempt.agent-end-context.test.ts",
       "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
       "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
       "extensions/codex/src/app-server/run-attempt.configured-mcp.test.ts",
@@ -15,6 +16,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       "extensions/codex/src/app-server/run-attempt.native-hook-relay.test.ts",
       "extensions/codex/src/app-server/run-attempt.native-hook-relay-retention.test.ts",
       "extensions/codex/src/app-server/run-attempt.notification-burst.test.ts",
+      "extensions/codex/src/app-server/run-attempt.reasoning-effort.test.ts",
       "extensions/codex/src/app-server/run-attempt-runtime.authority.test.ts",
       "extensions/codex/src/app-server/run-attempt.steering.test.ts",
       "extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",

@@ -15,10 +15,10 @@ import type {
   Tool,
   Usage,
 } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeUnsupportedToolResultMedia,
@@ -873,7 +873,7 @@ export function buildAssistantMessage(
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): AsyncGenerator<OllamaChatResponse> {
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let pendingRecordBytes = 0;
   try {
@@ -896,6 +896,7 @@ export async function* parseNdjsonStream(
       }
     }
 
+    buffer += decoder.decode();
     if (buffer.trim()) {
       yield parseOllamaNdjsonRecord(buffer.trim());
     }
@@ -981,7 +982,7 @@ function createRawOllamaStreamFn(
           ? { availableToolNames }
           : {};
         const ollamaMessages = convertToOllamaMessages(
-          context.messages ?? [],
+          transformMessages(context.messages ?? [], model),
           context.systemPrompt,
           toolCallNameOptions,
         );
@@ -1075,9 +1076,10 @@ function createRawOllamaStreamFn(
         try {
           await notifyProviderHttpResponse({ options, response, model });
           if (!response.ok) {
-            const errorText = await readResponseTextLimited(
+            const errorText = await readProviderResponseErrorText(
               response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
+              headers,
             ).catch(() => "unknown error");
             throw Object.assign(new Error(`${response.status} ${errorText}`), {
               status: response.status,

@@ -26,7 +26,8 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithPluginMock(params),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -38,11 +39,13 @@ vi.mock("./model-catalog.runtime.js", () => ({
 }));
 
 let createModelSelectionStateForTest: typeof import("../auto-reply/reply/model-selection.js").createModelSelectionState;
+let resolveSessionModelRef: typeof import("./session-model-ref.js").resolveSessionModelRef;
 
 describe("model-selection plugin runtime normalization", () => {
   beforeAll(async () => {
     ({ createModelSelectionState: createModelSelectionStateForTest } =
       await import("../auto-reply/reply/model-selection.js"));
+    ({ resolveSessionModelRef } = await import("./session-model-ref.js"));
   });
 
   beforeEach(() => {
@@ -242,6 +245,50 @@ describe("model-selection plugin runtime normalization", () => {
     expect(state.provider).toBe("custom-provider");
     expect(state.model).toBe("custom-modern-model");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("keeps resolved persisted overrides off plugin runtime hooks", () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue("incorrectly-renormalized-model");
+
+    expect(
+      resolveSessionModelRef(
+        {},
+        {
+          providerOverride: "custom-provider",
+          modelOverride: "custom-modern-model",
+          modelOverrideRouteResolution: "resolved",
+        },
+        "main",
+      ),
+    ).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes raw persisted overrides through plugin runtime hooks", () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) =>
+      provider === "custom-provider" &&
+      (context as { modelId?: string }).modelId === "custom-legacy-model"
+        ? "custom-modern-model"
+        : undefined,
+    );
+
+    expect(
+      resolveSessionModelRef(
+        {},
+        {
+          providerOverride: "custom-provider",
+          modelOverride: "custom-legacy-model",
+        },
+        "main",
+      ),
+    ).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledOnce();
   });
 
   it("reuses one lifecycle metadata snapshot across auto-reply model normalization", async () => {

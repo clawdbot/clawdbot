@@ -1,5 +1,27 @@
 import type { Page } from "playwright";
 
+export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    let identityMintFailed = false;
+    Object.defineProperty(globalThis.crypto, "getRandomValues", {
+      configurable: true,
+      value(array: Uint8Array<ArrayBuffer>) {
+        if (!identityMintFailed) {
+          identityMintFailed = true;
+          throw new Error("device identity unavailable");
+        }
+        Object.defineProperty(globalThis.crypto, "getRandomValues", {
+          configurable: true,
+          value: getRandomValues,
+        });
+        getRandomValues(array);
+        return array;
+      },
+    });
+  });
+}
+
 export async function openChatSidePanelType(page: Page, label: string): Promise<void> {
   const panel = page.locator(".sidebar-region__right-runtime .side-panel");
   if ((await panel.count()) === 0) {
@@ -34,16 +56,13 @@ export async function activateChatHeaderPanelAction(page: Page, label: string): 
     }
   }
   await action.waitFor({ state: "visible" });
-  const afterHide = menu.locator("wa-dropdown").evaluate(
-    (dropdown) =>
-      new Promise<void>((resolve) => {
-        dropdown.addEventListener("wa-after-hide", () => resolve(), { once: true });
-      }),
-  );
   await action.click();
-  await afterHide;
   await page.waitForFunction(() => {
     const dropdown = document.querySelector("openclaw-chat-header-session-menu wa-dropdown");
-    return !dropdown || Reflect.get(dropdown, "open") !== true;
+    // Web Awesome clears `open` before its hide animation; reopening while the popup is active
+    // skips showMenu setup and can let the previous close hide the newly opened submenu.
+    const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
+    return (!dropdown || Reflect.get(dropdown, "open") !== true) && !popup?.active;
   });
+  await action.waitFor({ state: "hidden" });
 }

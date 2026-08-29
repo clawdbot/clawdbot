@@ -38,6 +38,35 @@ export type SessionTranscriptUpdate = Omit<
 /** Internal transcript update that may identify a transcript without a file path. */
 export type InternalSessionTranscriptUpdate = SessionTranscriptUpdateFields;
 
+/** Persists authoritative run ownership on assistant and tool-result rows. */
+export function attachSessionTranscriptRunId<T>(message: T, runId: string | null | undefined): T {
+  const normalizedRunId = normalizeOptionalString(runId);
+  if (
+    !normalizedRunId ||
+    !isRecord(message) ||
+    (message.role !== "assistant" && message.role !== "toolResult")
+  ) {
+    return message;
+  }
+  const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : {};
+  if (metadata.runId === normalizedRunId) {
+    return message;
+  }
+  return {
+    ...message,
+    __openclaw: { ...metadata, runId: normalizedRunId },
+  };
+}
+
+/** Reads the run identity persisted on a transcript row, when one was attached. */
+export function readSessionTranscriptRunId(message: unknown): string | undefined {
+  if (!isRecord(message)) {
+    return undefined;
+  }
+  const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : {};
+  return normalizeOptionalString(metadata["runId"]);
+}
+
 /** Correlates only terminal assistant rows with the run that actually produced them. */
 export function resolveTerminalAssistantTranscriptRunId(
   message: unknown,

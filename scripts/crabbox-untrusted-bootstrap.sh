@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.15.0"
-pnpm_spec="pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+node_version="24.19.0"
+pnpm_spec="pnpm@12.0.0+sha512.9e2e3dc3911995868dc94b8175c217c27e95408fa03b4a22749778f2b34f773b77cdd3b39ede8171b22fcd53be6a35342e9fac9948a68ef58df6488ce89a7e67"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2
@@ -67,19 +67,35 @@ trap cleanup EXIT
   /usr/bin/grep "  ${archive}\$" SHASUMS256.txt | /usr/bin/sha256sum -c -
 )
 
-sudo /bin/rm -rf -- "$install_root" "$corepack_home"
-sudo /usr/bin/mkdir -p "$install_root" "$corepack_home"
-sudo /usr/bin/tar -xJf "$tmp_dir/$archive" -C "$install_root" --strip-components=1
-sudo /usr/bin/env \
+# Only public toolchain artifacts need shared access; keep caller state private.
+sudo /bin/bash -s -- "$install_root" "$corepack_home" "$tmp_dir/$archive" "$pnpm_spec" <<'INSTALL'
+set -euo pipefail
+umask 022
+install_root="$1"
+corepack_home="$2"
+archive_path="$3"
+pnpm_spec="$4"
+/bin/rm -rf -- "$install_root" "$corepack_home"
+/usr/bin/mkdir -p "$install_root" "$corepack_home"
+/usr/bin/tar -xJf "$archive_path" -C "$install_root" --strip-components=1
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" enable --install-directory "$install_root/bin"
-sudo /usr/bin/env \
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" prepare "$pnpm_spec" --activate
+# Warm from the trusted tool directory, never the untrusted checkout.
+cd "$install_root"
+/usr/bin/env \
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  COREPACK_HOME="$corepack_home" \
+  PATH="$install_root/bin:/usr/bin:/bin" \
+  "$install_root/bin/corepack" "$pnpm_spec" --version
+INSTALL
 
 for tool in node npm npx corepack pnpm pnpx; do
   if [[ -e "$install_root/bin/$tool" ]]; then

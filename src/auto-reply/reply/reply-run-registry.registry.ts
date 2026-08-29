@@ -11,7 +11,6 @@ import {
   replyMessageInjectionTargetOperation,
   replyRunInterruptTargetOperation,
   type ReplyOperation,
-  type ReplyOperationPhase,
   type ReplyRunInterruptTarget,
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
@@ -217,9 +216,7 @@ export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void
     if (normalizeOptionalString(backend?.runId) !== expectedRunId) {
       continue;
     }
-    beforeCancel();
-    backend?.cancel("superseded");
-    return true;
+    return operation.supersede(beforeCancel);
   }
   return false;
 }
@@ -230,12 +227,6 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
-}
-
-export function resolveReplyRunPhaseForSessionId(
-  sessionId: string,
-): ReplyOperationPhase | undefined {
-  return resolveReplyRunForCurrentSessionId(sessionId)?.phase;
 }
 
 export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
@@ -269,11 +260,14 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
   if (!operation || isReplyOperationPreBackendPhase(operation.phase)) {
     return;
   }
-  operation.abortForRestart();
-  // Backend cancellation may synchronously retire this operation and admit a
-  // replacement. Only clear the exact archived operation resolved above.
-  if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
-    operation.complete();
+  try {
+    operation.abortForRestart();
+  } finally {
+    // Backend cancellation may synchronously retire this operation and admit a
+    // replacement. Only clear the exact archived operation resolved above.
+    if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
+      operation.complete();
+    }
   }
 }
 

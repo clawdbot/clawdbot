@@ -21,7 +21,7 @@ describe("QA runtime-pair scenario catalog", () => {
           .length,
       ]),
     );
-    expect(laneCounts).toEqual({ core: 36, extended: 8, soak: 2 });
+    expect(laneCounts).toEqual({ core: 35, extended: 8, soak: 2 });
   });
 
   it("declares every release agentic scenario in the core lane", () => {
@@ -41,7 +41,6 @@ describe("QA runtime-pair scenario catalog", () => {
       "goal-followthrough-live",
       "plugin-hook-health-sentinel",
       "codex-legacy-read-tool-vocabulary",
-      "gateway-restart-multi-live",
       "streaming-final-integrity",
       "cron-model-created-explicit-authority",
       "cron-model-created-one-shot-recurring",
@@ -85,7 +84,7 @@ describe("QA runtime-pair scenario catalog", () => {
     expect(longContextFlow).not.toContain("patchConfig");
   });
 
-  it("selects the pinned gateway restart pair explicitly and implicitly at GPT-5.4", () => {
+  it("keeps the pinned gateway restart scenario owned by the OpenClaw runtime", () => {
     const scenarioId = "gateway-restart-multi-live";
     const scenario = readQaScenarioById(scenarioId);
     const scenarios = readQaScenarioPack().scenarios;
@@ -94,7 +93,8 @@ describe("QA runtime-pair scenario catalog", () => {
       primaryModel: "openai/gpt-5.4",
     };
 
-    expect(scenario.runtimePairLane).toBe("core");
+    expect(scenario.runtimePairLane).toBeUndefined();
+    expect(scenario.execution).toMatchObject({ kind: "flow", runtime: "openclaw" });
     expect(readQaScenarioExecutionConfig(scenarioId)).toMatchObject({
       requiredProviderMode: "live-frontier",
       requiredProvider: "openai",
@@ -119,7 +119,7 @@ describe("QA runtime-pair scenario catalog", () => {
 
     expect(explicitIds).toEqual([scenarioId]);
     expect(implicitIds).toContain(scenarioId);
-    expect(runtimePairLane.scenarioIds).toContain(scenarioId);
+    expect(runtimePairLane.scenarioIds).not.toContain(scenarioId);
     expect(runtimePairLane.excludedLaneScenarios.map((excluded) => excluded.id)).not.toContain(
       scenarioId,
     );

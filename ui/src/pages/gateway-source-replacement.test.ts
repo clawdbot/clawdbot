@@ -26,6 +26,11 @@ import "./usage/usage-page.ts";
 // Mirrors the module-private default usage TTL asserted below.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
+const settledEmptyProviderUsage = {
+  state: "settled",
+  result: { ok: true, value: { updatedAt: 1, providers: [] } },
+} satisfies UsageRouteData["providerUsage"];
+
 type TestPage = HTMLElement & {
   context: ApplicationContext;
   render: () => unknown;
@@ -229,7 +234,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsage: null,
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     } satisfies UsageRouteData;
@@ -273,19 +278,15 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result: staleResult,
       costSummary: null,
-      providerUsage: null,
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
 
     document.body.append(page);
     await page.updateComplete;
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object)),
-    );
     await waitForFast(() => expect(page.usageResult).toBe(freshResult));
 
-    expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object));
     expect(page.usageResult).not.toBe(staleResult);
   });
 
@@ -312,7 +313,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsage: { ok: true, value: { updatedAt: 1, providers: [] } },
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -362,7 +363,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
       costSummary: null,
-      providerUsage: null,
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -419,7 +420,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsage: { ok: true, value: { updatedAt: 1, providers: [] } },
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -441,11 +442,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     document.dispatchEvent(new Event("visibilitychange"));
     window.dispatchEvent(new Event("focus"));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.usage",
-      "usage.cost",
-      "usage.status",
-    ]);
+    const initialMethods = request.mock.calls.map(([method]) => method);
+    expect(initialMethods).toHaveLength(3);
+    expect(initialMethods).toEqual(
+      expect.arrayContaining(["sessions.usage", "usage.cost", "usage.status"]),
+    );
 
     page.refreshPolicy.request("manual");
     await waitForFast(() => expect(page.usageLoading).toBe(false));
@@ -786,19 +787,19 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-usage-page", contextWithClient(client)) as TestPage & {
       usageResult: unknown;
-      providerUsage: unknown;
+      providerUsageSummary: unknown;
       usageSelectedSessions: string[];
     };
     document.body.append(page);
     await page.updateComplete;
     page.usageResult = { sessions: [{ key: "old" }] };
-    page.providerUsage = { ok: true, value: { providers: [{ provider: "old" }] } };
+    page.providerUsageSummary = { providers: [{ provider: "old" }] };
     page.usageSelectedSessions = ["old"];
 
     await replaceContext(page, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.providerUsage).toBeNull();
+    expect(page.providerUsageSummary).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });
 

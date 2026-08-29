@@ -18,7 +18,10 @@ vi.mock("./doctor-auth-flat-profiles.js", () => ({
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
-  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
+    config: cfg,
+    retiredProfileCleanupPlans: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-oauth-sidecar.js", () => ({

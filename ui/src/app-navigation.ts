@@ -441,24 +441,24 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 }
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
- * Offline replaces the approval count (a stale queue is not actionable) and
- * carries the pending-outbox total; titles already ending in the brand
+ * A disconnected Gateway replaces the approval count (a stale queue is not
+ * actionable) and carries the pending-outbox total; titles already ending in the brand
  * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
-  offline?: boolean;
+  gatewayDisconnected?: boolean;
   queuedCount?: number;
 }): string {
   const base = options.context.endsWith("OpenClaw")
     ? options.context
     : `${options.context} — OpenClaw`;
-  if (options.offline) {
+  if (options.gatewayDisconnected) {
     const queued =
       options.queuedCount && options.queuedCount > 0
         ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
         : "";
-    return `(${t("common.offline")}${queued}) ${base}`;
+    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
   }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;

@@ -36,17 +36,24 @@ built entries:
 
 - `extensions` and `setupEntry` are source entries, used for workspace and git
   checkout development.
-- `runtimeExtensions` and `runtimeSetupEntry` are preferred for installed
-  packages: they let npm packages skip runtime TypeScript compilation.
+- `runtimeExtensions` and `runtimeSetupEntry` select the built entries instead
+  of the corresponding source entries.
 - `runtimeExtensions`, when present, must match `extensions` in array length
   (entries pair positionally). `runtimeSetupEntry` requires `setupEntry`.
 - If a `runtimeExtensions`/`runtimeSetupEntry` artifact is declared but
-  missing, install/discovery fails with a packaging error; OpenClaw does not
-  silently fall back to source. Source fallback (below) only applies when no
-  runtime entry is declared at all.
-- If an installed package declares only a TypeScript source entry, OpenClaw
-  looks for a matching built `dist/*.js` (or `.mjs`/`.cjs`) peer and uses it;
-  otherwise it falls back to the TypeScript source.
+  missing, installation fails and discovery reports a packaging error for that
+  entry; OpenClaw does not silently fall back to source.
+- Without an explicit runtime entry, package discovery through
+  `plugins.load.paths` or global roots looks for matching JavaScript peers under
+  `dist/` first, then beside the TypeScript source entry, trying `.js`, `.mjs`,
+  and `.cjs` in that order at each location.
+- Package installation and managed installed-package discovery require compiled
+  output for TypeScript extension and setup entries. Missing compiled output is
+  a packaging error, not a reason to fall back to TypeScript.
+- Trusted local/source development paths can use TypeScript when no runtime
+  entry is declared. These include workspace plugins, explicit local load paths,
+  untracked local plugin directories, and linked source checkouts. Workspace
+  discovery keeps the source entry rather than inferring built peers.
 - All entry paths must stay inside the plugin package directory. Runtime
   entries and inferred built-JS peers do not make an escaping `extensions` or
   `setupEntry` source path valid.
@@ -303,9 +310,11 @@ CLI registration:
   `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
   machine-readable stdout modes that are not selected solely by `--json`.
   Parse command tokens with `getRootOptionAwareCommandPath` from
-  `openclaw/plugin-sdk/cli-argv`. Keep the resolver in lightweight CLI metadata
-  and share it with full registration. Nested descriptors do not expose this
-  field.
+  `openclaw/plugin-sdk/cli-argv`. Keep the descriptor in a lightweight
+  plugin-local module and reuse it from both `cli-metadata.ts` and full
+  registration; do not import runtime barrels to construct metadata.
+  Meeting runtime shells accept that descriptor through `cli.descriptor`.
+  Nested descriptors do not expose `machineOutput`.
 - Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
   they land under `openclaw nodes` (equivalent to
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).
@@ -391,14 +400,16 @@ limited to config-only routes or methods required by that setup flow.
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode               | When                                               | What to register                                                                                                |
-| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Everything                                                                                                      |
-| `"discovery"`      | Read-only capability discovery                     | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                        |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                       |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed during setup                                      |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                            |
+| Mode               | When                                               | Runtime     | What to register                                                                                                |
+| ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
+| `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
+| `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
+| `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
+
+In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember

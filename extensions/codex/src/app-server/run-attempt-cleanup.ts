@@ -45,6 +45,12 @@ export async function cleanupCodexAttempt(
   // Exact-thread cron authority exists only while this creator turn owns the
   // live client/thread. Retained model callbacks must fail after cleanup begins.
   prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
+  // Finalization can throw before freezing. Close cancellation admission before
+  // any teardown await so it cannot replace the cleanup promise being joined.
+  freezeRunTerminalOutcome();
+  // Join late cancellation before releasing the subscription, but do not let a
+  // failed terminal RPC skip resource cleanup. Surface that failure below.
+  await state.abortCleanup.catch(() => undefined);
   try {
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
@@ -101,12 +107,14 @@ export async function cleanupCodexAttempt(
               resourceState.client,
               resourceState.thread.threadId,
               resourceState.thread.liveThreadOwnership?.release ??
-                (async (threadId) => {
+                (async (threadId, assertCurrent) => {
                   const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
                     threadId,
                     timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+                    assertCurrent,
                   });
                   if (!released) {
+                    assertCurrent?.();
                     await closeCodexStartupClientBestEffort(resourceState.client);
                     throw new CodexAppServerUnsafeSubscriptionError(
                       `Codex retained thread subscription could not be released: ${threadId}`,
@@ -147,7 +155,21 @@ export async function cleanupCodexAttempt(
       userInputBridgeRef.current?.cancelPending(),
     );
     await runCleanupStep("codex-turn-watch-clear", () => turnWatches.clearAllTimers());
+    await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
+      const cleanupReason = terminalState.turnSucceeded
+        ? "completion"
+        : state.timedOut
+          ? "timeout"
+          : runAbortController.signal.aborted
+            ? "cancel"
+            : "error";
+      const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
+      await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
+    });
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
+    await runCleanupStep("codex-transcript-checkpoint", () =>
+      activeTurn.activeProjector.transcriptCheckpoint.flush(true),
+    );
     await runCleanupStep(
       "codex-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
@@ -179,7 +201,6 @@ export async function cleanupCodexAttempt(
       runAbortController.signal.removeEventListener("abort", abortListener);
     });
     await runCleanupStep("codex-steering-cancel", () => steeringQueueRef.current?.cancel());
-    await runCleanupStep("codex-terminal-freeze", freezeRunTerminalOutcome);
     await runCleanupStep("codex-reply-backend-detach", () =>
       params.replyOperation?.detachBackend(handle),
     );
@@ -187,4 +208,5 @@ export async function cleanupCodexAttempt(
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     });
   }
+  await state.abortCleanup;
 }

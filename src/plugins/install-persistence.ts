@@ -484,6 +484,7 @@ export async function persistPluginInstall(params: {
   warningMessage?: string;
   runtime?: RuntimeEnv;
   persistenceLogger?: PluginInstallLogger;
+  onCommitted?: () => void;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
@@ -624,6 +625,8 @@ export async function persistPluginInstall(params: {
       }),
     { command: "install" },
   );
+  // The source transaction must survive later cleanup or registry-refresh failures.
+  params.onCommitted?.();
   if (replacedInstallRemoval) {
     const removalResult = await tracePluginLifecyclePhaseAsync(
       "replaced install cleanup",

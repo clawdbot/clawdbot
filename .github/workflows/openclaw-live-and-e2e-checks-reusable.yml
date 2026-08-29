@@ -134,6 +134,15 @@ on:
       candidate_artifact_json:
         description: Immutable package and Docker image artifact tuple
         value: ${{ jobs.prepare_docker_e2e_image.outputs.candidate_artifact_json }}
+      candidate_request_json:
+        description: Canonical full release candidate request
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.candidate_request_json }}
+      candidate_request_sha256:
+        description: Canonical full release candidate request SHA-256
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+      candidate_evidence_json:
+        description: Immutable full release candidate producer evidence binding
+        value: ${{ jobs.bind_full_release_candidate_evidence.outputs.candidate_evidence_json }}
       package_artifact_name:
         description: Immutable package artifact name
         value: ${{ jobs.prepare_docker_e2e_image.outputs.package_artifact_name }}
@@ -215,6 +224,16 @@ on:
         type: boolean
       prepare_only:
         description: Prepare immutable package and Docker image artifacts without running validation lanes
+        required: false
+        default: false
+        type: boolean
+      emit_candidate_evidence:
+        description: Emit content-addressed full release candidate producer evidence
+        required: false
+        default: false
+        type: boolean
+      release_soak:
+        description: Effective release soak policy recorded in candidate evidence
         required: false
         default: false
         type: boolean
@@ -451,6 +470,8 @@ on:
         required: false
       DEEPINFRA_API_KEY:
         required: false
+      DEEPSEEK_API_KEY:
+        required: false
       DASHSCOPE_API_KEY:
         required: false
       GROQ_API_KEY:
@@ -534,7 +555,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -583,9 +604,13 @@ jobs:
           NODE
 
       - name: Checkout workflow repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Ref trust needs every branch and tag, but no historical file blobs.
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
 
       - name: Validate selected ref
         id: validate
@@ -841,7 +866,11 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-openai-gpt56-ultra "stable full"
               add_profile_suite native-live-src-gateway-profiles-fireworks "full"
               add_profile_suite native-live-src-gateway-profiles-deepseek "full"
-              add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go "stable full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-deepseek-glm "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-kimi "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-mimo "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-minimax-qwen "full"
               add_profile_suite native-live-src-gateway-profiles-opencode-go-smoke "stable"
               add_profile_suite native-live-src-gateway-profiles-openrouter "full"
               add_profile_suite native-live-src-gateway-profiles-xai "full"
@@ -879,6 +908,10 @@ jobs:
               add_profile_suite native-live-extensions-media-music-google "full"
               add_profile_suite native-live-extensions-media-music-minimax "full"
               add_profile_suite native-live-extensions-media-video "full"
+              add_profile_suite native-live-extensions-media-video-a "full"
+              add_profile_suite native-live-extensions-media-video-b "full"
+              add_profile_suite native-live-extensions-media-video-c "full"
+              add_profile_suite native-live-extensions-media-video-d "full"
             fi
           fi
 
@@ -910,7 +943,7 @@ jobs:
       live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -941,7 +974,7 @@ jobs:
       OPENCLAW_LIVE_TEST: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -991,7 +1024,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1039,7 +1072,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1081,12 +1114,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.92
+          export OPENSHELL_VERSION=v0.0.109
           installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
           trap 'rm -f "$installer_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/2d108818f84be568e63232d5d0aba53775cea4f7/install.sh
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/8d67250a5d17348eb96c4fa46226b06d8041f2ba/install.sh
           sh "$installer_path"
           openshell --version
 
@@ -1197,6 +1230,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1255,7 +1289,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -1263,7 +1297,7 @@ jobs:
 
       - name: Checkout trusted release harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1537,7 +1571,7 @@ jobs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1572,6 +1606,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
+      max-parallel: 32
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -1584,6 +1619,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1633,21 +1669,21 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1933,14 +1969,14 @@ jobs:
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -2109,6 +2145,7 @@ jobs:
           if-no-files-found: error
 
   prepare_docker_e2e_image:
+    name: Prepare shared Docker E2E image
     needs: validate_selected_ref
     if: inputs.prepare_only || inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
     continue-on-error: ${{ inputs.advisory }}
@@ -2120,6 +2157,8 @@ jobs:
       packages: read
     outputs:
       candidate_artifact_json: ${{ steps.candidate_manifest.outputs.json }}
+      candidate_request_json: ${{ steps.candidate_request.outputs.json }}
+      candidate_request_sha256: ${{ steps.candidate_request.outputs.sha256 }}
       image: ${{ steps.image.outputs.image }}
       bare_image: ${{ steps.image.outputs.bare_image }}
       functional_image: ${{ steps.image.outputs.functional_image }}
@@ -2154,20 +2193,84 @@ jobs:
       image_artifact_digest: ${{ steps.upload_image_artifact.outputs.artifact-digest || inputs.shared_image_artifact_digest }}
       image_artifact_run_id: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_id || inputs.shared_image_artifact_run_id }}
       image_artifact_run_attempt: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_attempt || inputs.shared_image_artifact_run_attempt }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      producer_job_id: ${{ steps.producer_identity.outputs.job_id }}
+      producer_job_name: ${{ steps.producer_identity.outputs.job_name }}
+      producer_run_attempt: ${{ steps.producer_identity.outputs.run_attempt }}
+      producer_run_id: ${{ steps.producer_identity.outputs.run_id }}
+      producer_workflow_path: ${{ steps.producer_identity.outputs.workflow_path }}
+      producer_workflow_repository: ${{ steps.producer_identity.outputs.workflow_repository }}
+      producer_workflow_sha: ${{ steps.producer_identity.outputs.workflow_sha }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
     steps:
+      - name: Capture trusted producer identity
+        id: producer_identity
+        if: inputs.emit_candidate_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          TOOLING_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          producer_job_id="$(
+            jq -er '.check_run_id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$JOB_CONTEXT"
+          )"
+          producer_workflow_path="$(
+            jq -er \
+              '.workflow_file_path | select(test("^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"))' \
+              <<< "$JOB_CONTEXT"
+          )"
+          producer_workflow_repository="$(
+            jq -er \
+              '.workflow_repository | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))' \
+              <<< "$JOB_CONTEXT"
+          )"
+          producer_workflow_sha="$(
+            jq -er '.workflow_sha | select(test("^[a-f0-9]{40}$"))' <<< "$JOB_CONTEXT"
+          )"
+          [[ "$producer_workflow_repository" == "$TOOLING_REPOSITORY" &&
+            "$producer_workflow_sha" == "$TOOLING_SHA" ]] || {
+              echo "Current job workflow identity does not match the trusted release harness." >&2
+              exit 1
+            }
+          producer_job_name="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${producer_job_id}" |
+              jq -er \
+                --arg id "$producer_job_id" \
+                --arg run_id "$GITHUB_RUN_ID" \
+                --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+                'select(
+                  (.id | tostring) == $id and
+                  (.run_id | tostring) == $run_id and
+                  (.run_attempt | tostring) == $run_attempt and
+                  .status == "in_progress" and
+                  .conclusion == null
+                ) | .name | select(type == "string" and length > 0)'
+          )"
+          {
+            printf 'job_id=%s\n' "$producer_job_id"
+            printf 'job_name=%s\n' "$producer_job_name"
+            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'workflow_path=%s\n' "$producer_workflow_path"
+            printf 'workflow_repository=%s\n' "$producer_workflow_repository"
+            printf 'workflow_sha=%s\n' "$producer_workflow_sha"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -2222,7 +2325,24 @@ jobs:
           set -euo pipefail
           mkdir -p .artifacts/docker-tests
 
-          if [[ "$PREPARE_ONLY" == "true" || "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+          if [[ "$PREPARE_ONLY" == "true" ]]; then
+            # Shared artifacts serve both release-path and plugin prerelease consumers.
+            # Plan their union here without expanding either child's execution scope.
+            preparation_lanes="$(node --input-type=module <<'NODE'
+          import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
+          import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";
+          const releaseLanes = allReleasePathLanes({
+            includeOpenWebUI: process.env.INCLUDE_OPENWEBUI === "true",
+            releaseProfile: process.env.RELEASE_TEST_PROFILE,
+          });
+          console.log([...new Set([
+            ...releaseLanes.map(({ name }) => name),
+            ...createPluginPrereleaseTestPlan().dockerLanes,
+          ])].join(" "));
+          NODE
+            )"
+            export OPENCLAW_DOCKER_ALL_LANES="$preparation_lanes"
+          elif [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
             export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
           elif [[ -n "$LANES" ]]; then
@@ -2243,7 +2363,51 @@ jobs:
                 exit 1
               }
           fi
-          echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
+          printf 'plan_sha256=%s\n' "$(sha256sum "$plan_path" | awk '{print $1}')" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Build full release candidate request
+        id: candidate_request
+        if: inputs.emit_candidate_evidence
+        env:
+          ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+          RELEASE_PROFILE: ${{ inputs.release_test_profile }}
+          RELEASE_SOAK: ${{ inputs.release_soak }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
+          UPGRADE_SURVIVOR_BASELINES: ${{ inputs.published_upgrade_survivor_baselines }}
+          UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_dir="${RUNNER_TEMP}/full-release-candidate"
+          mkdir -p "$request_dir"
+          jq -cn \
+            --arg repository "$TARGET_REPOSITORY" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg toolingSha "$TOOLING_SHA" \
+            --arg releaseProfile "$RELEASE_PROFILE" \
+            --argjson releaseSoak "$RELEASE_SOAK" \
+            --arg upgradeSurvivorBaseline "$UPGRADE_SURVIVOR_BASELINE" \
+            --arg upgradeSurvivorBaselines "$UPGRADE_SURVIVOR_BASELINES" \
+            --arg upgradeSurvivorScenarios "$UPGRADE_SURVIVOR_SCENARIOS" \
+            --argjson allowFrozenTargetScenarioOmissions "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
+            --argjson allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --arg sharedImagePolicy "$SHARED_IMAGE_POLICY" \
+            '$ARGS.named' > "$request_dir/request-input.json"
+          result="$(
+            node .release-harness/scripts/full-release-candidate-contract.mjs request \
+              --input "$request_dir/request-input.json" \
+              --output "$request_dir/request.json"
+          )"
+          {
+            printf 'json=%s\n' "$(jq -er '.requestJson' <<< "$result")"
+            printf 'sha256=%s\n' "$(jq -er '.requestSha256' <<< "$result")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate Docker E2E package source metadata
         if: (!inputs.prepare_only) && steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'
@@ -2796,6 +2960,413 @@ jobs:
           fi
           echo "json=$json" >> "$GITHUB_OUTPUT"
 
+  bind_full_release_candidate_evidence:
+    name: Bind full release candidate evidence
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.emit_candidate_evidence && needs.prepare_docker_e2e_image.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      candidate_evidence_json: ${{ steps.candidate_binding.outputs.json }}
+    steps:
+      # Start from a statically trusted checkout. The following step validates job context
+      # locally before restoring the exact called-workflow revision.
+      - name: Checkout trusted release harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          fetch-depth: 1
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Restore exact trusted workflow revision
+        id: workflow
+        env:
+          EXPECTED_WORKFLOW_PATH: .github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          HARNESS_PATH: .release-harness
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const expectedWorkflowPath = process.env.EXPECTED_WORKFLOW_PATH ?? "";
+          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          const runAttempt = process.env.RUN_ATTEMPT ?? "";
+          const runId = process.env.RUN_ID ?? "";
+          const jobId = String(job.check_run_id ?? "");
+          if (!/^[1-9][0-9]*$/u.test(jobId)) {
+            throw new Error("job.check_run_id must be a positive decimal");
+          }
+          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
+            throw new Error("job.workflow_repository must exactly match github.repository");
+          }
+          if (
+            expectedWorkflowPath !==
+              ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml" ||
+            job.workflow_file_path !== expectedWorkflowPath
+          ) {
+            throw new Error("job.workflow_file_path must identify the candidate publisher workflow");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          if (!/^[1-9][0-9]*$/u.test(runId) || !/^[1-9][0-9]*$/u.test(runAttempt)) {
+            throw new Error("publisher run identity must contain positive decimals");
+          }
+          if (harnessPath !== ".release-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const currentJob = JSON.parse(
+            execFileSync("gh", ["api", `repos/${repository}/actions/jobs/${jobId}`], {
+              encoding: "utf8",
+            }),
+          );
+          if (
+            String(currentJob.id ?? "") !== jobId ||
+            String(currentJob.run_id ?? "") !== runId ||
+            String(currentJob.run_attempt ?? "") !== runAttempt ||
+            currentJob.head_sha !== job.workflow_sha ||
+            currentJob.status !== "in_progress" ||
+            currentJob.conclusion !== null
+          ) {
+            throw new Error("candidate publisher job metadata does not match the current job");
+          }
+          if (
+            typeof currentJob.name !== "string" ||
+            currentJob.name.length === 0 ||
+            /[\r\n]/u.test(currentJob.name)
+          ) {
+            throw new Error("candidate publisher job name is invalid");
+          }
+          const git = (...args) =>
+            execFileSync("git", ["-C", harnessPath, ...args], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "inherit"],
+            }).trim();
+          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
+          if (remote !== `https://github.com/${repository}`) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          execFileSync(
+            "git",
+            [
+              "-C",
+              harnessPath,
+              "fetch",
+              "--no-tags",
+              "--no-recurse-submodules",
+              "--depth=1",
+              "origin",
+              job.workflow_sha,
+            ],
+            { stdio: "inherit" },
+          );
+          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
+            stdio: "inherit",
+          });
+          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
+            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          appendFileSync(
+            outputPath,
+            [
+              `job_id=${jobId}`,
+              `job_name=${currentJob.name}`,
+              `repository=${repository}`,
+              `run_attempt=${runAttempt}`,
+              `run_id=${runId}`,
+              `sha=${job.workflow_sha}`,
+              `workflow_path=${expectedWorkflowPath}`,
+              "",
+            ].join("\n"),
+          );
+          NODE
+
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Create full release candidate evidence
+        id: candidate_evidence
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_docker_e2e_image.outputs.candidate_artifact_json }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.prepare_docker_e2e_image.outputs.candidate_request_json }}
+          CANDIDATE_REQUEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.plan_sha256 }}
+          PRODUCER_JOB_ID: ${{ needs.prepare_docker_e2e_image.outputs.producer_job_id }}
+          PRODUCER_JOB_NAME: ${{ needs.prepare_docker_e2e_image.outputs.producer_job_name }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.producer_run_attempt }}
+          PRODUCER_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.producer_run_id }}
+          PRODUCER_WORKFLOW_PATH: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_path }}
+          PRODUCER_WORKFLOW_REPOSITORY: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_repository }}
+          PRODUCER_WORKFLOW_SHA: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_sha }}
+          PUBLISHER_JOB_ID: ${{ steps.workflow.outputs.job_id }}
+          PUBLISHER_JOB_NAME: ${{ steps.workflow.outputs.job_name }}
+          PUBLISHER_RUN_ATTEMPT: ${{ steps.workflow.outputs.run_attempt }}
+          PUBLISHER_RUN_ID: ${{ steps.workflow.outputs.run_id }}
+          PUBLISHER_WORKFLOW_PATH: ${{ steps.workflow.outputs.workflow_path }}
+          PUBLISHER_WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          PUBLISHER_WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          REQUIRED_PACKAGES_JSON: ${{ needs.prepare_docker_e2e_image.outputs.required_prepublish_plugin_packages }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          TOOLING_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/full-release-candidate"
+          mkdir -p "$evidence_dir"
+          jq -e 'type == "array" and length > 0' <<< "$REQUIRED_PACKAGES_JSON" >/dev/null
+          [[ "$PRODUCER_RUN_ID" == "$GITHUB_RUN_ID" &&
+            "$PRODUCER_RUN_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] || {
+              echo "Candidate evidence must be bound in the producer run attempt." >&2
+              exit 1
+            }
+          [[ "$PRODUCER_WORKFLOW_REPOSITORY" == "$TOOLING_REPOSITORY" &&
+            "$PRODUCER_WORKFLOW_SHA" == "$TOOLING_SHA" ]] || {
+              echo "Producer workflow identity does not match the trusted release harness." >&2
+              exit 1
+            }
+          [[ "$PUBLISHER_RUN_ID" == "$PRODUCER_RUN_ID" &&
+            "$PUBLISHER_RUN_ATTEMPT" == "$PRODUCER_RUN_ATTEMPT" &&
+            "$PUBLISHER_WORKFLOW_REPOSITORY" == "$TOOLING_REPOSITORY" &&
+            "$PUBLISHER_WORKFLOW_SHA" == "$TOOLING_SHA" ]] || {
+              echo "Publisher workflow identity does not match the producer attempt." >&2
+              exit 1
+            }
+          node .release-harness/scripts/verify-full-release-producer-job.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --job-id "$PRODUCER_JOB_ID" \
+            --job-name "$PRODUCER_JOB_NAME" \
+            --run-id "$PRODUCER_RUN_ID" \
+            --run-attempt "$PRODUCER_RUN_ATTEMPT"
+          artifact_expiry() {
+            local label="$1"
+            local id="$2"
+            local name="$3"
+            local digest="$4"
+            local run_id="$5"
+            local run_attempt="$6"
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+              verify-upload "$label" "$id" "$name" "$digest" "$run_id" "$run_attempt"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" |
+              jq -er \
+                --arg id "$id" \
+                --arg name "$name" \
+                --arg digest "sha256:${digest}" \
+                --arg run_id "$run_id" \
+                'select(
+                  (.id | tostring) == $id and
+                  .name == $name and
+                  .digest == $digest and
+                  .expired == false and
+                  (.workflow_run.id | tostring) == $run_id
+                ) | .expires_at'
+          }
+          package_expiry="$(
+            artifact_expiry \
+              "OpenClaw package" \
+              "$(jq -er '.packageArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          )"
+          registry_expiry="$(
+            artifact_expiry \
+              "Prerelease plugin registry" \
+              "$(jq -er '.prepublishPluginRegistryArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          )"
+          image_expiry="$(
+            artifact_expiry \
+              "Shared Docker image" \
+              "$(jq -er '.imageArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          )"
+          jq -cn \
+            --argjson request "$CANDIDATE_REQUEST_JSON" \
+            --arg requestSha256 "$CANDIDATE_REQUEST_SHA256" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflowPath "$PRODUCER_WORKFLOW_PATH" \
+            --arg workflowSha "$PRODUCER_WORKFLOW_SHA" \
+            --arg runId "$PRODUCER_RUN_ID" \
+            --arg runAttempt "$PRODUCER_RUN_ATTEMPT" \
+            --arg jobId "$PRODUCER_JOB_ID" \
+            --arg jobName "$PRODUCER_JOB_NAME" \
+            --arg publisherRepository "$PUBLISHER_WORKFLOW_REPOSITORY" \
+            --arg publisherWorkflowPath "$PUBLISHER_WORKFLOW_PATH" \
+            --arg publisherWorkflowSha "$PUBLISHER_WORKFLOW_SHA" \
+            --arg publisherRunId "$PUBLISHER_RUN_ID" \
+            --arg publisherRunAttempt "$PUBLISHER_RUN_ATTEMPT" \
+            --arg publisherJobId "$PUBLISHER_JOB_ID" \
+            --arg publisherJobName "$PUBLISHER_JOB_NAME" \
+            --arg planSha256 "$PLAN_SHA256" \
+            --argjson requiredPackages "$REQUIRED_PACKAGES_JSON" \
+            --argjson candidate "$CANDIDATE_ARTIFACT_JSON" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg packageExpiresAt "$package_expiry" \
+            --arg registryExpiresAt "$registry_expiry" \
+            --arg imageExpiresAt "$image_expiry" \
+            '{
+              request: $request,
+              requestSha256: $requestSha256,
+              producer: {
+                repository: $repository,
+                workflowPath: $workflowPath,
+                workflowSha: $workflowSha,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                jobId: $jobId,
+                jobName: $jobName
+              },
+              publisher: {
+                repository: $publisherRepository,
+                workflowPath: $publisherWorkflowPath,
+                workflowSha: $publisherWorkflowSha,
+                runId: $publisherRunId,
+                runAttempt: $publisherRunAttempt,
+                jobId: $publisherJobId,
+                jobName: $publisherJobName
+              },
+              preparation: {
+                planSha256: $planSha256,
+                requiredPrepublishPluginPackages: $requiredPackages
+              },
+              package: {
+                artifact: {
+                  name: $candidate.packageArtifactName,
+                  id: $candidate.packageArtifactId,
+                  digest: $candidate.packageArtifactDigest,
+                  expiresAt: $packageExpiresAt,
+                  runId: $candidate.packageArtifactRunId,
+                  runAttempt: $candidate.packageArtifactRunAttempt
+                },
+                fileName: $candidate.packageFileName,
+                sourceSha: $candidate.packageSourceSha,
+                packageSha256: $candidate.packageSha256,
+                version: $candidate.packageVersion
+              },
+              prepublishPluginRegistry: {
+                artifact: {
+                  name: $candidate.prepublishPluginRegistryArtifactName,
+                  id: $candidate.prepublishPluginRegistryArtifactId,
+                  digest: $candidate.prepublishPluginRegistryArtifactDigest,
+                  expiresAt: $registryExpiresAt,
+                  runId: $candidate.prepublishPluginRegistryArtifactRunId,
+                  runAttempt: $candidate.prepublishPluginRegistryArtifactRunAttempt
+                },
+                manifestSha256: $candidate.prepublishPluginRegistryManifestSha256,
+                sourceSha: $targetSha
+              },
+              sharedImage: {
+                artifact: {
+                  name: $candidate.imageArtifactName,
+                  id: $candidate.imageArtifactId,
+                  digest: $candidate.imageArtifactDigest,
+                  expiresAt: $imageExpiresAt,
+                  runId: $candidate.imageArtifactRunId,
+                  runAttempt: $candidate.imageArtifactRunAttempt
+                },
+                archiveSha256: $candidate.imageArchiveSha256,
+                packageSha256: $candidate.packageSha256
+              }
+            }' > "$evidence_dir/manifest-input.json"
+          result="$(
+            node .release-harness/scripts/full-release-candidate-contract.mjs manifest \
+              --input "$evidence_dir/manifest-input.json" \
+              --output "$evidence_dir/full-release-candidate.json"
+          )"
+          printf 'manifest_sha256=%s\n' "$(jq -er '.manifestSha256' <<< "$result")" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Upload full release candidate evidence
+        id: upload_candidate_evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-release-candidate-v2-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          path: ${{ runner.temp }}/full-release-candidate/full-release-candidate.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
+      - name: Bind full release candidate evidence
+        id: candidate_binding
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload_candidate_evidence.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload_candidate_evidence.outputs.artifact-id }}
+          ARTIFACT_NAME: full-release-candidate-v2-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_json=""
+          artifact_error="${RUNNER_TEMP}/full-release-candidate/artifact-metadata-error"
+          for attempt in 1 2 3; do
+            if artifact_json="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" 2>"$artifact_error"
+            )"; then
+              break
+            fi
+            if [[ "$attempt" == "3" ]] ||
+              ! grep -Eiq 'HTTP 404|status code 404|Not Found' "$artifact_error"; then
+              cat "$artifact_error" >&2
+              echo "Full release candidate evidence metadata is unavailable." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 2))"
+          done
+          artifact_expires_at="$(
+            jq -er \
+              --arg id "$ARTIFACT_ID" \
+              --arg name "$ARTIFACT_NAME" \
+              --arg digest "sha256:${ARTIFACT_DIGEST}" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              'select(
+                (.id | tostring) == $id and
+                .name == $name and
+                .digest == $digest and
+                .expired == false and
+                (.workflow_run.id | tostring) == $run_id
+              ) | .expires_at' <<< "$artifact_json"
+          )"
+          binding="$(
+            node .release-harness/scripts/full-release-candidate-contract.mjs binding \
+              --manifest "${RUNNER_TEMP}/full-release-candidate/full-release-candidate.json" \
+              --artifact-name "$ARTIFACT_NAME" \
+              --artifact-id "$ARTIFACT_ID" \
+              --artifact-digest "$ARTIFACT_DIGEST" \
+              --artifact-expires-at "$artifact_expires_at" \
+              --artifact-run-id "$GITHUB_RUN_ID" \
+              --artifact-run-attempt "$GITHUB_RUN_ATTEMPT"
+          )"
+          printf 'json=%s\n' "$(jq -cer . <<< "$binding")" >> "$GITHUB_OUTPUT"
+
   docker_e2e_image_ready:
     needs: prepare_docker_e2e_image
     if: always() && needs.prepare_docker_e2e_image.result != 'skipped'
@@ -2838,7 +3409,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -2892,13 +3463,13 @@ jobs:
 
       - name: Setup Docker builder
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       - name: Build shared live-test image
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           file: ./Dockerfile
@@ -2917,7 +3488,7 @@ jobs:
       # target must not accidentally package the current checkout into its image.
       - name: Checkout trusted release harness
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3003,6 +3574,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3039,7 +3611,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -3047,7 +3619,7 @@ jobs:
 
       - name: Checkout trusted live Docker harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3175,6 +3747,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3209,14 +3782,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted live Docker harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3598,6 +4171,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3641,14 +4215,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -3764,7 +4338,7 @@ jobs:
             profiles: stable
           - suite_id: live-gateway-anthropic-docker-full
             suite_group: live-gateway-anthropic-docker
-            label: Docker live gateway Anthropic
+            label: Docker live gateway Anthropic (full advisory)
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false
@@ -3866,6 +4440,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3912,7 +4487,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -3920,7 +4495,7 @@ jobs:
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -4147,6 +4722,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -4190,14 +4766,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}

@@ -16,15 +16,14 @@ import {
 import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
+import { messageAction, postbackAction, type Action } from "./actions.js";
+import { createActionCard } from "./flex-templates/basic-cards.js";
 import {
-  createActionCard,
-  createAgendaCard,
   createAppleTvRemoteCard,
   createDeviceControlCard,
-  createEventCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
+} from "./flex-templates/media-control-cards.js";
+import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
@@ -129,17 +128,18 @@ export const LINE_PRESENTATION_CAPABILITIES = {
 
 function toLineAction(button: MessagePresentationButton): Action | undefined {
   const normalized = resolveMessagePresentationButtonAction(button);
+  const { label } = button;
   if (normalized?.type === "command") {
-    return messageAction(button.label, normalized.command);
+    return { type: "message", label, text: normalized.command };
   }
   if (normalized?.type === "callback") {
-    return postbackAction(button.label, normalized.value, button.label);
+    return { type: "postback", label, data: normalized.value, displayText: label };
   }
   if (normalized?.type === "url") {
-    return uriAction(button.label, normalized.url);
+    return { type: "uri", label, uri: normalized.url };
   }
   if (normalized?.type === "web-app" && normalized.url) {
-    return uriAction(button.label, normalized.url);
+    return { type: "uri", label, uri: normalized.url };
   }
   return undefined;
 }

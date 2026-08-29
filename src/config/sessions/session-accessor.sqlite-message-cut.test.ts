@@ -17,13 +17,17 @@ import {
   listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
-  readSessionTranscriptMessageEventCount,
+  listSessionParticipantsReadOnly,
+  recordSessionParticipant,
+  readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
+import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -480,7 +484,10 @@ describe("SQLite session message cuts", () => {
       throw new Error("expected rewind result");
     }
     expect(
-      readSessionTranscriptMessageEventCount({ agentId, env, sessionId: result.entry.sessionId }),
+      readSessionTranscriptMessageEventPage(
+        { agentId, env, sessionId: result.entry.sessionId },
+        { maxMessages: 0, offset: 0 },
+      ).totalMessages,
     ).toBe(2);
     expect(loadSessionEntry({ agentId, env, sessionKey })?.sessionId).toBe(result.entry.sessionId);
     expect(result.entry).toMatchObject({
@@ -502,6 +509,31 @@ describe("SQLite session message cuts", () => {
       to: "chat-123",
       accountId: undefined,
     });
+  });
+
+  it("defers an oversized rewind projection until the reconcile worker finishes", async () => {
+    const { env, scope } = await createSession();
+    await appendTranscriptEvent(scope, {
+      type: "oversized-padding",
+      padding: "x".repeat(SYNC_REBUILD_MAX_BYTES),
+    });
+
+    const result = await rewindSessionToMessage({
+      agentId,
+      env,
+      entryId: "user-2",
+      sessionKey,
+    });
+    if (result.status !== "created") {
+      throw new Error("expected oversized rewind result");
+    }
+    const targetScope = { agentId, env, sessionId: result.entry.sessionId, sessionKey };
+    expect(() => readSessionTranscriptMessageEvents(targetScope)).toThrow(
+      /projection is rebuilding/,
+    );
+
+    await waitForSessionTranscriptProjection(targetScope);
+    expect(readSessionTranscriptMessageEvents(targetScope)).toHaveLength(2);
   });
 
   it("omits editor attachments for a text-only message", async () => {
@@ -543,6 +575,10 @@ describe("SQLite session message cuts", () => {
     const { env, scope } = await createSession();
     const canonicalSourceKey = "agent:main:canonical-message-cut-source";
     const targetKey = "agent:main:dashboard:message-cut-fork";
+    recordSessionParticipant(scope, {
+      identity: { type: "profile", id: "source-person" },
+      promptedAt: 7,
+    });
 
     const result = await forkSessionAtMessage({
       agentId,
@@ -577,6 +613,15 @@ describe("SQLite session message cuts", () => {
       ),
     ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
+    expect(listSessionParticipantsReadOnly({ agentId, env }).get(targetKey)).toBeUndefined();
+    expect(listSessionParticipantsReadOnly({ agentId, env }).get(sessionKey)).toEqual([
+      {
+        identity: { type: "profile", id: "source-person" },
+        contributionCount: 1,
+        firstPromptedAt: 7,
+        lastPromptedAt: 7,
+      },
+    ]);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();

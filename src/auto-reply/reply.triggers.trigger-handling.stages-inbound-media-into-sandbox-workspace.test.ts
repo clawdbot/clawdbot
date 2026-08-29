@@ -4,7 +4,7 @@ import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
-import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
+import { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -568,18 +568,18 @@ describe("stageSandboxMedia", () => {
     });
   });
 
-  it("skips oversized media staging and keeps original media paths", async () => {
+  it("stages media above the generic media-store limit", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
 
       const mediaPath = await writeInboundMedia(
         home,
-        "oversized.bin",
+        "larger-than-generic-limit.bin",
         Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41),
       );
 
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
-      await stageSandboxMedia({
+      const result = await stageSandboxMedia({
         ctx,
         sessionCtx,
         cfg,
@@ -587,15 +587,44 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      let stagedStatError: NodeJS.ErrnoException | undefined;
-      try {
-        await fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath)));
-      } catch (error) {
-        stagedStatError = error as NodeJS.ErrnoException;
-      }
-      expect(stagedStatError?.code).toBe("ENOENT");
+      const stagedPath = `media/inbound/${basename(mediaPath)}`;
+      expect(result.staged.get(0)).toBe(stagedPath);
+      expect(ctx.media?.[0]?.path).toBe(stagedPath);
+      expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
+      await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({
+        size: MEDIA_MAX_BYTES + 1,
+      });
+    });
+  });
+
+  it("warns and keeps original media paths above the sandbox staging limit", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const stagingMaxBytes = SANDBOX_MEDIA_MAX_BYTES;
+      const mediaPath = await writeInboundMedia(home, "oversized.bin", "");
+      await fs.truncate(mediaPath, stagingMaxBytes + 1);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      await expect(
+        fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(result.staged).toEqual(new Map());
       expect(ctx.media?.[0]?.path).toBe(mediaPath);
       expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);
+      expect(warn).toHaveBeenCalledWith(
+        `Inbound media staging skipped for oversized.bin: file exceeds limit of ${stagingMaxBytes} bytes (got ${stagingMaxBytes + 1})`,
+      );
     });
   });
 });

@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -125,6 +125,339 @@ async function waitForCommittedAttachmentDraft(
 }
 
 suite.define(() => {
+  it.each([
+    { attachment: false, gesture: "held Enter", expectedTurns: 1 },
+    { attachment: true, gesture: "held Enter", expectedTurns: 1 },
+    { attachment: false, gesture: "released and repressed Enter", expectedTurns: 2 },
+    { attachment: true, gesture: "released and repressed Enter", expectedTurns: 2 },
+  ])(
+    "admits $expectedTurns turn(s) from $gesture during terminal history (attachment=$attachment)",
+    async ({ attachment, gesture, expectedTurns }) => {
+      await suite.withPage(
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+        },
+        async ({ page }) => {
+          const held = gesture === "held Enter";
+          const capture = held && attachment;
+          const proofDir = path.resolve(
+            process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim() || ".artifacts/control-ui-e2e",
+            "held-enter",
+          );
+          if (capture) {
+            await mkdir(proofDir, { recursive: true });
+            await Promise.all(
+              ["held-enter-before.png", "held-enter-after.png"].map((name) =>
+                rm(path.join(proofDir, name), { force: true }),
+              ),
+            );
+          }
+          const ready = {
+            content: [{ text: "Ready for the held Enter check.", type: "text" }],
+            role: "assistant",
+            __openclaw: { id: "held-enter-ready", seq: 1 },
+          };
+          const gateway = await installMockGateway(page, { historyMessages: [ready] });
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
+          const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+          const composer = pane.locator(".agent-chat__composer-combobox textarea");
+          await pane.getByText("Ready for the held Enter check.", { exact: true }).waitFor();
+          await gateway.waitForRequest("chat.startup");
+          const initialText = "Finish the initial synthetic turn.";
+          await composer.fill(initialText);
+          await composer.press("Enter");
+          const initial = await gateway.waitForRequest("chat.send");
+          expect(initial.params).toMatchObject({
+            idempotencyKey: expect.any(String),
+            message: initialText,
+            sessionKey: "main",
+          });
+          const initialRunId = (initial.params as { idempotencyKey: string }).idempotencyKey;
+          expect(initialRunId).not.toBe("");
+          await pane.getByRole("button", { name: "Stop generating" }).waitFor();
+
+          const followUpText = attachment ? "" : "Submit this follow-up once per key press.";
+          const fileName = "held-enter.txt";
+          const fileContents = "Synthetic held Enter attachment contents.";
+          await composer.fill(followUpText);
+          if (attachment) {
+            await pane.locator(".agent-chat__file-input").setInputFiles({
+              name: fileName,
+              mimeType: "text/plain",
+              buffer: Buffer.from(fileContents),
+            });
+            await pane.locator(".chat-attachment-thumb", { hasText: fileName }).waitFor();
+          }
+          const terminalText = "The initial synthetic turn completed.";
+          const terminalMessage = {
+            content: [{ text: terminalText, type: "text" }],
+            role: "assistant",
+            __openclaw: { id: "held-enter-terminal", seq: 3 },
+          };
+          const historyMessages = [
+            ready,
+            {
+              content: [{ text: initialText, type: "text" }],
+              role: "user",
+              __openclaw: {
+                id: "held-enter-initial-user",
+                idempotencyKey: `${initialRunId}:user`,
+                seq: 2,
+              },
+            },
+            terminalMessage,
+          ];
+          await gateway.setHistoryMessages(historyMessages);
+          const historyBefore = (await gateway.getRequests("chat.history")).length;
+          await gateway.deferNext("chat.history");
+          await gateway.emitChatFinal({ runId: initialRunId, text: terminalText });
+          await pane
+            .locator(".chat-group.assistant .chat-bubble")
+            .getByText(terminalText, { exact: true })
+            .waitFor();
+          await gateway.emitGatewayEvent("session.message", {
+            activeRunIds: [],
+            clientRunId: initialRunId,
+            hasActiveRun: false,
+            message: terminalMessage,
+            messageId: "held-enter-terminal",
+            messageSeq: 3,
+            session: { activeRunIds: [], hasActiveRun: false, key: "main", status: "done" },
+            sessionKey: "main",
+          });
+          await gateway.waitForRequest("chat.history", { after: historyBefore });
+          await expect
+            .poll(() => pane.getByRole("button", { name: "Send message" }).isEnabled())
+            .toBe(true);
+          expect(await composer.inputValue()).toBe(followUpText);
+          expect(await pane.locator(".chat-attachment-thumb").count()).toBe(attachment ? 1 : 0);
+          expect(await pane.locator(".chat-queue__item").count()).toBe(0);
+          await composer.click();
+          expect(
+            await composer.evaluate((element) => ({
+              focused: document.hasFocus() && document.activeElement === element,
+              visibility: document.visibilityState,
+            })),
+          ).toEqual({ focused: true, visibility: "visible" });
+          if (capture) {
+            await pane.screenshot({ path: path.join(proofDir, "held-enter-before.png") });
+          }
+
+          const keyProof = await composer.evaluateHandle((element) => {
+            const textarea = element as HTMLTextAreaElement;
+            const events: Array<{ isTrusted: boolean; repeat: boolean }> = [];
+            const record = (event: KeyboardEvent) => {
+              if (event.key === "Enter" && events.length < 4) {
+                events.push({ isTrusted: event.isTrusted, repeat: event.repeat });
+              }
+            };
+            textarea.addEventListener("keydown", record, true);
+            return {
+              events,
+              dispose: () => textarea.removeEventListener("keydown", record, true),
+            };
+          });
+          try {
+            try {
+              await page.keyboard.down("Enter");
+              if (!held) {
+                await page.keyboard.up("Enter");
+              }
+              await page.keyboard.down("Enter");
+            } finally {
+              await page.keyboard.up("Enter");
+            }
+            const keys = await keyProof.evaluate((proof) => proof.events);
+            expect(keys).toEqual([
+              { isTrusted: true, repeat: false },
+              { isTrusted: true, repeat: held },
+            ]);
+            expect(await gateway.getRequests("chat.history")).toHaveLength(historyBefore + 1);
+            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+            expect(await composer.inputValue()).toBe(followUpText);
+            expect(await pane.locator(".chat-attachment-thumb").count()).toBe(attachment ? 1 : 0);
+
+            const sendsBefore = (await gateway.getRequests("chat.send")).length;
+            await gateway.deferNext("chat.send");
+            await gateway.resolveDeferred("chat.history", {
+              messages: historyMessages,
+              sessionId: "control-ui-e2e-session",
+              sessionInfo: {
+                activeLeafEntryId: "held-enter-terminal",
+                activeRunIds: [],
+                hasActiveRun: false,
+                key: "main",
+                status: "done",
+              },
+              thinkingLevel: null,
+            });
+            const followUp = await gateway.waitForRequest("chat.send", { after: sendsBefore });
+            expect(followUp.params).toMatchObject({
+              expectedLeafEntryId: "held-enter-terminal",
+              idempotencyKey: expect.any(String),
+              message: followUpText,
+              sessionKey: "main",
+              ...(attachment
+                ? {
+                    attachments: [
+                      {
+                        content: Buffer.from(fileContents).toString("base64"),
+                        fileName,
+                        mimeType: "text/plain",
+                        type: "file",
+                      },
+                    ],
+                  }
+                : {}),
+            });
+            const followUpRunId = (followUp.params as { idempotencyKey: string }).idempotencyKey;
+            expect(followUpRunId).not.toBe("");
+            expect(followUpRunId).not.toBe(initialRunId);
+            if (!attachment) {
+              expect(followUp.params).not.toHaveProperty("attachments");
+            }
+
+            // Both held-history continuations enqueue synchronously before their
+            // next await. Cross a committed render boundary, not a transient count=1.
+            await waitForCommittedState(
+              page,
+              () => {
+                const active = document.querySelector('openclaw-chat-pane[aria-hidden="false"]');
+                const input = active?.querySelector(".agent-chat__composer-combobox textarea");
+                return (
+                  input instanceof HTMLTextAreaElement &&
+                  input.value === "" &&
+                  active?.querySelectorAll(".chat-attachment-thumb").length === 0
+                );
+              },
+              {},
+            );
+            // The held ACK keeps the first turn in the transcript; later
+            // waiting turns remain in the composer queue. Read both together.
+            const observed = await pane.evaluate(
+              (active, followUpContent) => {
+                const readRow = (row: Element, idAttribute: string) => {
+                  const rect = row.getBoundingClientRect();
+                  return {
+                    id: row.getAttribute(idAttribute),
+                    visible:
+                      rect.height > 0 &&
+                      rect.width > 0 &&
+                      rect.bottom > 0 &&
+                      rect.top < innerHeight,
+                  };
+                };
+                return {
+                  bubbles: [...active.querySelectorAll(".chat-group.user .chat-bubble")]
+                    .filter((bubble) => bubble.textContent?.includes(followUpContent))
+                    .map((bubble) => readRow(bubble, "data-message-id")),
+                  queued: [
+                    ...active.querySelectorAll(".agent-chat__composer-shell .chat-queue__item"),
+                  ].map((row) => {
+                    const { id, visible } = readRow(row, "data-chat-queue-item");
+                    return {
+                      id,
+                      visible,
+                      text: row.querySelector(".chat-queue__text")?.textContent?.trim(),
+                    };
+                  }),
+                };
+              },
+              attachment ? fileName : followUpText,
+            );
+            console.info("held-enter admission proof", {
+              attachment,
+              gesture,
+              keys,
+              followUpRequestId: followUp.id,
+              followUpRunId,
+              observed,
+            });
+            expect(pageErrors).toEqual([]);
+            if (capture) {
+              await pane.screenshot({ path: path.join(proofDir, "held-enter-after.png") });
+            }
+            expect(observed.bubbles.map((row) => row.id)).toEqual([`msg:send:${followUpRunId}:0`]);
+            for (const rows of [observed.bubbles, observed.queued]) {
+              expect(rows.every((row) => row.visible && row.id)).toBe(true);
+              expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
+            }
+            expect(
+              observed.queued.every(
+                (row) => row.text === (attachment ? "Image (1)" : followUpText),
+              ),
+            ).toBe(true);
+            expect(observed.bubbles.length + observed.queued.length).toBe(expectedTurns);
+            expect(await gateway.getRequests("chat.send")).toHaveLength(sendsBefore + 1);
+          } finally {
+            try {
+              await keyProof.evaluate((proof) => proof.dispose());
+            } finally {
+              await keyProof.dispose();
+            }
+          }
+        },
+      );
+    },
+  );
+
+  it("restores an attachment staged offline after reload and reconnect", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        const sessionKey = "global";
+        const text = "offline attachment draft";
+        const contents = "offline attachment contents";
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor();
+
+        await gateway.setOnline(false);
+        await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
+        await composer.fill(text);
+        await page.locator(".agent-chat__file-input").setInputFiles({
+          name: "offline.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from(contents),
+        });
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
+        await waitForCommittedAttachmentDraft(page, sessionKey, text);
+
+        await page.reload();
+        await gateway.setOnline(true);
+        await expect.poll(() => composer.inputValue()).toBe(text);
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({ path: path.join(artifactDir, "offline-draft-restored.png") });
+        }
+        await composer.press("Enter");
+
+        const request = await gateway.waitForRequest("chat.send");
+        expect(request.params).toMatchObject({
+          attachments: [
+            {
+              content: Buffer.from(contents).toString("base64"),
+              fileName: "offline.txt",
+              mimeType: "text/plain",
+            },
+          ],
+          message: text,
+        });
+      },
+    );
+  });
+
   it("restores isolated session drafts across fresh pages and retires sent or removed attachments", async () => {
     const firstSession = "agent:main:restart-session-a";
     const secondSession = "agent:main:restart-session-b";
@@ -330,7 +663,7 @@ suite.define(() => {
           }
           proof.finish();
         });
-        await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+        await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await expect.poll(() => send.isEnabled()).toBe(true);
         await send.click();
 
@@ -419,9 +752,8 @@ suite.define(() => {
           proof.finish();
         });
         await page
-          .locator(
-            'openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb img[alt="Attachment preview"]',
-          )
+          .locator('openclaw-chat-pane[aria-hidden="false"]')
+          .getByRole("img", { name: "pixel.png" })
           .waitFor();
       },
     );

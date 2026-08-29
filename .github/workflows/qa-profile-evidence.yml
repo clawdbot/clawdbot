@@ -196,7 +196,7 @@ jobs:
           NODE
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -334,7 +334,7 @@ jobs:
             }
 
       - name: Checkout trusted QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -387,6 +387,7 @@ jobs:
           set -euo pipefail
           selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
           mkdir -p "$selected_home"
+          # Native pnpm reads this policy from env; the config flag also covers older targets.
           env -i \
             CI=true \
             COREPACK_HOME="${selected_home}/.cache/corepack" \
@@ -394,12 +395,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -496,7 +498,7 @@ jobs:
             }
 
       - name: Checkout trusted QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -556,12 +558,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -801,7 +804,7 @@ jobs:
             }
 
       - name: Checkout trusted QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -861,12 +864,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \

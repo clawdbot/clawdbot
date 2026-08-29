@@ -277,27 +277,34 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     };
     const requestParams = await buildRequest("checkpoint");
 
-    firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-    const { stream: openaiStream, response } = await createResponsesStreamWithEncryptedContentRetry(
-      {
-        client: client as never,
-        request: requestParams as never,
-        requestOptions: {
-          ...buildResponsesRequestOptions(options),
-          signal: firstEventAbort.signal,
-        },
-        model,
-        buildFullHistoryRequest: () => buildRequest("full-history"),
-        onCompactionRejected: (checkpoint) =>
-          suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
+    const firstEvent = createFirstStreamEventAbortController(options?.signal);
+    firstEventAbort = firstEvent;
+    let started = false;
+    const { stream: hookedOpenAIStream } = await createResponsesStreamWithEncryptedContentRetry({
+      client: client as never,
+      request: requestParams as never,
+      requestOptions: {
+        ...buildResponsesRequestOptions(options),
+        signal: firstEvent.signal,
       },
-    );
-    const hookedOpenAIStream = withProviderResponseHook({
-      stream: openaiStream,
-      signal: firstEventAbort.signal,
-      abort: firstEventAbort.abort,
-      hook: createOpenAIProviderAcceptanceHook(options, response, model),
-      onReady: () => stream.push({ type: "start", partial: output }),
+      model,
+      buildFullHistoryRequest: () => buildRequest("full-history"),
+      onCompactionRejected: (checkpoint) =>
+        suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
+      canRetryStream: () => output.content.length === 0,
+      wrapStream: ({ stream: openaiStream, response }) =>
+        withProviderResponseHook({
+          stream: openaiStream,
+          signal: firstEvent.signal,
+          abort: firstEvent.abort,
+          hook: createOpenAIProviderAcceptanceHook(options, response, model),
+          onReady: () => {
+            if (!started) {
+              started = true;
+              stream.push({ type: "start", partial: output });
+            }
+          },
+        }),
     });
 
     const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);

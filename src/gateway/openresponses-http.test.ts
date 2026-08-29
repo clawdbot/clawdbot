@@ -28,8 +28,10 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
+import type { ResponseResource } from "./open-responses.schema.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -1377,6 +1379,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(prompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
   });
 
+  it("keeps one created_at across all response lifecycle resources", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["hello"],
+          text: "hello",
+        })) as never);
+
+      const response = await postResponses(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(response.status).toBe(200);
+      const createdAt = parseSseEvents(await response.text())
+        .filter((event) =>
+          ["response.created", "response.in_progress", "response.completed"].includes(
+            event.event ?? "",
+          ),
+        )
+        .map(
+          (event) =>
+            (parseSseData(event) as { response?: { created_at?: number } }).response?.created_at,
+        );
+
+      expect(createdAt).toHaveLength(3);
+      expect(createdAt.every((value) => typeof value === "number")).toBe(true);
+      expect(new Set(createdAt)).toEqual(new Set([createdAt[0]]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("streams OpenResponses SSE events", async () => {
     const port = enabledPort;
     try {
@@ -1410,6 +1450,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
       expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
+      expect(parseSseData(findSseEvent(deltaEvents, "response.output_item.added"))).toMatchObject({
+        item: { content: [] },
+      });
+      expect(parseSseData(findSseEvent(deltaEvents, "response.content_part.added"))).toMatchObject({
+        content_index: 0,
+        part: { type: "output_text", text: "" },
+      });
 
       const deltas = deltaEvents
         .filter((e) => e.event === "response.output_text.delta")
@@ -2102,6 +2149,88 @@ describe("OpenResponses HTTP API (e2e)", () => {
         expect(firstAgentOpts().senderIsOwner).toBe(senderIsOwner);
       }
     }
+  });
+
+  it("blocks a view-capped operator from mutating another operator's response session", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getGatewayTestPort();
+        const { startGatewayServer } = await import("./server.js");
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sessions: { others: "view" },
+                  },
+                },
+              },
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openResponsesEnabled: true,
+          });
+
+          const owner = ensureProfileForEmail("response-owner@example.test");
+          const sessionKey = "agent:main:foreign-openresponses-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "foreign-openresponses-http",
+              updatedAt: 1,
+              visibility: "shared",
+              createdActor: { type: "human", id: owner.id },
+            },
+          );
+
+          agentCommandMock.mockClear();
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const response = await postResponses(
+            port,
+            { model: "openclaw", input: "mutate foreign response session" },
+            {
+              "x-forwarded-for": "198.51.100.42",
+              "x-forwarded-proto": "https",
+              "x-forwarded-user": "guest@example.test",
+              "x-openclaw-session-key": sessionKey,
+            },
+          );
+
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({
+            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+          });
+          expect(agentCommandMock).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openresponses operator role session sharing test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
   });
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
@@ -3014,6 +3143,69 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(response?.output?.slice(1)).toEqual(doneFunctionCalls.map(({ item }) => item));
     expect(events.map((event) => event.data)).toContain("[DONE]");
   });
+
+  it.each([
+    { stream: false, tools: false },
+    { stream: true, tools: false },
+    { stream: false, tools: true },
+    { stream: true, tools: true },
+  ])(
+    "replays returned items into a stateless turn (stream=$stream, tools=$tools)",
+    async ({ stream, tools }) => {
+      agentCommandMock.mockClear();
+      const calls = [
+        { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
+        { id: "call_2", name: "get_weather", arguments: '{"city":"Paris"}' },
+      ];
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "Checking both cities." }],
+        ...(tools ? { meta: { stopReason: "tool_calls", pendingToolCalls: calls } } : {}),
+      } as never);
+      const user = { type: "message", role: "user", content: "Compare the weather." };
+      const firstResponse = await postResponses(enabledPort, {
+        model: "openclaw",
+        input: [user],
+        stream,
+        tools: WEATHER_TOOL,
+      });
+      expect(firstResponse.status).toBe(200);
+      const first = stream
+        ? (
+            parseSseData(
+              findSseEvent(parseSseEvents(await firstResponse.text()), "response.completed"),
+            ) as { response: ResponseResource }
+          ).response
+        : ((await firstResponse.json()) as ResponseResource);
+      const results = tools
+        ? calls.map((call, index) => ({
+            type: "function_call_output",
+            call_id: call.id,
+            output: String(20 + index),
+          }))
+        : [{ ...user, content: "Explain that answer." }];
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Compared." }] } as never);
+      const secondResponse = await postResponses(enabledPort, {
+        model: "openclaw",
+        input: [user, ...first.output, ...results],
+        tools: WEATHER_TOOL,
+      });
+      expect(secondResponse.status).toBe(200);
+      expect(firstAgentOpts(1).sessionKey).not.toBe(firstAgentOpts().sessionKey);
+      const prompt = firstAgentOpts(1).message;
+      expect(prompt).toContain("Checking both cities.");
+      if (tools) {
+        for (const call of calls) {
+          expect(prompt).toContain(
+            `tool_call id=${call.id} name=${call.name} arguments=${call.arguments}`,
+          );
+          expect(prompt).toContain(`Tool:${call.id}:`);
+        }
+      } else {
+        expect(prompt).toContain("Explain that answer.");
+      }
+      await ensureResponseConsumed(secondResponse);
+    },
+  );
 
   it("reuses the prior session when previous_response_id is provided", async () => {
     const port = enabledPort;

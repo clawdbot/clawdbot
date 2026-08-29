@@ -4,10 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  configureExecutionDecisionWorkSink,
+  type ExecutionDecisionWork,
+} from "../audit/execution-decision-work.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
+  listSessionParticipantsReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
@@ -18,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -50,10 +58,13 @@ import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const TEST_CONFIG = {
   session: {
@@ -428,11 +439,12 @@ describe("sessions tools", () => {
   });
 
   it("sessions_list forwards mailbox filters and includes messages", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-sessions-list-"), "sessions.json");
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          path: storePath,
           sessions: [
             {
               key: "agent:main:main",
@@ -1198,6 +1210,11 @@ describe("sessions tools", () => {
       }
       return {};
     });
+    const decisionWork: ExecutionDecisionWork[] = [];
+    const clearDecisionSink = configureExecutionDecisionWorkSink((work) => {
+      decisionWork.push(work);
+      return true;
+    });
     try {
       const tool = getSessionTool("sessions_send", {
         agentSessionKey: requesterSessionKey,
@@ -1209,12 +1226,25 @@ describe("sessions tools", () => {
         } as OpenClawConfig,
       });
 
-      const result = await tool.execute("scoped-send", {
-        sessionKey: targetSessionKey,
-        message: "Please check the main session",
-        timeoutSeconds: 0,
-        watch: true,
+      const token = createExecutionIdentityAdmissionToken("scoped-session-send", {
+        contextId: "scoped-session-send-context",
+        executionId: "scoped-session-send-execution",
       });
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: requesterSessionKey,
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        async () =>
+          await tool.execute("scoped-send", {
+            sessionKey: targetSessionKey,
+            message: "Please check the main session",
+            timeoutSeconds: 0,
+            watch: true,
+          }),
+      );
 
       expect(result.details).toMatchObject({
         status: "accepted",
@@ -1222,11 +1252,157 @@ describe("sessions tools", () => {
         watched: false,
       });
       expect(calls.map((call) => call.method)).toEqual(["agent"]);
+      expect(decisionWork).toHaveLength(1);
+      expect(decisionWork[0]).toMatchObject({
+        receipt: {
+          action: { family: "session", operation: "send" },
+          decision: { outcome: "allowed", reasonCode: "session_send_committed" },
+          enforcement: { coverageState: "attribution-only" },
+        },
+        refs: {
+          target: { namespace: "session", value: `["main","${targetSessionKey}"]` },
+        },
+      });
     } finally {
+      clearDecisionSink();
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("records the admitted target on the waited-send branch", async () => {
+    const targetSessionKey = "agent:main:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { runId?: string } };
+      if (request.method === "agent") {
+        return { runId: "run-waited-audit", status: "accepted", acceptedAt: 1 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: request.params?.runId, status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [{ role: "assistant", content: "REPLY_SKIP", timestamp: 2 }] };
+      }
+      return {};
+    });
+    const decisionWork: ExecutionDecisionWork[] = [];
+    const clearDecisionSink = configureExecutionDecisionWorkSink((work) => {
+      decisionWork.push(work);
+      return true;
+    });
+    const token = createExecutionIdentityAdmissionToken("waited-session-send", {
+      contextId: "waited-session-send-context",
+      executionId: "waited-session-send-execution",
+    });
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: "agent:main:dashboard:requester",
+      config: TEST_CONFIG,
+    });
+    try {
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:requester",
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        async () =>
+          await tool.execute("waited-send-audit", {
+            sessionKey: targetSessionKey,
+            message: "wait without reply-back",
+            timeoutSeconds: 1,
+          }),
+      );
+
+      expect(result.details).toMatchObject({ status: "no_reply", sessionKey: targetSessionKey });
+      expect(decisionWork).toHaveLength(1);
+      expect(decisionWork[0]).toMatchObject({
+        receipt: {
+          action: { family: "session", operation: "send" },
+          decision: { outcome: "allowed", reasonCode: "session_send_committed" },
+          enforcement: { coverageState: "attribution-only" },
+        },
+        refs: {
+          target: { namespace: "session", value: `["main","${targetSessionKey}"]` },
+        },
+      });
+    } finally {
+      clearDecisionSink();
+    }
+  });
+
+  it.each([
+    { timeoutSeconds: 0, admitted: true },
+    { timeoutSeconds: 1, admitted: true },
+    { timeoutSeconds: 0, admitted: false },
+    { timeoutSeconds: 1, admitted: false },
+  ])(
+    "records exactly one cross-agent contribution at the original prompt time only after admission (timeoutSeconds: $timeoutSeconds, admitted: $admitted)",
+    async ({ timeoutSeconds, admitted }) => {
+      const storePath = path.join(
+        tempDirs.make("openclaw-session-send-participant-"),
+        "agents",
+        "research",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const scope = { agentId: "research", sessionKey: "agent:research:main", storePath };
+      const sessionId = "participant-target";
+      const promptedAt = 1_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(promptedAt);
+      try {
+        await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+        callGatewayMock.mockImplementation(async (opts: unknown) => {
+          const request = opts as GatewayCall;
+          if (request.method === "sessions.resolve") {
+            return { key: scope.sessionKey, agentId: scope.agentId };
+          }
+          if (request.method === "agent") {
+            clock.mockReturnValue(promptedAt + 100);
+            if (!admitted) {
+              throw new Error("admission rejected");
+            }
+            return { runId: "participant-run", status: "accepted" };
+          }
+          if (request.method === "agent.wait") {
+            return { status: "ok" };
+          }
+          return { messages: [] };
+        });
+        const tool = createSessionsSendTool({
+          agentSessionKey: "agent:main:main",
+          expectedTargetSessionId: sessionId,
+          config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: storePath } },
+          callGateway: callGatewayMock,
+        });
+        const result = await tool.execute("participant-send", {
+          sessionKey: scope.sessionKey,
+          message: "Review this input",
+          timeoutSeconds,
+        });
+        expect(result.details).toMatchObject(
+          admitted
+            ? { status: timeoutSeconds === 0 ? "accepted" : "no_reply", runId: "participant-run" }
+            : { status: "error", error: "admission rejected" },
+        );
+        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? []).toEqual(
+          admitted
+            ? [
+                {
+                  identity: { type: "agent", id: "main" },
+                  contributionCount: 1,
+                  firstPromptedAt: promptedAt,
+                  lastPromptedAt: promptedAt,
+                },
+              ]
+            : [],
+        );
+      } finally {
+        clock.mockRestore();
+        disposeOpenClawAgentDatabaseByPath(storePath);
+      }
+    },
+  );
 
   it("sessions_send returns pending agent error diagnostics on timeout", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];

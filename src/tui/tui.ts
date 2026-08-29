@@ -1,7 +1,15 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { Container, Loader, matchesKey, ProcessTerminal, Text, TUI } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Loader,
+  matchesKey,
+  ProcessTerminal,
+  Text,
+  TuiMainScreen,
+} from "@earendil-works/pi-tui";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -23,7 +31,9 @@ import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invoc
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -91,8 +101,10 @@ export {
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
+const TUI_AUTH_COMMAND_MAX_CHARS = 320;
 const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
 const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
+const tuiAuthLog = createSubsystemLogger("tui/auth");
 
 type RunTuiOptions = TuiOptions & {
   /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
@@ -174,6 +186,13 @@ export function resolveTuiLocalAuthCliInvocation(params: {
       execArgv: params.execArgv ?? process.execArgv,
     },
   );
+}
+
+export function formatTuiAuthCommandArgv(command: string, args: readonly string[]): string {
+  const value = sanitizeRenderableLine(redactToolPayloadText(JSON.stringify([command, ...args])));
+  return value.length > TUI_AUTH_COMMAND_MAX_CHARS
+    ? `${truncateUtf16Safe(value, TUI_AUTH_COMMAND_MAX_CHARS - 1)}…`
+    : value;
 }
 
 export function resolveTuiSessionKey(params: {
@@ -286,7 +305,7 @@ export function resolveInitialTuiAgentId(params: {
       tryResolveLegacyCompatibilityAgentId(params.cfg) ??
       resolveDefaultAgentId(params.cfg, {
         surface: "TUI startup",
-        hint: "Pass an agent-scoped --session key.",
+        hint: `Pass an agent-scoped --session key (e.g., '${formatCliCommand("openclaw tui --session agent:agentname:main")}').`,
       }),
   );
 }
@@ -611,13 +630,21 @@ export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {
   return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
 }
 
+type ScheduleProcessExitAfterTuiReturnParams = {
+  delayMs?: number;
+  setTimeoutFn?: TuiProcessExitTimeout;
+  exit?: (code?: number) => never | void;
+  writeStderr?: (text: string) => void;
+};
+
 export function scheduleProcessExitAfterTuiReturn(
-  params: {
-    delayMs?: number;
-    setTimeoutFn?: TuiProcessExitTimeout;
-    exit?: (code?: number) => never | void;
-    writeStderr?: (text: string) => void;
-  } = {},
+  params?: ScheduleProcessExitAfterTuiReturnParams & { setTimeoutFn?: undefined },
+): ReturnType<typeof setTimeout>;
+export function scheduleProcessExitAfterTuiReturn(
+  params: ScheduleProcessExitAfterTuiReturnParams & { setTimeoutFn: TuiProcessExitTimeout },
+): TuiProcessExitTimer;
+export function scheduleProcessExitAfterTuiReturn(
+  params: ScheduleProcessExitAfterTuiReturnParams = {},
 ): TuiProcessExitTimer {
   const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
   const exit = params.exit ?? ((code?: number) => process.exit(code));
@@ -639,6 +666,10 @@ export function scheduleProcessExitAfterTuiReturn(
     : setTimeout(onTimeout, delayMs);
   timer.unref?.();
   return timer;
+}
+
+export function cancelProcessExitAfterTuiReturn(timer: ReturnType<typeof setTimeout>): void {
+  clearTimeout(timer);
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
@@ -896,7 +927,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
   }
 
-  const tui = new TUI(new ProcessTerminal());
+  const tui = new TuiMainScreen(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
@@ -1343,12 +1374,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
         await withTuiSuspended(async () => {
           const provider = params.provider?.trim() || undefined;
 
-          // Codex owns its auth store; delegate when the CLI is available.
-          const codexBin =
-            provider === OPENAI_CODEX_PROVIDER ||
-            (!provider && state.sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
-              ? await resolveCodexCliBin()
-              : null;
+          // Codex owns its auth store; the command handler already resolves the session provider.
+          const codexBin = provider === OPENAI_CODEX_PROVIDER ? await resolveCodexCliBin() : null;
 
           let command: string;
           let args: string[];
@@ -1363,14 +1390,30 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
           }
 
           const invocation = resolveLocalAuthSpawnInvocation({ command, args });
-          return await authChild.spawnAndWait(() =>
-            spawn(invocation.command, invocation.args, {
-              cwd,
-              env: process.env,
-              stdio: "inherit",
-              ...invocation.options,
-            }),
-          );
+          const commandArgv = formatTuiAuthCommandArgv(command, args);
+          tuiAuthLog.info(`auth child spawn: argv=${commandArgv}`);
+          try {
+            const result = await authChild.spawnAndWait(() =>
+              spawn(invocation.command, invocation.args, {
+                cwd,
+                env: process.env,
+                stdio: "inherit",
+                ...invocation.options,
+              }),
+            );
+            const outcome = `argv=${commandArgv} exitCode=${String(result.exitCode)} signal=${String(result.signal)}`;
+            if (result.exitCode === 0 && !result.signal) {
+              tuiAuthLog.info(`auth child finished: ${outcome}`);
+            } else {
+              tuiAuthLog.error(`auth child failed: ${outcome}`);
+            }
+            return { ...result, commandArgv };
+          } catch (error) {
+            tuiAuthLog.error(
+              `auth child failed to start: argv=${commandArgv} error=${formatTuiErrorMessage(error)}`,
+            );
+            throw error;
+          }
         })
     : undefined;
 
@@ -1444,8 +1487,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   } = sessionActions;
   const loadHistory = async (reconcileReconnect = false) => {
     const activeRunAtStart = state.activeChatRunId;
+    const reconcileMembership = captureHistoryRunMembership();
     const result = await loadHistorySnapshot();
     if (result.loaded) {
+      reconcileMembership(result.activeRunIds);
       // History can adopt a newer run before returning; terminal outcomes
       // still belong only to the unchanged run captured before the request.
       const recoveredRunId =
@@ -1483,6 +1528,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    captureHistoryRunMembership,
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose: disposeEventHandlers,
@@ -1839,7 +1885,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage);
+        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
         if (!ownsConnection()) {
           return;
         }

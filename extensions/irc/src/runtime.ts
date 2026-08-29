@@ -1,6 +1,5 @@
 // Irc plugin module implements runtime behavior.
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "./runtime-api.js";
+import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
 const { setRuntime: setIrcRuntime, getRuntime: getIrcRuntime } =
   createPluginRuntimeStore<PluginRuntime>({

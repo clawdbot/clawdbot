@@ -10,7 +10,9 @@ import {
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createReceiptCard, toFlexMessage, type FlexBubble } from "./flex-templates.js";
+import { toFlexMessage } from "./flex-templates/message.js";
+import { createReceiptCard } from "./flex-templates/schedule-cards.js";
+import type { FlexBubble } from "./flex-templates/types.js";
 export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 
 type FlexMessage = messagingApi.FlexMessage;
@@ -24,7 +26,7 @@ export interface ProcessedLineMessage {
   text: string;
   /** Flex messages extracted from tables/code blocks */
   flexMessages: FlexMessage[];
-  /** Source-ordered delivery parts only when a table must fall back to plain text. */
+  /** Source-ordered delivery parts whenever Markdown contains rich blocks. */
   segments?: Array<{ type: "text"; text: string } | { type: "flex"; message: FlexMessage }>;
 }
 
@@ -430,9 +432,7 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
 export function processLineMessage(text: string): ProcessedLineMessage {
   const { ir, tables } = parseLineMarkdown(text);
   const codeSpans = codeBlockSpans(ir);
-  const flexMessages: FlexMessage[] = [];
   const plainTextInsertions: PlainTextInsertion[] = [];
-  let hasOversizedTable = false;
 
   for (const table of tables) {
     // Receipt cards keep 12 plain rows; generic and styled table layouts keep only 10.
@@ -446,7 +446,6 @@ export function processLineMessage(text: string): ProcessedLineMessage {
     const bubble = rowOverflow ? undefined : convertTableToFlexBubble(toMarkdownTable(table));
     // LINE rejects the whole push/reply when any bubble exceeds its 30 KB UTF-8 JSON limit.
     if (!bubble || Buffer.byteLength(JSON.stringify(bubble), "utf8") > LINE_FLEX_BUBBLE_MAX_BYTES) {
-      hasOversizedTable = true;
       plainTextInsertions.push({
         position: table.placeholderOffset,
         text: `\n\n${formatOversizedTableAsBullets(table)}\n\n`,
@@ -454,27 +453,30 @@ export function processLineMessage(text: string): ProcessedLineMessage {
       continue;
     }
     const message = toFlexMessage("Table", bubble);
-    flexMessages.push(message);
     plainTextInsertions.push({ position: table.placeholderOffset, message });
   }
 
   for (const span of codeSpans) {
-    const message = toFlexMessage("Code", convertCodeBlockToFlexBubble(toCodeBlock(ir, span)));
-    flexMessages.push(message);
-    plainTextInsertions.push({ position: span.start, message });
+    const block = toCodeBlock(ir, span);
+    // An empty fence has no code to show, and LINE rejects the whole push when a
+    // Flex text is blank, so it drops out instead of costing the reply.
+    if (!block.code.trim()) {
+      continue;
+    }
+    plainTextInsertions.push({
+      position: span.start,
+      message: toFlexMessage("Code", convertCodeBlockToFlexBubble(block)),
+    });
   }
 
   const segments: LineMessageSegment[] = [];
-  const processedText = projectPlainText(
-    ir,
-    codeSpans,
-    plainTextInsertions,
-    hasOversizedTable ? (segment) => segments.push(segment) : undefined,
+  const processedText = projectPlainText(ir, codeSpans, plainTextInsertions, (segment) =>
+    segments.push(segment),
   );
   return {
     text: processedText,
-    flexMessages,
-    ...(hasOversizedTable ? { segments } : {}),
+    flexMessages: segments.flatMap((segment) => (segment.type === "flex" ? [segment.message] : [])),
+    ...(plainTextInsertions.length > 0 ? { segments } : {}),
   };
 }
 

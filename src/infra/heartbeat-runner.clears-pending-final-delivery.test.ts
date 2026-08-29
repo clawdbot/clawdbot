@@ -66,49 +66,52 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     expect(entry?.pendingFinalDelivery).toBeUndefined();
   }
 
-  it("nulls every pendingFinalDelivery* field after delivering substantive heartbeat content", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig(storePath);
-      const NOW = Date.now();
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "clears pending %s acknowledgements after delivering substantive heartbeat content",
+    async (acknowledgement) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatConfig(storePath);
+        const NOW = Date.now();
 
-      // Seed a stuck pendingFinalDelivery this run owns: createdAt at run start
-      // marks it as produced by this heartbeat (the case the original fix
-      // targets). pendingFinalDeliveryText is a heartbeat-ack token so the
-      // pendingFinalDelivery defer gate does not bail before the send.
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-        updatedAt: NOW,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "HEARTBEAT_OK",
-          createdAt: NOW,
-          context: { channel: "telegram", to: "target" },
-          intentId: "intent-send-success",
-        },
+        // Seed a stuck pendingFinalDelivery this run owns: createdAt at run start
+        // marks it as produced by this heartbeat (the case the original fix
+        // targets). pendingFinalDeliveryText is a heartbeat-ack token so the
+        // pendingFinalDelivery defer gate does not bail before the send.
+        const sessionKey = await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: TELEGRAM_GROUP,
+          updatedAt: NOW,
+          pendingFinalDelivery: {
+            kind: "replayable",
+            text: acknowledgement,
+            createdAt: NOW,
+            context: { channel: "telegram", to: "target" },
+            intentId: "intent-send-success",
+          },
+        });
+
+        // Substantive reply text forces the post-success store write path
+        // (heartbeat-runner.ts:~2120, `if (visibleSendSucceeded && !shouldSkipMain ...)`).
+        const replyText = "Heartbeat update: everything is green.";
+        replySpy.mockResolvedValue({ text: replyText });
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+        });
+
+        expect(result.status).toBe("ran");
+        expect(sendTelegram).toHaveBeenCalledTimes(1);
+
+        const entry = await readEntry(storePath, sessionKey);
+        expect(entry?.lastHeartbeatText).toBe(replyText);
+        expect(typeof entry?.lastHeartbeatSentAt).toBe("number");
+        expectPendingFinalDeliveryCleared(entry);
       });
-
-      // Substantive reply text forces the post-success store write path
-      // (heartbeat-runner.ts:~2120, `if (visibleSendSucceeded && !shouldSkipMain ...)`).
-      const replyText = "Heartbeat update: everything is green.";
-      replySpy.mockResolvedValue({ text: replyText });
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
-      });
-
-      expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-
-      const entry = await readEntry(storePath, sessionKey);
-      expect(entry?.lastHeartbeatText).toBe(replyText);
-      expect(typeof entry?.lastHeartbeatSentAt).toBe("number");
-      expectPendingFinalDeliveryCleared(entry);
-    });
-  });
+    },
+  );
 
   it("clears pendingFinalDelivery* on a duplicate skip even when responsePrefix diverges the stored text", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {

@@ -150,10 +150,9 @@ final assistant text private unless the agent calls `message(action="send")`.
 
 Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
-or notify. Heartbeat initiative guidance is sent as a Codex collaboration-mode
-developer instruction scoped to the heartbeat turn; ordinary chat turns stay
-in Codex Default mode. The heartbeat monitor's cron scratch is appended to the
-heartbeat prompt when present.
+or notify. Heartbeat turns use the same Codex Default collaboration mode as
+ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
+scheduled heartbeat user message when present.
 
 ## Hook boundaries
 
@@ -223,20 +222,27 @@ process. Failed environment registration never falls back to host execution.
 See [Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution)
 for configuration and local-only transport restrictions.
 
-Paired-device `remote-exec` is separate from the experimental local sandbox
-flag: Codex app-server and model auth stay on the Gateway, while an explicitly
-authorized managed exec-server on the node owns process, filesystem, capability,
-and credential-free HTTP operations. The Gateway rejects authentication,
-cookie, API-key, and other sensitive HTTP headers before they reach the node;
-authenticated HTTP must run on the Gateway. The existing duplex node channel
-carries the Codex JSON-RPC stream without starting an OpenClaw worker child or
-consuming a worker slot. Each attempt owns an isolated Gateway app-server
-client so its remote environment registration retires with that attempt.
-Disconnect ends the active attempt and its remote processes; reconnect allows
-only a fresh attempt. Normal Codex turns work, but `/btw` side questions fail
-closed because they are not yet placement-bound. The placement workspace does
-not confine execution: process and filesystem access remain bounded only by the
-node's operating system account.
+Node-backed `remote-exec`, whether on a paired device or the same Crabbox cloud
+profile used for OpenClaw worker turns, is separate from the experimental
+local sandbox flag. Codex app-server and model auth stay on the Gateway, while
+an explicitly authorized managed exec-server on the enrolled node owns
+process, filesystem, capability, and credential-free HTTP operations. The
+Gateway rejects authentication, cookie, API-key, and other sensitive HTTP
+headers before they reach the node; authenticated HTTP must run on the
+Gateway. The existing duplex node channel carries the Codex JSON-RPC stream
+without starting an OpenClaw worker child or consuming a worker slot. Explicit
+Gateway command allowlisting remains required. Launch needs per-attempt
+allow-once approval or exact admitted session Full access with node-local
+full/off policy. Full access never overrides local deny, ask, or allowlist
+restrictions, pairing, hosting consent, command authorization, or tool policy.
+The node rechecks local policy immediately before spawning the pinned binary;
+a stale launch is refused. Each attempt owns an isolated Gateway app-server client so its
+remote environment registration retires with that attempt. Disconnect ends the
+active attempt and its remote processes; reconnect allows only a fresh
+attempt. Normal Codex turns work, but `/btw` side questions fail closed because
+they are not yet placement-bound. The placement workspace does not confine
+execution: process and filesystem access remain bounded only by the node's
+operating system account.
 
 ## V1 support contract
 
@@ -337,6 +343,11 @@ Active-run queue steering maps onto Codex app-server `turn/steer`. With the
 default `messages.queue.mode: "steer"`, OpenClaw batches steer-mode chat
 messages for the configured quiet window and sends them as one `turn/steer`
 request in arrival order.
+
+When Codex confirms consumption, OpenClaw saves completed visible assistant
+items before the steered user message, including items before a tool or sleep
+handoff. Each item keeps its own identity so later steers do not duplicate it.
+This history prefix is separate from the turn's final-answer selection.
 
 Codex review and manual compaction turns can reject same-turn steering. In
 that case, OpenClaw waits for the active run to finish before starting the

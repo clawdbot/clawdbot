@@ -78,17 +78,18 @@ function resolveSlackThreadTsCandidate(value?: string | number | null): string |
 
 const mattermostThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
-    const ambientThreadId = threadId != null && threadId !== "" ? String(threadId) : undefined;
-    const resolvedThreadId =
-      replyDelivery?.chatType === "direct"
-        ? undefined
-        : replyToIsExplicit
+    const ambientThreadId = threadId != null ? String(threadId) : undefined;
+    const isFlatDirect =
+      replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+    const resolvedThreadId = isFlatDirect
+      ? undefined
+      : replyDelivery
+        ? replyToIsExplicit
           ? (replyToId ?? ambientThreadId)
-          : replyDelivery
-            ? (ambientThreadId ?? replyToId ?? undefined)
-            : (replyToId ?? ambientThreadId);
+          : (ambientThreadId ?? replyToId ?? undefined)
+        : (ambientThreadId ?? replyToId);
     return {
-      replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+      replyToId: isFlatDirect ? null : resolvedThreadId,
       threadId: resolvedThreadId ?? null,
     };
   },
@@ -316,6 +317,7 @@ describe("routeReply", () => {
       requesterSenderId: "sender-1",
       replyKind: "block",
       runId: "run-1",
+      deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
     });
 
     expect(res.ok).toBe(true);
@@ -335,6 +337,16 @@ describe("routeReply", () => {
       },
     });
     expect(lastDelivery()).not.toHaveProperty("skipMessageSendingHooks");
+    expectLastDeliveryFields({
+      queuePolicy: "required",
+      deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
+      reusePendingDeliveryIntent: true,
+      completionRetention: {
+        idPrefix: "block-reply:v1:",
+        maxAgeMs: 24 * 60 * 60_000,
+        maxEntries: 2_000,
+      },
+    });
   });
 
   it("uses payload reply policy when resolving the final Slack transport", async () => {
@@ -469,25 +481,31 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().replyToId).toBeUndefined();
   });
 
-  it("honors Mattermost policy that clears direct-message reply targets", async () => {
-    const res = await routeTestReply({
-      payload: { text: "hello", replyToId: "post-1" },
-      channel: "mattermost",
-      to: "user:U123",
-      replyDelivery: {
-        chatType: "direct",
-        replyToMode: "all",
-      },
-      replyKind: "block",
-    });
+  it.each([
+    { replyToMode: "off" as const, expectedTarget: null },
+    { replyToMode: "all" as const, expectedTarget: "post-1" },
+  ])(
+    "honors Mattermost $replyToMode direct-message reply placement",
+    async ({ replyToMode, expectedTarget }) => {
+      const res = await routeTestReply({
+        payload: { text: "hello", replyToId: "post-1" },
+        channel: "mattermost",
+        to: "user:U123",
+        replyDelivery: {
+          chatType: "direct",
+          replyToMode,
+        },
+        replyKind: "block",
+      });
 
-    expect(res.ok).toBe(true);
-    expectLastDeliveryFields({
-      replyToId: null,
-      threadId: null,
-    });
-    expect(lastDeliveryPayload().replyToId).toBeUndefined();
-  });
+      expect(res.ok).toBe(true);
+      expectLastDeliveryFields({
+        replyToId: expectedTarget,
+        threadId: expectedTarget,
+      });
+      expect(lastDeliveryPayload().replyToId).toBe(expectedTarget ?? undefined);
+    },
+  );
 
   it("preserves explicit Mattermost reply targets over the ambient thread", async () => {
     const res = await routeTestReply({

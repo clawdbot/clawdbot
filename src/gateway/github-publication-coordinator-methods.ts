@@ -12,12 +12,10 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
+import { matchesGitHubPublicationIdentityRow } from "./github-publication-executor.js";
+import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
-  captureGitHubPublicationWorkspaceSnapshot,
-  matchesGitHubPublicationIdentityRow,
-} from "./github-publication-executor.js";
-import {
-  claimGitHubPublicationExecution as claimExecution,
+  deferGitHubPublicationRequests as deferRequests,
   digestGitHubPublicationRequest as digestRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
@@ -83,7 +81,6 @@ function exactClaimForPlacement(
 
 export function createGitHubPublicationCoordinatorMethods(params: {
   placements: WorkerSessionPlacementStore;
-  instanceId: string;
   readById: (requestId: string) => PublicationRow | undefined;
   requestForClaim: (request: ClaimRequest) => Promise<SessionGitHubPublicationResult>;
   sameWorktree: (
@@ -94,21 +91,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     initial: PublicationRow,
     validateAuthority: () => boolean,
   ) => Promise<SessionGitHubPublicationResult>;
-  failClaimPreparation: (
-    claim: WorkerSessionTurnClaim,
-    error: unknown,
-  ) => SessionGitHubPublicationResult[];
-  complete: (row: PublicationRow, result: SessionGitHubPublicationResult) => PublicationRow;
 }) {
-  const {
-    readById,
-    requestForClaim,
-    sameWorktree,
-    processRow,
-    failClaimPreparation,
-    instanceId,
-    complete,
-  } = params;
+  const { readById, requestForClaim, sameWorktree, processRow } = params;
   return {
     async requestForSession(
       input: SessionGitHubPublishParams & {
@@ -157,13 +141,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         }
       };
       const claim = placement ? exactClaimForPlacement(placement) : undefined;
-      if (claim) {
-        if (!input.expectedRunId) {
-          throw new Error("GitHub publication cannot join another active session turn.");
-        }
-        if (claim.runId !== input.expectedRunId) {
-          throw new Error("GitHub publication run identity changed.");
-        }
+      if (claim && input.expectedRunId && claim.runId === input.expectedRunId) {
         const accepted = await requestForClaim({
           claim,
           sessionKey: loaded.canonicalKey,
@@ -186,11 +164,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           return params.placements.validateTurnClaim(claim);
         });
       }
-      if (placement && placement.state !== "local") {
+      if (claim && placement?.state === "local") {
         throw new Error(
-          "GitHub publication for a cloud session must be requested by its next live turn.",
+          input.expectedRunId
+            ? "GitHub publication run identity changed."
+            : "GitHub publication cannot join another active session turn.",
         );
       }
+      const deferred = placement !== undefined && placement.state !== "local";
       const { worktree } = resolveGitHubPublicationWorktreeOwner({
         sessionId,
         sessionKey: loaded.canonicalKey,
@@ -222,6 +203,96 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       input.assertCurrent?.();
       const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
       input.assertCurrent?.();
+      const insertSessionRequest = (snapshot?: {
+        sourceHeadCommit: string;
+        sourceIndexTree: string;
+        workspaceTree: string;
+      }): PublicationRow => {
+        const now = Date.now();
+        const requestId = randomUUID();
+        input.assertCurrent?.();
+        return runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const query = publicationDb(db);
+            executeSqliteQuerySync(
+              db,
+              query
+                .insertInto("github_publication_requests")
+                .values({
+                  request_id: requestId,
+                  idempotency_key: input.idempotencyKey,
+                  request_digest: requestDigest,
+                  session_id: sessionId,
+                  session_key: loaded.canonicalKey,
+                  agent_id: input.agentId,
+                  worktree_id: worktree.id,
+                  repository_fingerprint: worktree.repoFingerprint,
+                  claim_id: null,
+                  run_id: null,
+                  environment_id: null,
+                  owner_epoch: null,
+                  placement_generation: null,
+                  identity_source: identity.source,
+                  identity_profile_id: identity.profileId ?? null,
+                  identity_account_id: identity.account.accountId,
+                  identity_login: identity.account.login,
+                  title: input.title ?? null,
+                  body: input.body ?? null,
+                  status: "requested",
+                  gateway_instance_id: null,
+                  repository: null,
+                  branch: worktree.branch,
+                  base_branch: null,
+                  source_head_commit: snapshot?.sourceHeadCommit ?? null,
+                  source_index_tree: snapshot?.sourceIndexTree ?? null,
+                  workspace_tree: snapshot?.workspaceTree ?? null,
+                  head_commit: null,
+                  pull_request_url: null,
+                  error_code: null,
+                  next_action: null,
+                  created_at_ms: now,
+                  updated_at_ms: now,
+                  reported_at_ms: null,
+                })
+                .onConflict((conflict) =>
+                  conflict.columns(["session_id", "idempotency_key"]).doNothing(),
+                ),
+            );
+            const stored = executeSqliteQuerySync(
+              db,
+              query
+                .selectFrom("github_publication_requests")
+                .selectAll()
+                .where("session_id", "=", sessionId)
+                .where("idempotency_key", "=", input.idempotencyKey),
+            ).rows[0];
+            if (
+              !stored ||
+              stored.request_digest !== requestDigest ||
+              !matchesGitHubPublicationIdentityRow(stored, identity) ||
+              !sameWorktree(stored, worktree)
+            ) {
+              throw new Error("GitHub publication idempotency key was reused.");
+            }
+            return stored;
+          },
+          undefined,
+          { operationLabel: "github-publication.request-session" },
+        );
+      };
+      if (deferred) {
+        resolveGitHubPublicationWorktreeOwner({
+          sessionId,
+          sessionKey: loaded.canonicalKey,
+          agentId: input.agentId,
+          expected: {
+            worktreeId: worktree.id,
+            repositoryFingerprint: worktree.repoFingerprint,
+            branch: worktree.branch,
+          },
+        });
+        return publicationResult(insertSessionRequest());
+      }
       const current = params.placements.get(sessionId);
       if ((current && current.state !== "local") || current?.turnClaim) {
         throw new Error("GitHub publication session authority changed after verification.");
@@ -248,77 +319,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           branch: worktree.branch,
         },
       });
-      const now = Date.now();
-      const requestId = randomUUID();
-      input.assertCurrent?.();
-      const row = runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const query = publicationDb(db);
-          executeSqliteQuerySync(
-            db,
-            query
-              .insertInto("github_publication_requests")
-              .values({
-                request_id: requestId,
-                idempotency_key: input.idempotencyKey,
-                request_digest: requestDigest,
-                session_id: sessionId,
-                session_key: loaded.canonicalKey,
-                agent_id: input.agentId,
-                worktree_id: worktree.id,
-                repository_fingerprint: worktree.repoFingerprint,
-                claim_id: null,
-                run_id: null,
-                environment_id: null,
-                owner_epoch: null,
-                placement_generation: null,
-                identity_source: identity.source,
-                identity_profile_id: identity.profileId ?? null,
-                identity_account_id: identity.account.accountId,
-                identity_login: identity.account.login,
-                title: input.title ?? null,
-                body: input.body ?? null,
-                status: "requested",
-                gateway_instance_id: null,
-                repository: null,
-                branch: worktree.branch,
-                base_branch: null,
-                source_head_commit: snapshot.sourceHeadCommit,
-                source_index_tree: snapshot.sourceIndexTree,
-                workspace_tree: snapshot.workspaceTree,
-                head_commit: null,
-                pull_request_url: null,
-                error_code: null,
-                next_action: null,
-                created_at_ms: now,
-                updated_at_ms: now,
-                reported_at_ms: null,
-              })
-              .onConflict((conflict) =>
-                conflict.columns(["session_id", "idempotency_key"]).doNothing(),
-              ),
-          );
-          const stored = executeSqliteQuerySync(
-            db,
-            query
-              .selectFrom("github_publication_requests")
-              .selectAll()
-              .where("session_id", "=", sessionId)
-              .where("idempotency_key", "=", input.idempotencyKey),
-          ).rows[0];
-          if (
-            !stored ||
-            stored.request_digest !== requestDigest ||
-            !matchesGitHubPublicationIdentityRow(stored, identity) ||
-            !sameWorktree(stored, worktree)
-          ) {
-            throw new Error("GitHub publication idempotency key was reused.");
-          }
-          return stored;
-        },
-        undefined,
-        { operationLabel: "github-publication.request-idle" },
-      );
+      const row = insertSessionRequest(snapshot);
       return await processRow(row, () => {
         input.assertCurrent?.();
         const latest = params.placements.get(sessionId);
@@ -326,7 +327,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       });
     },
 
-    async resumeLocalRequests(): Promise<void> {
+    async resumeSessionRequests(): Promise<void> {
       if (!schemaExists()) {
         return;
       }
@@ -340,10 +341,16 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           .where("status", "in", ["requested", "publishing"])
           .orderBy("created_at_ms"),
       ).rows;
+      const pending = new Set(
+        params.placements.listPendingWorkspaceResults().map((result) => result.sessionId),
+      );
       for (const row of rows) {
+        if (pending.has(row.session_id) || params.placements.get(row.session_id)?.turnClaim) {
+          continue;
+        }
         await processRow(row, () => {
           const placement = params.placements.get(row.session_id);
-          return (!placement || placement.state === "local") && !placement?.turnClaim;
+          return !placement?.turnClaim && !pending.has(row.session_id);
         });
       }
     },
@@ -361,16 +368,30 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           .where("run_id", "=", claim.runId)
           .orderBy("created_at_ms"),
       ).rows;
-      if (
-        rows.some((row) => !row.source_head_commit || !row.source_index_tree || !row.workspace_tree)
-      ) {
-        return failClaimPreparation(
-          claim,
-          new Error("GitHub publication accepted workspace snapshot is missing."),
-        );
-      }
+      const missingSnapshots = rows.filter(
+        (row) => !row.source_head_commit || !row.source_index_tree || !row.workspace_tree,
+      );
+      deferRequests(missingSnapshots.map((row) => row.request_id));
       const results: SessionGitHubPublicationResult[] = [];
       for (const row of rows) {
+        if (!row.source_head_commit || !row.source_index_tree || !row.workspace_tree) {
+          continue;
+        }
+        results.push(
+          await processRow(row, () => params.placements.validateWorkspaceResultClaim(claim)),
+        );
+      }
+      const deferred = executeSqliteQuerySync(
+        db,
+        publicationDb(db)
+          .selectFrom("github_publication_requests")
+          .selectAll()
+          .where("session_id", "=", claim.sessionId)
+          .where("claim_id", "is", null)
+          .where("status", "=", "requested")
+          .orderBy("created_at_ms"),
+      ).rows;
+      for (const row of deferred) {
         results.push(
           await processRow(row, () => params.placements.validateWorkspaceResultClaim(claim)),
         );
@@ -378,14 +399,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return results;
     },
 
-    failOrphanedRequests(): Array<{
-      sessionId: string;
-      sessionKey: string;
-      agentId: string;
-      result: SessionGitHubPublicationResult;
-    }> {
+    deferOrphanedRequests(): void {
       if (!schemaExists()) {
-        return [];
+        return;
       }
       const pending = new Set(
         params.placements
@@ -401,11 +417,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           .where("status", "in", ["requested", "publishing"])
           .orderBy("created_at_ms"),
       ).rows;
-      return rows.flatMap((row) => {
-        // Claim-less rows are local publication requests. The startup/periodic
-        // sweep resumes them against their persisted worktree authority.
+      const orphaned = rows.filter((row) => {
         if (row.claim_id === null) {
-          return [];
+          return false;
         }
         const ownerKey = `${row.session_id}\0${row.claim_id}\0${row.run_id}`;
         const placement = params.placements.get(row.session_id);
@@ -414,29 +428,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           liveClaim?.claimId === row.claim_id &&
           liveClaim.runId === row.run_id &&
           liveClaim.generation === row.placement_generation;
-        if (pending.has(ownerKey) || stillLive) {
-          return [];
-        }
-        const claimed = claimExecution(row.request_id, instanceId);
-        const terminal = publicationResult(
-          complete(claimed, {
-            requestId: row.request_id,
-            status: "failed",
-            code: "session_changed",
-            message: "GitHub publication failed.",
-            nextAction:
-              "The originating turn ended before its workspace result was accepted. Start a new turn and request publication again.",
-          }),
-        );
-        return [
-          {
-            sessionId: row.session_id,
-            sessionKey: row.session_key,
-            agentId: row.agent_id,
-            result: terminal,
-          },
-        ];
+        return !pending.has(ownerKey) && !stillLive;
       });
+      deferRequests(orphaned.map((row) => row.request_id));
     },
 
     listUnreportedResults(): Array<{

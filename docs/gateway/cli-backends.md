@@ -25,7 +25,7 @@ Use it as a safety net for "always works" text responses, not a primary path. Fo
 The bundled Anthropic plugin registers a default `claude-cli` backend, so it works with no config beyond having Claude Code installed and logged in:
 
 ```bash
-openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-4-6
+openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-5
 ```
 
 `main` is the default agent id when no explicit agent list is configured; swap in your own agent id otherwise.
@@ -48,11 +48,11 @@ Add the CLI backend to your fallback list so it only runs when primary models fa
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["claude-cli/claude-sonnet-4-6"],
+        fallbacks: ["claude-cli/claude-sonnet-5"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "claude-cli/claude-sonnet-4-6": {},
+        "claude-cli/claude-sonnet-5": {},
       },
     },
   },
@@ -89,7 +89,7 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 1. Selects a backend by provider prefix (`claude-cli/...`).
 2. Builds a system prompt using the same OpenClaw prompt and workspace context.
-3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend keeps a Claude stdio process alive per OpenClaw session and sends follow-up turns over stream-json stdin.
+3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend uses Anthropic's official Agent SDK and keeps its authenticated Claude Code subprocess warm across compatible agent turns.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
@@ -116,17 +116,17 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
-OpenClaw's managed Claude stdio sessions require the `msg_lifecycle_v1`
-capability, first observed in the published Claude Code 2.1.206 build. At
-runtime OpenClaw does not trust the version string alone: it waits for
-Claude Code's `system/init` record to advertise `msg_lifecycle_v1`, then accepts
-assistant, tool, and result records only after the matching input lifecycle has
-started. Unknown capabilities are ignored. A CLI that omits the required
-capability fails immediately with `claude update` and gateway-restart guidance
-instead of waiting for the no-output watchdog.
+The bundled Anthropic plugin runs the installed Claude Code executable through
+Anthropic's official Agent SDK. Claude Code owns its existing local login and
+subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
+refreshes, or forwards native tokens, or sends synthesized Anthropic API
+requests. Compatible agent turns share one warm SDK query and
+Claude Code subprocess. A changed model, system prompt, or tool policy starts a
+new query; persisted Claude session IDs still provide
+conversation continuity when the gateway or subprocess restarts.
 
-Setup and Doctor treat 2.1.206 as advisory, so a lower-version compatible
-backport or wrapper remains selectable and is verified by the runtime gate.
+Keep Claude Code updated, especially if the SDK reports an incompatible
+installed executable:
 
 ```bash
 claude --version
@@ -134,16 +134,27 @@ claude update
 # Restart the OpenClaw gateway after updating.
 ```
 
-Claude Code's public CLI documentation covers stream-json mode and updates but
-does not currently document the lifecycle event itself. OpenClaw therefore
-feature-detects the advertised capability; 2.1.206 is the first published
-Claude Code build observed to provide it.
-
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
-Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. The Anthropic plugin normalizes Claude's permission flags to match the effective policy and host restriction.
+The Agent SDK always runs with Claude Code's default permission mode.
+OpenClaw's SDK permission callback and `PreToolUse` hook keep native tools under
+host control, including when user or enterprise settings would otherwise
+preapprove a call. Native requests pass through canonical `before_tool_call`
+policy before exec policy and approval, with native tool names and file
+arguments projected into their OpenClaw equivalents. Per-agent and session
+restrictions still override broader global policy. OpenClaw-owned MCP tools
+remain authorized by the Gateway rather than receiving duplicate native
+approval; other MCP tools stay host-permission controlled.
 
-Under a restrictive policy, Claude asks OpenClaw over stdio before using one of its native or extension tools (its own Bash, WebFetch, or Claude in Chrome browser tools). When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays each request as an interactive approval to the session's channel: **Allow once** permits the single call, **Allow always** permits that tool name for the rest of the live Claude session (in memory only, never persisted), and **Deny**, a timeout, or an unreachable approval route all deny the call. Policies that never prompt keep their old behavior: `security: "deny"` rejects every request, and ask `off` with less than full security (exec mode `allowlist`) denies without asking.
+When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
+native or extension tool requests as interactive approvals to the session's
+channel: **Allow once** permits the single call, **Allow always** permits that
+tool name for the same warm live session while each subsequent turn's policy
+and available tools still allow it, and **Deny**, a timeout, an unreachable
+approval route, or a closed turn all deny the call. Grants stay in memory, end
+when that exact live session is replaced, and never apply to Bash. Policies
+that never prompt keep their existing behavior: `security: "deny"` rejects
+every request, and ask `off` with less than full security denies without asking.
 
 ### Claude browser tools and 1Password sign-in
 
@@ -172,16 +183,15 @@ register a small wrapper backend plugin.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
-- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`, so follow-up turns reuse the live Claude process while it is active, including for custom configs that omit transport fields. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
-- Claude live sessions keep bounded JSONL output guards: 8 MiB and 20,000 raw JSONL lines per turn.
+- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one official Agent SDK query and Claude Code subprocess warm for compatible consecutive agent turns. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
-- Fresh CLI sessions normally reseed only from OpenClaw's compaction summary plus the post-compaction tail. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
+- Fresh CLI sessions normally reseed from OpenClaw's latest compaction summary, the messages retained by that compaction, and subsequent turns on the active branch. OpenClaw reads this history from the canonical session SQLite database; it does not require an OpenClaw JSONL transcript file. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes, including a changed auth profile id, static API key, static token, or OAuth account identity when the CLI exposes one; OAuth access/refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
 ## Fallback prelude from claude-cli sessions
 
-When a `claude-cli` attempt fails over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover), OpenClaw seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript (under `~/.claude/projects/`, keyed per workspace). Without this seed the fallback provider starts cold, since OpenClaw's own session transcript is empty for `claude-cli` runs.
+When a `claude-cli` attempt fails over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover), OpenClaw seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript (under `~/.claude/projects/`, keyed per workspace). This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
 
 - The prelude prefers the latest `/compact` summary or `compact_boundary` marker, then appends the most recent post-boundary turns up to a char budget. Pre-boundary turns are dropped because the summary already represents them.
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest; an oversized summary is truncated and labeled `(truncated)`.
@@ -225,24 +235,25 @@ Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex ag
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
-| Key                      | Value                                                                                                                                                                                                         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`                | `claude`                                                                                                                                                                                                      |
-| `args`                   | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
-| `output`                 | `jsonl`                                                                                                                                                                                                       |
-| `input`                  | `stdin`                                                                                                                                                                                                       |
-| `modelArg`               | `--model`                                                                                                                                                                                                     |
-| `sessionArgs`            | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
-| `sessionMode`            | `always`                                                                                                                                                                                                      |
-| live-session requirement | `msg_lifecycle_v1` (first observed in Claude Code 2.1.206)                                                                                                                                                    |
-| `imageArg`               | `@`                                                                                                                                                                                                           |
-| `imagePathScope`         | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg`    | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`       | `append`                                                                                                                                                                                                      |
+| Key                   | Value                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`             | `claude`                                                                                                                                                                                                      |
+| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
+| `output`              | `jsonl`                                                                                                                                                                                                       |
+| `input`               | `stdin`                                                                                                                                                                                                       |
+| `modelArg`            | `--model`                                                                                                                                                                                                     |
+| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
+| `sessionMode`         | `always`                                                                                                                                                                                                      |
+| agent runtime         | Anthropic Agent SDK with a warm, session-scoped Claude Code query                                                                                                                                             |
+| `imageArg`            | `@`                                                                                                                                                                                                           |
+| `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
+| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
+| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
-`--exclude-dynamic-system-prompt-sections` after its bounded Gateway-startup
-version probe. Older, unknown, or failed probes keep the established argv.
+`--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
+first CLI execution. Concurrent executions share the probe; API catalog discovery
+does not start it. Older, unknown, or failed probes keep the established argv.
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
@@ -341,10 +352,12 @@ If no MCP servers are enabled, OpenClaw still injects a strict config when a bac
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
-For `claude-cli`, a compatible selected or ordered OpenClaw OAuth/token profile
-is forwarded to that Claude child. This makes per-agent profiles authoritative
-for the turn while preserving Claude's native host login when no compatible
-profile exists.
+For `claude-cli`, the installed Claude Code process uses its current native
+login. OpenClaw uses a non-secret route marker and never reads, persists,
+refreshes, selects, or forwards the native tokens.
+Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+Explicit OpenClaw-managed API-key and token profiles continue to use the
+protected, per-invocation credential-forwarding CLI path.
 
 ## Reseed history cap
 

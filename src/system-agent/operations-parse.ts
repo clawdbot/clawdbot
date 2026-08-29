@@ -562,9 +562,21 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
   }
 }
 
+export const SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF =
+  "This change needs operator approval and cannot be applied from this chat. Approve it in the OpenClaw operator UI (`openclaw dashboard` on the Gateway host), or run the change there with `openclaw setup`.";
+
+export const SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF =
+  "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request. Open `openclaw dashboard` or run `openclaw setup` on the Gateway host.";
+
 /** Format the standard approval plan text for a persistent operation. */
-export function formatSystemAgentPersistentPlan(operation: SystemAgentOperation): string {
-  return `Plan: ${describeSystemAgentPersistentOperation(operation)}. Say yes to apply.`;
+export function formatSystemAgentPersistentPlan(
+  operation: SystemAgentOperation,
+  operatorApprovalOnly = false,
+): string {
+  const description = describeSystemAgentPersistentOperation(operation);
+  return operatorApprovalOnly
+    ? `Refused: ${description} requires operator approval and was not applied from this chat.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+    : `Plan: ${description}. Say yes to apply.`;
 }
 
 function formatCreateAgentWorkspace(workspace: string | undefined): string {

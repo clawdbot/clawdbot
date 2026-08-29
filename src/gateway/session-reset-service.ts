@@ -2,9 +2,13 @@
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
@@ -36,6 +40,7 @@ import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
@@ -97,6 +102,9 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
+import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   type PreparedGatewaySessionLifecycle,
@@ -946,6 +954,8 @@ export async function performGatewaySessionReset(params: {
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Existing-row changes stay admin-gated across reset preparation and commit. */
+  fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -962,6 +972,10 @@ export async function performGatewaySessionReset(params: {
   commandSource: string;
   /** Trusted provenance for a reset that materializes a previously missing row. */
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  /** Authenticated durable operator identity for missing-session materialization. */
+  requestingOperatorProfileId?: string;
+  /** Trusted host actor; system-owned resets must identify themselves explicitly. */
+  operatorRoleActor?: GatewayOperatorRoleActor;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
   authorizedPluginId?: string;
   /** Arms local checkout attribution in the authoritative reset commit. */
@@ -985,6 +999,7 @@ export async function performGatewaySessionReset(params: {
       agentId: string;
       storePath: string;
       incognitoDeleted: true;
+      deletedSessionId?: string;
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
@@ -1036,6 +1051,18 @@ export async function performGatewaySessionReset(params: {
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
+  if (!initialResetEntry) {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg: resetTarget.cfg,
+      agentId: resetTarget.target.agentId,
+      ...(params.operatorRoleActor
+        ? { actor: params.operatorRoleActor }
+        : { profileId: params.requestingOperatorProfileId }),
+    });
+    if (creationError) {
+      return { ok: false, error: creationError };
+    }
+  }
   const initialOwnershipError = resolvePluginSessionOwnershipError({
     action: "reset",
     entry: initialResetEntry,
@@ -1044,6 +1071,19 @@ export async function performGatewaySessionReset(params: {
   });
   if (initialOwnershipError) {
     return { ok: false, error: initialOwnershipError };
+  }
+  const resolveFastModeSelectionError = (entry: SessionEntry | undefined) => {
+    const selection = params.fastModeSelection;
+    return entry &&
+      selection &&
+      selection.value !== entry.fastMode &&
+      !selection.allowExistingChange
+      ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
+      : undefined;
+  };
+  const initialFastModeSelectionError = resolveFastModeSelectionError(initialResetEntry);
+  if (initialFastModeSelectionError) {
+    return { ok: false, error: initialFastModeSelectionError };
   }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
     resetTarget.target.canonicalKey,
@@ -1118,6 +1158,22 @@ export async function performGatewaySessionReset(params: {
         params.key,
         resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
       );
+      if (!currentEntry) {
+        resetPreparationError = authorizeGatewaySessionCreation({
+          cfg: resetTarget.cfg,
+          agentId: resetTarget.target.agentId,
+          ...(params.operatorRoleActor
+            ? { actor: params.operatorRoleActor }
+            : { profileId: params.requestingOperatorProfileId }),
+        });
+        if (resetPreparationError) {
+          return;
+        }
+      }
+      resetPreparationError = resolveFastModeSelectionError(currentEntry);
+      if (resetPreparationError) {
+        return;
+      }
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
       resetPreparationError = resolvePluginSessionOwnershipError({
@@ -1150,7 +1206,14 @@ export async function performGatewaySessionReset(params: {
         resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
         return;
       }
-      const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry);
+      // Reset drains pending preparation before replacing the session.
+      const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry, {
+        allowPendingWorkspace: true,
+        allowRestartTombstoneReplacement:
+          currentEntry !== undefined &&
+          currentEntry.archivedAt === undefined &&
+          isRestartRecoveryTombstone(currentEntry),
+      });
       if (archivedSessionError) {
         resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
         return;
@@ -1220,6 +1283,12 @@ export async function performGatewaySessionReset(params: {
           ),
         };
       }
+      // Admitted directives can finish persisting while reset drains them.
+      // Recheck their final selection before retiring placement or running cleanup.
+      const currentFastModeSelectionError = resolveFastModeSelectionError(entry);
+      if (currentFastModeSelectionError) {
+        return { ok: false, error: currentFastModeSelectionError };
+      }
       const currentOwnershipError = resolvePluginSessionOwnershipError({
         action: "reset",
         entry,
@@ -1241,7 +1310,13 @@ export async function performGatewaySessionReset(params: {
           error: errorShape(ErrorCodes.INVALID_REQUEST, placementError.message),
         };
       }
-      const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+      const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+        allowPendingWorkspace: true,
+        allowRestartTombstoneReplacement:
+          entry !== undefined &&
+          entry.archivedAt === undefined &&
+          isRestartRecoveryTombstone(entry),
+      });
       if (archivedSessionError) {
         return {
           ok: false,
@@ -1434,6 +1509,7 @@ export async function performGatewaySessionReset(params: {
           agentId: target.agentId,
           storePath,
           incognitoDeleted: true,
+          deletedSessionId: deleted.deletedSessionId,
         };
       }
 
@@ -1449,10 +1525,12 @@ export async function performGatewaySessionReset(params: {
       }
       let resetBoundaryAppended = false;
       let resetSkipped = false;
+      let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
+      let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundaryReason: boundaryEntry ? params.reason : undefined,
+        resetBoundary: boundaryEntry ? { context: "clear", reason: params.reason } : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
@@ -1466,7 +1544,23 @@ export async function performGatewaySessionReset(params: {
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
           params.assertAuthorizedInstance?.();
+          if (!currentEntry) {
+            creationAuthorizationError = authorizeGatewaySessionCreation({
+              cfg,
+              agentId: target.agentId,
+              ...(params.operatorRoleActor
+                ? { actor: params.operatorRoleActor }
+                : { profileId: params.requestingOperatorProfileId }),
+            });
+            if (creationAuthorizationError) {
+              throw new Error(creationAuthorizationError.message);
+            }
+          }
           createdNewEntry = currentEntry === undefined;
+          fastModeSelectionError = resolveFastModeSelectionError(currentEntry);
+          if (fastModeSelectionError) {
+            throw new Error(fastModeSelectionError.message);
+          }
           if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
             if (currentEntry) {
               resetSkipped = true;
@@ -1502,9 +1596,15 @@ export async function performGatewaySessionReset(params: {
                 createdActor: currentEntry.createdActor,
                 createdAt: currentEntry.createdAt,
                 projectId: currentEntry.projectId,
+                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
-              ? buildSessionCreationStamp(params.creation)
+              ? {
+                  ...buildSessionCreationStamp(params.creation),
+                  ...(resolveCreatorSandbox(cfg, params.creation) === "required"
+                    ? { sandbox: "required" as const }
+                    : {}),
+                }
               : {};
           const nextEntry: InternalSessionEntry = {
             sessionId: nextSessionId,
@@ -1515,7 +1615,7 @@ export async function performGatewaySessionReset(params: {
             abortedLastRun: false,
             contextWindow: currentEntry?.contextWindow,
             thinkingLevel: currentEntry?.thinkingLevel,
-            fastMode: currentEntry?.fastMode,
+            fastMode: params.fastModeSelection?.value ?? currentEntry?.fastMode,
             toolOverrides: currentEntry?.toolOverrides,
             verboseLevel: currentEntry?.verboseLevel,
             traceLevel: currentEntry?.traceLevel,
@@ -1688,8 +1788,18 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
-      const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
-        await lifecyclePromise;
+      let lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>>;
+      try {
+        lifecycle = await lifecyclePromise;
+      } catch (error) {
+        if (fastModeSelectionError) {
+          return { ok: false, error: fastModeSelectionError };
+        }
+        if (creationAuthorizationError) {
+          return { ok: false, error: creationAuthorizationError };
+        }
+        throw error;
+      }
       lifecyclePreparationCommitted = !resetSkipped;
       if (!resetSkipped) {
         const resetSessionKey = target.canonicalKey ?? params.key;

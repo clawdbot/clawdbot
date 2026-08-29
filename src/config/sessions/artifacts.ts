@@ -137,10 +137,7 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
 
 /** Returns true for transcript files counted in usage, including reset/deleted archives. */
 export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
-    return true;
-  }
-  return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
+  return parseUsageCountedSessionIdFromFileName(fileName) !== null;
 }
 
 /** Extracts the session id from a usage-counted transcript filename. */
@@ -153,7 +150,8 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
     const marker = `.jsonl.${reason}.`;
     const index = normalized.lastIndexOf(marker);
     if (index > 0 && hasArchiveSuffix(normalized, reason)) {
-      return normalized.slice(0, index);
+      const sessionId = normalized.slice(0, index);
+      return isPrimarySessionTranscriptFileName(`${sessionId}.jsonl`) ? sessionId : null;
     }
   }
   return null;

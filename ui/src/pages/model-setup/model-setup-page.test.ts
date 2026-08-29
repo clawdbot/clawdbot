@@ -563,7 +563,7 @@ describe("ModelSetupPage catalog icons", () => {
       if (method === "wizard.next") {
         config = { ...config, configuredModel: "provider/model" };
         hash = "hash-3";
-        return { done: true, status: "done" };
+        return { done: true, status: "done", modelActivation: { modelRef: "provider/model" } };
       }
       if (method === "openclaw.setup.detect") {
         return {
@@ -597,7 +597,6 @@ describe("ModelSetupPage catalog icons", () => {
         "openclaw.setup.auth.start",
         "wizard.next",
         "config.get",
-        "openclaw.setup.detect",
       ]);
       expect(page.textContent).toContain("Connection verified");
     });

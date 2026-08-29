@@ -439,6 +439,24 @@ describe("followup queue collect routing", () => {
     },
   );
 
+  it("keeps history-policy peers separate when delivery targets coincide", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      "history-route-peers",
+      {},
+      2,
+    );
+    for (const peerId of ["peer", "direct:peer"]) {
+      enqueueSlackRun(key, settings, peerId, { conversationRoutePeerId: peerId });
+    }
+    await drainRecordedQueue(key, runFollowup, done);
+    expect(calls.map((call) => call.run.conversationRoutePeerId)).toEqual(["peer", "direct:peer"]);
+    expect(calls.map((call) => call.prompt)).toEqual(
+      ["peer", "direct:peer"].map(
+        (peerId) => `[Queued messages while agent was busy]\n\n---\nQueued #1\n${peerId}`,
+      ),
+    );
+  });
+
   it("collects distinct messages inside the same routed thread", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-shared-thread-${Date.now()}`,
@@ -649,6 +667,86 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).not.toContain("channel A content");
     expect(calls[1]?.originatingTo).toBe("channel:B");
   });
+
+  it.each([
+    { disposition: "deliver", elided: false },
+    { disposition: "drop", elided: false },
+    { disposition: "deliver", elided: true },
+    { disposition: "drop", elided: true },
+  ] as const)(
+    "keeps the WebChat $disposition owner on overflow summaries (elided: $elided)",
+    async ({ disposition, elided }) => {
+      const key = `test-webchat-overflow-delivery-${disposition}-${elided}-${Date.now()}`;
+      const settings = createQueueSettings({ cap: 1 });
+      const delivered: string[] = [];
+      const sourceDisposition =
+        disposition === "deliver"
+          ? {
+              kind: "deliver" as const,
+              deliver: async (batch: { payloads: Array<{ text?: string }> }) => {
+                delivered.push(batch.payloads[0]?.text ?? "");
+              },
+            }
+          : { kind: "drop" as const, reason: "source-unavailable" as const };
+      const dropped = createRun({
+        prompt: "overflowed WebChat message",
+        originatingChannel: "webchat",
+        originatingChatType: "direct",
+      });
+      dropped.queuedFollowupReplyDisposition = sourceDisposition;
+      enqueueFollowupRun(key, dropped, settings);
+      if (elided) {
+        enqueueTestRun(
+          key,
+          {
+            prompt: "separate overflow route",
+            originatingChannel: "webchat",
+            originatingChatType: "group",
+          },
+          settings,
+        );
+      }
+      enqueueTestRun(
+        key,
+        {
+          prompt: "live WebChat message",
+          originatingChannel: "webchat",
+          originatingChatType: elided ? "group" : "direct",
+        },
+        settings,
+      );
+
+      const expectedCalls = elided ? 3 : 2;
+      const { calls, done } = createDrainRecorder(expectedCalls);
+      const unrelatedDispatcher = vi.fn();
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        if (run.prompt.includes("overflowed WebChat message")) {
+          const owner = run.queuedFollowupReplyDisposition;
+          if (owner?.kind === "deliver") {
+            await owner.deliver({
+              kind: "queued-followup",
+              runId: "overflow-summary-run",
+              originatingChannel: "webchat",
+              payloads: [{ text: "overflow summary reached its owner" }],
+            });
+          } else if (owner?.kind !== "drop") {
+            unrelatedDispatcher();
+          }
+        }
+        if (calls.length >= expectedCalls) {
+          done.resolve();
+        }
+      });
+      await done.promise;
+
+      expect(calls[0]?.queuedFollowupReplyDisposition).toBe(sourceDisposition);
+      expect(unrelatedDispatcher).not.toHaveBeenCalled();
+      expect(delivered).toEqual(
+        disposition === "deliver" ? ["overflow summary reached its owner"] : [],
+      );
+    },
+  );
 
   it("does not attribute elided private drops to a public summary", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(

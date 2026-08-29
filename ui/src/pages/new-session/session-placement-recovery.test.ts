@@ -8,6 +8,7 @@ import {
   listSessionPlacementRecoveries,
   migrateSessionPlacementRecoveryScope,
   parseSessionPlacementCreateParams,
+  pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
   writeSessionPlacementRecoveryIfAvailable,
@@ -107,6 +108,102 @@ describe("session placement recovery", () => {
       ),
     ).toEqual(automatic);
   });
+
+  it("does not retire a replacement submission at the same session key", () => {
+    const replacement = { ...recovery, messageId: "message-newer", message: "newer input" };
+    expect(writeSessionPlacementRecovery(replacement)).toBe(true);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+      recovery.messageId,
+    );
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toEqual(replacement);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+      replacement.messageId,
+    );
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toBeNull();
+  });
+
+  it.each(["not-sent", "rejected", "unconfirmed"] as const)(
+    "retains a paused %s failure without changing pending recovery or storage lifetime",
+    (reason) => {
+      const paused = {
+        ...recovery,
+        phase: "paused" as const,
+        reason,
+        error: "Target unavailable",
+      };
+      expect(writeSessionPlacementRecovery(paused)).toBe(true);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(paused);
+      expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(paused);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps input in memory on a failed pause write (already paused=%s)",
+    (alreadyPaused) => {
+      const retained = alreadyPaused
+        ? {
+            ...recovery,
+            phase: "paused" as const,
+            reason: "not-sent" as const,
+            error: "first failure",
+          }
+        : recovery;
+      expect(writeSessionPlacementRecovery(retained)).toBe(true);
+      const storage = sessionStorage;
+      vi.stubGlobal("sessionStorage", {
+        getItem: storage.getItem.bind(storage),
+        removeItem: storage.removeItem.bind(storage),
+        setItem: () => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        },
+      });
+      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+        message: retained.message,
+        messageId: retained.messageId,
+        phase: "paused",
+        reason: "not-sent",
+        error: expect.stringContaining("Keep this page open"),
+      });
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(alreadyPaused ? retained : null);
+    },
+  );
 
   it("migrates only exact framed rows under a new scope", () => {
     const sourceScope = recovery.recoveryScope;
@@ -279,6 +376,11 @@ describe("session placement recovery", () => {
         category: "Client work",
         projectId: "openclaw",
         thinkingLevel: "high",
+        toolOverrides: {
+          mcpServers: { github: false },
+          skills: { release: false },
+          webSearch: false,
+        },
         visibility: "draft" as const,
         worktree: true as const,
       },
@@ -314,6 +416,9 @@ describe("session placement recovery", () => {
       value: { projectId: "openclaw", execNode: "macbook" },
     },
     { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
+    { name: "a null Fast Mode", value: { fastMode: null } },
+    { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
     expect(

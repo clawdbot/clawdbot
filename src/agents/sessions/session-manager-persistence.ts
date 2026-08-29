@@ -5,6 +5,7 @@ import {
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
@@ -35,6 +36,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): number {
+    this.ensureCompletePersistedHistory();
     let preservedStart = this.fileEntries.length;
     while (preservedStart > 1) {
       const entry = this.fileEntries[preservedStart - 1];
@@ -203,7 +205,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       );
       return undefined;
     }
-    const appendOptions = {
+    const appendOptions = copyCodeModeSourceAppendOptions(options, {
       cwd: this.cwd,
       eventId: entry.id,
       ...(options?.config ? { config: options.config } : {}),
@@ -212,8 +214,14 @@ export class SessionManagerPersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
-    } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
-    const result = appendTranscriptMessageSync(scope, appendOptions);
+    } satisfies Parameters<typeof appendTranscriptMessageSync>[1]);
+    const outcome = appendTranscriptMessageSync(scope, appendOptions);
+    if (!outcome.ok) {
+      throw new Error(`Session transcript message was not persisted: ${entry.id}`, {
+        cause: outcome.error,
+      });
+    }
+    const result = outcome.value;
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
@@ -248,6 +256,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
+    // appendEntry owns this JSON copy. Cache the final storage projection: a
+    // second credential mask can differ from the guard's diagnostic hint.
+    entry.message = result.message;
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
       effectiveParentId: result.effectiveParentId,

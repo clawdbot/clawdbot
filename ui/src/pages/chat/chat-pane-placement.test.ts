@@ -350,89 +350,126 @@ describe("chat pane placement", () => {
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 
-  it("disables incompatible cloud execution modes while preserving compatible machine selection", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.list") {
-        return {
-          profiles: [
-            {
-              id: "worker-only",
-              providerId: "crabbox",
-              executionMode: "worker-turn",
-            },
-            {
-              id: "remote-exec",
-              providerId: "crabbox",
-              executionMode: "remote-exec",
-              machines: [
-                { id: "standard", label: "Standard", default: true },
-                { id: "beast", label: "Beast" },
-              ],
-            },
-          ],
-          environments: [],
-        };
-      }
-      return { ok: true };
-    });
-    const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {
-        refreshReplacement: vi.fn(async () => undefined),
-      } as unknown as SessionCapability,
-    });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
-    } as never;
-    const session = {
-      ...activePlacementSession(),
-      agentRuntime: {
-        id: "codex",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "remote-exec",
-        source: "model",
-      },
-    } satisfies GatewaySessionRow;
-
-    const moving = pane.moveHeaderPlacement(session);
-    try {
-      await vi.waitFor(() => {
-        expect(document.body.querySelector('[data-value="cloud:worker-only"]')).not.toBeNull();
+  it.each([
+    {
+      runtimeId: "openclaw",
+      executionMode: "worker-turn",
+      compatibleSingleMode: "worker-only",
+      incompatibleSingleMode: "remote-only",
+    },
+    {
+      runtimeId: "codex",
+      executionMode: "remote-exec",
+      compatibleSingleMode: "remote-only",
+      incompatibleSingleMode: "worker-only",
+    },
+  ] as const)(
+    "moves $runtimeId to the same two-mode cloud profile while preserving machine selection",
+    async ({ runtimeId, executionMode, compatibleSingleMode, incompatibleSingleMode }) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "environments.list") {
+          return {
+            profiles: [
+              {
+                id: "lifecycle-only",
+                providerId: "crabbox",
+              },
+              {
+                id: "worker-only",
+                providerId: "crabbox",
+                executionMode: "worker-turn",
+                executionModes: ["worker-turn"],
+              },
+              {
+                id: "remote-only",
+                providerId: "crabbox",
+                executionMode: "remote-exec",
+                executionModes: ["remote-exec"],
+              },
+              {
+                id: "aws",
+                providerId: "crabbox",
+                executionMode: "worker-turn",
+                executionModes: ["worker-turn", "remote-exec"],
+                machines: [
+                  { id: "standard", label: "Standard", default: true },
+                  { id: "beast", label: "Beast" },
+                ],
+              },
+            ],
+            environments: [],
+          };
+        }
+        return { ok: true };
       });
-      const incompatible = document.body.querySelector<HTMLButtonElement>(
-        '[data-value="cloud:worker-only"]',
-      );
-      expect(incompatible?.disabled).toBe(true);
-      expect(incompatible?.title).toMatch(/compatible cloud worker|cannot use/i);
-      const compatible = document.body.querySelector<HTMLButtonElement>(
-        '[data-value="cloud:remote-exec"]',
-      );
-      expect(compatible?.disabled).toBe(false);
-      compatible?.click();
-      document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
-      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Move session")
-        ?.click();
-      await moving;
+      const { pane } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+        sessions: {
+          refreshReplacement: vi.fn(async () => undefined),
+        } as unknown as SessionCapability,
+      });
+      pane.context.gateway.snapshot.hello = {
+        features: { methods: ["sessions.move"] },
+        auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+      } as never;
+      const session = {
+        ...activePlacementSession(),
+        agentRuntime: {
+          id: runtimeId,
+          cloudPlacementSupported: true,
+          cloudPlacementExecutionMode: executionMode,
+          source: "model",
+        },
+      } satisfies GatewaySessionRow;
 
-      expect(request).toHaveBeenCalledWith(
-        "sessions.move",
-        expect.objectContaining({
-          target: {
-            kind: "profile",
-            profileId: "remote-exec",
-            machineClass: "beast",
-          },
-        }),
-      );
-    } finally {
-      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Cancel")
-        ?.click();
-      await moving;
-    }
-  });
+      const moving = pane.moveHeaderPlacement(session);
+      try {
+        await vi.waitFor(() => {
+          expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+        });
+        const incompatible = document.body.querySelector<HTMLButtonElement>(
+          `[data-value="cloud:${incompatibleSingleMode}"]`,
+        );
+        expect(incompatible?.disabled).toBe(true);
+        expect(incompatible?.title).toMatch(/compatible cloud worker|cannot use/i);
+        const lifecycleOnly = document.body.querySelector<HTMLButtonElement>(
+          '[data-value="cloud:lifecycle-only"]',
+        );
+        expect(lifecycleOnly?.disabled).toBe(true);
+        expect(lifecycleOnly?.title).toMatch(/compatible cloud worker|cannot use/i);
+        const compatibleSingle = document.body.querySelector<HTMLButtonElement>(
+          `[data-value="cloud:${compatibleSingleMode}"]`,
+        );
+        expect(compatibleSingle?.disabled).toBe(false);
+        const multiMode = document.body.querySelector<HTMLButtonElement>(
+          '[data-value="cloud:aws"]',
+        );
+        expect(multiMode?.disabled).toBe(false);
+        multiMode?.click();
+        document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
+        [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent?.trim() === "Move session")
+          ?.click();
+        await moving;
+
+        expect(request).toHaveBeenCalledWith(
+          "sessions.move",
+          expect.objectContaining({
+            target: {
+              kind: "profile",
+              profileId: "aws",
+              machineClass: "beast",
+            },
+          }),
+        );
+      } finally {
+        [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent?.trim() === "Cancel")
+          ?.click();
+        await moving;
+      }
+    },
+  );
 
   it("cancels offline-device continuation without opening a picker or sending an RPC", async () => {
     const request = vi.fn(async () => ({ ok: true }));

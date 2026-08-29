@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -13,6 +14,51 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
+    const shutdownError = new Error("SSH tunnel shutdown failed");
+    const nodeShutdown = createDeferred();
+    const tunnelManager = {
+      stopAll: vi.fn().mockRejectedValueOnce(shutdownError).mockResolvedValue(undefined),
+    } as unknown as WorkerTunnelManager;
+    const nodeTunnelManager = {
+      bindWorkspaceBindingResolver: vi.fn(),
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => await nodeShutdown.promise),
+    };
+    const nodeDesktopCarrier = {
+      bindRuntime: vi.fn(),
+      observe: vi.fn(),
+      launchApp: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerNodeDesktopCarrier;
+    const workerService = support.createService(support.createProvider(), {
+      tunnelManager,
+      nodeTunnelManager,
+      nodeDesktopCarrier,
+    });
+    const stopping = workerService.stop();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await support.waitForFast(() => expect(nodeTunnelManager.stopAll).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(nodeDesktopCarrier.stopAll).toHaveBeenCalledOnce();
+
+      nodeShutdown.resolve();
+      await expect(stopping).rejects.toBe(shutdownError);
+    } finally {
+      nodeShutdown.resolve();
+      await stopping.catch(() => undefined);
+    }
+  });
 
   it("projects live workspace transport status and fences it before provider teardown", async () => {
     support.seedReady("worker-tunnel", undefined, true);

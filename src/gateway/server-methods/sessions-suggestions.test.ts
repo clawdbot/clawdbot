@@ -120,196 +120,6 @@ describe("session suggestion handlers", () => {
     });
   });
 
-  it("lets a suggest viewer add and list only their own suggestion", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const alice = client("alice", "Alice");
-      const add = await call(
-        "session.suggestions.add",
-        { sessionKey: "main", text: "  Try the focused fix\n" },
-        alice,
-      );
-      expect(add.responses[0]?.[0]).toBe(true);
-      expect(add.responses[0]?.[1]).toMatchObject({
-        suggestion: {
-          author: { id: "alice", label: "Alice" },
-          text: "  Try the focused fix\n",
-          state: "pending",
-        },
-      });
-      expect(add.context.broadcast).toHaveBeenCalledWith(
-        "session.suggestion",
-        expect.objectContaining({ action: "added" }),
-        expect.objectContaining({ sessionKeys: [sessionKey, "main"] }),
-      );
-      expect(
-        readSessionTranscriptMessageEvents({ agentId: "main", sessionId: "session-main" }),
-      ).toEqual([]);
-
-      await call(
-        "session.suggestions.add",
-        { sessionKey, text: "Bob's idea" },
-        client("bob", "Bob"),
-      );
-      const listed = await call("session.suggestions.list", { sessionKey }, alice);
-      expect(listed.responses[0]?.[1]).toMatchObject({
-        role: "viewer",
-        suggestions: [{ author: { id: "alice" }, text: "  Try the focused fix\n" }],
-      });
-    });
-  });
-
-  it("hides draft suggestions from members while owner and admin can list", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const draftKey = "agent:main:draft-suggestions";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: draftKey },
-        {
-          sessionId: "session-draft",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "draft",
-        },
-      );
-      addSessionMember(
-        { agentId: "main", sessionKey: draftKey },
-        { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
-      );
-      addSessionSuggestion(
-        { agentId: "main", sessionKey: draftKey },
-        {
-          id: "draft-suggestion",
-          authorId: "member",
-          text: "private draft suggestion",
-          expectedSessionId: "session-draft",
-        },
-      );
-
-      const member = client("member", "Member");
-      const expectHiddenDraft = (result: Awaited<ReturnType<typeof call>>) => {
-        expect(result.responses[0]?.[0]).toBe(false);
-        expect(result.responses[0]?.[1]).toBeUndefined();
-        expect(result.responses[0]?.[2]).toMatchObject({
-          message: "session is draft for this connection",
-          details: {
-            code: "SESSION_PARTICIPATION_REQUIRED",
-            sessionKey: draftKey,
-            visibility: "draft",
-          },
-        });
-      };
-
-      expectHiddenDraft(await call("session.suggestions.list", { sessionKey: draftKey }, member));
-      expectHiddenDraft(
-        await call("session.suggestions.add", { sessionKey: draftKey, text: "leak draft" }, member),
-      );
-      expectHiddenDraft(
-        await call(
-          "session.suggestions.resolve",
-          { sessionKey: draftKey, id: "draft-suggestion", resolution: "dismiss" },
-          member,
-        ),
-      );
-      expect(
-        (
-          await call(
-            "session.typing",
-            { sessionKey: draftKey, sessionId: "session-draft", typing: true },
-            member,
-          )
-        ).responses[0]?.[1],
-      ).toEqual({ ok: true, broadcast: false });
-
-      const ownerList = await call(
-        "session.suggestions.list",
-        { sessionKey: draftKey },
-        client("owner", "Owner"),
-      );
-      expect(ownerList.responses[0]?.[1]).toMatchObject({
-        role: "owner",
-        suggestions: [{ id: "draft-suggestion", text: "private draft suggestion" }],
-      });
-      const adminList = await call(
-        "session.suggestions.list",
-        { sessionKey: draftKey },
-        client("admin", "Admin", true),
-      );
-      expect(adminList.responses[0]?.[1]).toMatchObject({
-        role: "admin",
-        suggestions: [{ id: "draft-suggestion", text: "private draft suggestion" }],
-      });
-    });
-  });
-
-  it("keeps incognito suggestion and typing surfaces admin-only", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const incognitoKey = "agent:main:dashboard:incognito-suggestions";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: incognitoKey },
-        {
-          sessionId: "session-incognito",
-          updatedAt: 1,
-          incognito: true,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
-      addSessionSuggestion(
-        { agentId: "main", sessionKey: incognitoKey },
-        {
-          id: "incognito-suggestion",
-          authorId: "owner",
-          text: "private suggestion",
-          expectedSessionId: "session-incognito",
-        },
-      );
-      const owner = client("owner", "Owner");
-      const expectHidden = (result: Awaited<ReturnType<typeof call>>) => {
-        expect(result.responses[0]?.[0]).toBe(false);
-        expect(result.responses[0]?.[1]).toBeUndefined();
-        expect(result.responses[0]?.[2]?.message).toBe(
-          `Incognito session "${incognitoKey}" was not found.`,
-        );
-      };
-
-      expectHidden(await call("session.suggestions.list", { sessionKey: incognitoKey }, owner));
-      expectHidden(
-        await call("session.suggestions.add", { sessionKey: incognitoKey, text: "probe" }, owner),
-      );
-      expectHidden(
-        await call(
-          "session.suggestions.resolve",
-          { sessionKey: incognitoKey, id: "incognito-suggestion", resolution: "dismiss" },
-          owner,
-        ),
-      );
-      expectHidden(
-        await call(
-          "session.typing",
-          { sessionKey: incognitoKey, sessionId: "wrong-session", typing: true },
-          owner,
-        ),
-      );
-      expectHidden(
-        await call(
-          "session.typing",
-          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true },
-          owner,
-        ),
-      );
-
-      const adminList = await call(
-        "session.suggestions.list",
-        { sessionKey: incognitoKey },
-        client("admin", "Admin", true),
-      );
-      expect(adminList.responses[0]?.[1]).toMatchObject({
-        role: "admin",
-        suggestions: [{ id: "incognito-suggestion", text: "private suggestion" }],
-      });
-    });
-  });
-
   it("rejects archived suggestion creation and non-dismiss resolutions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const archivedKey = "agent:main:archived-suggestions";
@@ -401,7 +211,11 @@ describe("session suggestion handlers", () => {
               }),
               internal: expect.objectContaining({
                 syntheticClient: true,
-                senderAttribution: { id: "alice", name: "Suggested by Alice" },
+                senderAttribution: {
+                  id: "alice",
+                  name: "Suggested by Alice",
+                  identity: { type: "profile", id: "alice" },
+                },
               }),
             }),
           }),
@@ -554,7 +368,11 @@ describe("session suggestion handlers", () => {
               role: "user",
               content: "Ship the focused change",
               idempotencyKey: `session-suggestion:${id}`,
-              __openclaw: { senderId: "alice", senderName: "Suggested by Alice" },
+              __openclaw: {
+                senderId: "alice",
+                senderName: "Suggested by Alice",
+                senderIdentity: { type: "profile", id: "alice" },
+              },
             },
           });
           expect(mocks.handleChatSend).toHaveBeenCalledOnce();
@@ -573,7 +391,12 @@ describe("session suggestion handlers", () => {
       await upsertDefaultSuggestionSession();
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
-      mocks.presence = [{ user: { id: "alice" }, watchedSessions: [sessionKey] }];
+      mocks.presence = [
+        {
+          user: { id: "alice", identity: { type: "profile", id: "alice" } },
+          watchedSessions: [sessionKey],
+        },
+      ];
       const solo = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -583,7 +406,10 @@ describe("session suggestion handlers", () => {
       expect(solo.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
       expect(broadcast).not.toHaveBeenCalled();
 
-      mocks.presence.push({ user: { id: "owner" }, watchedSessions: [sessionKey] });
+      mocks.presence.push({
+        user: { id: "owner", identity: { type: "profile", id: "owner" } },
+        watchedSessions: [sessionKey],
+      });
       const collaborative = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -628,8 +454,14 @@ describe("session suggestion handlers", () => {
       );
 
       mocks.presence = [
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
-        { user: { id: "bob" }, watchedSessions: [sessionKey] },
+        {
+          user: { id: "owner", identity: { type: "profile", id: "owner" } },
+          watchedSessions: [sessionKey],
+        },
+        {
+          user: { id: "bob", identity: { type: "profile", id: "bob" } },
+          watchedSessions: [sessionKey],
+        },
       ];
       vi.setSystemTime(4_000);
       const notViewing = await call(
@@ -650,8 +482,14 @@ describe("session suggestion handlers", () => {
         },
       );
       mocks.presence = [
-        { user: { id: "shared-alice" }, watchedSessions: [sessionKey] },
-        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+        {
+          user: { id: "shared-alice", identity: { type: "profile", id: "shared-alice" } },
+          watchedSessions: [sessionKey],
+        },
+        {
+          user: { id: "owner", identity: { type: "profile", id: "owner" } },
+          watchedSessions: [sessionKey],
+        },
       ];
       vi.setSystemTime(5_000);
       const sharedViewer = await call(

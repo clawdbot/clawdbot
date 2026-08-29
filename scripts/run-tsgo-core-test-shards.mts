@@ -2,10 +2,13 @@
 
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
 // accumulate while the next shard loads.
-import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
-import { signalExitCode } from "./lib/managed-child-process.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   selectTsgoCoreTestShards,
@@ -48,39 +51,49 @@ if (concurrencyFlagIndex >= 0) {
 const env = resolveLocalCheckEnv(process.env);
 
 function runShard(config: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child: ChildProcess = spawn(
-      process.execPath,
-      [path.join(repoRoot, "scripts/run-tsgo.mjs"), "-b", config, "--builders", "1"],
-      {
-        cwd: repoRoot,
-        env,
-        stdio: "inherit",
-      },
-    );
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      resolve(signal ? signalExitCode(signal) : (code ?? 1));
-    });
+  return runManagedCommand({
+    bin: process.execPath,
+    args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), [
+      "-b",
+      config,
+      "--builders",
+      "1",
+    ]),
+    cwd: repoRoot,
+    env,
+    requireProcessTreeExit: process.platform !== "win32",
   });
 }
 
-const queue = [...shards];
-let failureCode = 0;
-const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
-  for (;;) {
-    const shard = queue.shift();
-    // Stop draining after the first failure so the exit stays prompt.
-    if (!shard || failureCode !== 0) {
-      return;
+// The batch owns outputs once; its existing compiler concurrency stays intact
+// without children waiting to reacquire their parent's lock.
+await withDistArtifactOwnership(repoRoot, async () => {
+  const queue = [...shards];
+  let failureCode = 0;
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    for (;;) {
+      const shard = queue.shift();
+      // Stop draining after the first failure so the exit stays prompt.
+      if (!shard || failureCode !== 0) {
+        return;
+      }
+      const code = await runShard(shard.config).catch((error: unknown) => {
+        failureCode = 1;
+        throw error;
+      });
+      if (code !== 0 && failureCode === 0) {
+        failureCode = code;
+      }
     }
-    const code = await runShard(shard.config);
-    if (code !== 0 && failureCode === 0) {
-      failureCode = code;
-    }
+  });
+  const results = await Promise.allSettled(workers);
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "tsgo core test shards failed");
+  }
+  if (failureCode !== 0) {
+    process.exitCode = failureCode;
   }
 });
-await Promise.all(workers);
-if (failureCode !== 0) {
-  process.exitCode = failureCode;
-}

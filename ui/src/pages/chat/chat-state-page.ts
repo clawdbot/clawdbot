@@ -30,6 +30,7 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -143,6 +144,8 @@ export function createPageState(
   const appConfig = context.config.current;
   const state = {
     sessions: context.sessions,
+    hasPendingInitialTurn: (sessionKey: string) =>
+      context.placementStartup.hasPendingTurn(sessionKey),
     initialUserMessage: context.initialUserMessage,
     settings,
     password: "",
@@ -163,6 +166,7 @@ export function createPageState(
     connected: false,
     connectionEpoch: 0,
     hello: null,
+    selfUser: null,
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
@@ -206,6 +210,7 @@ export function createPageState(
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatModelSwitchPromises: {},
+    chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
@@ -225,6 +230,7 @@ export function createPageState(
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Map<string, Promise<void>>(),
+    chatGoalDraftMode: null,
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
     chatComposerFallbackByScope: {},
@@ -244,17 +250,15 @@ export function createPageState(
     chatScrollCommitCleanup: null,
     chatStreamRenderFrame: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
+    attachmentSidebarContent: null,
     sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
     sidebarFocusVersion: 0,
     imageLightbox: null,
@@ -403,26 +407,35 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
-    let opened = openSlot(state.sidebarLayout, "detail");
-    const detailPanel = opened.columns
+    const attachmentPreview = content?.kind === "attachment";
+    const targetSlot = attachmentPreview ? "workspace" : "detail";
+    let opened = openSlot(state.sidebarLayout, targetSlot);
+    const targetPanel = opened.columns
       .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "detail");
-    if (detailPanel) {
-      opened = activatePanel(opened, detailPanel.id);
+      .find((panel) => panel.slot === targetSlot);
+    if (targetPanel) {
+      opened = activatePanel(opened, targetPanel.id);
     }
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;
     const fitted =
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    state.sidebarContent = content;
+    if (attachmentPreview) {
+      state.attachmentSidebarContent = content;
+    } else {
+      state.sidebarContent = content;
+    }
     state.updateSidebarLayout(fitted);
-    if (detailPanel) {
-      state.updateSidebarActivePanel(detailPanel.id);
+    if (targetPanel) {
+      state.updateSidebarActivePanel(targetPanel.id);
     }
   };
-  state.handleCloseSidebar = () => {
-    state.updateSidebarLayout(closeSlot(state.sidebarLayout, "detail"));
+  state.handleCloseSidebar = (slot) => {
+    if (slot === "workspace") {
+      state.attachmentSidebarContent = null;
+    }
+    state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
   state.beginImageOpen = () => {
     const requestVersion = invalidateImageLightbox(state);
@@ -435,14 +448,22 @@ export function createPageState(
       item.release?.();
       return;
     }
-    const safeSrc = resolveSafeExternalUrl(item.src, window.location.href, {
-      allowDataImage: true,
-    });
-    if (!safeSrc) {
+    const video = item.kind === "video";
+    const resolveSrc = (src: string) =>
+      video
+        ? safeMediaAttachmentHref(src, "video")
+        : resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
+    const safeSrc = resolveSrc(item.src);
+    const safeOriginalSrc = item.originalSrc ? resolveSrc(item.originalSrc) : undefined;
+    if (!safeSrc || (item.originalSrc && !safeOriginalSrc)) {
       item.release?.();
       return;
     }
-    state.imageLightbox = { ...item, src: safeSrc };
+    state.imageLightbox = {
+      ...item,
+      src: safeSrc,
+      ...(safeOriginalSrc ? { originalSrc: safeOriginalSrc } : {}),
+    };
     renderLifecycle.invalidate();
   };
   state.handleCloseImage = () => {

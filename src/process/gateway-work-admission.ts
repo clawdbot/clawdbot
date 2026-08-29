@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "prepared";
+type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "draining" | "prepared";
 
 type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend phase";
 type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
@@ -23,6 +23,7 @@ type GatewayRootWorkAdmission = {
 
 type GatewayWorkAdmissionState = {
   restartDraining: boolean;
+  restartDrainController: AbortController;
   restartSignalPending: boolean;
   restartSignalGeneration: number;
   suspendPhase: GatewaySuspendAdmissionPhase;
@@ -39,6 +40,7 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayWorkAdmissionState"),
   (): GatewayWorkAdmissionState => ({
     restartDraining: false,
+    restartDrainController: new AbortController(),
     restartSignalPending: false,
     restartSignalGeneration: 0,
     suspendPhase: "accepting",
@@ -63,7 +65,13 @@ type GatewayRootWorkAdmissionLease = {
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
+export type GatewayRootWorkAdmissionContinuationScope = {
+  release: () => void;
+  run: <T>(run: () => Promise<T>) => Promise<T>;
+};
+
 type GatewaySuspendAdmissionLease = {
+  drain: () => boolean;
   commit: () => boolean;
   rollback: () => boolean;
   release: () => boolean;
@@ -179,6 +187,10 @@ export function isGatewayRestartDraining(): boolean {
   );
 }
 
+export function getGatewayRestartDrainSignal(): AbortSignal {
+  return GATEWAY_WORK_ADMISSION_STATE.restartDrainController.signal;
+}
+
 export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
   return error instanceof GatewayDrainingError && isGatewayRestartDraining();
 }
@@ -193,6 +205,9 @@ export function markGatewayRestartDraining(): void {
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = true;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
+    new GatewayDrainingError("gateway is draining for restart"),
+  );
   resolveSuspendOpenWaiters();
   logAdmissionClosed("restart drain");
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
@@ -364,14 +379,60 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
   return admission.run(run).finally(admission.release);
 }
 
-/** Transfers an admitted request root to work that intentionally outlives its handler. */
-export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | null {
+function createGatewayRootWorkAdmissionContinuationScope(
+  retainRoot: boolean,
+): GatewayRootWorkAdmissionContinuationScope | null {
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
-  if (!current || current.released) {
+  if (!current || current.released || !GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)) {
     return null;
   }
-  current.references += 1;
-  return createGatewayRootWorkRelease(current);
+  if (retainRoot) {
+    current.references += 1;
+  }
+  const releaseAdmission = retainRoot ? createGatewayRootWorkRelease(current) : undefined;
+  let released = false;
+  return {
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      releaseAdmission?.();
+    },
+    run: async <T>(run: () => Promise<T>) => {
+      if (
+        released ||
+        current.released ||
+        !GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)
+      ) {
+        throw new GatewayDrainingError("gateway root work continuation is no longer active");
+      }
+      // Completion owners can settle and release their retained handle inside
+      // this callback; keep the root live until that entire callback finishes.
+      current.references += 1;
+      const releaseRun = createGatewayRootWorkRelease(current);
+      try {
+        return await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
+      } finally {
+        releaseRun();
+      }
+    },
+  };
+}
+
+/** Borrows exact root ownership without extending the creating request's lifetime. */
+export function captureGatewayRootWorkAdmissionContinuationScope(): GatewayRootWorkAdmissionContinuationScope | null {
+  return createGatewayRootWorkAdmissionContinuationScope(false);
+}
+
+/** Retains exact root ownership for work that intentionally outlives its handler. */
+export function retainGatewayRootWorkAdmissionContinuationScope(): GatewayRootWorkAdmissionContinuationScope | null {
+  return createGatewayRootWorkAdmissionContinuationScope(true);
+}
+
+/** Transfers an admitted request root to work that intentionally outlives its handler. */
+export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | null {
+  return retainGatewayRootWorkAdmissionContinuationScope()?.release ?? null;
 }
 
 /** Starts process-lifetime work without inheriting the request root that created it. */
@@ -430,9 +491,10 @@ export function tryBeginGatewaySuspendAdmission(
   };
 
   return {
-    commit: () => transition("preparing", "prepared"),
+    drain: () => transition("preparing", "draining"),
+    commit: () => transition("preparing", "prepared") || transition("draining", "prepared"),
     rollback: () => transition("preparing", "accepting"),
-    release: () => transition("prepared", "accepting"),
+    release: () => transition("draining", "accepting") || transition("prepared", "accepting"),
   };
 }
 
@@ -447,6 +509,7 @@ export function resetGatewayWorkAdmission(): void {
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController = new AbortController();
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {

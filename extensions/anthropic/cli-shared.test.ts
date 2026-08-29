@@ -1,4 +1,5 @@
 // Anthropic tests cover cli shared plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
@@ -311,7 +312,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         toolAvailability: {
           native: [],
           openClaw: ["openclaw"],
-          mcp: ["mcp__openclaw__openclaw"],
         },
       }),
     ).toEqual([
@@ -387,7 +387,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         toolAvailability: {
           native: [],
           openClaw: ["message"],
-          mcp: ["mcp__openclaw__message"],
         },
       }),
     ).toEqual([
@@ -451,7 +450,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "mcp__other__*",
         ],
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
       }),
     ).toEqual([
       "-p",
@@ -721,13 +720,6 @@ describe("normalizeClaudeBackendConfig", () => {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     });
-    expect(backend.liveSessionRequirement).toEqual({
-      capability: "msg_lifecycle_v1",
-      minimumVersion: "2.1.206",
-      versionArgs: ["--version"],
-      updateCommand: "claude update",
-    });
-
     const normalized = normalizeConfig?.({
       ...backend.config,
       args: ["-p", "--output-format", "stream-json", "--verbose"],
@@ -763,7 +755,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.systemPromptWhen).toBe("always");
   });
 
-  it("gates the Claude cache-control flag on the startup capability probe", () => {
+  it("gates the Claude cache-control flag on the capability probe", () => {
     expect(supportsClaudeDynamicSystemPromptSections("Claude Code 2.1.97")).toBe(false);
     expect(supportsClaudeDynamicSystemPromptSections("Claude Code 2.1.98")).toBe(true);
     expect(supportsClaudeDynamicSystemPromptSections("Claude Code 2.1.98-beta.1")).toBe(false);
@@ -789,17 +781,17 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(supported.resolveExecutionArgs?.(context)).toContain(CLAUDE_CACHE_FLAG);
   });
 
-  it("starts one Claude version probe at plugin load and awaits it before first execution", async () => {
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "2.1.98 (Claude Code)",
-      stderr: "",
-    });
+  it("defers one shared Claude version probe until execution and awaits it before preparing argv", async () => {
+    const version = createDeferred<{ code: number; stdout: string; stderr: string }>();
+    const runCommandWithTimeout = vi.fn(() => version.promise);
+    const readRuntime = vi.fn(() => ({ system: { runCommandWithTimeout } }));
     const registerCliBackend = vi.fn();
     const registerHook = vi.fn();
     const api = {
       pluginConfig: { sessionCatalog: { enabled: false } },
-      runtime: { system: { runCommandWithTimeout } },
+      get runtime() {
+        return readRuntime();
+      },
       registerCliBackend,
       registerHook,
       registerProvider: vi.fn(),
@@ -811,17 +803,29 @@ describe("normalizeClaudeBackendConfig", () => {
     const backend = registerCliBackend.mock.calls[0]?.[0] as ReturnType<
       typeof buildAnthropicCliBackend
     >;
+    expect(readRuntime).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    const context = {
+      workspaceDir: "/tmp",
+      provider: "claude-cli",
+      modelId: "claude-haiku-4-5",
+    };
+    const prepared = vi.fn();
+    const executions = [
+      Promise.resolve(backend.prepareExecution?.(context)).then(prepared),
+      Promise.resolve(backend.prepareExecution?.(context)).then(prepared),
+    ];
+    await Promise.resolve();
     expect(runCommandWithTimeout).toHaveBeenCalledOnce();
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       ["claude", "--version"],
       expect.objectContaining({ timeoutMs: 1_500 }),
     );
     expect(registerHook).not.toHaveBeenCalled();
-    await backend.prepareExecution?.({
-      workspaceDir: "/tmp",
-      provider: "claude-cli",
-      modelId: "claude-haiku-4-5",
-    });
+    expect(prepared).not.toHaveBeenCalled();
+    version.resolve({ code: 0, stdout: "2.1.98 (Claude Code)", stderr: "" });
+    await Promise.all(executions);
+    expect(prepared).toHaveBeenCalledTimes(2);
     expect(
       backend.resolveExecutionArgs?.({
         workspaceDir: "/tmp",
@@ -831,10 +835,11 @@ describe("normalizeClaudeBackendConfig", () => {
         baseArgs: backend.config.args ?? [],
       }),
     ).toContain(CLAUDE_CACHE_FLAG);
+    await backend.prepareExecution?.(context);
     expect(runCommandWithTimeout).toHaveBeenCalledOnce();
   });
 
-  it("keeps the established argv when the startup version probe fails", async () => {
+  it("keeps the established argv when the version probe fails", async () => {
     const runCommandWithTimeout = vi.fn().mockRejectedValue(new Error("claude is unavailable"));
     const registerCliBackend = vi.fn();
     const registerHook = vi.fn();
@@ -890,7 +895,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
-    expect(backend.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
+    expect(backend.config.clearEnv).not.toContain("CLAUDE_CONFIG_DIR");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_BEDROCK");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
@@ -1016,16 +1021,20 @@ describe("normalizeClaudeBackendConfig", () => {
     ).toThrow("Selected Claude CLI OAuth credential is expired or invalid");
   });
 
-  it("keeps native Claude login when no compatible profile is selected", () => {
+  it("runs native Claude login through the official Agent SDK without forwarding credentials", () => {
     const backend = buildAnthropicCliBackend();
 
-    expect(
-      backend.prepareExecution?.({
-        workspaceDir: "/tmp/openclaw-claude-cli",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toBeUndefined();
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      executionMode: "agent",
+    });
+
+    expect(prepared).toEqual(expect.objectContaining({ execute: expect.any(Function) }));
+    expect(prepared).not.toHaveProperty("secretInput");
+    expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR");
+    expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR");
   });
 
   it("forwards a selected API-key profile through Claude's private descriptor", async () => {

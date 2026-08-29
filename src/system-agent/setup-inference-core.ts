@@ -322,6 +322,23 @@ export function invalidSetupConfigError(snapshot: {
   return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
 }
 
+export async function redactSetupInferenceError(
+  message: string,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
+  const secrets = new Set(
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
+  );
+  let redacted = message;
+  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  const { redactToolPayloadText } = await import("../logging/redact.js");
+  return redactToolPayloadText(redacted);
+}
+
 export function resolveCandidatePresentation(
   candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
   authChoices: readonly ProviderAuthChoiceMetadata[],

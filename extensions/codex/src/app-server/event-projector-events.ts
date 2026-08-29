@@ -1,6 +1,8 @@
-import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  ToolProgressDetailMode,
+import {
+  embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asFiniteNumber,
@@ -31,6 +33,28 @@ import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 
+/** Downstream event consumers must never corrupt the canonical Codex turn projection. */
+export function emitCodexAgentEvent(params: EmbeddedRunAttemptParams, event: AgentEvent): void {
+  try {
+    emitGlobalAgentEvent({
+      runId: params.runId,
+      stream: event.stream,
+      data: event.data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+  }
+  try {
+    const maybePromise = params.onAgentEvent?.(event);
+    void Promise.resolve(maybePromise).catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
+  }
+}
+
 type NormalizedToolItemProjection = {
   name: string;
   status: ReturnType<typeof itemStatus>;
@@ -43,9 +67,18 @@ function guardianActionCommand(action: JsonObject | undefined): string | undefin
   if (!action) {
     return undefined;
   }
-  const command = readString(action, "command");
-  if (command) {
-    return command;
+  const directLabel =
+    readString(action, "command") ??
+    readString(action, "target") ??
+    readString(action, "toolTitle") ??
+    readString(action, "reason");
+  if (directLabel) {
+    return directLabel;
+  }
+  const server = readString(action, "connectorName") ?? readString(action, "server");
+  const tool = readString(action, "toolName");
+  if (server && tool) {
+    return `${server}/${tool}`;
   }
   const argv = Array.isArray(action.argv)
     ? action.argv.filter((value): value is string => typeof value === "string")
@@ -59,6 +92,13 @@ function normalizeApprovalReviewStatus(status: string | undefined): string | und
 
 const GUARDIAN_TIMEOUT_WARNING =
   "Automatic approval review timed out while evaluating the requested approval.";
+
+// These routine Codex diagnostics lack structured codes. Match complete templates so only
+// host-managed notices stay log-only and other actionable warnings still reach chat.
+const LOG_ONLY_CODEX_WARNING_PATTERNS = [
+  /^Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\.$/,
+  /^Code Mode is enabled in configuration, but model `[^`\r\n]+` does not advertise Code Mode support\. This may degrade model performance\. Disable `features\.code_mode` and `features\.code_mode_only`, or select a model whose metadata enables Code Mode\.$/,
+];
 
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
@@ -82,6 +122,8 @@ export function projectNormalizedToolItem(params: {
         stream: "tool",
         data: {
           phase: params.phase,
+          // Codex tool lifecycle is private telemetry; channels render authored progress only.
+          hideFromChannelProgress: true,
           name,
           itemId: item.id,
           toolCallId: item.id,
@@ -104,6 +146,15 @@ export function projectNormalizedToolItem(params: {
 export class CodexEventProjection {
   private reviewCount = 0;
   private pendingGuardianWarning: string | undefined;
+  private activeGuardianReview:
+    | {
+        reviewId?: string;
+        targetItemId?: string | null;
+        command?: string;
+        threadId: string;
+        turnId: string;
+      }
+    | undefined;
 
   constructor(
     private readonly threadId: string,
@@ -118,12 +169,27 @@ export class CodexEventProjection {
     return this.reviewCount;
   }
 
+  emitCompactionEnd(itemId: string, completed: boolean): void {
+    this.emitAgentEvent({
+      stream: "compaction",
+      data: {
+        phase: "end",
+        backend: "codex-app-server",
+        completed,
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId,
+      },
+    });
+  }
+
   handleGuardianReview(method: string, params: JsonObject): void {
     this.reviewCount += 1;
     const review = isJsonObject(params.review) ? params.review : undefined;
     const action = isJsonObject(params.action) ? params.action : undefined;
     const reviewId = readString(params, "reviewId");
     const targetItemId = readNullableString(params, "targetItemId");
+    const command = guardianActionCommand(action);
     const reviewStatus = review ? readString(review, "status") : undefined;
     const status = normalizeApprovalReviewStatus(reviewStatus);
     const riskLevel = review ? readString(review, "riskLevel") : undefined;
@@ -147,11 +213,18 @@ export class CodexEventProjection {
     } else {
       this.flushPendingGuardianWarning();
     }
+    const threadId = readString(params, "threadId") ?? this.threadId;
+    const turnId = readString(params, "turnId") ?? this.turnId;
+    if (method.endsWith("/started")) {
+      this.activeGuardianReview = { reviewId, targetItemId, command, threadId, turnId };
+    }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
         method,
         phase: method.endsWith("/started") ? "started" : "completed",
+        threadId,
+        turnId,
         reviewId,
         targetItemId,
         decisionSource: readString(params, "decisionSource"),
@@ -160,7 +233,7 @@ export class CodexEventProjection {
         userAuthorization,
         rationale,
         actionType: action ? readString(action, "type") : undefined,
-        command: guardianActionCommand(action),
+        command,
       },
     });
     if (reviewId && targetItemId && status) {
@@ -189,6 +262,9 @@ export class CodexEventProjection {
         },
       });
     }
+    if (method.endsWith("/completed") && this.activeGuardianReview?.reviewId === reviewId) {
+      this.activeGuardianReview = undefined;
+    }
   }
 
   handleGuardianWarning(params: JsonObject): void {
@@ -204,6 +280,29 @@ export class CodexEventProjection {
     });
   }
 
+  handleWarning(params: JsonObject): void {
+    const summary = readString(params, "summary") ?? readString(params, "message");
+    const details = readString(params, "details");
+    const message = [summary, details].filter(Boolean).join("\n");
+    if (LOG_ONLY_CODEX_WARNING_PATTERNS.some((pattern) => pattern.test(message))) {
+      embeddedAgentLog.warn(message);
+    } else if (message) {
+      this.emitAgentEvent({ stream: "notice", data: { phase: "warning", message } });
+    }
+  }
+
+  handleModelRerouted(params: JsonObject): void {
+    const fromModel = readString(params, "fromModel");
+    const toModel = readString(params, "toModel");
+    const reason = readString(params, "reason");
+    if (fromModel && toModel && fromModel !== toModel) {
+      this.emitAgentEvent({
+        stream: "fallback",
+        data: { fromModel, toModel, ...(reason ? { reason } : {}) },
+      });
+    }
+  }
+
   flushPendingGuardianWarning(): void {
     const pending = this.pendingGuardianWarning;
     if (!pending) {
@@ -213,6 +312,23 @@ export class CodexEventProjection {
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: { phase: "warning", message: pending },
+    });
+  }
+
+  handleStrictReviewRequired(params: JsonObject): void {
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        method: "autoApprovalReview/strictReviewRequired",
+        phase: "strict_review_required",
+        threadId:
+          readString(params, "threadId") ?? this.activeGuardianReview?.threadId ?? this.threadId,
+        turnId: readString(params, "turnId") ?? this.activeGuardianReview?.turnId ?? this.turnId,
+        reviewId: this.activeGuardianReview?.reviewId,
+        targetItemId: this.activeGuardianReview?.targetItemId,
+        command: this.activeGuardianReview?.command,
+        startedAtMs: asFiniteNumber(params.startedAtMs),
+      },
     });
   }
 

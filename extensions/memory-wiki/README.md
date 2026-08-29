@@ -100,9 +100,11 @@ normalized agent id:
 
 This resolves agents such as `support` and `marketing` to
 `~/.openclaw/wiki/support` and `~/.openclaw/wiki/marketing`. With no explicit
-path, the parent defaults to `~/.openclaw/wiki`; the default `main` agent
-therefore keeps the existing `~/.openclaw/wiki/main` path. In global scope,
-`vault.path` remains the exact shared vault path.
+path, the parent defaults to `<state-dir>/wiki`; the default `main` agent
+therefore uses `<state-dir>/wiki/main`. The state directory is `~/.openclaw` by
+default and follows `OPENCLAW_STATE_DIR` when configured. In global scope,
+`vault.path` remains the exact shared vault path; explicit paths and `~/`
+expansion keep their existing behavior.
 
 Wiki tools and compiled prompt/corpus supplements resolve the active runtime
 agent on each call. In bridge mode, an agent vault imports only public memory

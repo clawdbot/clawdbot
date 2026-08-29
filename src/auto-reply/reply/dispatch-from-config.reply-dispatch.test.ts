@@ -53,6 +53,7 @@ function firstReplyDispatchCall() {
         },
         {
           cfg?: unknown;
+          dispatchKind?: "agent" | "acp";
         },
       ]
     | undefined;
@@ -231,11 +232,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchEvent?.inboundAudio).toBe(false);
     expect(replyDispatchRuntime?.cfg).toBe(emptyConfig);
+    expect(replyDispatchRuntime?.dispatchKind).toBe("agent");
     expect(result).toEqual({
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },
     });
   });
+
   it("still applies send-policy deny after an unhandled plugin dispatch", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({
       handled: false,
@@ -894,7 +897,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
-  it("dedupes byte-identical non-streaming final payload entries for one turn", async () => {
+  it("dedupes equivalent non-streaming final payload entries for one turn", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const dispatcher = createDispatcher();
     const replyPayload = {
@@ -907,7 +910,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       ctx: createHookCtx(),
       cfg: emptyConfig,
       dispatcher,
-      replyResolver: async () => [replyPayload, { ...replyPayload }],
+      replyResolver: async () => [
+        replyPayload,
+        { ...replyPayload },
+        { ...replyPayload, videoAsNote: false },
+      ],
     });
 
     expect(result.queuedFinal).toBe(true);
@@ -915,87 +922,68 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(replyPayload);
   });
 
-  it("preserves same-content final payloads with distinct route metadata", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
-    const firstReply = setReplyPayloadMetadata(
-      { text: "same visible reply" } satisfies ReplyPayload,
-      {
-        replyDelivery: { chatType: "channel", replyToMode: "off" },
-        replyDeliverySource: { channel: "slack", accountId: "primary" },
-      },
-    );
-    const secondReply = setReplyPayloadMetadata(
-      { text: "same visible reply" } satisfies ReplyPayload,
-      {
-        replyDelivery: { chatType: "channel", replyToMode: "off" },
-        replyDeliverySource: { channel: "slack", accountId: "secondary" },
-      },
-    );
+  it.each([
+    {
+      name: "different native locations",
+      replies: [
+        { location: { latitude: 1, longitude: 2 } },
+        { location: { latitude: 3, longitude: 4 } },
+      ],
+    },
+    {
+      name: "normal and round videos sharing the same media",
+      replies: [
+        { mediaUrl: "file:///tmp/reply.mp4" },
+        { mediaUrl: "file:///tmp/reply.mp4", videoAsNote: true },
+      ],
+    },
+    {
+      name: "distinct route metadata",
+      replies: ["primary", "secondary"].map((accountId) =>
+        setReplyPayloadMetadata(
+          { text: "same visible reply" },
+          {
+            replyDelivery: { chatType: "channel", replyToMode: "off" },
+            replyDeliverySource: { channel: "slack", accountId },
+          },
+        ),
+      ),
+    },
+    {
+      name: "distinct reply-threading identity",
+      replies: [
+        { text: "same threaded reply", replyToId: "message-1" },
+        setReplyPayloadMetadata(
+          { text: "same threaded reply", replyToId: "message-1" },
+          { replyToIdExplicit: true },
+        ),
+      ],
+    },
+    {
+      name: "distinct assistant messages",
+      replies: [1, 2].map((assistantMessageIndex) =>
+        setReplyPayloadMetadata({ text: "intentional repeat" }, { assistantMessageIndex }),
+      ),
+    },
+  ] satisfies Array<{ name: string; replies: ReplyPayload[] }>)(
+    "preserves final payloads with $name",
+    async ({ replies }) => {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      const dispatcher = createDispatcher();
 
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => [firstReply, secondReply],
-    });
+      const result = await dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => replies,
+      });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, firstReply);
-    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, secondReply);
-  });
-
-  it("preserves same-content final payloads with distinct reply-threading identity", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
-    const implicitReply = {
-      text: "same threaded reply",
-      replyToId: "message-1",
-    } satisfies ReplyPayload;
-    const explicitReply = setReplyPayloadMetadata(
-      {
-        text: "same threaded reply",
-        replyToId: "message-1",
-      } satisfies ReplyPayload,
-      { replyToIdExplicit: true },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => [implicitReply, explicitReply],
-    });
-
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, implicitReply);
-    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, explicitReply);
-  });
-
-  it("preserves same-content final payloads from distinct assistant messages", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
-    const firstReply = setReplyPayloadMetadata(
-      { text: "intentional repeat" } satisfies ReplyPayload,
-      { assistantMessageIndex: 1 },
-    );
-    const secondReply = setReplyPayloadMetadata(
-      { text: "intentional repeat" } satisfies ReplyPayload,
-      { assistantMessageIndex: 2 },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => [firstReply, secondReply],
-    });
-
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, firstReply);
-    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, secondReply);
-  });
+      expect(result.queuedFinal).toBe(true);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+      expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, replies[0]);
+      expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, replies[1]);
+    },
+  );
 
   it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
     const deliveryOrder: string[] = [];

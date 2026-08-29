@@ -308,9 +308,10 @@ class ChatControllerModelSelectionTest {
       val controller =
         createChatController(
           cacheScope = { gatewayScope },
-          captureSettingsRequestLease = { scope ->
+          captureRequestLease = { scope ->
             scope ?: error("missing scope")
-            GatewaySession.RequestLease(scope.gatewayId) { _, _, _ ->
+            GatewaySession.RequestLease(scope.gatewayId) { _, _, _, withEnqueue ->
+              withEnqueue {}
               capturedScopes += scope
               "{}"
             }

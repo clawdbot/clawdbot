@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { DARWIN_SYSTEM_PROBE_TIMEOUT_MS, resolveDarwinProductVersion } from "./os-summary.js";
@@ -27,14 +28,13 @@ export type SystemPresence = {
   roles?: string[];
   scopes?: string[];
   instanceId?: string;
-  user?: {
-    id: string;
-    email?: string;
-    name?: string;
-    avatarUrl?: string;
-  };
+  user?: PresenceEntry["user"];
   watchedSessions?: string[];
+  /** Server-owned timing for the person's current continuous live interval. */
+  onlineSince?: number;
+  lastActivityAt?: number;
   text: string;
+  /** Heartbeat freshness, independent of person activity and online duration. */
   ts: number;
 };
 

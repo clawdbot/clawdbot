@@ -25,6 +25,14 @@ import {
   spawnText,
 } from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
@@ -33,58 +41,6 @@ const tsxImport = import.meta.resolve("tsx");
 afterAll(() => {
   cleanupTempDirs(tempDirs);
 });
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
 
 function writeGroupedReport(filePath: string) {
   fs.writeFileSync(
@@ -1140,40 +1096,37 @@ describe("scripts/test-group-report child process guard", () => {
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
-    const readyPath = path.join(tempDir, "child.ready");
     const cleanupPath = path.join(tempDir, "child.cleanup");
-    let childPid: number | undefined;
-    try {
-      const childScript = [
-        "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "process.on('SIGTERM', () => {",
-        "  setTimeout(() => {",
-        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
-        "    process.exit(0);",
-        "  }, 25);",
-        "});",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-
-      const startedAt = Date.now();
-      const runPromise = spawnText(process.execPath, ["--eval", parentScript], {
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {",
+      "  setTimeout(() => {",
+      `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
+      "    process.exit(0);",
+      "  }, 25);",
+      "});",
+      "setInterval(() => {}, 1000);",
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    ].join("\n");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "process.on('SIGTERM', () => process.exit(0));",
+      `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      spawnText(process.execPath, ["--eval", parentScript], {
         cwd: process.cwd(),
         env: process.env,
         killGraceMs: 250,
         timeoutMs: 250,
-      });
-
-      await waitForFile(readyPath, 2_000);
-      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
-      const result = await runPromise;
+      }),
+    );
+    let childPid: number | undefined;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      const startedAt = Date.now();
+      const result = await releaseAndWait();
 
       expect(result).toMatchObject({
         status: 1,
@@ -1184,10 +1137,14 @@ describe("scripts/test-group-report child process guard", () => {
       expect(Date.now() - startedAt).toBeLessThan(900);
       await waitForDead(childPid, 2_000);
     } finally {
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
+      try {
+        await releaseAndWait();
+      } finally {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+          await waitForDead(childPid, 2_000);
+        }
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

@@ -27,6 +27,7 @@ import {
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
+  isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "../providers/anthropic-auth-headers.js";
@@ -124,7 +125,6 @@ import {
   parseRetryAfterSeconds,
   readResponseTextSnippet,
   resolveModelHeaderSentinels,
-  resolveSecretSentinel,
 } from "./transport-utils.js";
 
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -226,12 +226,6 @@ function resolveAnthropicMessagesMaxTokens(params: {
           Math.floor(contextWindow / ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR),
         ),
       );
-}
-
-function isAnthropicOAuthToken(apiKey: string): boolean {
-  // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
-  const resolved = resolveSecretSentinel(apiKey);
-  return (resolved ?? apiKey).includes("sk-ant-oat");
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -872,7 +866,7 @@ function createAnthropicTransportClient(params: {
   if (needsInterleavedBeta) {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
-  if (isAnthropicOAuthToken(apiKey)) {
+  if (isAnthropicOAuthApiKey(apiKey)) {
     const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     return {
       client: createAnthropicMessagesClient({

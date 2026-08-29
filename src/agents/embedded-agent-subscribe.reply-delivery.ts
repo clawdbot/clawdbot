@@ -23,6 +23,7 @@ type ReplyDeliveryParams = {
 
 export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams) {
   const assistantTexts = state.assistantTexts;
+  const lastEmittedCommentaryByItem = new Map<string, string>();
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const pendingPartialReplyTasks = new Set<Promise<void>>();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
@@ -31,21 +32,40 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
     const { data } = delivery;
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "assistant",
-      data,
-    });
-    if (params.onAgentEvent) {
-      runBestEffortCallback({
-        label: "assistant agent event",
-        log,
-        callback: () =>
-          params.onAgentEvent?.({
-            stream: "assistant",
-            data,
-          }),
-      });
+    const itemId = typeof data.itemId === "string" ? data.itemId : "";
+    const progressText =
+      data.phase === "commentary" && typeof data.text === "string"
+        ? data.text.replace(/\s+/g, " ").trim()
+        : "";
+    const event = progressText
+      ? {
+          stream: "item" as const,
+          data: {
+            kind: "preamble",
+            title: "Preamble",
+            phase: "update",
+            progressText,
+            ...(itemId ? { itemId } : {}),
+          },
+        }
+      : data.phase === "commentary"
+        ? undefined
+        : { stream: "assistant" as const, data };
+    if (
+      event &&
+      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== progressText)
+    ) {
+      if (event.stream === "item") {
+        lastEmittedCommentaryByItem.set(itemId, progressText);
+      }
+      emitAgentEvent({ runId: params.runId, ...event });
+      if (params.onAgentEvent) {
+        runBestEffortCallback({
+          label: "assistant agent event",
+          log,
+          callback: () => params.onAgentEvent?.(event),
+        });
+      }
     }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
       try {

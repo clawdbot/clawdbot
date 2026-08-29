@@ -4,14 +4,12 @@ import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -24,29 +22,22 @@ import type {
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import {
-  buildGatewaySessionEventFields,
-  buildGatewaySessionEventRow,
-  projectSessionEventActiveRunIds,
-} from "./session-event-payload.js";
+  resolvePrivateSessionEventBroadcastScope,
+  resolveSessionEventAgentScope,
+  type SessionEventAgentScope,
+} from "./session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
   resolveSessionSubscriptionKeys,
 } from "./session-subscription-keys.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
-import {
-  loadGatewaySessionRow,
-  loadGatewaySessionEntryReadOnly,
-  type GatewaySessionRow,
-} from "./session-utils.js";
+import { loadGatewaySessionRow, loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-
-function tryResolveCompatibilityDefaultAgentId(): string | undefined {
-  return tryResolveLegacyCompatibilityAgentId(getRuntimeConfig());
-}
 
 function readTranscriptUpdateLifecycleOwner(
   update: InternalSessionTranscriptUpdate,
@@ -78,60 +69,6 @@ function readTranscriptUpdateLifecycleOwner(
   return lifecycleRevision ? { lifecycleRevision } : {};
 }
 
-export function buildGatewaySessionSnapshot(params: {
-  sessionRow: GatewaySessionRow | null | undefined;
-  agentId?: string;
-  includeSession?: boolean;
-  label?: string;
-  displayName?: string;
-  parentSessionKey?: string;
-  status?: GatewaySessionRow["status"];
-  hasActiveRun?: boolean;
-  activeRunIds?: string[] | null;
-}): Record<string, unknown> {
-  const { sessionRow } = params;
-  if (!sessionRow) {
-    return {};
-  }
-  // Nested snapshots are the UI merge source, so preserve explicit clear semantics there too.
-  const session: Record<string, unknown> | undefined = params.includeSession
-    ? {
-        ...buildGatewaySessionEventRow(sessionRow),
-        createdActor: sessionRow.createdActor ?? null,
-        thinkingLevel: sessionRow.thinkingLevel ?? null,
-      }
-    : undefined;
-  if (session && sessionRow.key === "global" && !params.agentId) {
-    // The unscoped global row hides goal state to avoid presenting one agent's
-    // scoped goal as the global/default session goal.
-    delete session.goal;
-  }
-  if (session && params.status !== undefined) {
-    session.status = params.status;
-  }
-  if (session && params.hasActiveRun !== undefined) {
-    session.hasActiveRun = params.hasActiveRun;
-  }
-  if (session && params.activeRunIds !== undefined) {
-    session.activeRunIds = params.activeRunIds;
-  }
-  return {
-    ...(session ? { session } : {}),
-    ...buildGatewaySessionEventFields({
-      sessionRow,
-      agentId: params.agentId,
-      label: params.label,
-      displayName: params.displayName,
-      parentSessionKey: params.parentSessionKey,
-      status: params.status,
-      hasActiveRun: params.hasActiveRun,
-      activeRunIds: params.activeRunIds,
-    }),
-    subagentRunState: sessionRow.subagentRunState,
-    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
-  };
-}
-
 /** Creates a serialized transcript-update broadcaster for session websocket clients. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -157,27 +94,25 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       normalizeOptionalString(update.target?.sessionKey) ??
       normalizeOptionalString(update.sessionKey) ??
       (legacyMarker ? resolveTranscriptSessionKeyBySessionId(legacyMarker) : undefined);
-    let agentId =
+    const agentId =
       normalizeOptionalString(update.target?.agentId) ??
       normalizeOptionalString(update.agentId) ??
       legacyMarker?.agentId;
-    if (!agentId && sessionKey?.toLowerCase() === "global") {
-      const config = getRuntimeConfig();
-      const persistedOwner = resolvePersistedSessionStoreOwnerForKey(config, sessionKey);
-      agentId =
-        persistedOwner.kind === "configured"
-          ? persistedOwner.agentId
-          : tryResolveLegacyCompatibilityAgentId(config);
+    const agentScope = sessionKey
+      ? resolveSessionEventAgentScope(getRuntimeConfig(), sessionKey, agentId)
+      : undefined;
+    if (agentScope === null) {
+      return Promise.resolve();
     }
     // Raw global is per-agent storage identity; its qualified aliases must share a lane.
     const laneKey =
-      sessionKey && agentId
-        ? resolveSessionSubscriptionKey(sessionKey, agentId)
+      sessionKey && agentScope?.[1]
+        ? resolveSessionSubscriptionKey(sessionKey, agentScope[1])
         : (sessionKey ?? normalizeOptionalString(update.sessionFile) ?? "");
     // Preserve transcript update order within the lane even when counting
     // messages requires an async read from the session file.
     const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
-    const task = tail.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate));
+    const task = tail.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate, agentScope));
     const settled = task.then(
       () => undefined,
       () => undefined,
@@ -201,6 +136,7 @@ async function handleTranscriptUpdateBroadcast(
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   },
   update: InternalSessionTranscriptUpdate,
+  capturedAgentScope: SessionEventAgentScope | undefined,
 ): Promise<void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
   const targetAgentId = normalizeOptionalString(update.target?.agentId);
@@ -260,28 +196,25 @@ async function handleTranscriptUpdateBroadcast(
   if (!sessionKey) {
     return;
   }
-  const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
-  const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
-  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(getRuntimeConfig(), sessionKey);
-  const stableCompatibilityAgentId =
-    persistedOwner.kind === "configured" ? persistedOwner.agentId : compatibilityDefaultAgentId;
-  const stableUnscopedOwner =
-    !parseAgentSessionKey(sessionKey) && !effectiveAgentId ? stableCompatibilityAgentId : undefined;
-  const storageAgentId = effectiveAgentId ?? stableUnscopedOwner;
-  const visibleAgentId = effectiveAgentId;
-  const routingAgentId = effectiveAgentId ?? stableUnscopedOwner;
+  const agentScope =
+    capturedAgentScope ??
+    resolveSessionEventAgentScope(
+      getRuntimeConfig(),
+      sessionKey,
+      compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId,
+    );
+  if (!agentScope) {
+    return;
+  }
+  const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
+  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope);
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  let broadcastKeys = [sessionKey];
-  if (sessionKey === "global" && routingAgentId) {
-    broadcastKeys = resolveSessionSubscriptionKeys(
-      sessionKey,
-      routingAgentId,
-      stableCompatibilityAgentId,
-    );
-  }
+  const broadcastKeys = routingAgentId
+    ? resolveSessionSubscriptionKeys(sessionKey, routingAgentId, compatibilityOwnerAgentId)
+    : [sessionKey];
   for (const broadcastKey of broadcastKeys) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
@@ -295,6 +228,29 @@ async function handleTranscriptUpdateBroadcast(
       return;
     }
   }
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+  if (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(sessionKey)) {
+    if (lifecycleRevision) {
+      const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update);
+      if (
+        !currentLifecycleOwner ||
+        (currentLifecycleOwner.lifecycleRevision &&
+          currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
+      ) {
+        return;
+      }
+    }
+    params.broadcastToConnIds(
+      "sessions.changed",
+      { sessionKey, phase: "message", ts: Date.now() },
+      connIds,
+      {
+        ...privateBroadcastScope,
+        dropIfSlow: true,
+      },
+    );
+    return;
+  }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (update.message !== undefined && messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
@@ -303,7 +259,7 @@ async function handleTranscriptUpdateBroadcast(
     const fallbackTarget = updateStorePath
       ? {
           entry: loadAccessorSessionEntryReadOnly({
-            agentId: storageAgentId ?? routingAgentId,
+            agentId: routingAgentId,
             sessionKey,
             storePath: updateStorePath,
           }),
@@ -319,7 +275,7 @@ async function handleTranscriptUpdateBroadcast(
     messageSeq = messageSessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
-            agentId: update.target?.agentId ?? storageAgentId ?? routingAgentId,
+            agentId: update.target?.agentId ?? routingAgentId,
             sessionEntry: entry,
             sessionId: messageSessionId,
             sessionKey,
@@ -328,7 +284,6 @@ async function handleTranscriptUpdateBroadcast(
         )
       : undefined;
   }
-  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
   if (lifecycleRevision) {
     // A reset can retain sessionId, so validate the captured owner after every
     // awaited transcript read before projecting the current session snapshot.
@@ -349,23 +304,22 @@ async function handleTranscriptUpdateBroadcast(
   });
   const activeRunState =
     sessionRow &&
-    (sessionRow.key !== "global" || routingAgentId !== undefined || compatibilityDefaultAgentId)
+    (sessionRow.key !== "global" || routingAgentId !== undefined || compatibilityOwnerAgentId)
       ? resolveVisibleActiveSessionRunState({
           context: params,
           requestedKey: sessionKey,
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
           ...(routingAgentId ? { agentId: routingAgentId } : {}),
-          defaultAgentId: stableUnscopedOwner,
+          defaultAgentId: compatibilityOwnerAgentId,
         })
       : null;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow,
-    agentId: routingAgentId,
+    agentId: eventAgentId,
     includeSession: true,
+    activeRunState,
     status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
-    hasActiveRun: activeRunState?.active,
-    activeRunIds: projectSessionEventActiveRunIds(activeRunState),
   });
   if (update.message === undefined) {
     // A committed batch without individually proven cursors must invalidate
@@ -374,7 +328,7 @@ async function handleTranscriptUpdateBroadcast(
       "sessions.changed",
       {
         sessionKey,
-        ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
+        ...(eventAgentId ? { agentId: eventAgentId } : {}),
         phase: "message",
         ts: Date.now(),
         ...sessionSnapshot,
@@ -385,7 +339,7 @@ async function handleTranscriptUpdateBroadcast(
   }
   const projected = projectSessionMessagePayload({
     sessionKey,
-    ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
+    ...(eventAgentId ? { agentId: eventAgentId } : {}),
     message: update.message,
     ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
@@ -407,7 +361,7 @@ async function handleTranscriptUpdateBroadcast(
     "sessions.changed",
     {
       sessionKey,
-      ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
+      ...(eventAgentId ? { agentId: eventAgentId } : {}),
       phase: "message",
       ts: Date.now(),
       ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
@@ -435,29 +389,50 @@ export function createLifecycleEventBroadcastHandler(params: {
     if (!hasSessionChangeReceivers(connIds)) {
       return;
     }
-    const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
-    const eventAgentId =
-      normalizeOptionalString(event.agentId) ?? parseAgentSessionKey(event.sessionKey)?.agentId;
-    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(
+    const agentScope = resolveSessionEventAgentScope(
       getRuntimeConfig(),
       event.sessionKey,
+      normalizeOptionalString(event.agentId),
+      true,
     );
-    const stableOwnerAgentId =
-      (persistedOwner.kind === "configured" ? persistedOwner.agentId : undefined) ??
-      compatibilityDefaultAgentId;
-    const rowAgentId = eventAgentId ?? stableOwnerAgentId;
-    const sessionRow = rowAgentId
-      ? loadGatewaySessionRow(event.sessionKey, { agentId: rowAgentId })
-      : undefined;
+    if (!agentScope) {
+      return;
+    }
+    const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
+    const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(
+      event.sessionKey,
+      agentScope,
+    );
+    const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
+    // Key-only lifecycle deletes invalidate membership; a later row is not deletion evidence.
+    if (
+      event.reason === "delete" ||
+      !routingAgentId ||
+      (!eventAgentId && !compatibilityOwnerAgentId)
+    ) {
+      params.broadcastToConnIds(
+        "sessions.changed",
+        {
+          sessionKey: event.sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          reason: event.reason,
+          ts: Date.now(),
+        },
+        connIds,
+        broadcastOptions,
+      );
+      return;
+    }
+    const sessionRow = loadGatewaySessionRow(event.sessionKey, { agentId: routingAgentId });
     const activeRunState =
-      sessionRow && (sessionRow.key !== "global" || rowAgentId)
+      sessionRow && (sessionRow.key !== "global" || routingAgentId)
         ? resolveVisibleActiveSessionRunState({
             context: params,
             requestedKey: event.sessionKey,
             canonicalKey: sessionRow.key,
             sessionId: sessionRow.sessionId,
-            ...(rowAgentId ? { agentId: rowAgentId } : {}),
-            defaultAgentId: stableOwnerAgentId,
+            ...(routingAgentId ? { agentId: routingAgentId } : {}),
+            defaultAgentId: compatibilityOwnerAgentId,
           })
         : null;
     params.broadcastToConnIds(
@@ -472,11 +447,11 @@ export function createLifecycleEventBroadcastHandler(params: {
         ts: Date.now(),
         ...buildGatewaySessionSnapshot({
           sessionRow,
+          agentId: eventAgentId,
           label: event.label,
           displayName: event.displayName,
           parentSessionKey: event.parentSessionKey,
-          hasActiveRun: activeRunState?.active,
-          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
+          activeRunState,
         }),
         ...(swarmEvent.swarmGroupId
           ? {

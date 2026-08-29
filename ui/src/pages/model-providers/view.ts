@@ -7,7 +7,7 @@ import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
   renderSettingsEmpty,
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsGroup,
   renderSettingsPage,
   renderSettingsRow,
@@ -20,7 +20,7 @@ import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -61,6 +61,8 @@ type ModelProvidersViewProps = {
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
+  /** Usage never converged before the retry budget ran out; cards lack usage. */
+  providerUsageStalled: boolean;
   probeAvailable: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, ModelProviderRowMessage>;
@@ -130,67 +132,55 @@ function renderModelBehavior(props: ModelProvidersViewProps) {
     props.thinkingLevel && !THINKING_LEVEL_SET.has(props.thinkingLevel)
       ? [...THINKING_LEVELS, props.thinkingLevel]
       : THINKING_LEVELS;
-  const thinkingDefault = renderSettingsDefaultState({
-    value: t("quickSettings.model.modelPolicy"),
-    overridden: props.thinkingOverridden,
-    disabled: props.configBusy,
-    onReset: props.onThinkingReset,
-  });
-  const fastDefault = renderSettingsDefaultState({
-    value: t("quickSettings.model.modelPolicy"),
-    overridden: props.fastModeOverridden,
-    disabled: props.configBusy,
-    onReset: props.onFastModeReset,
-  });
   const fastMode = props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode);
   return html`
     <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
       ${renderSettingsSection({ title: t("quickSettings.model.title") }, [
         renderSettingsRow({
           title: t("quickSettings.model.thinking"),
-          description: thinkingDefault.description,
-          control: html`
-            ${renderSettingsSegmented({
-              value: props.thinkingLevel ?? "",
-              options: [
-                { value: "", label: t("quickSettings.model.default") },
-                ...thinkingLevels.map((level) => ({
-                  value: level,
-                  label: THINKING_LEVEL_SET.has(level)
-                    ? t(`quickSettings.model.thinkingLevels.${level}`)
-                    : formatThinkingOverrideLabel(level),
-                })),
-              ],
-              disabled: props.configBusy,
-              onChange: (value, element) =>
-                value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
-            })}
-            ${thinkingDefault.action}
-          `,
+          description: renderSettingsDefaultDescription(
+            t("quickSettings.model.modelPolicy"),
+            props.thinkingOverridden,
+          ),
+          control: renderSettingsSegmented({
+            value: props.thinkingLevel ?? "",
+            options: [
+              { value: "", label: t("quickSettings.model.default") },
+              ...thinkingLevels.map((level) => ({
+                value: level,
+                label: THINKING_LEVEL_SET.has(level)
+                  ? t(`quickSettings.model.thinkingLevels.${level}`)
+                  : formatThinkingOverrideLabel(level),
+              })),
+            ],
+            disabled: props.configBusy,
+            onChange: (value, element) =>
+              value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
+          }),
         }),
         renderSettingsRow({
           title: t("quickSettings.model.fastMode"),
-          description: fastDefault.description,
-          control: html`
-            ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
-              value: fastMode,
-              options: [
-                { value: "", label: t("quickSettings.model.default") },
-                { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-                { value: "on", label: t("quickSettings.model.fastModes.fast") },
-                { value: "off", label: t("quickSettings.model.fastModes.standard") },
-              ],
-              disabled: props.configBusy,
-              onChange: (value) => {
-                if (value === "") {
-                  props.onFastModeReset();
-                } else if (value !== fastMode) {
-                  props.onFastModeChange(fastModeOptionValue(value));
-                }
-              },
-            })}
-            ${fastDefault.action}
-          `,
+          description: renderSettingsDefaultDescription(
+            t("quickSettings.model.modelPolicy"),
+            props.fastModeOverridden,
+          ),
+          control: renderSettingsSegmented<"" | "auto" | "on" | "off">({
+            value: fastMode,
+            options: [
+              { value: "", label: t("quickSettings.model.default") },
+              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+              { value: "on", label: t("quickSettings.model.fastModes.fast") },
+              { value: "off", label: t("quickSettings.model.fastModes.standard") },
+            ],
+            disabled: props.configBusy,
+            onChange: (value) => {
+              if (value === "") {
+                props.onFastModeReset();
+              } else if (value !== fastMode) {
+                props.onFastModeChange(fastModeOptionValue(value));
+              }
+            },
+          }),
         }),
       ])}
     </div>
@@ -650,6 +640,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       providerRows,
     )}
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
+    ${props.providerUsageStalled
+      ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
+      : nothing}
     ${props.mutationBlockedReason
       ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}

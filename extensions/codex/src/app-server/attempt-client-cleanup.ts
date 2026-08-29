@@ -138,18 +138,65 @@ export async function interruptCodexTurnAndWaitBestEffort(
   }
 }
 
+/** Stops native terminals on the cancelled thread without retiring peer threads. */
+export async function terminateCodexBackgroundTerminals(
+  client: CodexAppServerClient,
+  threadId: string,
+): Promise<void> {
+  const options = {
+    timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    signal: AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS),
+  };
+  try {
+    // Codex returns the complete inventory when limit is omitted. Its process
+    // IDs are thread-owned handles, not host PIDs or process-group authority.
+    const { data } = await client.request("thread/backgroundTerminals/list", { threadId }, options);
+    for (const { processId } of data) {
+      // False also means it exited between listing and termination. The final
+      // inventory distinguishes that benign race from a failed termination.
+      await client.request(
+        "thread/backgroundTerminals/terminate",
+        { threadId, processId },
+        options,
+      );
+    }
+    if (data.length > 0) {
+      const remaining = await client.request(
+        "thread/backgroundTerminals/list",
+        { threadId, limit: 1 },
+        options,
+      );
+      if (remaining.data.length > 0) {
+        throw new Error("native background terminals remain running");
+      }
+    }
+  } catch (cause) {
+    throw new Error(
+      "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
+      { cause },
+    );
+  }
+}
+
 /** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {
     threadId: string;
     timeoutMs: number;
+    assertCurrent?: () => void;
   },
 ): Promise<boolean> {
   try {
-    await unsubscribeCodexAppServerLiveThread(client, params.threadId, params.timeoutMs);
+    await unsubscribeCodexAppServerLiveThread(
+      client,
+      params.threadId,
+      params.timeoutMs,
+      params.assertCurrent,
+    );
     return true;
   } catch (error) {
+    params.assertCurrent?.();
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
       threadId: params.threadId,
       error,

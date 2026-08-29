@@ -1,6 +1,7 @@
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createChatRunState,
@@ -27,6 +28,8 @@ export function createGatewayConnectionState(params: {
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
+    preparePresenceProjection: (presence) =>
+      createPresenceRecipientProjection({ cfg: loadRuntimeConfig(), presence }),
     sessionMessageSubscribers,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
       canReceiveSessionEvent({

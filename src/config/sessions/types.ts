@@ -9,12 +9,15 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
@@ -273,33 +276,10 @@ export interface QuotaSuspension {
   state: LaneExecutionState; // State machine check for hot-path
 }
 
-export type SessionGoalStatus =
-  | "active"
-  | "paused"
-  | "blocked"
-  | "usage_limited"
-  | "budget_limited"
-  | "complete";
-
-export type SessionGoal = {
-  schemaVersion: 1;
-  id: string;
-  objective: string;
-  status: SessionGoalStatus;
-  createdAt: number;
-  updatedAt: number;
-  tokenStart: number;
-  tokenStartFresh?: boolean;
-  tokensUsed: number;
-  tokenBudget?: number;
-  continuationTurns: number;
-  lastStatusNote?: string;
-  pausedAt?: number;
-  blockedAt?: number;
-  completedAt?: number;
-  usageLimitedAt?: number;
-  budgetLimitedAt?: number;
-};
+export type {
+  SessionGoal,
+  SessionGoalStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
 export type RestartRecoveryRun = {
   runId: string;
@@ -392,11 +372,13 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
+    /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
+    sandbox?: "required";
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
-    /** Earliest external prompt actors, projected from the participant table. */
+    /** Retained identities, projected from the participant table before display truncation. */
     participants?: SessionParticipant[];
-    /** Total external prompt actors after excluding the effective owner. */
+    /** Raw retained identity count, including the owner, for admission-bound coverage. */
     participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
@@ -477,6 +459,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Exact server-stamped authority provenance copied from the owning cron job. */
       scheduledToolPolicy?: CronScheduledToolPolicy;
+      /** Restrict-only exec pin copied from the owning cron job's cap. */
+      toolsAllowExecTarget?: CronToolsAllowExecTarget;
+      /** Expected pin copied with the cap so detached continuation loss fails closed. */
+      toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
       /** Store-private origin paired with an account scheduled-tool policy. */
       scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
       cliSessionBindingFacts?: {
@@ -629,6 +615,15 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Canonical remote repository awaiting preparation by this exact session generation. */
+  pendingProjectGitUrl?: string;
+  /** Authorized worktree intent awaiting preparation by an admitted turn. */
+  pendingWorktree?: {
+    workspace?: string;
+    name?: string;
+    baseRef?: string;
+    titleSource: string;
+  };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;
@@ -786,12 +781,17 @@ function mergeSessionEntryWithPolicy(
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
 
-  // Node creation and exact fork ancestry are write-once; patches may only fill absent values.
+  // Node creation and exact fork ancestry are write-once; sandbox policy cannot be added later.
   if (existing.createdVia !== undefined) {
     next.createdVia = existing.createdVia;
   }
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
+  }
+  if (existing.sandbox === "required") {
+    next.sandbox = existing.sandbox;
+  } else {
+    delete next.sandbox;
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;

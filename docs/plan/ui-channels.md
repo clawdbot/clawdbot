@@ -13,7 +13,7 @@ Implemented for the shared agent, CLI, plugin capability, and outbound delivery 
 
 - `ReplyPayload.presentation` carries semantic message UI.
 - `ReplyPayload.delivery.pin` carries sent-message pin requests.
-- Shared message actions expose `presentation`, `delivery`, and `pin` instead of provider-native `components`, `blocks`, `buttons`, or `card`.
+- Shared message actions expose `presentation`, `delivery`, and `pin` instead of provider-native fields by default. Discord keeps the documented `components` exception for native layouts that `presentation` cannot express.
 - Core renders or auto-degrades presentation through plugin-declared outbound capabilities.
 - Discord, Slack, Telegram, Mattermost, MS Teams, and Feishu renderers consume the generic contract.
 - Discord channel control-plane code no longer imports Carbon-backed UI containers.
@@ -267,7 +267,7 @@ Add or update:
 - Presentation auto-degrade tests for unsupported blocks.
 - Cross-context marker tests for plugin dispatch and core delivery paths.
 - Channel render matrix tests for Discord, Slack, Telegram, Mattermost, MS Teams, Feishu, LINE, and text fallback.
-- Message tool schema tests proving native fields are gone.
+- Message tool schema tests proving unapproved native fields are gone and approved exceptions stay scoped.
 - CLI tests proving native flags are gone.
 - Discord entrypoint import-laziness regression covering Carbon.
 - Delivery pin tests covering Telegram and generic fallback.

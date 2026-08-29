@@ -1,7 +1,7 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 
-const KNIP_VERSION = "6.8.0";
+const KNIP_VERSION = "6.32.2";
 const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
 const KNIP_KILL_GRACE_MS = 5_000;
 const KNIP_PROCESS_TREE_EXIT_POLL_MS = 25;
@@ -137,14 +137,7 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
   const killGraceMs = params.killGraceMs ?? KNIP_KILL_GRACE_MS;
   const scanName = params.scanName ?? "scan";
   const writeStatus = params.writeStatus ?? ((message) => process.stderr.write(`${message}\n`));
-  const args = [
-    "--config.minimum-release-age=0",
-    "dlx",
-    "--package",
-    `knip@${KNIP_VERSION}`,
-    "knip",
-    ...knipArgs,
-  ];
+  const args = ["dlx", "--package", `knip@${KNIP_VERSION}`, "knip", ...knipArgs];
 
   return await new Promise<KnipRunResult>((resolve) => {
     const startedAt = Date.now();

@@ -1,12 +1,16 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { afterAll, afterEach, beforeAll, describe, expect, inject } from "vitest";
 import {
-  canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+
+declare module "vitest" {
+  export interface ProvidedContext {
+    controlUiE2eChromium: { executablePath: string; available: boolean };
+  }
+}
 
 type ControlUiE2eSuiteOptions = {
   browserLaunchOptions?: Omit<NonNullable<Parameters<typeof chromium.launch>[0]>, "executablePath">;
@@ -34,9 +38,58 @@ type ControlUiE2eSuite = {
   ) => Promise<T>;
 };
 
+/* The shared title tooltip (components/tooltip-title.ts) lifts a hovered or
+   focused element's `title` into its overlay and blanks the attribute until
+   pointer-leave/focusout, so elements that can sit under the pointer or hold
+   focus race a raw getAttribute("title") read. Read the lifted overlay
+   description when the attribute is blank. */
+export function tooltipTitleText(item: Locator) {
+  return item.evaluate((element) => {
+    const title = element.getAttribute("title");
+    if (title) {
+      return title;
+    }
+    // The overlay describes the first interactive descendant when the titled
+    // row itself is not describable (tooltip.ts resolveDescribedElement), so
+    // link rows carry the description on their nested anchor.
+    const described = element.hasAttribute("aria-describedby")
+      ? element
+      : (element.querySelector("[aria-describedby]") ?? element);
+    const root = described.getRootNode();
+    const scope = root instanceof ShadowRoot ? root : described.ownerDocument;
+    return (described.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => scope.getElementById(id)?.textContent?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
+  });
+}
+
+export async function holdModuleResponse(page: Page, module: RegExp) {
+  let release!: () => void;
+  let requested!: (url: string) => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const request = new Promise<string>((resolve) => {
+    requested = resolve;
+  });
+  let requests = 0;
+  await page.route(module, async (route) => {
+    requests += 1;
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    requested(route.request().url());
+    await gate;
+    await route.fulfill({ response });
+  });
+  return { request, release, requests: () => requests };
+}
+
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
-  const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-  const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+  // Global setup already checked the executable; keep that result across isolated files.
+  const { executablePath: chromiumExecutablePath, available: chromiumAvailable } =
+    inject("controlUiE2eChromium");
   const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
   const describeControlUiE2e =
     chromiumAvailable || !allowMissingChromium ? describe : describe.skip;

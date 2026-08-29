@@ -1,4 +1,6 @@
-// Package-version compatibility helpers for E2E acceptance scripts.
+// Candidate-package compatibility helpers for E2E acceptance scripts.
+import { readFileSync } from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 import { isDirectRunUrl } from "../../lib/direct-run.mjs";
 
 export function legacyPackageAcceptanceCompat(version) {
@@ -9,6 +11,27 @@ export function legacyPackageAcceptanceCompat(version) {
   );
 }
 
+// Candidates on either side of consent enforcement can share a package version.
+// Only successful command help establishes support; callers own probe failures.
+export function fixtureCapabilityConsentArgs(help) {
+  return /^[\t ]*--accept-capabilities(?:[\t ]|$)/m.test(stripVTControlCharacters(help))
+    ? ["--accept-capabilities"]
+    : [];
+}
+
+function clawhubReleaseSecurityMode(version) {
+  // The frozen 2026.6.35 candidate predates the ClawHub release-security endpoint.
+  return version === "2026.6.35" ? "absent" : "required";
+}
+
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  console.log(legacyPackageAcceptanceCompat(process.argv[2]) ? "1" : "0");
+  console.log(
+    process.argv[2] === "--clawhub-release-security-mode"
+      ? clawhubReleaseSecurityMode(process.argv[3])
+      : process.argv[2] === "fixture-consent"
+        ? fixtureCapabilityConsentArgs(readFileSync(0, "utf8")).join("\n")
+        : legacyPackageAcceptanceCompat(process.argv[2])
+          ? "1"
+          : "0",
+  );
 }

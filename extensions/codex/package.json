@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@openai/codex": "0.148.0",
+    "@openai/codex": "0.150.1",
     "semver": "7.8.5",
-    "smol-toml": "1.7.1",
-    "typebox": "1.3.6",
-    "ws": "8.21.1",
+    "smol-toml": "1.8.0",
+    "typebox": "1.3.16",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

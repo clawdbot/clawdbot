@@ -258,7 +258,7 @@
   },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],
-  "nonSecretAuthMarkers": ["openclaw:claude-cli-api-key-helper"],
+  "nonSecretAuthMarkers": ["openclaw:claude-cli-native-auth"],
   "setup": {
     "providers": [
       {

@@ -1,5 +1,6 @@
 // Test environment tests validate shared env setup helpers.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +15,12 @@ import {
 import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import {
+  captureFullEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnv,
+} from "../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
@@ -78,10 +84,98 @@ afterEach(() => {
     cleanupFns.pop()?.();
   }
   restoreProcessEnv();
+  vi.restoreAllMocks();
+  vi.doUnmock("node:child_process");
   cleanupTempDirs(tempDirs);
 });
 
 describe("installTestEnv", () => {
+  it.each([".openclaw", ".claude"])(
+    "rolls back live staging failure at %s before another installation",
+    (failedDirectory) => {
+      const sandbox = makeTempDir(tempDirs, "openclaw-env-acquisition-");
+      const realHome = createTempHome();
+      writeFile(
+        path.join(realHome, ".profile"),
+        [
+          "export ACQUISITION_PROFILE_ADDED=from-profile",
+          "export ACQUISITION_PROFILE_EMPTY=from-profile",
+          "export OPENCLAW_TEST_FAST=from-profile",
+        ].join("\n"),
+      );
+      const configPath = path.join(realHome, ".openclaw", "openclaw.json");
+      writeFile(configPath, "{}\n");
+      writeFile(path.join(realHome, ".claude", "settings.json"), "{}\n");
+      vi.spyOn(os, "tmpdir").mockReturnValue(sandbox);
+      const snapshot = captureFullEnv();
+      cleanupFns.push(() => snapshot.restore());
+
+      withEnv(
+        {
+          HOME: realHome,
+          USERPROFILE: realHome,
+          OPENCLAW_HOME: realHome,
+          OPENCLAW_STATE_DIR: path.join(realHome, ".openclaw"),
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_LIVE_TEST: "1",
+          OPENCLAW_LIVE_USE_REAL_HOME: undefined,
+          OPENCLAW_LIVE_TEST_QUIET: "1",
+          OPENCLAW_TEST_FAST: "",
+          ACQUISITION_PROFILE_ADDED: undefined,
+          ACQUISITION_PROFILE_EMPTY: "",
+        },
+        () => {
+          const callerEnv = { ...process.env };
+          const failure = new Error(`staging failed at ${failedDirectory}`);
+          const mkdirSync = fs.mkdirSync;
+          let failedHome = "";
+          const fault = vi.spyOn(fs, "mkdirSync").mockImplementation((target, options) => {
+            const home = process.env.HOME;
+            if (home && home !== realHome && target === path.join(home, failedDirectory)) {
+              failedHome = home;
+              throw failure;
+            }
+            return mkdirSync(target, options);
+          });
+          try {
+            let caught: unknown;
+            try {
+              const unexpected = installTestEnv();
+              cleanupFns.push(unexpected.cleanup);
+            } catch (error) {
+              caught = error;
+            }
+            expect(caught).toBe(failure);
+          } finally {
+            fault.mockRestore();
+          }
+          expect(failedHome).not.toBe("");
+          const changedKeys = [
+            ...new Set([...Object.keys(callerEnv), ...Object.keys(process.env)]),
+          ].filter((key) => callerEnv[key] !== process.env[key]);
+          expect.soft(changedKeys).toEqual([]);
+          expect.soft(fs.existsSync(failedHome)).toBe(false);
+          expect(fs.readdirSync(sandbox)).toEqual([]);
+          expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+
+          const next = installTestEnv();
+          cleanupFns.push(next.cleanup);
+          expect(next.tempHome).not.toBe(failedHome);
+          expect(process.env.ACQUISITION_PROFILE_ADDED).toBe("from-profile");
+          expect(process.env.ACQUISITION_PROFILE_EMPTY).toBe("from-profile");
+          expect(
+            fs.readFileSync(path.join(next.tempHome, ".claude", "settings.json"), "utf8"),
+          ).toBe("{}\n");
+          next.cleanup();
+          expect(process.env.HOME).toBe(realHome);
+          expect(process.env.OPENCLAW_TEST_FAST).toBe("from-profile");
+          expect(process.env.ACQUISITION_PROFILE_ADDED).toBe("from-profile");
+          expect(fs.readdirSync(sandbox)).toEqual([]);
+        },
+      );
+    },
+  );
+
   it("keeps live tests on a temp HOME while copying config and auth state", () => {
     const realHome = createTempHome();
     const openClawHome = createTempHome();
@@ -387,6 +481,23 @@ describe("installTestEnv", () => {
 
     testEnv.cleanup();
     expect(process.env.OPENCLAW_HOME).toBe(configuredOpenClawHome);
+  });
+
+  it.each([
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_PHONE_NUMBER",
+    "TWILIO_SMS_FROM",
+    "TWILIO_MESSAGING_SERVICE_SID",
+  ])("isolates and restores the SMS activation variable %s", (key) => {
+    setTestEnvValue(key, "test-channel-value");
+
+    const testEnv = installTestEnv({ mode: "hermetic" });
+    cleanupFns.push(testEnv.cleanup);
+
+    expect(process.env[key]).toBeUndefined();
+    testEnv.cleanup();
+    expect(process.env[key]).toBe("test-channel-value");
   });
 
   it("does not load ~/.profile for normal isolated test runs", () => {

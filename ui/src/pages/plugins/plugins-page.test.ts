@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type {
@@ -30,6 +31,8 @@ import {
 } from "./plugins-page.test-support.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+
 function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
   page
     .querySelector(`#plugins-tab-${tab}`)
@@ -39,6 +42,7 @@ function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills"
 describe("PluginsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
   });
 
   afterEach(resetPluginsPageTestState);
@@ -261,17 +265,17 @@ describe("PluginsPage", () => {
     } satisfies PluginInstallRequest;
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
-    await page.install(catalogRequest, installIdentity);
+    await page.consentController.install(catalogRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (1).",
     );
 
-    await page.install(searchRequest, installIdentity);
+    await page.consentController.install(searchRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (2).",
     );
 
-    await page.install(
+    await page.consentController.install(
       { ...searchRequest, acknowledgeInstallPolicyWarning: true },
       installIdentity,
     );
@@ -497,7 +501,7 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install(
+        await page.consentController.install(
           {
             source: "clawhub",
             packageName: "example-plugin",
@@ -708,7 +712,7 @@ describe("PluginsPage", () => {
     await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
-  it("uninstalls a removable plugin after inline confirmation", async () => {
+  it("waits for uninstall restart confirmation and sends nothing when cancelled", async () => {
     const removable = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -742,12 +746,26 @@ describe("PluginsPage", () => {
       }),
     );
 
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
-    page
-      .querySelector<HTMLButtonElement>(
-        '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
-      )
-      ?.click();
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    expect(showConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Remove Community Thing?",
+        message:
+          "Removing this plugin package and all of its entries restarts the Gateway immediately and interrupts active sessions.",
+        confirmLabel: "Remove",
+        danger: true,
+      }),
+    );
+    expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
+
+    confirmation.resolve(false);
+    await confirmation.promise;
+    expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
+
+    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
 
     await waitForFast(() =>
       expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),

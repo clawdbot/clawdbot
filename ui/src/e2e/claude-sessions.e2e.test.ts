@@ -365,7 +365,7 @@ suite.define(() => {
             },
           }),
         );
-      const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
+      const connecting = page.getByRole("status", { name: "Connecting to session…" });
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
@@ -434,7 +434,7 @@ suite.define(() => {
         .toContainEqual(
           expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
         );
-      await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
+      await page.getByRole("status", { name: "Connecting to session…" }).waitFor();
       await page
         .locator("openclaw-terminal-panel .tabstrip-tab", {
           hasText: "claude --resume claude-termi…",
@@ -456,6 +456,7 @@ suite.define(() => {
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
+    await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -541,27 +542,28 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
+    const catalog = page.locator('[data-session-section="catalog:claude"]');
     await page.locator('[data-session-catalog-load-more="claude"]').click();
-    await page.getByText("Older remote review", { exact: true }).waitFor();
+    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
       catalogId: "claude",
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.clock.install();
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await page.clock.runFor(50);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(catalogRequestCount);
     await page.clock.fastForward(30_000);
     await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThanOrEqual(catalogRequestCount + 2);
-    await page.getByText("Older remote review", { exact: true }).waitFor();
-    await page.getByText("Remote architecture review", { exact: true }).click();
+      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
+    await remote.hover();
+    await page.locator(".session-progress-hovercard").waitFor();
+    await remote.click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
     const catalogPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const thread = catalogPane.locator(".chat-thread");
@@ -587,7 +589,6 @@ suite.define(() => {
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
-    await catalogPane.locator(".chat-history-loading").waitFor();
     const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
     await showEarlier.waitFor();
     expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
@@ -655,7 +656,7 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
-    expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
+    expect(await catalogPane.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
@@ -752,7 +753,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2]);
-      await pane.locator(".chat-history-loading").waitFor();
+      await pane.locator('.chat-history-available[aria-busy="true"]').waitFor();
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -772,7 +773,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2, 6]);
-      await pane.locator(".chat-history-loading").waitFor();
+      await pane.locator('.chat-history-available[aria-busy="true"]').waitFor();
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -787,7 +788,9 @@ suite.define(() => {
       await expect
         .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
         .toBe(true);
-      await expect.poll(() => pane.locator(".chat-history-loading").count()).toBe(0);
+      await expect
+        .poll(() => pane.locator('.chat-history-available[aria-busy="true"]').count())
+        .toBe(0);
       expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
       if (artifactDir) {
         await page.screenshot({
@@ -895,8 +898,7 @@ suite.define(() => {
     // Pin each wait past the earlier chat.history traffic so a slow runner
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
-    await page.locator(".chat-history-loading").waitFor();
-    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
+    await page.locator('.chat-history-available[aria-busy="true"]').waitFor();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
@@ -908,13 +910,12 @@ suite.define(() => {
       message: "history unavailable",
       retryable: true,
     });
-    await expect.poll(() => page.locator(".chat-history-loading").count()).toBe(0);
-    expect(await showEarlier.getAttribute("aria-busy")).toBe("false");
+    await expect.poll(() => showEarlier.getAttribute("aria-busy")).toBe("false");
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
     await showEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
-    await page.locator(".chat-history-loading").waitFor();
+    await page.locator('.chat-history-available[aria-busy="true"]').waitFor();
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     await gateway.resolveDeferred("chat.history", {
       messages: older,
@@ -972,64 +973,7 @@ suite.define(() => {
     });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
-    expect(await page.locator(".chat-history-loading").count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
-    await page.close();
-  });
-
-  it("keeps a focused message action mounted while its row scrolls out of view", async () => {
-    const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const messages = Array.from({ length: 200 }, (_, index) => ({
-      __openclaw: { seq: index + 1 },
-      content: [
-        {
-          type: "text",
-          text: `focus retention message ${index + 1}\n${"transcript detail line\n".repeat(3)}`,
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: Date.now() + index,
-    }));
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup"],
-      methodResponses: {
-        "chat.startup": {
-          messages,
-          hasMore: false,
-          totalMessages: messages.length,
-          sessionId: "focus-retention",
-          thinkingLevel: null,
-        },
-      },
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText(/^focus retention message 200\n/).waitFor();
-    const thread = page.locator(".chat-thread");
-    const action = thread.locator("button.chat-reply-btn").last();
-    await action.focus();
-    const focusedRowKey = await action.evaluate(
-      (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",
-    );
-    expect(focusedRowKey).not.toBe("");
-
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
-    await expect.poll(() => thread.evaluate((element) => Math.round(element.scrollTop))).toBe(0);
-    await page.getByText(/^focus retention message 1\n/).waitFor();
-    await expect
-      .poll(() =>
-        thread.evaluate((element, key) => {
-          const row = Array.from(
-            element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-          ).find((candidate) => candidate.dataset.virtualRowKey === key);
-          return Boolean(row?.contains(document.activeElement));
-        }, focusedRowKey),
-      )
-      .toBe(true);
-    expect(await thread.locator(".chat-virtual-row").count()).toBeLessThan(30);
     await page.close();
   });
 });

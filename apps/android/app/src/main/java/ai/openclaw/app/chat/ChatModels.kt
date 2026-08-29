@@ -29,9 +29,40 @@ data class ChatMessage(
   val idempotencyKey: String? = null,
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
+  val truncated: Boolean = false,
+  val isSyntheticDisplay: Boolean = false,
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
-)
+  val senderLabel: String? = null,
+) {
+  // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
+  // Keep the ID for timeline actions, but never use it to recover or retain full text.
+  internal val canReadFullMessage: Boolean
+    get() = role == "assistant" && truncated && !isSyntheticDisplay && !entryId.isNullOrBlank()
+
+  internal fun matchesFullRead(other: ChatMessage): Boolean = canReadFullMessage && other.canReadFullMessage && entryId == other.entryId && content == other.content
+}
+
+internal sealed interface ChatFullMessageState {
+  data object Loading : ChatFullMessageState
+
+  data class Loaded(
+    val content: List<ChatMessageContent>,
+  ) : ChatFullMessageState
+
+  data class Unavailable(
+    val reason: ChatFullMessageUnavailable,
+  ) : ChatFullMessageState
+
+  data object Failed : ChatFullMessageState
+}
+
+internal enum class ChatFullMessageUnavailable {
+  GatewayUpdate,
+  Disconnected,
+  NotFound,
+  TooLarge,
+}
 
 data class ChatMessageProvenance(
   val kind: String,
@@ -315,6 +346,8 @@ data class ChatSessionEntry(
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
+  val markedUnreadAt: Long? = null,
+  val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
   val hasAgentStatusMetadata: Boolean = agentStatus != null,
   val observerDigest: SessionObserverDigest? = null,
@@ -351,6 +384,10 @@ data class ChatSessionEntry(
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )
 
+data class ChatSessionUnreadExpectation(
+  val markedUnreadAt: Long?,
+)
+
 data class ChatSessionAgentStatus(
   val note: String,
   val expiresAt: Long,
@@ -365,7 +402,7 @@ fun filterSessionEntries(
   val query = search.trim().lowercase()
   if (query.isEmpty()) return sessions
   return sessions.filter { session ->
-    listOfNotNull(session.displayName, session.label, session.key)
+    listOfNotNull(session.displayName, session.label, session.category, session.key)
       .any { it.lowercase().contains(query) }
   }
 }

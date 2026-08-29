@@ -1,5 +1,5 @@
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   listMemoryCorpusSupplements,
   type MemoryCorpusSearchResult,
@@ -19,17 +19,31 @@ type MemorySupplementReadResult = Omit<MemorySupplementGetResult, "content"> & {
   text: string;
 };
 
+export type MemoryCorpusFailure = { error: string; code?: string };
+type UnavailableMemoryCorpus<T> = {
+  corpus: MemoryCorpus;
+  outcome: "unavailable";
+  value: T;
+} & MemoryCorpusFailure;
+
 export type MemoryCorpusAttempt<T> =
   | { corpus: MemoryCorpus; outcome: "ok"; value: T }
-  | { corpus: MemoryCorpus; outcome: "unavailable"; value: T; error: string }
+  | UnavailableMemoryCorpus<T>
   | { corpus: MemoryCorpus; outcome: "not-registered" };
 
 export function unavailableMemoryCorpus<T>(
   corpus: MemoryCorpus,
   value: T,
   error: unknown,
-): MemoryCorpusAttempt<T> {
-  return { corpus, outcome: "unavailable", value, error: formatErrorMessage(error) };
+): UnavailableMemoryCorpus<T> {
+  const code = extractErrorCode(error);
+  return {
+    corpus,
+    outcome: "unavailable",
+    value,
+    error: formatErrorMessage(error),
+    ...(code ? { code } : {}),
+  };
 }
 
 async function raceMemoryCorpusSignal<T>(signal: AbortSignal, task: Promise<T>): Promise<T> {
@@ -103,15 +117,13 @@ export function composeMemoryCorpusMetadata(
     (left, right) => Number(left.corpus === "wiki") - Number(right.corpus === "wiki"),
   );
   const warnings = ordered.flatMap((attempt) => {
-    if (attempt.outcome === "ok") {
-      return [];
-    }
     const label = attempt.corpus === "memory" ? "Memory" : "Wiki";
-    return [
-      attempt.outcome === "not-registered"
-        ? `${label} corpus is not registered; results do not cover that requested corpus.`
-        : `${label} corpus unavailable: ${attempt.error}`,
-    ];
+    if (attempt.outcome === "unavailable") {
+      return [`${label} corpus unavailable: ${attempt.error}`];
+    }
+    return attempt.outcome === "not-registered" && ordered.length === 1
+      ? [`${label} corpus is not registered; results do not cover that requested corpus.`]
+      : [];
   });
   warnings.push(...extraWarnings);
   const errors = ordered.flatMap((attempt) =>

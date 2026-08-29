@@ -5,6 +5,7 @@ import {
 import {
   buildModelCatalogMergeKey,
   parseModelCatalogRef,
+  type ModelCatalogRef,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { MODEL_APIS } from "../config/types.models.js";
@@ -18,6 +19,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { resolveAgentEntry } from "./agent-scope-config.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
@@ -75,6 +77,7 @@ export function toStaticCatalogEntry(model: ProviderRuntimeModel): ModelCatalogE
     ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
     ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     ...(model.input ? { input: model.input } : {}),
     ...(model.params ? { params: model.params } : {}),
     ...(model.compat ? { compat: model.compat } : {}),
@@ -87,6 +90,7 @@ export function collectPreparedModelRuntimeProviderIds(
   credentials: Readonly<AuthStorageData>,
   includeCredentialProviders: boolean,
   configuredModelRefs: readonly ConfiguredModelRef[] = collectConfiguredModelRefs(config),
+  agentId?: string,
 ): string[] {
   const providerIds = new Set<string>();
   const addProviderId = (value: string) => {
@@ -100,14 +104,19 @@ export function collectPreparedModelRuntimeProviderIds(
       addProviderId(providerId);
     }
   }
-  for (const providerId of Object.keys(config.models?.providers ?? {})) {
-    addProviderId(providerId);
-  }
   for (const ref of configuredModelRefs) {
     const separator = ref.value.indexOf("/");
     if (separator > 0) {
       addProviderId(ref.value.slice(0, separator));
     }
+    addProviderId(
+      resolveConfiguredModelHarnessRuntime({
+        config,
+        modelRef: ref.value,
+        agentId,
+        includeImplicitRuntimePreferences: false,
+      }) ?? "",
+    );
   }
   return [...providerIds].toSorted((left, right) => left.localeCompare(right));
 }
@@ -165,8 +174,7 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
 }
 
 export function prepareConfiguredRuntimeModels(params: {
-  config: OpenClawConfig;
-  configuredModelRefs?: readonly ConfiguredModelRef[];
+  configuredModelRefs: readonly ModelCatalogRef[];
   metadataSnapshot: PluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerStaticModels: readonly ProviderRuntimeModel[];
@@ -178,12 +186,7 @@ export function prepareConfiguredRuntimeModels(params: {
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
-  for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const parsed = parseModelCatalogRef(value);
-    if (!parsed) {
-      continue;
-    }
-    const { modelId, provider } = parsed;
+  for (const { modelId, provider } of params.configuredModelRefs) {
     const key = buildModelCatalogMergeKey(provider, modelId);
     if (seen.has(key)) {
       continue;

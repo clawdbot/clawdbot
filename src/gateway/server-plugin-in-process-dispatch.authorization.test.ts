@@ -8,7 +8,9 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
 import type {
@@ -16,7 +18,10 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import {
+  dispatchGatewayMethodInProcess,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-dispatch.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
@@ -29,11 +34,20 @@ vi.mock("./agent-turn/agent-turn-service.js", () => ({
 }));
 
 function createContext(): GatewayRequestContext {
-  return {
+  const context = {
     dedupe: new Map(),
     getRuntimeConfig: () => ({}),
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  context.createAgentTurnFacade = (principal) =>
+    createInternalAgentTurnFacade({
+      ...principal,
+      getContext: () => context,
+      ...(context.getGatewayMethodRegistry
+        ? { getMethodRegistry: context.getGatewayMethodRegistry }
+        : {}),
+    });
+  return context;
 }
 
 function createOperatorClient(params: {
@@ -109,6 +123,451 @@ describe("typed in-process agent authorization", () => {
   beforeEach(() => {
     startTurn.mockReset();
     waitForTurn.mockReset();
+  });
+
+  it.each([
+    ["agent", { message: "owned turn", idempotencyKey: "host-owned" }],
+    ["agent.wait", { runId: "host-owned" }],
+  ] as const)(
+    "uses the captured host factory for %s and refuses an ownerless context",
+    async (method, params) => {
+      const client = createOperatorClient({ profileId: "owner", scopes: ["operator.write"] });
+      const context = createContext();
+      const createFacade = vi.fn(context.createAgentTurnFacade!);
+      context.createAgentTurnFacade = createFacade;
+      const result = { runId: "host-owned", status: "ok" };
+      startTurn.mockImplementation(async ({ io }) => io.emitAcceptance([true, result, undefined]));
+      waitForTurn.mockResolvedValue(result);
+
+      await expect(dispatchScopedMethod({ client, context, method, params })).resolves.toEqual(
+        result,
+      );
+      expect(createFacade).toHaveBeenCalledOnce();
+      expect(createFacade.mock.calls[0]?.[0].client).toBe(client);
+
+      delete context.createAgentTurnFacade;
+      await expect(dispatchScopedMethod({ client, context, method, params })).rejects.toThrow(
+        "Gateway instance agent turn facade unavailable",
+      );
+    },
+  );
+
+  it.each([
+    ["agent", { message: "retired turn", idempotencyKey: "retired-host" }],
+    ["agent.wait", { runId: "retired-host" }],
+  ] as const)(
+    "revalidates the captured host after awaiting its %s factory",
+    async (method, params) => {
+      const context = createContext();
+      let current = context;
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const createFacade = context.createAgentTurnFacade!;
+      context.createAgentTurnFacade = async (principal) => {
+        entered.resolve();
+        await release.promise;
+        return createFacade(principal);
+      };
+
+      const pending = dispatchGatewayMethodInProcess(method, params, {
+        forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
+        resolveGatewayContext: () => current,
+      });
+      const rejected = expect(pending).rejects.toThrow("current gateway instance binding");
+      await entered.promise;
+      current = createContext();
+      release.resolve();
+
+      await rejected;
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(waitForTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves verified operator identity and never widens a synthetic tool caller's scopes", async () => {
+    const owner = createOperatorClient({
+      profileId: "tool-owner",
+      scopes: ["operator.read"],
+    });
+    let dispatched: GatewayRequestOptions["client"] = null;
+    const context = createContext();
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.list",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
+            dispatched = client;
+            respond(true, { sessions: [] });
+          },
+        },
+      ]);
+
+    await withOperatorToolGatewayAuthority(
+      {
+        authenticatedUserProfile: owner.authenticatedUserProfile!,
+        scopes: owner.connect.scopes ?? [],
+      },
+      async () =>
+        await dispatchGatewayMethodInProcess(
+          "sessions.list",
+          {},
+          {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.read", "operator.admin"],
+            resolveGatewayContext: () => context,
+          },
+        ),
+    );
+
+    expect(dispatched).toMatchObject({
+      authenticatedUserProfile: { profileId: "tool-owner" },
+      connect: { scopes: ["operator.read"] },
+      internal: { syntheticClient: true },
+    });
+  });
+
+  it.each(["explicit", "scoped"])(
+    "does not fall back to ambient scope when a %s Gateway binding is retired",
+    async (binding) => {
+      const ambient = createContext();
+      ambient.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
+          {
+            name: "sessions.list",
+            scope: "operator.read",
+            owner: { kind: "core", area: "sessions" },
+            handler: ({ respond }: GatewayRequestHandlerOptions) => {
+              respond(true, { sessions: [] });
+            },
+          },
+        ]);
+
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          context: ambient,
+          ...(binding === "scoped" ? { resolveGatewayContext: () => undefined } : {}),
+          isWebchatConnect: () => false,
+        },
+        async () =>
+          await expect(
+            dispatchGatewayMethodInProcess(
+              "sessions.list",
+              {},
+              {
+                forceSyntheticClient: true,
+                ...(binding === "explicit" ? { resolveGatewayContext: () => undefined } : {}),
+                syntheticScopes: ["operator.read"],
+              },
+            ),
+          ).rejects.toThrow("instance binding"),
+      );
+    },
+  );
+
+  it.each(["explicit", "scoped"])(
+    "carries a %s Gateway binding into the session mutation commit guard",
+    async (binding) => {
+      const admitted = createContext();
+      const replacement = createContext();
+      let current = admitted;
+      let committed = false;
+      const setupStarted = createDeferredCore();
+      const releaseSetup = createDeferredCore();
+      admitted.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
+          {
+            name: "sessions.create",
+            scope: "operator.write",
+            owner: { kind: "core", area: "sessions" },
+            handler: async ({
+              respond,
+              sessionMutationCommitGuard,
+            }: GatewayRequestHandlerOptions) => {
+              setupStarted.resolve();
+              await releaseSetup.promise;
+              sessionMutationCommitGuard?.();
+              committed = true;
+              respond(true, { key: "agent:main:dashboard:child" });
+            },
+          },
+        ]);
+
+      const dispatch = withPluginRuntimeGatewayRequestScope(
+        {
+          context: admitted,
+          isWebchatConnect: () => false,
+          ...(binding === "scoped" ? { resolveGatewayContext: () => current } : {}),
+        },
+        () =>
+          dispatchGatewayMethodInProcess(
+            "sessions.create",
+            { agentId: "main" },
+            {
+              forceSyntheticClient: true,
+              ...(binding === "explicit" ? { resolveGatewayContext: () => current } : {}),
+              syntheticScopes: ["operator.write"],
+            },
+          ),
+      );
+      await setupStarted.promise;
+      current = replacement;
+      releaseSetup.resolve();
+
+      await expect(dispatch).rejects.toThrow("current gateway instance binding");
+      expect(committed).toBe(false);
+    },
+  );
+
+  it("composes caller authority into the session mutation commit guard", async () => {
+    const admitted = createContext();
+    const assertCallerCurrent = vi.fn();
+    admitted.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.create",
+          scope: "operator.write",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ respond, sessionMutationCommitGuard }: GatewayRequestHandlerOptions) => {
+            sessionMutationCommitGuard?.();
+            respond(true, { key: "agent:main:dashboard:child" });
+          },
+        },
+      ]);
+
+    await dispatchGatewayMethodInProcess(
+      "sessions.create",
+      { agentId: "main" },
+      {
+        forceSyntheticClient: true,
+        resolveGatewayContext: () => admitted,
+        sessionMutationCommitGuard: assertCallerCurrent,
+        syntheticScopes: ["operator.write"],
+      },
+    );
+
+    expect(assertCallerCurrent).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {
+    const owner = createOperatorClient({
+      profileId: "model-spawn-owner",
+      scopes: ["operator.write"],
+    });
+    let dispatched: GatewayRequestOptions["client"] = null;
+    const context = createContext();
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.create",
+          scope: "operator.write",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
+            dispatched = client;
+            respond(true, { key: "agent:guest:dashboard:child" });
+          },
+        },
+      ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        client: owner,
+        context,
+        isWebchatConnect: () => false,
+      },
+      async () =>
+        await dispatchGatewayMethodInProcess(
+          "sessions.create",
+          { agentId: "guest" },
+          {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.write", "operator.admin"],
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: "agent:main:main",
+            },
+          },
+        ),
+    );
+
+    expect(dispatched).toMatchObject({
+      authenticatedUserProfile: { profileId: "model-spawn-owner" },
+      connect: { scopes: ["operator.write"] },
+      internal: { syntheticClient: true },
+    });
+  });
+
+  it("rejects retained tool authority after its owning invocation has completed", async () => {
+    const owner = createOperatorClient({ profileId: "expired-owner", scopes: ["operator.read"] });
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let retained: Promise<unknown> | undefined;
+
+    await withOperatorToolGatewayAuthority(
+      {
+        authenticatedUserProfile: owner.authenticatedUserProfile!,
+        scopes: owner.connect.scopes ?? [],
+      },
+      async () => {
+        retained = dispatchGate.then(
+          async () =>
+            await dispatchGatewayMethodInProcess(
+              "sessions.list",
+              {},
+              { forceSyntheticClient: true, resolveGatewayContext: createContext },
+            ),
+        );
+      },
+    );
+    releaseDispatch();
+
+    await expect(retained).rejects.toThrow("operator tool invocation authority expired");
+  });
+
+  it("keeps a spawned agent host-owned and clears human authority before autonomous work", async () => {
+    const owner = createOperatorClient({
+      profileId: "spawn-owner",
+      scopes: ["operator.write"],
+    });
+    const context = createContext();
+    let autonomousClient: GatewayRequestOptions["client"] = null;
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.list",
+          scope: "operator.write",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
+            autonomousClient = client;
+            respond(true, { sessions: [] });
+          },
+        },
+      ]);
+    startTurn.mockImplementation(async ({ principal, io }) => {
+      expect(principal.authenticatedUserProfile).toBeUndefined();
+      expect(principal.internal).toMatchObject({
+        operatorRoleActor: { kind: "operator", profileId: "spawn-owner" },
+      });
+      await dispatchGatewayMethodInProcess(
+        "sessions.list",
+        {},
+        { forceSyntheticClient: true, resolveGatewayContext: () => context },
+      );
+      io.emitAcceptance([true, { runId: "autonomous-run", status: "accepted" }, undefined]);
+    });
+
+    await withOperatorToolGatewayAuthority(
+      {
+        authenticatedUserProfile: owner.authenticatedUserProfile!,
+        scopes: owner.connect.scopes ?? [],
+      },
+      async () =>
+        await dispatchGatewayMethodInProcess(
+          "agent",
+          { message: "run child", idempotencyKey: "autonomous-run" },
+          {
+            forceSyntheticClient: true,
+            agentRunTracking: "native_subagent",
+            syntheticScopes: ["operator.write"],
+            resolveGatewayContext: () => context,
+          },
+        ),
+    );
+
+    expect(autonomousClient).toMatchObject({
+      connect: { scopes: ["operator.write"] },
+      internal: { operatorRoleActor: { kind: "operator", profileId: "spawn-owner" } },
+    });
+    expect(autonomousClient).not.toHaveProperty("authenticatedUserProfile");
+  });
+
+  it("explicitly marks profile-less host-owned agent launches as system actors", async () => {
+    const context = createContext();
+    startTurn.mockImplementation(async ({ principal, io }) => {
+      expect(principal.authenticatedUserProfile).toBeUndefined();
+      expect(principal.internal).toMatchObject({ operatorRoleActor: { kind: "system" } });
+      io.emitAcceptance([true, { runId: "system-run", status: "accepted" }, undefined]);
+    });
+
+    await dispatchGatewayMethodInProcess(
+      "agent",
+      { message: "run child", idempotencyKey: "system-run" },
+      {
+        forceSyntheticClient: true,
+        agentRunTracking: "native_subagent",
+        syntheticScopes: ["operator.write"],
+        resolveGatewayContext: () => context,
+      },
+    );
+  });
+
+  it("rejects tracked agent launches when a scoped operator identity was dropped", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const unidentifiedClient = createOperatorClient({
+        profileId: "dropped-spawn-owner",
+        scopes: ["operator.write"],
+      });
+      delete unidentifiedClient.authenticatedUserProfile;
+      const context = createContext();
+      context.getRuntimeConfig = () => ({
+        gateway: {
+          roles: {
+            default: "limited",
+            definitions: {
+              limited: {
+                agents: ["guest"],
+                scopes: ["operator.write"],
+                sessions: { others: "none" },
+              },
+            },
+          },
+        },
+      });
+      const foreignSessionKey = "agent:maintainer:main";
+      await upsertSessionEntryCore(
+        {
+          agentId: "maintainer",
+          sessionKey: foreignSessionKey,
+        },
+        {
+          sessionId: "maintainer-session",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", id: "maintainer" },
+        },
+      );
+
+      await expect(
+        withPluginRuntimeGatewayRequestScope(
+          {
+            client: unidentifiedClient,
+            context,
+            isWebchatConnect: () => false,
+          },
+          async () =>
+            await dispatchGatewayMethodInProcess(
+              "agent",
+              {
+                message: "run forbidden child",
+                sessionKey: foreignSessionKey,
+                idempotencyKey: "dropped-spawn-owner",
+              },
+              {
+                forceSyntheticClient: true,
+                agentRunTracking: "native_subagent",
+                operatorRoleActor: { kind: "system" },
+                syntheticScopes: ["operator.write"],
+              },
+            ),
+        ),
+      ).rejects.toThrow(/scope|role|operator/i);
+      expect(startTurn).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

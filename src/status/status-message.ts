@@ -47,6 +47,7 @@ import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
+  hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
@@ -124,7 +125,14 @@ type StatusArgs = {
   now?: number;
 };
 
-type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
+type NormalizedAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "aws-sdk"
+  | "native"
+  | "mixed"
+  | "unknown";
 
 function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -142,6 +150,9 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   }
   if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
     return "aws-sdk";
+  }
+  if (normalized === "native" || normalized.startsWith("native ")) {
+    return "native";
   }
   if (normalized === "mixed" || normalized.startsWith("mixed ")) {
     return "mixed";
@@ -550,19 +561,6 @@ function resolveChannelModelNote(params: {
     return undefined;
   }
   return "channel override";
-}
-
-function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
-  if (!entry?.modelOverride) {
-    return false;
-  }
-  if (entry.modelOverrideSource === "user") {
-    return true;
-  }
-  if (entry.modelOverrideSource === "auto") {
-    return false;
-  }
-  return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
 export type StatusMessageParts = {

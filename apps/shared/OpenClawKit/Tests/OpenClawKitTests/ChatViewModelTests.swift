@@ -2748,13 +2748,17 @@ struct ChatViewModelTests {
         viewModel.sessions = [running]
         let omitted = try JSONDecoder().decode(
             OpenClawSessionMessageEventPayload.self,
-            from: Data(#"{"sessionKey":"main","hasActiveRun":true,"messageId":"message-1","message":{"role":"assistant","content":[{"type":"text","text":"working"}],"timestamp":2}}"#.utf8))
+            from: Data(
+                #"{"sessionKey":"main","hasActiveRun":true,"messageId":"message-1","message":{"role":"assistant","content":[{"type":"text","text":"working"}],"timestamp":2}}"#
+                    .utf8))
         viewModel.handleTransportEvent(.sessionMessage(omitted))
         #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
 
         let payload = try JSONDecoder().decode(
             OpenClawSessionMessageEventPayload.self,
-            from: Data(#"{"sessionKey":"main","hasActiveRun":true,"activeRunIds":null,"messageId":"message-2","message":{"role":"assistant","content":[{"type":"text","text":"still working"}],"timestamp":3}}"#.utf8))
+            from: Data(
+                #"{"sessionKey":"main","hasActiveRun":true,"activeRunIds":null,"messageId":"message-2","message":{"role":"assistant","content":[{"type":"text","text":"still working"}],"timestamp":3}}"#
+                    .utf8))
 
         viewModel.handleTransportEvent(.sessionMessage(payload))
 
@@ -10408,6 +10412,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run {
             vm.sessions.first(where: { $0.key == "main" })?.thinkingLevel
         } == "high")
+        #expect(await MainActor.run { vm.errorText } == nil)
     }
 
     @Test func `older pending thinking choice becomes preference fallback`() async throws {
@@ -10486,12 +10491,15 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectFastMode("off") }
         await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.errorText } == "rejected")
         #expect(await MainActor.run { vm.fastModeSelectionID } == OpenClawChatViewModel.inheritedThinkingSelectionID)
         #expect(await MainActor.run { vm.sessions.first?.fastMode } == nil)
         #expect(await MainActor.run { vm.sessions.first?.effectiveFastMode } == .on)
+        #expect(await MainActor.run { vm.fastModeIsEnabled })
 
         await MainActor.run { vm.selectVerboseLevel("full") }
         await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.errorText } == "rejected")
         #expect(await MainActor.run { vm.verboseLevel } == OpenClawChatViewModel.inheritedThinkingSelectionID)
         #expect(await MainActor.run { vm.sessions.first?.verboseLevel } == nil)
     }
@@ -10561,6 +10569,7 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         #expect(await MainActor.run { vm.fastModeSelectionID } == "off")
+        #expect(await MainActor.run { !vm.fastModeIsEnabled })
     }
 
     @Test func `stale fast rollback cannot mutate replacement agent target`() async throws {
@@ -10763,6 +10772,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.preferredThinkingLevel } == "off")
         #expect(await MainActor.run { !vm.prefersExplicitThinkingLevel })
         #expect(await MainActor.run { callbackState.values } == ["medium", "off"])
+        #expect(await MainActor.run { vm.errorText } == "rejected")
     }
 
     @Test func `two failed queued thinking patches restore the confirmed level`() async throws {

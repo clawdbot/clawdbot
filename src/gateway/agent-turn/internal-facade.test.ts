@@ -120,4 +120,21 @@ describe("createInternalAgentTurnFacade", () => {
       meta: { cached: true, runId: "run-2" },
     });
   });
+
+  it("passes the exact internal execution-start observer to the turn", async () => {
+    const onExecutionStarted = vi.fn();
+    startTurn.mockImplementation(async ({ io }) => {
+      expect(io.emitExecutionStarted).toBe(onExecutionStarted);
+      io.emitAcceptance([true, { runId: "run-started", status: "accepted" }, undefined]);
+      io.emitExecutionStarted?.();
+    });
+
+    await expect(
+      createFacade().dispatchRaw(
+        { message: "test", idempotencyKey: "run-started" },
+        { onExecutionStarted },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(onExecutionStarted).toHaveBeenCalledOnce();
+  });
 });

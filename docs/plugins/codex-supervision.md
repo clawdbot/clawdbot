@@ -253,6 +253,14 @@ or clear the locked native binding. The `/codex model` query and `/codex fast`,
 `/codex permissions`, and `/codex threads` remain available. Start another
 ordinary session when you want a different model or fresh thread.
 
+**Fork from here** can branch before a mirrored user message from the original
+native source. The child keeps that source's connection and model-locked harness,
+and the original source and parent Chat remain unchanged. Messages added after
+OpenClaw starts its canonical harness thread are not supported as fork points
+yet: those requests are rejected rather than rebuilding model history from an
+incomplete native transcript view. Choose an original mirrored source message
+when forking from OpenClaw.
+
 Keep supervision enabled for this Chat. If supervision is disabled or its
 stored connection binding becomes unavailable or inconsistent, the turn fails
 closed instead of moving to an ordinary agent-home session.

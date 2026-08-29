@@ -68,7 +68,105 @@ const multiAgentRoster = [
 ];
 
 suite.define(() => {
-  it("keeps a newer in-flight roster ahead of delayed chat startup", async () => {
+  it("follows the visible catalog groups when selecting an agent with the keyboard", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["cron.list"],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [
+                multiAgentRoster[0],
+                { id: "alpha", name: "Needle Alpha" },
+                { id: "charlie", name: "Needle Charlie" },
+              ],
+            },
+            "cron.list": { jobs: [{ id: "bravo", name: "Needle Bravo" }] },
+            "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
+            "sessions.usage": emptyUsage,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await gateway.waitForRequest("agents.list");
+        await page.keyboard.press("ControlOrMeta+k");
+        const input = page.locator(".cmd-palette__input");
+        await input.fill("Needle");
+        await page.getByRole("option", { name: "Needle Bravo", exact: true }).waitFor();
+        const options = page.locator("openclaw-command-palette").getByRole("option");
+        await expect
+          .poll(async () =>
+            (await options.allTextContents()).map((text) => text.replace(/\s+/g, " ").trim()),
+          )
+          .toEqual(["Needle Alpha alpha", "Needle Charlie charlie", "Needle Bravo"]);
+        await input.press("ArrowDown");
+        await expect.poll(() => options.nth(1).getAttribute("aria-selected")).toBe("true");
+        await screenshot(page, "09-palette-keyboard-group-order.png");
+        await input.press("Enter");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/charlie");
+      },
+    );
+  });
+
+  it("opens a named agent from the palette without changing the chat agent", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: multiAgentRoster,
+            },
+            "sessions.usage": emptyUsage,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await gateway.waitForRequest("agents.list");
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await expect
+          .poll(async () =>
+            (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+          )
+          .toBe("Main");
+        await page.keyboard.press("ControlOrMeta+k");
+        await page.locator(".cmd-palette__input").fill("Reviewer");
+        const result = page.getByRole("option", { name: "Reviewer reviewer", exact: true });
+        await result.waitFor();
+        await screenshot(page, "07-palette-reviewer-result.png");
+        await result.click();
+        const selectedAgent = page.locator("openclaw-agents-page openclaw-agent-select");
+        await selectedAgent.waitFor();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
+        await expect
+          .poll(() =>
+            selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+          )
+          .toBe("reviewer");
+        await screenshot(page, "08-palette-selected-agent.png");
+        await page.reload();
+        await expect
+          .poll(() =>
+            selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+          )
+          .toBe("reviewer");
+        await page.goBack();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
+        await expect
+          .poll(async () =>
+            (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+          )
+          .toBe("Main");
+      },
+    );
+  });
+
+  it("preserves an in-flight canonical roster refresh while chat startup is delayed", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
       async ({ page }) => {
@@ -79,16 +177,11 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("agents.list");
         await gateway.deferNext("agents.list");
         await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
-        await gateway.waitForRequest("agents.list");
+        await gateway.waitForRequest("agents.list", { after: 1 });
         await gateway.resolveDeferred("chat.startup", {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [{ id: "main", name: "Stale Main" }],
-          },
           messages: [],
           metadata: { models: [] },
           sessionId: "control-ui-e2e-session",
@@ -97,7 +190,7 @@ suite.define(() => {
         await gateway.resolveDeferred("agents.list", {
           defaultId: "research",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "research", name: "Research" }],
         });
 
@@ -111,7 +204,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps a refreshed roster ahead of delayed chat startup", async () => {
+  it("keeps a refreshed canonical roster while chat startup remains delayed", async () => {
     if (captureUiProof) {
       await mkdir(proofDir, { recursive: true });
     }
@@ -132,7 +225,7 @@ suite.define(() => {
             "agents.list": {
               defaultId: "research",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: [
                 { id: "research", name: "Research" },
                 { id: "writer", name: "Writer" },
@@ -143,20 +236,15 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
         await gateway.waitForRequest("agents.list");
+        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
+        await gateway.waitForRequest("agents.list", { after: 1 });
 
         const sidebar = page.locator("openclaw-app-sidebar");
         const agentName = sidebar.locator(".sidebar-agent-card__name");
         await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
 
         await gateway.resolveDeferred("chat.startup", {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [{ id: "main", name: "Stale Main" }],
-          },
           messages: [],
           metadata: { models: [] },
           sessionId: "control-ui-e2e-session",
@@ -211,14 +299,14 @@ suite.define(() => {
             "agents.list": {
               defaultId: "main",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: multiAgentRoster,
             },
             "chat.startup": {
               agentsList: {
                 defaultId: "main",
                 mainKey: "main",
-                scope: "agent",
+                scope: "per-sender",
                 agents: multiAgentRoster,
               },
               messages: [],
@@ -305,7 +393,7 @@ suite.define(() => {
             "agents.list": {
               defaultId: "main",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: multiAgentRoster,
             },
             "sessions.list": {

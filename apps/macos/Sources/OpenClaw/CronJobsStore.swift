@@ -206,3 +206,35 @@ final class CronJobsStore {
         self.isLoadingRuns = false
     }
 }
+
+#if DEBUG
+extension CronJobsStore {
+    /// Screenshot/demo helper (OPENCLAW_DEBUG_MENU_FIXTURES=1): synthetic jobs
+    /// so menu captures show populated automation rows without a gateway.
+    func seedDebugFixtureJobs() {
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        func job(_ id: String, _ name: String, nextInMinutes: Int) -> CronJob {
+            CronJob(
+                id: id,
+                agentId: nil,
+                name: name,
+                description: nil,
+                enabled: true,
+                deleteAfterRun: nil,
+                createdAtMs: now,
+                updatedAtMs: now,
+                schedule: .at(at: "2099-01-01T00:00:00Z"),
+                sessionTarget: CronSessionTarget.main,
+                wakeMode: .now,
+                payload: .systemEvent(text: "fixture"),
+                delivery: nil,
+                state: CronJobState(nextRunAtMs: now + nextInMinutes * 60000))
+        }
+        self.jobs = [
+            job("fixture-1", "Morning Brief", nextInMinutes: 13),
+            job("fixture-2", "Inbox Sweep With A Deliberately Long Name", nextInMinutes: 180),
+            job("fixture-3", "Weekly Digest", nextInMinutes: 720),
+        ]
+    }
+}
+#endif

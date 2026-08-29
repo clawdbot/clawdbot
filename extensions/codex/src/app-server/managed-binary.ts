@@ -9,16 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
+import { resolveMacOSDesktopCodexAppServerCommandCandidates } from "./desktop-app-paths.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
 let registeredCodexPluginRoot: string | undefined;
-// ChatGPT.app is the current desktop owner; keep Codex.app as the legacy fallback.
-const MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS = [
-  "/Applications/ChatGPT.app/Contents/Resources/codex",
-  "/Applications/Codex.app/Contents/Resources/codex",
-] as const;
 
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
@@ -108,14 +104,16 @@ export function resolveManagedCodexNativeCommand(
   return undefined;
 }
 
-/** Returns whether a resolved managed command is owned by the macOS desktop app. */
+/** Returns whether a command is one of the standard macOS desktop app executables. */
 export function isManagedCodexDesktopCommand(
   command: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   return (
     platform === "darwin" &&
-    MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS.some((candidate) => candidate === command)
+    resolveMacOSDesktopCodexAppServerCommandCandidates(platform).some(
+      (candidate) => candidate === command,
+    )
   );
 }
 
@@ -210,7 +208,7 @@ function resolveManagedCodexAppServerCommandCandidates(
 }
 
 function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
-  return platform === "darwin" ? [...MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS] : [];
+  return resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
 }
 
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {

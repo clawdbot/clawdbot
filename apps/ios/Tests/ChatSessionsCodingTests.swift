@@ -13,6 +13,7 @@ struct ChatSessionsCodingTests {
             "archived":false,
             "unread":true,
             "lastReadAt":1720000000000,
+            "markedUnreadAt":1720000002500,
             "lastActivityAt":1720000005000
         }
         """#.utf8)
@@ -25,6 +26,7 @@ struct ChatSessionsCodingTests {
         #expect(entry.archived == false)
         #expect(entry.unread == true)
         #expect(entry.lastReadAt == 1_720_000_000_000)
+        #expect(entry.markedUnreadAt == 1_720_000_002_500)
         #expect(entry.lastActivityAt == 1_720_000_005_000)
     }
 }

@@ -292,6 +292,7 @@ export async function prepareDirectCompactionAttempt(
     id: runtimeModel.id,
     api: runtimeModel.api,
     reasoning: runtimeModel.reasoning,
+    ...(runtimeModel.thinkingLevelMap ? { thinkingLevelMap: runtimeModel.thinkingLevelMap } : {}),
     params: runtimeModel.params,
     ...(thinkingCompat ? { compat: thinkingCompat } : {}),
   } satisfies ThinkingCatalogEntry;

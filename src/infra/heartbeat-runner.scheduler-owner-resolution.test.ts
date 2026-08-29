@@ -4,8 +4,6 @@ import { heartbeatLog } from "./heartbeat-runner-config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
 
-const TEST_SCHEDULER_SEED = "heartbeat-owner-resolution-test-seed";
-
 describe("startHeartbeatRunner ambient owner resolution", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -24,11 +22,7 @@ describe("startHeartbeatRunner ambient owner resolution", () => {
       },
     } as OpenClawConfig;
 
-    const runner = startHeartbeatRunner({
-      cfg,
-      runOnce,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
+    const runner = startHeartbeatRunner({ cfg, runOnce });
     requestHeartbeat({ source: "manual", intent: "manual", reason: "manual", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
 
@@ -44,10 +38,7 @@ describe("startHeartbeatRunner ambient owner resolution", () => {
       agents: { ownership: "explicit", entries: { ops: {}, main: {} } },
     } as OpenClawConfig;
 
-    const runner = startHeartbeatRunner({
-      cfg,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
+    const runner = startHeartbeatRunner({ cfg });
     runner.updateConfig(cfg);
 
     expect(info).toHaveBeenCalledWith("heartbeat: disabled", { enabled: false });

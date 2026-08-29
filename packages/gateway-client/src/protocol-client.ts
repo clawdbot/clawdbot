@@ -205,6 +205,9 @@ export class GatewayProtocolClient<TPlan> {
       this.opts.onSocketFactoryError?.(normalized);
       this.opts.onConnectError?.(normalized);
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
+        if (this.generation > 0 && !this.stopped && !this.socket && !this.reconnectSignal) {
+          this.opts.onReconnectStopped?.(normalized);
+        }
         throw normalized;
       }
       // Callbacks can stop or restart synchronously; never schedule over their replacement socket.
@@ -215,6 +218,8 @@ export class GatewayProtocolClient<TPlan> {
         !this.reconnectSignal
       ) {
         this.scheduleReconnect();
+      } else if (this.generation > 0 && !this.stopped && !this.socket && !this.reconnectSignal) {
+        this.opts.onReconnectStopped?.(normalized);
       }
       return;
     }
@@ -335,7 +340,9 @@ export class GatewayProtocolClient<TPlan> {
     this.connectRequestSent = true;
     void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan))
       .then((hello) => {
-        if (!this.isActive(socket, generation)) {
+        // Closing transports remain current until their close callback runs;
+        // a late response must not publish readiness or reset reconnect backoff.
+        if (!this.isActive(socket, generation) || !socket.isOpen()) {
           return;
         }
         this.helloReceived = true;
@@ -499,7 +506,8 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.reconnectSignal = null;
-        this.connect();
+        // Explicit start retains synchronous policy errors; background retries cannot reject orphaned.
+        this.invoke("reconnect", () => this.connect());
       },
       () => {
         if (this.reconnectSignal === retry.signal) {

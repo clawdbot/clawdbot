@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
@@ -126,7 +126,7 @@ async function handleProxyRequest(
             : undefined,
         }),
         signal: upstreamAbort.signal,
-        ...(body ? { body: toFetchBody(body) } : {}),
+        ...(body ? { body } : {}),
       },
       auditContext: "copilot-byok-provider",
       requireHttps: true,
@@ -140,10 +140,10 @@ async function handleProxyRequest(
       res.end();
       return;
     }
-    await finished(
-      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>).pipe(
-        res,
-      ),
+    // Own errors and cancellation on both streams so interrupted responses cannot crash the host.
+    await pipeline(
+      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>),
+      res,
     );
   } catch (error) {
     if (res.destroyed || res.writableEnded) {
@@ -210,18 +210,12 @@ function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: str
   );
 }
 
-async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
+async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | undefined> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
-}
-
-function toFetchBody(body: Buffer): Uint8Array<ArrayBuffer> {
-  const copy = new Uint8Array(body.byteLength);
-  copy.set(body);
-  return copy;
 }
 
 function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string> {

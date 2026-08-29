@@ -14,6 +14,8 @@ export type MemoryArtifactProvenance = {
   fileHash: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 type StoredMemoryArtifactProvenance = MemoryArtifactProvenance & {
@@ -114,6 +116,16 @@ function normalizeStoredProvenance(
   return value;
 }
 
+function toPublicProvenance(stored: StoredMemoryArtifactProvenance): MemoryArtifactProvenance {
+  return {
+    fileHash: stored.fileHash,
+    originClass: stored.originClass,
+    observedAt: stored.observedAt,
+    ...(stored.sessionId ? { sessionId: stored.sessionId } : {}),
+    ...(stored.sessionKey ? { sessionKey: stored.sessionKey } : {}),
+  };
+}
+
 export async function recordMemoryArtifactWriteProvenance(params: {
   workspaceDir: string;
   relativePath: string;
@@ -121,6 +133,8 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   contentAfter: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
 }): Promise<(() => Promise<void>) | undefined> {
   const address = resolveAddress(params);
   if (!address) {
@@ -147,6 +161,8 @@ export async function recordMemoryArtifactWriteProvenance(params: {
       fileHash: sha256(params.contentAfter),
       originClass,
       observedAt: params.observedAt,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       reservationId,
     };
   });
@@ -188,13 +204,7 @@ export async function readMemoryArtifactProvenance(params: {
     return undefined;
   }
   const stored = normalizeStoredProvenance(openStore().lookup(address.storeKey), address);
-  return stored
-    ? {
-        fileHash: stored.fileHash,
-        originClass: stored.originClass,
-        observedAt: stored.observedAt,
-      }
-    : undefined;
+  return stored ? toPublicProvenance(stored) : undefined;
 }
 
 export async function listMemoryArtifactProvenance(params: {
@@ -213,16 +223,7 @@ export async function listMemoryArtifactProvenance(params: {
       };
       const stored = normalizeStoredProvenance(entry.value, address);
       return stored
-        ? [
-            {
-              relativePath: stored.relativePath,
-              provenance: {
-                fileHash: stored.fileHash,
-                originClass: stored.originClass,
-                observedAt: stored.observedAt,
-              },
-            },
-          ]
+        ? [{ relativePath: stored.relativePath, provenance: toPublicProvenance(stored) }]
         : [];
     });
 }

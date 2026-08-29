@@ -9,8 +9,6 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -18,11 +16,11 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
@@ -42,6 +40,7 @@ import type {
 } from "./app-sidebar-session-narration.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import {
   renderSessionTree,
   type SessionListHost,
@@ -51,6 +50,7 @@ import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+  SIDEBAR_SESSION_PAGE_SIZE,
   setStoredSessionCatalogHidden,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
@@ -64,21 +64,18 @@ import {
 import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
-const sidebarChromeImport = createIdleImport(() =>
-  Promise.all([
-    customElements.get("openclaw-lobster-pet") ? undefined : import("./lobster-pet.ts"),
-    customElements.get("openclaw-viewer-facepile") ? undefined : import("./viewer-facepile.ts"),
-  ]),
-);
+const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
-  @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
-  @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
+  @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  @state() override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+  private readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -136,7 +133,20 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narrationLoad: Promise<void> | null = null;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
-  private readonly narrationSubscriptions = this.createNarrationSubscriptions();
+  private projectedSessionSections: SidebarVisibleSections = {
+    sections: [],
+    expandedRows: [],
+    visibleRows: [],
+  };
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
+    )
+    .watch(
+      () => this.context?.agentIdentity,
+      (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    );
   private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
@@ -155,57 +165,16 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       }
     },
   );
-  private readonly agentIdentitySubscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.agentIdentity,
-    (agentIdentity, notify) => agentIdentity.subscribe(notify),
-  );
-
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   constructor() {
     super();
-    void this.narrationSubscriptions;
-    void this.agentIdentitySubscriptions;
-    void new BoardAvailabilityController(
-      this,
-      () => {
-        const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
-        return [
-          mainKey,
-          ...this.visibleSessionRowsInOrder()
-            .filter((session) => !session.isChild)
-            .map((session) => session.key),
-        ];
-      },
-      undefined,
-      () => {
-        const snapshot = this.context?.gateway.snapshot;
-        const client = snapshot?.client;
-        const availabilityClient =
-          client &&
-          typeof client.request === "function" &&
-          typeof client.addEventListener === "function"
-            ? client
-            : null;
-        return {
-          client: availabilityClient,
-          connected: snapshot?.phase === "connected",
-          available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
-          key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
-            snapshot?.hello?.server?.version ?? ""
-          }`,
-        };
-      },
-    );
+    void this.subscriptions;
   }
 
-  private createNarrationSubscriptions(): SubscriptionsController {
-    const subscriptions = new SubscriptionsController(this);
-    subscriptions.effect(
-      () => this.context?.gateway,
-      (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
-    );
-    return subscriptions;
+  override dismissTransientMenus(): boolean {
+    const hadPersonCard = this.people.dismiss();
+    return super.dismissTransientMenus() || hadPersonCard;
   }
 
   override disconnectedCallback() {
@@ -221,8 +190,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    const currentResult = this.sessionData.sessionsResult;
+    this.sessionProjection.observeRows([
+      ...(currentResult ? [currentResult] : []),
+      ...Object.values(this.sessionData.sessionResultsByAgent),
+    ]);
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
+    this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows);
     const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -249,6 +224,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     return this.projectedSessionRows ?? super.selectedAgentSessionRows(navigationState);
   }
 
+  protected override zonedVisibleSections(_rows: SidebarRecentSession[]): SidebarVisibleSections {
+    return this.projectedSessionSections;
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (!this.narration) {
@@ -269,7 +248,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       if (this.isSessionChildrenExpanded(session)) {
         visibleSessionChildren({
           session,
-          fullyShownChildSessionKeys: this.fullyShownChildSessionKeys,
+          fullyShown: this.isSessionChildrenFullyShown(session.key),
         }).forEach(append);
       }
     };
@@ -322,7 +301,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    sidebarChromeImport.schedule();
+    lobsterPetImport.schedule();
     this.catalogRendererImport.schedule();
   }
 
@@ -372,6 +351,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   toggleSection(sectionId: string): void {
+    if (!this.collapsedSessionSections.has(sectionId)) {
+      this.sessionProjection.resetMembership(sectionId);
+    }
     this.sessionOrganizer.toggleSection(sectionId);
   }
 
@@ -387,11 +369,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionOrganizer.handleSessionListDrop(event);
   }
 
-  openNewSession(target?: NewSessionTarget): void {
-    this.requestOpenNewSession(this.expandedAgentId(), target);
-  }
-
   setVisibleSessionLimit(sectionId: string, limit: number): void {
+    const previousLimit =
+      this.sessionData.visibleSessionLimits.get(sectionId) ?? SIDEBAR_SESSION_PAGE_SIZE;
+    if (limit < previousLimit) {
+      this.sessionProjection.resetMembership(sectionId);
+    }
     this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
@@ -419,7 +402,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     setStoredSessionCatalogHidden(catalogId, true);
     // Reuse the settings-search destination for the Sidebar preferences block so the
     // toast opens the same place the rest of the app calls "Appearance > Sidebar".
-    const recovery = SETTINGS_SEARCH_TARGETS.appearanceSidebar;
+    const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
     const recoveryHref =
       pathForRoute(recovery.routeId, this.basePath) + recovery.search + recovery.hash;
     // The section disappears instantly and its only standing recovery lives on another
@@ -453,6 +436,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     trigger?: HTMLElement,
   ): void {
     this.sidebarMenus.catalogMenu.open(request, x, y, trigger);
+  }
+
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void {
+    this.sidebarMenus.catalogMenu.retargetTrigger(key, element);
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {

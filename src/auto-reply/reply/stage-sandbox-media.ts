@@ -17,12 +17,13 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
-import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { getMediaDir } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
-const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
+/** Maximum size of one file copied into an agent sandbox or staging workspace. */
+export const SANDBOX_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // Attachment indexes are the staging identity. Callers use this map to detect
@@ -120,7 +121,7 @@ export async function stageSandboxMedia(params: {
           remotePath: source.physicalPath,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
         });
       } else {
         const copySource = await fs.realpath(source.physicalPath).catch(() => source.physicalPath);
@@ -128,14 +129,12 @@ export async function stageSandboxMedia(params: {
           sourcePath: copySource,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
         });
       }
     } catch (err) {
       if (err instanceof FsSafeError && err.code === "too-large") {
-        logVerbose(
-          `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source.physicalPath}`,
-        );
+        console.warn(`Inbound media staging skipped for ${fileName}: ${err.message}`);
       } else {
         logVerbose(`Failed to stage inbound media path ${source.physicalPath}: ${String(err)}`);
       }

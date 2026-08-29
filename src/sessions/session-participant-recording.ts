@@ -1,19 +1,16 @@
 import { recordSessionParticipant } from "../config/sessions/session-accessor.js";
-import type {
-  SessionCreatedActor,
-  SessionParticipantSource,
-} from "../config/sessions/session-entry-provenance.js";
+import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
 
 /** Defers participant history persistence so it can never delay or abort an admitted turn. */
 export function recordSessionParticipantBestEffort(params: {
-  actor: SessionCreatedActor & { id: string };
+  identity: SessionParticipantIdentity;
   agentId: string;
   sessionKey: string;
   storePath: string;
-  source: SessionParticipantSource;
   promptedAt?: number;
   onError?: (error: unknown) => void;
 }): void {
+  const promptedAt = params.promptedAt ?? Date.now();
   queueMicrotask(() => {
     try {
       recordSessionParticipant(
@@ -23,10 +20,9 @@ export function recordSessionParticipantBestEffort(params: {
           storePath: params.storePath,
         },
         {
-          actor: params.actor,
-          promptedAt: params.promptedAt,
+          identity: params.identity,
+          promptedAt,
           sessionAgentId: params.agentId,
-          source: params.source,
         },
       );
     } catch (error) {

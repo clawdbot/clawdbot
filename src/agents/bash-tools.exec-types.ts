@@ -55,6 +55,8 @@ export type ExecToolDefaults = {
   approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
+  /** Immutable session policy that forbids execution outside its provisioned sandbox. */
+  sandboxRequired?: boolean;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   /** Final run-local availability of the process continuation tool. */
@@ -157,7 +159,7 @@ export type ExecToolDetails = {
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
-      reason?: "not-dispatched" | "outcome-unknown";
+      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied";
       nodeInvokeFailure?: {
         failureCode?: string;
         message: string;

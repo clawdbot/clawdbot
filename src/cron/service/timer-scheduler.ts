@@ -52,7 +52,7 @@ export function armTimer(state: CronServiceState) {
     clearTimeout(state.timer);
   }
   state.timer = null;
-  if (state.stopped || state.schedulingPaused) {
+  if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler stopped");
     return;
   }
@@ -146,6 +146,7 @@ function requestIndependentImmediateCronRecheck(
 
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
+  const lifecycleGeneration = state.lifecycleGeneration;
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
@@ -158,7 +159,10 @@ export async function onTimer(state: CronServiceState) {
     throw err;
   }
   try {
-    await admission.run(async () => await onAdmittedTimer(state));
+    // Reopening admission cannot transfer a retired tick to a restarted scheduler.
+    if (state.lifecycleGeneration === lifecycleGeneration) {
+      await admission.run(async () => await onAdmittedTimer(state));
+    }
   } finally {
     admission.release();
   }
@@ -166,7 +170,7 @@ export async function onTimer(state: CronServiceState) {
 
 /** Loads due jobs, reserves them, executes, persists, and re-arms. */
 async function onAdmittedTimer(state: CronServiceState) {
-  if (state.stopped || state.schedulingPaused) {
+  if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     return;
   }
   state.running = true;
@@ -182,7 +186,7 @@ async function onAdmittedTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (state.stopped) {
+      if (state.stopped || state.startupCatchup) {
         state.deps.log.warn({}, "cron: due job reservation skipped - scheduler unavailable");
         return [];
       }
