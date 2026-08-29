@@ -63,6 +63,12 @@ submitting replaces the stored value. The Gateway preserves submitted values
 exactly, including leading or trailing whitespace. Web and Apple request fields
 are single-line; use the CLI's `--value-file` input for multiline credentials.
 
+If the agent omits a host proposal, a replacement request starts with the entry's
+current hosts; a new entry starts with an empty list. An explicitly empty proposal
+stays empty. Submitting saves the displayed list or your edits, even if another
+write changes the entry while the prompt is pending. Clearing the list disables
+egress substitution while keeping the credential usable through config SecretRefs.
+
 Once the store write commits, the question is answered and cannot be submitted
 again. A later runtime refresh failure does not undo that write: resolve the
 reported provider error and run `openclaw secrets reload`, rather than resubmitting.

@@ -161,15 +161,22 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
       const existing = listSecretStoreEntries({ scope: { kind: "team" } }).find(
         (entry) => entry.name === binding.name,
       );
-      if (existing) {
-        return {
-          ...question,
-          secretStoreExisting: {
-            updatedAtMs: existing.updatedAtMs,
-            ...(existing.updatedBy ? { updatedBy: existing.updatedBy } : {}),
-          },
-        };
-      }
+      return {
+        ...question,
+        // Save the policy shown for consent, never inherit unseen hosts at submission.
+        secretStore: {
+          ...binding,
+          allowedHosts: binding.allowedHosts ?? existing?.allowedHosts ?? [],
+        },
+        ...(existing
+          ? {
+              secretStoreExisting: {
+                updatedAtMs: existing.updatedAtMs,
+                ...(existing.updatedBy ? { updatedBy: existing.updatedBy } : {}),
+              },
+            }
+          : {}),
+      };
     }
     const optionLabels = new Set<string>();
     for (const option of question.options) {

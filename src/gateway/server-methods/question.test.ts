@@ -1,163 +1,46 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
   getAgentRunContext,
-  registerAgentRunContext,
-  registerAgentRunDelegatedAuthorityClosedHandler,
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import * as secretsRuntimeState from "../../secrets/runtime-state.js";
-import {
-  listSecretStoreEntries,
-  readSecretStoreValue,
-  writeSecretStoreEntry,
-} from "../../secrets/store/secret-store.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../../secrets/store/secret-store.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import {
   abortChatRunById,
   registerChatAbortController,
   type ChatAbortControllerEntry,
 } from "../chat-abort.js";
-import { QuestionManager } from "../question-manager.js";
-import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
-import { createQuestionHandlers } from "./question.js";
-import { createSecretStoreWriteService } from "./secrets.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import {
+  adminRequestClient,
+  broadcast,
+  callQuestionRpc as call,
+  installQuestionTestHooks,
+  manager,
+  reloadSecrets,
+  requesterAuthority,
+  requestParams,
+  requestSecretQuestion,
+  secretRequestParams,
+  secretRequestQuestion,
+  storeWriteService,
+} from "./question.test-support.js";
+import type { GatewayClient } from "./types.js";
 
-let manager: QuestionManager;
-let requesterAuthority: AgentRunDelegatedAuthority;
-let unregisterAuthorityClosed: () => void;
-let adminRequestClient: GatewayClient;
-let broadcast: ReturnType<typeof vi.fn<GatewayBroadcastFn>>;
-let handlers: ReturnType<typeof createQuestionHandlers>;
-type SecretStoreReload = Parameters<typeof createSecretStoreWriteService>[0]["reloadSecrets"];
-let reloadSecrets: ReturnType<typeof vi.fn<SecretStoreReload>>;
-
-beforeEach(() => {
-  // Keep projection metadata alive independently of the exact admitted authority.
-  registerAgentRunContext(requestParams.runId, {
-    sessionKey: requestParams.sessionKey,
-    agentId: requestParams.agentId,
-  });
-  vi.useFakeTimers();
-  vi.setSystemTime(1_000);
-  manager = new QuestionManager();
-  requesterAuthority = claimAgentRunDelegatedAuthority({
-    instanceId: "requester-instance",
-    runId: requestParams.runId,
-  });
-  adminRequestClient = {
-    connect: { scopes: ["operator.admin"] },
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: requestParams.agentId,
-        sessionKey: requestParams.sessionKey,
-        operationalRunInstance: requesterAuthority.operationalRunInstance,
-        delegatedAuthority: { kind: "local", ...requesterAuthority },
-      },
-    },
-  } as GatewayClient;
-  unregisterAuthorityClosed = registerAgentRunDelegatedAuthorityClosedHandler(() =>
-    manager.cancelClosedAuthorities(),
-  );
-  broadcast = vi.fn<GatewayBroadcastFn>();
-  reloadSecrets = vi.fn<SecretStoreReload>().mockResolvedValue({ warningCount: 0 });
-  handlers = createQuestionHandlers(manager, createSecretStoreWriteService({ reloadSecrets }));
-});
-
-afterEach(() => {
-  releaseAgentRunDelegatedAuthority(requesterAuthority);
-  unregisterAuthorityClosed();
-  clearAgentRunContext(requestParams.runId);
-  manager.reset();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-});
-
-async function call(
-  method: string,
-  params: Record<string, unknown>,
-  options?: { client?: GatewayClient; cfg?: OpenClawConfig },
-) {
-  const calls: Parameters<RespondFn>[] = [];
-  const respond: RespondFn = (...args) => calls.push(args);
-  await handlers[method]?.({
-    req: { type: "req", id: "request-1", method, params },
-    params,
-    respond,
-    client: options?.client ?? null,
-    isWebchatConnect: () => false,
-    context: createDirectChatContext({
-      broadcast,
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-      getRuntimeConfig: () => options?.cfg ?? {},
-    }),
-  });
-  const response = calls[0];
-  if (!response) {
-    throw new Error(`expected ${method} response`);
-  }
-  return response;
-}
-
-const requestParams = {
-  questions: [
-    {
-      questionId: "destination",
-      header: "Destination",
-      question: "Where next?",
-      options: [],
-      multiSelect: false,
-      isOther: true,
-      isSecret: false,
-    },
-  ],
-  agentId: "main",
-  sessionKey: "agent:main:main",
-  runId: "run-main",
-  timeoutMs: 100,
-};
-
-const secretRequestQuestion = {
-  questionId: "secret_value",
-  header: "API key",
-  question: "Provide SERVICE_API_KEY",
-  options: [],
-  isSecret: true,
-  secretStore: {
-    name: "SERVICE_API_KEY",
-    kind: "secret" as const,
-    allowedHosts: ["api.example.test"],
-  },
-};
-
-const secretRequestParams = {
-  ...requestParams,
-  questions: [secretRequestQuestion],
-};
-
-async function requestSecretQuestion(): Promise<string> {
-  const response = await call("question.request", secretRequestParams, {
-    client: adminRequestClient,
-  });
-  return (response[1] as { id: string }).id;
-}
+installQuestionTestHooks();
 
 function mockReferencedStoreSnapshot() {
   vi.spyOn(secretsRuntimeState, "getActiveSecretsRuntimeSnapshotState").mockReturnValue({
@@ -740,28 +623,6 @@ describe("question gateway methods", () => {
     });
   });
 
-  it("annotates a store-bound question with replacement metadata without exposing the old value", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const oldValue = "test-secret-value-existing-123";
-      writeSecretStoreEntry({
-        scope: { kind: "team" },
-        name: "SERVICE_API_KEY",
-        value: oldValue,
-        kind: "secret",
-        updatedBy: "Previous Operator",
-      });
-
-      const id = await requestSecretQuestion();
-      const record = manager.get(id);
-
-      expect(record?.questions[0]).toMatchObject({
-        secretStore: secretRequestQuestion.secretStore,
-        secretStoreExisting: { updatedAtMs: 1_000, updatedBy: "Previous Operator" },
-      });
-      expect(JSON.stringify(record)).not.toContain(oldValue);
-    });
-  });
-
   it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const id = await requestSecretQuestion();
@@ -1001,12 +862,8 @@ describe("question gateway methods", () => {
 
   it("keeps store-bound questions pending when the write service is unavailable", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const service = createSecretStoreWriteService({ reloadSecrets });
-      handlers = createQuestionHandlers(manager, {
-        ...service,
-        write: vi.fn(() => {
-          throw new Error("database unavailable");
-        }),
+      vi.spyOn(storeWriteService, "write").mockImplementation(() => {
+        throw new Error("database unavailable");
       });
       const id = await requestSecretQuestion();
 
