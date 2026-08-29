@@ -74,7 +74,7 @@ export function collectPackageDistImportErrors(params) {
 }
 
 /** Collect relative dist import edges from package JavaScript files. */
-export function collectPackageDistImports(params) {
+function collectPackageDistImports(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const imports = [];
 
