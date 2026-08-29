@@ -189,6 +189,7 @@ export async function handleAgentExecutionError(params: {
       payload: markAgentRunFailureReplyPayload({
         text: resolveExternalRunFailureTextForConversation({
           text: switchErrorText,
+          visibleReplyDelivered: turn.didDeliverVisiblePartialReply?.(),
           sessionCtx: turn.sessionCtx,
           isGenericRunnerFailure: !params.shouldSurfaceToControlUi,
           cfg: turn.followupRun.run.config,
@@ -505,6 +506,7 @@ export async function handleAgentExecutionError(params: {
                 : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
   const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
     text: fallbackText,
+    visibleReplyDelivered: turn.didDeliverVisiblePartialReply?.(),
     sessionCtx: turn.sessionCtx,
     isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
     cfg: turn.followupRun.run.config,

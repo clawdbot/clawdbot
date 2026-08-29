@@ -81,6 +81,7 @@ export type AgentTurnParams = {
   replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: InternalGetReplyOptions;
+  didDeliverVisiblePartialReply?: () => boolean;
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;

@@ -1745,6 +1745,35 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 
+  it.each([true, undefined, false])(
+    "reports provider failure after a group partial with visibility %s",
+    async (callbackResult) => {
+      const onPartialReply = vi.fn(async () => callbackResult);
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        throw new Error("model stream failed");
+      });
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { onPartialReply, preserveProgressCallbackStartOrder: true },
+        sessionCtx: {
+          ChatType: "group",
+          SessionKey: "agent:test:telegram:group:-100123",
+        },
+      });
+
+      const result = await run();
+      const payload = Array.isArray(result) ? result[0] : result;
+
+      expect(payload).toMatchObject({
+        text: callbackResult === false ? "NO_REPLY" : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        ...(callbackResult === false ? {} : { isError: true }),
+      });
+      expect(onPartialReply).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rethrows after a delivered partial without visible content", async () => {
     const accounting = await import("./session-run-accounting.js");
     const persistSpy = vi

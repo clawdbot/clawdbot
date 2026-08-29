@@ -5,6 +5,7 @@ import {
   allDeliveredReplyTexts,
   describeTelegramDispatch,
   createContext,
+  createBot,
   createDirectSessionPayload,
   createStatusReactionController,
   createTelegramDraftStream,
@@ -199,6 +200,48 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       );
     },
   );
+
+  it("keeps a retried partial and its terminal failure in one Telegram message", async () => {
+    const actualDraft =
+      await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+    createTelegramDraftStream.mockImplementation(actualDraft.createTelegramDraftStream);
+    const bot = createBot();
+    const partialText = "A visible partial answer before the provider failed";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: partialText });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: partialText });
+        await dispatcherOptions.deliver(
+          { text: "The model failed. Please try again.", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+        threadSpec: { id: undefined, scope: "none" },
+        replyThreadId: undefined,
+      }),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(bot.api.sendMessage).toHaveBeenCalledOnce();
+    expect(bot.api.editMessageText).toHaveBeenLastCalledWith(
+      123,
+      1001,
+      `${partialText}\n\nThe model failed. Please try again.`,
+      expect.anything(),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+  });
 
   it("clears a pending partial and sends one fallback after an unexpected reply failure", async () => {
     const { answerDraftStream } = setupDraftStreams();
