@@ -2,7 +2,7 @@
 import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
-} from "../infra/device-pairing.js";
+} from "../infra/device-pairing-prune.js";
 import { reconcileRevokedDeviceWorker } from "./device-worker-revocation.js";
 import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";

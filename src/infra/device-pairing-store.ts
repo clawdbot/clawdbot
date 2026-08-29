@@ -1,10 +1,6 @@
 // SQLite row mapping for device pairing and bootstrap-token snapshots.
-// Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  resolvePairingSetupAccess,
-  type PairingSetupAccess,
-} from "../shared/device-bootstrap-profile.js";
+import { resolvePairingSetupAccess } from "../shared/device-bootstrap-profile.js";
 import {
   ensureDevicePairSetupBootstrapSchema,
   ensureDevicePairSetupCompletionSchema,
@@ -12,8 +8,6 @@ import {
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
-  DevicePairingPaired,
-  DevicePairingPending,
   DeviceBootstrapTokens,
 } from "../state/openclaw-state-db.generated.js";
 import {
@@ -23,15 +17,23 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
+import {
+  DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP,
+  fromBootstrapRow,
+  fromPairedRow,
+  fromPendingRow,
+  fromSetupCompletionRow,
+  toBootstrapRow,
+  toJsonColumn,
+  toPairedRow,
+  toPendingRow,
+} from "./device-pairing-store-rows.js";
 import type {
-  DeviceAuthToken,
   DeviceBootstrapTokenRecord,
   DevicePairingPendingRecord,
   DevicePairSetupCompletionRecord,
   PairedDevice,
-  PairedDeviceApprovalKind,
   PairedDeviceNodeSurface,
-  PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 import {
   executeSqliteQuerySync,
@@ -45,20 +47,14 @@ export type DevicePairingStoreState = {
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
-const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
-  "device_id",
-  "issued_at_ms",
-  "last_used_at_ms",
-  "pending_profile_json",
-  "profile_json",
-  "public_key",
-  "redeemed_profile_json",
-  "token",
-  "token_key",
-  "ts",
-] as const satisfies readonly (keyof DeviceBootstrapTokens)[];
-
 type DevicePairingStoreTarget = "pending" | "paired" | "both";
+
+type DevicePairingStorePersistOptions = { clearApnsNodeIds?: readonly string[] };
+
+export type DevicePairingStorePersist = (
+  target: DevicePairingStoreTarget,
+  options?: DevicePairingStorePersistOptions,
+) => void;
 
 type DevicePairingStoreValidityToken = {
   dataVersion: number;
@@ -152,213 +148,6 @@ function runDevicePairingStoreMutation<T>(
     invalidateDevicePairingStoreCache(database);
   }
   return result.value;
-}
-
-// Read-back allowlist for the approved_via column. The Record type forces
-// every PairedDeviceApprovalKind to appear here at compile time: omit one and
-// this object is a type error, instead of the stored provenance silently
-// dropping to undefined on load (which mergeApprovalKind treats as a legacy
-// record). Keep this in sync when adding an approval kind.
-const APPROVAL_KIND_MEMBERS = {
-  owner: true,
-  silent: true,
-  "trusted-cidr": true,
-  "trusted-proxy": true,
-  "ssh-verified": true,
-  bootstrap: true,
-} satisfies Record<PairedDeviceApprovalKind, true>;
-const APPROVAL_KINDS = new Set(Object.keys(APPROVAL_KIND_MEMBERS));
-
-function toJsonColumn(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function fromJsonColumn<T>(value: string | null): T | undefined {
-  return value === null ? undefined : (JSON.parse(value) as T);
-}
-
-function toBooleanColumn(value: boolean | undefined): number | null {
-  return value === undefined ? null : value ? 1 : 0;
-}
-
-// Column null means the optional record key was absent; keep it absent on read
-// so records round-trip byte-identical to the retired JSON store.
-function optional<K extends string, V>(key: K, value: V | null): { [P in K]?: V } {
-  return value === null ? {} : ({ [key]: value } as { [P in K]: V });
-}
-
-function toPendingRow(record: DevicePairingPendingRecord): DevicePairingPending {
-  return {
-    request_id: record.requestId,
-    device_id: record.deviceId,
-    public_key: record.publicKey,
-    display_name: record.displayName ?? null,
-    platform: record.platform ?? null,
-    device_family: record.deviceFamily ?? null,
-    client_id: record.clientId ?? null,
-    client_mode: record.clientMode ?? null,
-    browser_origin: record.browserOrigin ?? null,
-    role: record.role ?? null,
-    roles_json: toJsonColumn(record.roles),
-    scopes_json: toJsonColumn(record.scopes),
-    remote_ip: record.remoteIp ?? null,
-    silent: toBooleanColumn(record.silent),
-    is_repair: toBooleanColumn(record.isRepair),
-    ts: record.ts,
-    refreshed_at_ms: record.refreshedAtMs ?? null,
-  };
-}
-
-function fromPendingRow(row: DevicePairingPending): DevicePairingPendingRecord {
-  return {
-    requestId: row.request_id,
-    deviceId: row.device_id,
-    publicKey: row.public_key,
-    ...optional("displayName", row.display_name),
-    ...optional("platform", row.platform),
-    ...optional("deviceFamily", row.device_family),
-    ...optional("clientId", row.client_id),
-    ...optional("clientMode", row.client_mode),
-    ...optional("browserOrigin", row.browser_origin),
-    ...optional("role", row.role),
-    ...optional("roles", fromJsonColumn<string[]>(row.roles_json) ?? null),
-    ...optional("scopes", fromJsonColumn<string[]>(row.scopes_json) ?? null),
-    ...optional("remoteIp", row.remote_ip),
-    ...optional("silent", row.silent === null ? null : row.silent !== 0),
-    ...optional("isRepair", row.is_repair === null ? null : row.is_repair !== 0),
-    ts: row.ts,
-    ...optional("refreshedAtMs", row.refreshed_at_ms),
-  };
-}
-
-function toPairedRow(device: PairedDevice): DevicePairingPaired {
-  return {
-    device_id: device.deviceId,
-    public_key: device.publicKey,
-    display_name: device.displayName ?? null,
-    operator_label: device.operatorLabel ?? null,
-    platform: device.platform ?? null,
-    device_family: device.deviceFamily ?? null,
-    client_id: device.clientId ?? null,
-    client_mode: device.clientMode ?? null,
-    browser_origin: device.browserOrigin ?? null,
-    role: device.role ?? null,
-    roles_json: toJsonColumn(device.roles),
-    scopes_json: toJsonColumn(device.scopes),
-    approved_scopes_json: toJsonColumn(device.approvedScopes),
-    remote_ip: device.remoteIp ?? null,
-    tokens_json: toJsonColumn(device.tokens),
-    approved_via: device.approvedVia ?? null,
-    node_surface_json: toJsonColumn(device.nodeSurface),
-    pending_node_surface_json: toJsonColumn(device.pendingNodeSurface),
-    created_at_ms: device.createdAtMs,
-    approved_at_ms: device.approvedAtMs,
-    last_seen_at_ms: device.lastSeenAtMs ?? null,
-    last_seen_reason: device.lastSeenReason ?? null,
-  };
-}
-
-function fromApprovedViaColumn(value: string | null): PairedDeviceApprovalKind | null {
-  return value !== null && APPROVAL_KINDS.has(value) ? (value as PairedDeviceApprovalKind) : null;
-}
-
-// Same compile-time exhaustiveness contract as APPROVAL_KIND_MEMBERS: the
-// completion access level is presented to the operator, so an unrecognized
-// stored value must fall back to the least-privilege label, never leak through.
-const PAIRING_SETUP_ACCESS_MEMBERS = {
-  full: true,
-  limited: true,
-  node: true,
-} satisfies Record<PairingSetupAccess, true>;
-const PAIRING_SETUP_ACCESS_VALUES = new Set(Object.keys(PAIRING_SETUP_ACCESS_MEMBERS));
-
-function fromSetupCompletionAccessColumn(value: string): PairingSetupAccess {
-  return PAIRING_SETUP_ACCESS_VALUES.has(value) ? (value as PairingSetupAccess) : "limited";
-}
-
-function fromSetupCompletionDeliveryStateColumn(
-  value: string,
-): DevicePairSetupCompletionRecord["deliveryState"] {
-  return value === "confirmed" ? "confirmed" : "uncertain";
-}
-
-function fromPairedRow(row: DevicePairingPaired): PairedDevice {
-  return {
-    deviceId: row.device_id,
-    publicKey: row.public_key,
-    ...optional("displayName", row.display_name),
-    ...optional("operatorLabel", row.operator_label),
-    ...optional("platform", row.platform),
-    ...optional("deviceFamily", row.device_family),
-    ...optional("clientId", row.client_id),
-    ...optional("clientMode", row.client_mode),
-    ...optional("browserOrigin", row.browser_origin),
-    ...optional("role", row.role),
-    ...optional("roles", fromJsonColumn<string[]>(row.roles_json) ?? null),
-    ...optional("scopes", fromJsonColumn<string[]>(row.scopes_json) ?? null),
-    ...optional("approvedScopes", fromJsonColumn<string[]>(row.approved_scopes_json) ?? null),
-    ...optional("remoteIp", row.remote_ip),
-    ...optional("tokens", fromJsonColumn<Record<string, DeviceAuthToken>>(row.tokens_json) ?? null),
-    ...optional("approvedVia", fromApprovedViaColumn(row.approved_via)),
-    ...optional(
-      "nodeSurface",
-      fromJsonColumn<PairedDeviceNodeSurface>(row.node_surface_json) ?? null,
-    ),
-    ...optional(
-      "pendingNodeSurface",
-      fromJsonColumn<PairedDevicePendingNodeSurface>(row.pending_node_surface_json) ?? null,
-    ),
-    createdAtMs: row.created_at_ms,
-    approvedAtMs: row.approved_at_ms,
-    ...optional("lastSeenAtMs", row.last_seen_at_ms),
-    ...optional("lastSeenReason", row.last_seen_reason),
-  };
-}
-
-function toBootstrapRow(
-  tokenKey: string,
-  record: DeviceBootstrapTokenRecord,
-): DeviceBootstrapTokens {
-  return {
-    token_key: tokenKey,
-    token: record.token,
-    setup_id: record.setupId ?? null,
-    ts: record.ts,
-    device_id: record.deviceId ?? null,
-    public_key: record.publicKey ?? null,
-    profile_json: toJsonColumn(record.profile),
-    redeemed_profile_json: toJsonColumn(record.redeemedProfile),
-    pending_profile_json: toJsonColumn(record.pendingProfile),
-    issued_at_ms: record.issuedAtMs,
-    last_used_at_ms: record.lastUsedAtMs ?? null,
-  };
-}
-
-function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecord {
-  return {
-    token: row.token,
-    ...optional("setupId", row.setup_id),
-    ts: row.ts,
-    ...optional("deviceId", row.device_id),
-    ...optional("publicKey", row.public_key),
-    ...optional(
-      "profile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["profile"]>(row.profile_json) ?? null,
-    ),
-    ...optional(
-      "redeemedProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["redeemedProfile"]>(row.redeemed_profile_json) ??
-        null,
-    ),
-    ...optional(
-      "pendingProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["pendingProfile"]>(row.pending_profile_json) ??
-        null,
-    ),
-    issuedAtMs: row.issued_at_ms,
-    ...optional("lastUsedAtMs", row.last_used_at_ms),
-  };
 }
 
 export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): DevicePairingStoreState {
@@ -494,33 +283,69 @@ export function updatePairedDevicePresenceInTransaction<T>(
   });
 }
 
+function writeDevicePairingStoreTables(
+  db: DatabaseSync,
+  state: DevicePairingStoreState,
+  target: DevicePairingStoreTarget,
+  options?: DevicePairingStorePersistOptions,
+): void {
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  if (target !== "paired") {
+    executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
+    const rows = Object.values(state.pendingById).map(toPendingRow);
+    if (rows.length > 0) {
+      executeSqliteQuerySync(db, kysely.insertInto("device_pairing_pending").values(rows));
+    }
+  }
+  if (target !== "pending") {
+    executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_paired"));
+    const rows = Object.values(state.pairedByDeviceId).map(toPairedRow);
+    if (rows.length > 0) {
+      executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(rows));
+    }
+  }
+  for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
+    clearApnsRegistrationFromDatabase(db, nodeId);
+  }
+}
+
 /** Replace the pending and/or paired table contents with the given snapshot. */
 export function persistDevicePairingStoreState(
   state: DevicePairingStoreState,
   baseDir: string | undefined,
   target: DevicePairingStoreTarget,
-  options?: { clearApnsNodeIds?: readonly string[] },
+  options?: DevicePairingStorePersistOptions,
 ): void {
   runDevicePairingStoreMutation(baseDir, ({ db }) => {
-    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-    if (target !== "paired") {
-      executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
-      const rows = Object.values(state.pendingById).map(toPendingRow);
-      if (rows.length > 0) {
-        executeSqliteQuerySync(db, kysely.insertInto("device_pairing_pending").values(rows));
-      }
-    }
-    if (target !== "pending") {
-      executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_paired"));
-      const rows = Object.values(state.pairedByDeviceId).map(toPairedRow);
-      if (rows.length > 0) {
-        executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(rows));
-      }
-    }
-    for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
-      clearApnsRegistrationFromDatabase(db, nodeId);
-    }
+    writeDevicePairingStoreTables(db, state, target, options);
     return { mutated: true, value: undefined };
+  });
+}
+
+export function mutateDevicePairingStoreStateInTransaction<T>(
+  baseDir: string | undefined,
+  mutate: (state: DevicePairingStoreState, persist: DevicePairingStorePersist) => T,
+): T {
+  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
+    const state = readDevicePairingStoreStateFromDatabase(db);
+    let requested: { target: DevicePairingStoreTarget; clearApnsNodeIds: string[] } | undefined;
+    const persist: DevicePairingStorePersist = (target, options) => {
+      requested = {
+        target: requested && requested.target !== target ? "both" : target,
+        clearApnsNodeIds: [
+          ...(requested?.clearApnsNodeIds ?? []),
+          ...(options?.clearApnsNodeIds ?? []),
+        ],
+      };
+    };
+    const value = mutate(state, persist);
+    if (!requested) {
+      return { mutated: false, value };
+    }
+    writeDevicePairingStoreTables(db, state, requested.target, {
+      clearApnsNodeIds: requested.clearApnsNodeIds,
+    });
+    return { mutated: true, value };
   });
 }
 
@@ -703,15 +528,7 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
         .where("setup_id", "=", setupId)
         .where("device_id", "=", deviceId),
     );
-    return {
-      setupId: row.setup_id,
-      deviceId: row.device_id,
-      ...optional("deviceName", row.device_name),
-      access: fromSetupCompletionAccessColumn(row.access),
-      completedAtMs: row.completed_at_ms,
-      deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
-      retainUntilMs: row.retain_until_ms,
-    };
+    return fromSetupCompletionRow(row);
   }, resolveDevicePairingStateDbOptions(params.baseDir));
 }
 
@@ -761,17 +578,7 @@ export function loadDevicePairSetupCompletionRecord(
           .selectAll()
           .where("setup_id", "=", setupId),
       );
-      return row
-        ? {
-            setupId: row.setup_id,
-            deviceId: row.device_id,
-            ...optional("deviceName", row.device_name),
-            access: fromSetupCompletionAccessColumn(row.access),
-            completedAtMs: row.completed_at_ms,
-            deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
-            retainUntilMs: row.retain_until_ms,
-          }
-        : null;
+      return row ? fromSetupCompletionRow(row) : null;
     },
     { ...databaseOptions, database },
   );

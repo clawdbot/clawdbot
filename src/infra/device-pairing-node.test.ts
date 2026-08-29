@@ -21,12 +21,13 @@ import {
   requestNodePairing,
   reusePendingNodePairingForReconnect,
 } from "./device-pairing-node.js";
+import { withDevicePairingLock } from "./device-pairing-state.js";
+import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
   getPairedDevice,
   listDevicePairingReadOnly,
   requestDevicePairing,
   resolveNodePairingGeneration,
-  withPairedDeviceRecords,
 } from "./device-pairing.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
@@ -667,14 +668,13 @@ describe("node surface approvals", () => {
       if (!generation) {
         throw new Error("expected node pairing generation");
       }
-      const snapshotLoaded = createDeferred();
-      const releaseMutation = createDeferred();
-      const lockedMutation = withPairedDeviceRecords(baseDir, async () => {
-        snapshotLoaded.resolve();
-        await releaseMutation.promise;
-        return { value: undefined, persist: false };
+      const lockHeld = createDeferred();
+      const releaseLock = createDeferred();
+      const lockedMutation = withDevicePairingLock(async () => {
+        lockHeld.resolve();
+        await releaseLock.promise;
       });
-      await snapshotLoaded.promise;
+      await lockHeld.promise;
 
       let connectionCurrent = true;
       const publication = updatePairedNodeSessionHost({
@@ -685,7 +685,7 @@ describe("node surface approvals", () => {
         baseDir,
       });
       connectionCurrent = false;
-      releaseMutation.resolve();
+      releaseLock.resolve();
 
       await lockedMutation;
       await expect(publication).resolves.toBe(false);
@@ -860,19 +860,28 @@ describe("node surface approvals", () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
 
-      const snapshotLoaded = createDeferred();
-      const releaseMutation = createDeferred();
-      const lockedMutation = withPairedDeviceRecords(baseDir, async (pairedByDeviceId) => {
-        const device = pairedByDeviceId["node-1"];
-        if (!device?.nodeSurface) {
-          throw new Error("expected paired node surface");
-        }
-        device.nodeSurface = { ...device.nodeSurface, bins: ["ffmpeg"] };
-        snapshotLoaded.resolve();
-        await releaseMutation.promise;
-        return { value: true, persist: true };
+      const lockHeld = createDeferred();
+      const releaseLock = createDeferred();
+      const lockedMutation = withDevicePairingLock(async () => {
+        const updated = updatePairedDeviceNodeSurfaceInTransaction<boolean>(
+          "node-1",
+          baseDir,
+          (device) => {
+            if (!device?.nodeSurface) {
+              throw new Error("expected paired node surface");
+            }
+            return {
+              value: true,
+              persist: true,
+              nodeSurface: { ...device.nodeSurface, bins: ["ffmpeg"] },
+            };
+          },
+        );
+        lockHeld.resolve();
+        await releaseLock.promise;
+        return updated;
       });
-      await snapshotLoaded.promise;
+      await lockHeld.promise;
 
       let connectionSettled = false;
       const connection = recordPairedNodeConnection("node-1", 1_234, baseDir).then((result) => {
@@ -882,7 +891,7 @@ describe("node surface approvals", () => {
       await Promise.resolve();
       expect(connectionSettled).toBe(false);
 
-      releaseMutation.resolve();
+      releaseLock.resolve();
       await expect(lockedMutation).resolves.toBe(true);
       await expect(connection).resolves.toEqual({ recorded: true, firstConnection: true });
       expect(await findPairedNode("node-1", baseDir)).toMatchObject({

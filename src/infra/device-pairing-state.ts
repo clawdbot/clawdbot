@@ -4,6 +4,8 @@ import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalizatio
 import { loadDevicePairingStoreStateReadOnly } from "./device-pairing-store-readonly.js";
 import {
   loadDevicePairingStoreState,
+  mutateDevicePairingStoreStateInTransaction,
+  type DevicePairingStorePersist,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
@@ -34,6 +36,26 @@ export async function loadDevicePairingState(baseDir?: string): Promise<DevicePa
   const state = loadDevicePairingStoreState(baseDir);
   pruneExpiredPairingState(state);
   return state;
+}
+
+export async function readPairedDeviceRecords<T>(
+  baseDir: string | undefined,
+  read: (pairedByDeviceId: Record<string, PairedDevice>) => T,
+): Promise<T> {
+  return await withLock(async () => {
+    const state = await loadDevicePairingState(baseDir);
+    return read(state.pairedByDeviceId);
+  });
+}
+
+export function mutateDevicePairingState<T>(
+  baseDir: string | undefined,
+  mutate: (state: DevicePairingStoreState, persist: DevicePairingStorePersist) => T,
+): T {
+  return mutateDevicePairingStoreStateInTransaction(baseDir, (state, persist) => {
+    pruneExpiredPairingState(state);
+    return mutate(state, persist);
+  });
 }
 
 /** Load one read-only pairing snapshot with expired pending state removed. */

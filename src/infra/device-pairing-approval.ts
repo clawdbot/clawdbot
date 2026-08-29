@@ -10,16 +10,15 @@ import {
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
 import {
-  loadDevicePairingState,
   mergeDevicePairingRoles,
   mergeDevicePairingScopes,
+  mutateDevicePairingState,
   preserveDeviceRoleScopes,
   resolveRequestedDeviceRoles,
   sameDevicePairingStringSet,
   withDevicePairingLock,
 } from "./device-pairing-state.js";
-import type { DevicePairingStoreState } from "./device-pairing-store.js";
-import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
+import type { DevicePairingStorePersist, DevicePairingStoreState } from "./device-pairing-store.js";
 import { createDeviceAuthToken, resolveRoleTokenScopes } from "./device-pairing-tokens.js";
 import {
   clearNodePairingGenerationState,
@@ -154,9 +153,9 @@ function commitApprovedDevicePairing(params: {
   state: DevicePairingStoreState;
   requestId: string;
   device: PairedDevice;
-  baseDir?: string;
+  persist: DevicePairingStorePersist;
 }): Extract<ApproveDevicePairingResult, { status: "approved" }> {
-  const { state, requestId, device, baseDir } = params;
+  const { state, requestId, device, persist } = params;
   const existing = state.pairedByDeviceId[device.deviceId];
   // The approved device preserves nodeSurface by reference, so capture its
   // generation before cleanup mutates generation-owned fields.
@@ -169,9 +168,7 @@ function commitApprovedDevicePairing(params: {
   const installationIdentityChanged = Boolean(existing && existing.publicKey !== device.publicKey);
   delete state.pendingById[requestId];
   state.pairedByDeviceId[device.deviceId] = device;
-  persistState(
-    state,
-    baseDir,
+  persist(
     "both",
     installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
   );
@@ -282,117 +279,118 @@ async function approveDevicePairingWithOptions(
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   return await withDevicePairingLock(async () => {
-    const state = await loadDevicePairingState(baseDir);
-    const pendingRecord = state.pendingById[requestId];
-    if (!pendingRecord) {
-      return null;
-    }
-    const autoApproveScopes = options?.autoApproveNewDeviceScopes;
-    const requestedRoles = resolveRequestedDeviceRoles(pendingRecord);
-    const knownDevice = state.pairedByDeviceId[pendingRecord.deviceId];
-    // Trusted-proxy connects carry an SSO-authenticated user, and the connect
-    // handshake has already proven possession of the pending public key. A
-    // matching key on the paired record is therefore the same physical device
-    // re-requesting (typically a scope upgrade) and may auto-approve; a key
-    // mismatch is a real repair — possibly a deviceId squat — and stays a
-    // manual owner decision.
-    const trustedProxySameKeyDevice =
-      options?.approvedVia === "trusted-proxy" &&
-      knownDevice !== undefined &&
-      knownDevice.publicKey === pendingRecord.publicKey;
-    if (
-      autoApproveScopes &&
-      (((pendingRecord.isRepair || knownDevice) && !trustedProxySameKeyDevice) ||
-        !sameDevicePairingStringSet(requestedRoles, [OPERATOR_ROLE]))
-    ) {
-      return null;
-    }
-    const pending = autoApproveScopes
-      ? { ...pendingRecord, scopes: [...autoApproveScopes] }
-      : pendingRecord;
-    const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
-    const roleMismatchScope = resolveScopeOutsideRequestedRoles({
-      requestedRoles,
-      requestedScopes,
-    });
-    if (roleMismatchScope) {
-      return {
-        status: "forbidden",
-        reason: "scope-outside-requested-roles",
-        scope: roleMismatchScope,
-      };
-    }
-    const now = Date.now();
-    const existing = state.pairedByDeviceId[pending.deviceId];
-    const roles = mergeDevicePairingRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-    );
-    const approvedScopes = mergeDevicePairingScopes(
-      existing?.approvedScopes ?? existing?.scopes,
-      pending.scopes,
-    );
-    const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    const nextTokenScopesByRole = new Map<string, string[]>();
-    for (const roleForToken of requestedRoles) {
-      const existingToken = tokens[roleForToken];
-      const nextScopes = resolveApprovedTokenScopes({
-        role: roleForToken,
-        pending,
-        existingToken,
-        approvedScopes,
-        existing,
+    return mutateDevicePairingState(baseDir, (state, persist) => {
+      const pendingRecord = state.pendingById[requestId];
+      if (!pendingRecord) {
+        return null;
+      }
+      const autoApproveScopes = options?.autoApproveNewDeviceScopes;
+      const requestedRoles = resolveRequestedDeviceRoles(pendingRecord);
+      const knownDevice = state.pairedByDeviceId[pendingRecord.deviceId];
+      // Trusted-proxy connects carry an SSO-authenticated user, and the connect
+      // handshake has already proven possession of the pending public key. A
+      // matching key on the paired record is therefore the same physical device
+      // re-requesting (typically a scope upgrade) and may auto-approve; a key
+      // mismatch is a real repair — possibly a deviceId squat — and stays a
+      // manual owner decision.
+      const trustedProxySameKeyDevice =
+        options?.approvedVia === "trusted-proxy" &&
+        knownDevice !== undefined &&
+        knownDevice.publicKey === pendingRecord.publicKey;
+      if (
+        autoApproveScopes &&
+        (((pendingRecord.isRepair || knownDevice) && !trustedProxySameKeyDevice) ||
+          !sameDevicePairingStringSet(requestedRoles, [OPERATOR_ROLE]))
+      ) {
+        return null;
+      }
+      const pending = autoApproveScopes
+        ? { ...pendingRecord, scopes: [...autoApproveScopes] }
+        : pendingRecord;
+      const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
+      const roleMismatchScope = resolveScopeOutsideRequestedRoles({
+        requestedRoles,
+        requestedScopes,
       });
-      nextTokenScopesByRole.set(roleForToken, nextScopes);
-      if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
-        const callerRequiredScopes =
-          mergeDevicePairingScopes(
-            resolveRoleTokenScopes(roleForToken, pending.scopes),
-            nextScopes,
-          ) ?? nextScopes;
-        if (!options?.callerScopes) {
-          return {
-            status: "forbidden",
-            reason: "caller-scopes-required",
-            scope: callerRequiredScopes[0],
-          };
-        }
-        const missingScope = resolveMissingRequestedScope({
-          role: OPERATOR_ROLE,
-          requestedScopes: callerRequiredScopes,
-          allowedScopes: options.callerScopes,
+      if (roleMismatchScope) {
+        return {
+          status: "forbidden",
+          reason: "scope-outside-requested-roles",
+          scope: roleMismatchScope,
+        };
+      }
+      const now = Date.now();
+      const existing = state.pairedByDeviceId[pending.deviceId];
+      const roles = mergeDevicePairingRoles(
+        existing?.roles,
+        existing?.role,
+        pending.roles,
+        pending.role,
+      );
+      const approvedScopes = mergeDevicePairingScopes(
+        existing?.approvedScopes ?? existing?.scopes,
+        pending.scopes,
+      );
+      const tokens = existing?.tokens ? { ...existing.tokens } : {};
+      const nextTokenScopesByRole = new Map<string, string[]>();
+      for (const roleForToken of requestedRoles) {
+        const existingToken = tokens[roleForToken];
+        const nextScopes = resolveApprovedTokenScopes({
+          role: roleForToken,
+          pending,
+          existingToken,
+          approvedScopes,
+          existing,
         });
-        if (missingScope) {
-          return { status: "forbidden", reason: "caller-missing-scope", scope: missingScope };
+        nextTokenScopesByRole.set(roleForToken, nextScopes);
+        if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
+          const callerRequiredScopes =
+            mergeDevicePairingScopes(
+              resolveRoleTokenScopes(roleForToken, pending.scopes),
+              nextScopes,
+            ) ?? nextScopes;
+          if (!options?.callerScopes) {
+            return {
+              status: "forbidden",
+              reason: "caller-scopes-required",
+              scope: callerRequiredScopes[0],
+            };
+          }
+          const missingScope = resolveMissingRequestedScope({
+            role: OPERATOR_ROLE,
+            requestedScopes: callerRequiredScopes,
+            allowedScopes: options.callerScopes,
+          });
+          if (missingScope) {
+            return { status: "forbidden", reason: "caller-missing-scope", scope: missingScope };
+          }
         }
       }
-    }
-    for (const [roleForToken, nextScopes] of nextTokenScopesByRole) {
-      const existingToken = tokens[roleForToken];
-      const tokenNow = Date.now();
-      tokens[roleForToken] = {
-        token: generatePairingToken(),
-        role: roleForToken,
-        scopes: nextScopes,
-        createdAtMs: existingToken?.createdAtMs ?? tokenNow,
-        rotatedAtMs: existingToken ? tokenNow : undefined,
-        revokedAtMs: undefined,
-        lastUsedAtMs: existingToken?.lastUsedAtMs,
-      };
-    }
-    const device = buildApprovedPairedDevice({
-      pending,
-      existing,
-      roles,
-      approvedScopes,
-      tokens,
-      now,
-      approvedVia: options?.approvedVia ?? "owner",
-      accessMetadata: options?.accessMetadata,
+      for (const [roleForToken, nextScopes] of nextTokenScopesByRole) {
+        const existingToken = tokens[roleForToken];
+        const tokenNow = Date.now();
+        tokens[roleForToken] = {
+          token: generatePairingToken(),
+          role: roleForToken,
+          scopes: nextScopes,
+          createdAtMs: existingToken?.createdAtMs ?? tokenNow,
+          rotatedAtMs: existingToken ? tokenNow : undefined,
+          revokedAtMs: undefined,
+          lastUsedAtMs: existingToken?.lastUsedAtMs,
+        };
+      }
+      const device = buildApprovedPairedDevice({
+        pending,
+        existing,
+        roles,
+        approvedScopes,
+        tokens,
+        now,
+        approvedVia: options?.approvedVia ?? "owner",
+        accessMetadata: options?.accessMetadata,
+      });
+      return commitApprovedDevicePairing({ state, requestId, device, persist });
     });
-    return commitApprovedDevicePairing({ state, requestId, device, baseDir });
   });
 }
 
@@ -422,77 +420,78 @@ export async function approveBootstrapDevicePairing(
   const approvedRoles = mergeDevicePairingRoles(bootstrapProfile.roles) ?? [];
   const approvedScopes = resolveDeviceProfileScopes(bootstrapProfile, approvedRoles);
   return await withDevicePairingLock(async () => {
-    const state = await loadDevicePairingState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
-      return null;
-    }
-    const requestedRoles = resolveRequestedDeviceRoles(pending);
-    const missingRole = requestedRoles.find((role) => !approvedRoles.includes(role));
-    if (missingRole) {
-      return { status: "forbidden", reason: "bootstrap-role-not-allowed", role: missingRole };
-    }
-    const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
-      scope.startsWith(OPERATOR_SCOPE_PREFIX),
-    );
-    const missingScope = resolveMissingRequestedScope({
-      role: OPERATOR_ROLE,
-      requestedScopes: requestedOperatorScopes,
-      allowedScopes: approvedScopes,
-    });
-    if (missingScope) {
-      return { status: "forbidden", reason: "bootstrap-scope-not-allowed", scope: missingScope };
-    }
-
-    const now = Date.now();
-    const existing = state.pairedByDeviceId[pending.deviceId];
-    const grantedRoles = requestedRoles;
-    const grantedScopes = resolveDeviceProfileScopes(
-      bootstrapProfile,
-      grantedRoles,
-      pending.scopes ?? [],
-    );
-    const grantedRoleSet = new Set(grantedRoles);
-    const preservedExistingScopes = (
-      mergeDevicePairingRoles(existing?.roles, existing?.role) ?? []
-    ).flatMap((existingRole) =>
-      grantedRoleSet.has(existingRole)
-        ? []
-        : preserveDeviceRoleScopes(existingRole, existing?.approvedScopes ?? existing?.scopes),
-    );
-    const roles = mergeDevicePairingRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-    );
-    const nextApprovedScopes = mergeDevicePairingScopes(preservedExistingScopes, grantedScopes);
-    const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    for (const roleForToken of grantedRoles) {
-      const existingToken = tokens[roleForToken];
-      const tokenScopes =
-        roleForToken === OPERATOR_ROLE
-          ? resolveDeviceProfileRoleScopes(bootstrapProfile, roleForToken, grantedScopes)
-          : [];
-      tokens[roleForToken] = createDeviceAuthToken({
-        role: roleForToken,
-        scopes: tokenScopes,
-        existing: existingToken,
-        now,
-        ...(existingToken ? { rotatedAtMs: now } : {}),
+    return mutateDevicePairingState(baseDir, (state, persist) => {
+      const pending = state.pendingById[requestId];
+      if (!pending) {
+        return null;
+      }
+      const requestedRoles = resolveRequestedDeviceRoles(pending);
+      const missingRole = requestedRoles.find((role) => !approvedRoles.includes(role));
+      if (missingRole) {
+        return { status: "forbidden", reason: "bootstrap-role-not-allowed", role: missingRole };
+      }
+      const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+        scope.startsWith(OPERATOR_SCOPE_PREFIX),
+      );
+      const missingScope = resolveMissingRequestedScope({
+        role: OPERATOR_ROLE,
+        requestedScopes: requestedOperatorScopes,
+        allowedScopes: approvedScopes,
       });
-    }
+      if (missingScope) {
+        return { status: "forbidden", reason: "bootstrap-scope-not-allowed", scope: missingScope };
+      }
 
-    const device = buildApprovedPairedDevice({
-      pending,
-      existing,
-      roles,
-      approvedScopes: nextApprovedScopes,
-      tokens,
-      now,
-      approvedVia: "bootstrap",
-      accessMetadata: options?.accessMetadata,
+      const now = Date.now();
+      const existing = state.pairedByDeviceId[pending.deviceId];
+      const grantedRoles = requestedRoles;
+      const grantedScopes = resolveDeviceProfileScopes(
+        bootstrapProfile,
+        grantedRoles,
+        pending.scopes ?? [],
+      );
+      const grantedRoleSet = new Set(grantedRoles);
+      const preservedExistingScopes = (
+        mergeDevicePairingRoles(existing?.roles, existing?.role) ?? []
+      ).flatMap((existingRole) =>
+        grantedRoleSet.has(existingRole)
+          ? []
+          : preserveDeviceRoleScopes(existingRole, existing?.approvedScopes ?? existing?.scopes),
+      );
+      const roles = mergeDevicePairingRoles(
+        existing?.roles,
+        existing?.role,
+        pending.roles,
+        pending.role,
+      );
+      const nextApprovedScopes = mergeDevicePairingScopes(preservedExistingScopes, grantedScopes);
+      const tokens = existing?.tokens ? { ...existing.tokens } : {};
+      for (const roleForToken of grantedRoles) {
+        const existingToken = tokens[roleForToken];
+        const tokenScopes =
+          roleForToken === OPERATOR_ROLE
+            ? resolveDeviceProfileRoleScopes(bootstrapProfile, roleForToken, grantedScopes)
+            : [];
+        tokens[roleForToken] = createDeviceAuthToken({
+          role: roleForToken,
+          scopes: tokenScopes,
+          existing: existingToken,
+          now,
+          ...(existingToken ? { rotatedAtMs: now } : {}),
+        });
+      }
+
+      const device = buildApprovedPairedDevice({
+        pending,
+        existing,
+        roles,
+        approvedScopes: nextApprovedScopes,
+        tokens,
+        now,
+        approvedVia: "bootstrap",
+        accessMetadata: options?.accessMetadata,
+      });
+      return commitApprovedDevicePairing({ state, requestId, device, persist });
     });
-    return commitApprovedDevicePairing({ state, requestId, device, baseDir });
   });
 }
