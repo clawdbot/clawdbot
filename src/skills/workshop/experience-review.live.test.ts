@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { redactAgentDiagnosticPayload } from "../../agents/diagnostic-redaction.js";
 import { isLiveTestEnabled } from "../../agents/live-test-helpers.js";
 import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
@@ -19,7 +19,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { readSkillReviewOutcomes } from "./collection-review-state.js";
+import {
+  readSkillReviewOutcomes,
+  recordSkillExperienceReviewOutcome,
+} from "./collection-review-state.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import { listSkillProposals } from "./service.js";
 
@@ -226,14 +229,28 @@ beforeAll(async () => {
   workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
 });
 
+function logReviewOutcomes() {
+  // Persisted failures contain raw provider errors; keep only structured
+  // outcome metadata in CI logs, regardless of secret spelling or format.
+  const outcomes = Object.fromEntries(
+    Object.entries(readSkillReviewOutcomes().experienceReviews).map(([key, review]) => [
+      key,
+      {
+        attemptedAtMs: review.attemptedAtMs,
+        outcome: review.outcome,
+        proposalId: review.proposalId,
+        usage: review.usage,
+      },
+    ]),
+  );
+  console.log("WORKSHOP_REVIEW_OUTCOMES", JSON.stringify(outcomes));
+}
+
 afterAll(async () => {
   unsubscribeDiagnostics();
   if (LIVE) {
     console.log("WORKSHOP_RUNTIME_DIAGNOSTICS", JSON.stringify([...reviewDiagnostics.values()]));
-    console.log(
-      "WORKSHOP_REVIEW_OUTCOMES",
-      JSON.stringify(readSkillReviewOutcomes().experienceReviews),
-    );
+    logReviewOutcomes();
   }
   await testState.cleanup();
   await tempDirs.cleanup();
@@ -328,6 +345,33 @@ async function candidate(
   }
   return result;
 }
+
+describe("skill experience review diagnostics", () => {
+  it("logs persisted failure outcomes without raw provider error text", async () => {
+    const diagnosticWorkspace = await tempDirs.make("openclaw-live-skill-review-diagnostic-");
+    recordSkillExperienceReviewOutcome(diagnosticWorkspace, {
+      attemptedAtMs: 1,
+      outcome: "failed",
+      error: "provider rejected Authorization: Bearer synthetic-workshop-credential",
+      usage: { inputTokens: 3, cachedInputTokens: 1, outputTokens: 2 },
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      logReviewOutcomes();
+      expect(log).toHaveBeenCalledOnce();
+      const [label, json] = log.mock.calls[0]!;
+      expect(label).toBe("WORKSHOP_REVIEW_OUTCOMES");
+      expect(Object.values(JSON.parse(json))).toContainEqual({
+        attemptedAtMs: 1,
+        outcome: "failed",
+        usage: { inputTokens: 3, cachedInputTokens: 1, outputTokens: 2 },
+      });
+      expect(json).not.toContain("synthetic-workshop-credential");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
 
 describe("skill experience review transcript fixture", () => {
   it.each([
