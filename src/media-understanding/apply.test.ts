@@ -471,6 +471,72 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("<file");
   });
 
+  it("keeps tiny audio-MIME text files eligible for extraction", async () => {
+    const ctx = await createAudioCtx({ fileName: "note.txt", content: "recoverable file text" });
+    const transcribeAudio = vi.fn(async () => ({ text: "must not run" }));
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: createGroqAudioConfig(),
+      providers: { groq: { id: "groq", transcribeAudio } },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(true);
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Transcript).toBe(
+      "[Voice note could not be transcribed because the audio attachment was too small]",
+    );
+    expect(ctx.Body).toContain('<file name="note.txt" mime="text/plain">');
+    expect(ctx.Body).toContain("recoverable file text");
+  });
+
+  it("keeps a successful transcript instead of an earlier tooSmall placeholder", async () => {
+    const { MediaUnderstandingSkipError } =
+      await import("../../packages/media-understanding-common/src/errors.js");
+    const ctx = await createAudioCtx();
+    const transcribeAudio = vi
+      .fn<NonNullable<MediaUnderstandingProvider["transcribeAudio"]>>()
+      .mockRejectedValueOnce(new MediaUnderstandingSkipError("tooSmall", "provider rejected clip"))
+      .mockResolvedValue({ text: "recovered transcript" });
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: {
+        tools: {
+          media: {
+            models: [
+              { provider: "groq", model: "primary", capabilities: ["audio"] },
+              { provider: "groq", model: "fallback", capabilities: ["audio"] },
+            ],
+            audio: { enabled: true },
+          },
+        },
+      },
+      providers: { groq: { id: "groq", transcribeAudio } },
+    });
+
+    expect(transcribeAudio).toHaveBeenCalledTimes(2);
+    expect(result.outputs).toEqual([
+      {
+        kind: "audio.transcription",
+        attachmentIndex: 0,
+        text: "recovered transcript",
+        provider: "groq",
+        model: "fallback",
+      },
+    ]);
+    const audioDecision = result.decisions.find((decision) => decision.capability === "audio");
+    expect(audioDecision?.attachments[0]).toMatchObject({
+      attempts: [{ outcome: "skipped" }, { outcome: "success" }],
+      chosen: { outcome: "success", model: "fallback" },
+    });
+    expectTranscriptApplied({
+      ctx,
+      transcript: "recovered transcript",
+      body: "[Audio]\nTranscript:\nrecovered transcript",
+      commandBody: "recovered transcript",
+    });
+  });
+
   it("keeps caption for command parsing when audio has user text", async () => {
     const ctx = await createAudioCtx({
       body: "/capture status",
@@ -1575,57 +1641,74 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("adds placeholder for tooSmall audio while preserving real transcript for valid audio", async () => {
-    const dir = await createTempMediaDir();
-    const validAudio = createSafeAudioFixtureBuffer(2048);
-    const tinyAudio = Buffer.alloc(100);
-    const validPath = path.join(dir, "valid.ogg");
-    const tinyPath = path.join(dir, "tiny.ogg");
-    await fs.writeFile(validPath, validAudio);
-    await fs.writeFile(tinyPath, tinyAudio);
+  it.each(["first", "last"] as const)(
+    "adds tooSmall placeholders in %s order while preserving real transcripts",
+    async (prefer) => {
+      const dir = await createTempMediaDir();
+      const validAudio = createSafeAudioFixtureBuffer(2048);
+      const tinyAudio = Buffer.alloc(100);
+      const validPath = path.join(dir, "valid.ogg");
+      const tinyPath = path.join(dir, "tiny.ogg");
+      await fs.writeFile(validPath, validAudio);
+      await fs.writeFile(tinyPath, tinyAudio);
 
-    const ctx: MsgContext = {
-      Body: "",
-      media: [
-        { path: validPath, contentType: "audio/ogg" },
-        { path: tinyPath, contentType: "audio/ogg" },
-      ],
-    };
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          models: [{ provider: "groq", capabilities: ["audio"] }],
-          audio: {
-            enabled: true,
-            attachments: { mode: "all", maxAttachments: 2 },
+      const ctx: MsgContext = {
+        Body: "",
+        media: [
+          { path: validPath, contentType: "audio/ogg" },
+          { path: tinyPath, contentType: "audio/ogg" },
+        ],
+      };
+      const cfg: OpenClawConfig = {
+        tools: {
+          media: {
+            models: [{ provider: "groq", capabilities: ["audio"] }],
+            audio: {
+              enabled: true,
+              attachments: { mode: "all", maxAttachments: 2, prefer },
+            },
           },
         },
-      },
-    };
+      };
 
-    const result = await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      providers: {
-        groq: {
-          id: "groq",
-          transcribeAudio: async (req) => ({ text: `transcribed ${req.fileName ?? "unknown"}` }),
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg,
+        providers: {
+          groq: {
+            id: "groq",
+            transcribeAudio: async (req) => ({ text: `transcribed ${req.fileName ?? "unknown"}` }),
+          },
         },
-      },
-    });
+      });
 
-    expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toContain("transcribed valid.ogg");
-    expect(ctx.Transcript).toContain(
-      "[Voice note could not be transcribed because the audio attachment was too small]",
-    );
-    expect(ctx.Body).toContain("[Audio 1/2]");
-    expect(ctx.Body).toContain("transcribed valid.ogg");
-    expect(ctx.Body).toContain("[Audio 2/2]");
-    expect(ctx.Body).toContain(
-      "[Voice note could not be transcribed because the audio attachment was too small]",
-    );
-  });
+      expect(result.appliedAudio).toBe(true);
+      expect(ctx.Transcript).toContain("transcribed valid.ogg");
+      expect(ctx.Transcript).toContain(
+        "[Voice note could not be transcribed because the audio attachment was too small]",
+      );
+      expect(ctx.Body).toContain("[Audio 1/2]");
+      expect(ctx.Body).toContain("transcribed valid.ogg");
+      expect(ctx.Body).toContain("[Audio 2/2]");
+      expect(ctx.Body).toContain(
+        "[Voice note could not be transcribed because the audio attachment was too small]",
+      );
+      expect(result.outputs.map((output) => output.attachmentIndex)).toEqual(
+        prefer === "last" ? [1, 0] : [0, 1],
+      );
+      const expectedTexts = [
+        "transcribed valid.ogg",
+        "[Voice note could not be transcribed because the audio attachment was too small]",
+      ];
+      if (prefer === "last") {
+        expectedTexts.reverse();
+      }
+      expect(ctx.Transcript).toBe(`Audio 1:\n${expectedTexts[0]}\n\nAudio 2:\n${expectedTexts[1]}`);
+      expect(ctx.Body).toBe(
+        `[Audio 1/2]\nTranscript:\n${expectedTexts[0]}\n\n[Audio 2/2]\nTranscript:\n${expectedTexts[1]}`,
+      );
+    },
+  );
 
   it("orders mixed media outputs as image, audio, video", async () => {
     const dir = await createTempMediaDir();
