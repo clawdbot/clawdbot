@@ -498,20 +498,27 @@ function activePluginMatchesRepairableInstallRecord(params: {
   return canonicalPluginRoot === canonicalInstallPath;
 }
 
+type InstalledPluginMissingDependencyState = {
+  missingDependencies: string[];
+  /** Package identity discovered from the active record-owned plugin root. */
+  activePackageName?: string;
+};
+
 /**
  * Managed installs can end up with a package payload whose declared required
  * dependencies are absent from the dependency tree (for example an interrupted
  * npm install); the plugin then loads at startup but dies at import time.
- * Maps each active, record-backed installed plugin to its missing required packages.
+ * Maps each active, record-backed installed plugin to its missing dependencies
+ * and the package identity discovered from that same canonical root.
  */
 function collectInstalledPluginMissingRequiredDependencies(params: {
   cfg: OpenClawConfig;
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
-}): Map<string, string[]> {
+}): Map<string, InstalledPluginMissingDependencyState> {
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
-  const missingByPluginId = new Map<string, string[]>();
+  const missingByPluginId = new Map<string, InstalledPluginMissingDependencyState>();
   for (const plugin of params.snapshot.plugins) {
     if (
       !activePluginMatchesRepairableInstallRecord({
@@ -538,7 +545,11 @@ function collectInstalledPluginMissingRequiredDependencies(params: {
       optionalDependencies: plugin.packageOptionalDependencies,
     });
     if (dependencyStatus.hasDependencies && !dependencyStatus.requiredInstalled) {
-      missingByPluginId.set(plugin.id, dependencyStatus.missing);
+      const activePackageName = plugin.packageName?.trim();
+      missingByPluginId.set(plugin.id, {
+        missingDependencies: dependencyStatus.missing,
+        ...(activePackageName ? { activePackageName } : {}),
+      });
     }
   }
   return missingByPluginId;

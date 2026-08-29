@@ -2908,17 +2908,29 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       name: "stale pinned selector",
       installedVersion: "2026.5.6",
       recordSpec: "@openclaw/codex@2026.5.6",
+      resolvedName: "@openclaw/codex",
+      resolvedSpec: "@openclaw/codex@2026.5.6",
       expectedChange: 'Refreshed stale configured plugin "codex".',
     },
     {
       name: "current floating selector",
       installedVersion: VERSION,
       recordSpec: "@openclaw/codex",
+      resolvedName: "@openclaw/codex",
+      resolvedSpec: `@openclaw/codex@${VERSION}`,
+      expectedChange: 'Repaired broken installed plugin "codex".',
+    },
+    {
+      name: "current selector with missing resolved identities",
+      installedVersion: VERSION,
+      recordSpec: "@openclaw/codex",
+      resolvedName: undefined,
+      resolvedSpec: undefined,
       expectedChange: 'Repaired broken installed plugin "codex".',
     },
   ])(
     "keeps a hollow Codex runtime on the current release cohort ($name)",
-    async ({ installedVersion, recordSpec, expectedChange }) => {
+    async ({ installedVersion, recordSpec, resolvedName, resolvedSpec, expectedChange }) => {
       const installDir = path.join(
         tempDirs.make("openclaw-plugin-stub-repair-"),
         "node_modules",
@@ -2939,8 +2951,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         codex: {
           source: "npm" as const,
           spec: recordSpec,
-          resolvedName: "@openclaw/codex",
-          resolvedSpec: `@openclaw/codex@${installedVersion}`,
+          ...(resolvedName ? { resolvedName } : {}),
+          ...(resolvedSpec ? { resolvedSpec } : {}),
           resolvedVersion: installedVersion,
           version: installedVersion,
           integrity: "sha512-old-codex",
@@ -2949,6 +2961,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       };
       const pluginMetadata = {
         id: "codex",
+        packageName: "@openclaw/codex",
         packageVersion: "2026.5.6",
         providers: ["codex"],
         channels: [],

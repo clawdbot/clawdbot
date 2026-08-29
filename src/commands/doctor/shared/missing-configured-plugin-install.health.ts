@@ -177,7 +177,8 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       continue;
     }
     if (kind === "repairable-installed-plugin") {
-      const missingDependencies = missingRequiredDependenciesByPluginId.get(pluginId);
+      const missingDependencies =
+        missingRequiredDependenciesByPluginId.get(pluginId)?.missingDependencies;
       issues.push({
         kind,
         pluginId,

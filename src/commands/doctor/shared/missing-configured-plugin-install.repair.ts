@@ -3,6 +3,7 @@ import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -320,8 +321,15 @@ async function repairMissingPluginInstallsWithLease(
             return [];
           }
           const candidate = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
+          const candidatePackageName = candidate?.npmSpec
+            ? parseRegistryNpmSpec(candidate.npmSpec)?.name
+            : undefined;
+          const activePackageName =
+            installedPluginIdsWithMissingRequiredDependencies.get(pluginId)?.activePackageName;
           if (
             !candidate?.npmSpec ||
+            !candidatePackageName ||
+            activePackageName !== candidatePackageName ||
             !isTrustedOfficialInstallRecordForCandidate({
               record: records[pluginId],
               candidate,
