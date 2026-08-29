@@ -3007,8 +3007,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
         pluginIds: ["codex"],
         skipDisabledPlugins: true,
-        specOverrides: { codex: "@openclaw/codex" },
       });
+      expect.soft(updateArg.specOverrides).toEqual({ codex: "@openclaw/codex" });
       expect.soft(updateArg.versionBoundToCorePluginIds).toEqual(new Set(["codex"]));
       expect.soft(mockCallArg(mocks.installPluginFromNpmSpec)).toMatchObject({
         spec: expectedCodexInstallSpec(),
