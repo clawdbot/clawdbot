@@ -456,6 +456,7 @@ suite.define(() => {
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
       await writable.page.keyboard.press("ArrowUp");
       await writable.page.keyboard.press("Enter");
       await waitForWorkboardSelectValue(prioritySelect, "high");
@@ -463,6 +464,7 @@ suite.define(() => {
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
       await writable.page.keyboard.press("Home");
       await writable.page.keyboard.press("Enter");
       await waitForWorkboardSelectValue(prioritySelect, "all");
