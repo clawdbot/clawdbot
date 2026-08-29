@@ -6,8 +6,12 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
+import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isStagedInputPath, STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
+import {
+  createStagedInputPathMatcher,
+  STAGED_INPUT_GIT_PATHSPEC,
+} from "../../media/staged-inputs.js";
 import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -559,6 +563,7 @@ async function snapshotWorktree(
         addSnapshotPath(entry);
       }
     }
+    const isStagedInput = createStagedInputPathMatcher(await fsRoot(record.path));
     for (const entry of splitNullBuffer(
       await requireGitBuffer(record.path, [
         "ls-files",
@@ -570,7 +575,7 @@ async function snapshotWorktree(
         STAGED_INPUT_GIT_PATHSPEC,
       ]),
     )) {
-      if (isStagedInputPath(entry.toString("utf8"))) {
+      if (await isStagedInput(entry.toString("utf8"))) {
         addSnapshotPath(entry);
       }
     }

@@ -9,15 +9,13 @@ import { prepareNodeWorkspaceTransferSnapshot } from "../../gateway/worker-envir
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
 import { parseWorkerWorkspaceManifest } from "../../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../../gateway/worker-environments/workspace-reconcile.js";
+import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { captureManifest } from "../../node-host/node-worker-workspace-commands.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { requireGit } from "./git.js";
 import { ManagedWorktreeService } from "./service.js";
-import {
-  initializeManagedWorktreeTestRepository,
-  materializeManagedWorktreeFixture,
-} from "./service.test-support.js";
+import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const sandbox = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() }));
 vi.mock("../sandbox.js", () => sandbox);
@@ -35,8 +33,14 @@ it.each(["host", "writable sandbox", "cloud"])(
       const png = createSolidPngBuffer(3, 3, { r: 255, g: 0, b: 0 });
       await fs.mkdir(path.join(repo, "media/inbound"), { recursive: true });
       await fs.writeFile(path.join(repo, "media/inbound/project.png"), png);
-      await fs.writeFile(path.join(repo, ".gitignore"), "unrelated-private.txt\n");
-      await fs.writeFile(path.join(repo, ".worktreeinclude"), "");
+      await fs.writeFile(
+        path.join(repo, ".gitignore"),
+        "unrelated-private.txt\nmedia/inbound/openclaw-staged-*/\n",
+      );
+      const explicitInput = `media/inbound/openclaw-staged-${"d".repeat(64)}/input-secret.txt`;
+      await fs.mkdir(path.dirname(path.join(repo, explicitInput)), { recursive: true });
+      await fs.writeFile(path.join(repo, explicitInput), `fixture bytes: ${explicitInput}\n`);
+      await fs.writeFile(path.join(repo, ".worktreeinclude"), `${explicitInput}\n`);
       await requireGit(repo, [
         "add",
         ".gitignore",
@@ -45,13 +49,8 @@ it.each(["host", "writable sandbox", "cloud"])(
       ]);
       await requireGit(repo, ["commit", "-qm", "project-owned inputs"]);
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, "state") };
-      const worktree = await materializeManagedWorktreeFixture({
-        env,
-        name: "inputs",
-        now: Date.now(),
-        repoRoot: repo,
-        stateDir: env.OPENCLAW_STATE_DIR,
-      });
+      const service = new ManagedWorktreeService({ env });
+      const worktree = await service.create({ repoRoot: repo, name: "inputs", baseRef: "HEAD" });
       const cwd = worktree.path;
       const git = (args: string[]) => requireGit(cwd, args);
       const originalHead = await git(["rev-parse", "HEAD"]);
@@ -211,9 +210,23 @@ it.each(["host", "writable sandbox", "cloud"])(
       for (const input of inputs) {
         expect(replacement.manifest.entries.map((entry) => entry.path)).toContain(input);
       }
-      const service = new ManagedWorktreeService({ env });
+      const ownership = await createStagedInputOwnershipFixture(cwd);
       await service.remove({ id: worktree.id, reason: "input-retention-proof" });
       await service.restore({ id: worktree.id });
+      for (const relative of ownership.ownedFiles) {
+        await expect(fs.readFile(path.join(cwd, relative), "utf8")).resolves.toBe(
+          `fixture bytes: ${relative}\n`,
+        );
+      }
+      for (const relative of ownership.unownedFiles) {
+        if (relative === explicitInput) {
+          await expect(fs.readFile(path.join(cwd, relative), "utf8")).resolves.toBe(
+            `fixture bytes: ${relative}\n`,
+          );
+        } else {
+          await expect(fs.stat(path.join(cwd, relative))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
       expect(await git(["rev-parse", "HEAD"])).toBe(originalHead);
       expect(await git(["diff", "--cached", "--name-only"])).toBe("");
       for (const input of inputs) {
@@ -230,9 +243,11 @@ it.each(["host", "writable sandbox", "cloud"])(
       );
       await expect(fs.readFile(path.join(cwd, "media/inbound/project.png"))).resolves.toEqual(png);
       await expect(fs.readFile(path.join(cwd, ".gitignore"), "utf8")).resolves.toBe(
-        "unrelated-private.txt\n",
+        "unrelated-private.txt\nmedia/inbound/openclaw-staged-*/\n",
       );
-      await expect(fs.readFile(path.join(cwd, ".worktreeinclude"), "utf8")).resolves.toBe("");
+      await expect(fs.readFile(path.join(cwd, ".worktreeinclude"), "utf8")).resolves.toBe(
+        `${explicitInput}\n`,
+      );
       await assertPublication(cwd);
       closeOpenClawStateDatabaseForTest();
     });

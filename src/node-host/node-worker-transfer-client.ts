@@ -21,7 +21,11 @@ import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { ensureStagedInputDirectory, isStagedInputPath } from "../media/staged-inputs.js";
+import {
+  ensureStagedInputDirectory,
+  isStagedInputPath,
+  stagedInputDirectoriesFromEntries,
+} from "../media/staged-inputs.js";
 import { runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
@@ -364,10 +368,13 @@ async function downloadWorkspace(params: {
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
   const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
+  const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   if (
     params.transfer.attachments &&
     (manifest.baseCommit !== null ||
-      manifest.entries.some((entry) => entry.type !== "file" || !isStagedInputPath(entry.path)))
+      manifest.entries.some(
+        (entry) => entry.type !== "file" || !isStagedInputPath(entry.path, stagedInputs),
+      ))
   ) {
     throw new Error("Invalid worker attachment manifest");
   }
@@ -485,9 +492,7 @@ async function downloadWorkspace(params: {
     if (params.transfer.attachments) {
       params.signal?.throwIfAborted();
       const root = await fsRoot(params.workspaceDir);
-      for (const directory of new Set(
-        manifest.entries.map((entry) => path.posix.dirname(entry.path)),
-      )) {
+      for (const directory of stagedInputs) {
         params.signal?.throwIfAborted();
         await ensureStagedInputDirectory(params.workspaceDir, directory, params.signal);
       }

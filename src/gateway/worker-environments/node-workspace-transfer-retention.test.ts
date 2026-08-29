@@ -9,6 +9,7 @@ import {
   stagedInputDirectory,
   stagedInputFileName,
 } from "../../media/staged-inputs.js";
+import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
@@ -16,6 +17,7 @@ import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-se
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
+import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
@@ -23,16 +25,32 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["git", "git-with-empty-include", "plain"])(
+it.each([
+  "git",
+  "git-with-empty-include",
+  "git-with-explicit-include",
+  "git-with-marker-only-include",
+  "plain",
+])(
   "reconciles private inputs staged after dispatch through the node transport (%s)",
   async (mode) => {
     const root = await fs.realpath(tempDirs.make("node-workspace-input-retention-"));
     const localPath = path.join(root, "gateway-workspace");
     await fs.mkdir(localPath);
     await fs.writeFile(path.join(localPath, "project.txt"), "existing project file\n");
-    await fs.writeFile(path.join(localPath, ".gitignore"), "unrelated-private.txt\n");
-    if (mode === "git-with-empty-include") {
-      await fs.writeFile(path.join(localPath, ".worktreeinclude"), "");
+    await fs.writeFile(
+      path.join(localPath, ".gitignore"),
+      "unrelated-private.txt\nmedia/inbound/openclaw-staged-*/\n",
+    );
+    const explicitlyIncluded = `${stagedInputDirectory("d".repeat(64))}/input-secret.txt`;
+    if (mode.startsWith("git-with-")) {
+      const includePaths =
+        mode === "git-with-explicit-include"
+          ? [explicitlyIncluded, explicitlyIncluded.replace("secret.txt", "cache.pyc")]
+          : mode === "git-with-marker-only-include"
+            ? [`${stagedInputDirectory("a1".repeat(32))}/.gitignore`]
+            : [];
+      await fs.writeFile(path.join(localPath, ".worktreeinclude"), includePaths.join("\n"));
     }
     if (mode !== "plain") {
       await requireGit(localPath, ["init", "--quiet"]);
@@ -48,6 +66,7 @@ it.each(["git", "git-with-empty-include", "plain"])(
         "base before attachments",
       ]);
     }
+    const ownership = await createStagedInputOwnershipFixture(localPath);
     const owner = new AbortController();
     const environmentId = "input-worker";
     const sessionId = "input-session";
@@ -91,6 +110,35 @@ it.each(["git", "git-with-empty-include", "plain"])(
       const synced = await actions.syncWorkspace({ localPath, sessionId, generation: ownerEpoch });
       expect(synced.mode).toBe(mode === "plain" ? "plain" : "git");
       const remote = synced.remoteWorkspaceDir;
+      for (const relative of ownership.ownedFiles) {
+        await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
+          await fs.readFile(path.join(localPath, relative)),
+        );
+      }
+      const selectedProjectFile = (relative: string) =>
+        (mode === "plain" && !relative.endsWith(".pyc")) ||
+        (mode === "git-with-explicit-include" && relative === explicitlyIncluded);
+      for (const relative of ownership.unownedFiles) {
+        if (selectedProjectFile(relative)) {
+          await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
+            await fs.readFile(path.join(localPath, relative)),
+          );
+        } else {
+          await expect
+            .soft(fs.stat(path.join(remote, relative)), relative)
+            .rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
+      // New ignored project files on the worker must not be promoted on return either.
+      await createStagedInputOwnershipFixture(remote);
+      for (const relative of ownership.unownedFiles) {
+        await fs.writeFile(path.join(remote, relative), "worker project bytes\n");
+      }
+      const ordinaryOutput =
+        mode === "plain" ? `${stagedInputDirectory("a1".repeat(32))}/new-output.txt` : undefined;
+      if (ordinaryOutput) {
+        await fs.writeFile(path.join(remote, ordinaryOutput), "ordinary project output\n");
+      }
       let baseManifestRef = synced.manifestRef;
       let pending: WorkerWorkspaceReconciliationJournal | undefined;
       const reconcile = async (claimId: string) => {
@@ -123,10 +171,10 @@ it.each(["git", "git-with-empty-include", "plain"])(
             },
           });
           const applied = await verifyReconciledWorkspaceFinal(result, quiescence);
-          expect(applied?.conflictPaths).toEqual([]);
           expect(recorded).toBe(ref);
           expect(baseManifestRef).toBe(result.manifestRef);
           await deleteStagedWorkerWorkspaceResult({ root: localPath, stagedResultRef: ref });
+          return applied;
         } finally {
           await quiescence.resume();
         }
@@ -141,6 +189,7 @@ it.each(["git", "git-with-empty-include", "plain"])(
       const originalNotes = Buffer.from("original private notes\n");
       const expected = new Map([
         [notesPath, originalNotes],
+        [`${directory}/input-cache.pyc`, Buffer.from("original input cache\n")],
         [pngPath, png],
         [`${directory}/${stagedInputFileName(".gitignore")}`, Buffer.from("!*\n")],
         [
@@ -170,6 +219,18 @@ it.each(["git", "git-with-empty-include", "plain"])(
       await fs.writeFile(path.join(remote, "unrelated-private.txt"), "unselected ignored file\n");
 
       const assertRetained = async () => {
+        if (ordinaryOutput) {
+          await expect(fs.readFile(path.join(localPath, ordinaryOutput), "utf8")).resolves.toBe(
+            "ordinary project output\n",
+          );
+        }
+        for (const relative of ownership.unownedFiles) {
+          await expect(fs.readFile(path.join(localPath, relative), "utf8")).resolves.toBe(
+            selectedProjectFile(relative)
+              ? "worker project bytes\n"
+              : `fixture bytes: ${relative}\n`,
+          );
+        }
         for (const [relative, bytes] of expected) {
           // Assert Gateway bytes first: a successful upload alone did not prove retention.
           await expect(fs.readFile(path.join(localPath, relative))).resolves.toEqual(bytes);
@@ -199,7 +260,7 @@ it.each(["git", "git-with-empty-include", "plain"])(
           expect(await requireGit(localPath, ["ls-files", "--", "media/inbound"])).toBe("");
         }
       };
-      await reconcile("first-input-turn");
+      expect((await reconcile("first-input-turn"))?.conflictPaths).toEqual([]);
       await assertRetained();
 
       const nextDirectory = stagedInputDirectory("b".repeat(64));
@@ -215,8 +276,77 @@ it.each(["git", "git-with-empty-include", "plain"])(
       // The source still contains originalNotes; repeated staging must preserve the worker edit.
       await stage();
       await expect(fs.readFile(path.join(remote, notesPath))).resolves.toEqual(editedNotes);
-      await reconcile("next-input-turn");
+      const editedCache = Buffer.from("edited input cache\n");
+      await fs.writeFile(path.join(remote, directory, "input-cache.pyc"), editedCache);
+      expected.set(`${directory}/input-cache.pyc`, editedCache);
+      expect((await reconcile("next-input-turn"))?.conflictPaths).toEqual([]);
       await assertRetained();
+
+      for (const { kind, identity, markerBefore } of [
+        { kind: "addition", identity: "d".repeat(64), markerBefore: undefined },
+        { kind: "replacement", identity: "e".repeat(64), markerBefore: Buffer.from("*\n") },
+        {
+          kind: "unchanged-marker-new-child",
+          identity: "a1".repeat(32),
+          markerBefore: expected.get(`${directory}/.gitignore`)!,
+        },
+      ]) {
+        // Each marker addition/replacement starts from its own authoritative dispatch.
+        const collisionDispatch = await actions.syncWorkspace({
+          localPath,
+          sessionId,
+          generation: ownerEpoch,
+        });
+        baseManifestRef = collisionDispatch.manifestRef;
+        expect(collisionDispatch.remoteWorkspaceDir).toBe(remote);
+        const collision = stagedInputDirectory(identity);
+        const markerPath = path.join(localPath, collision, ".gitignore");
+        if (markerBefore) {
+          await expect(fs.readFile(markerPath)).resolves.toEqual(markerBefore);
+        } else {
+          await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        const markerLinksBefore = markerBefore ? (await fs.lstat(markerPath)).nlink : undefined;
+        await fs.mkdir(path.join(remote, collision), { recursive: true });
+        const workerMarker = path.join(remote, collision, ".gitignore");
+        await fs.rm(workerMarker, { force: true });
+        await fs.writeFile(workerMarker, expected.get(`${directory}/.gitignore`)!, { flag: "wx" });
+        const localPrivate = new Map<string, Buffer>();
+        for (const name of ["input-secret.txt", "input-cache.pyc"]) {
+          const relative = `${collision}/${name}`;
+          localPrivate.set(relative, await fs.readFile(path.join(localPath, relative)));
+          await fs.writeFile(path.join(remote, relative), `worker collision bytes: ${relative}\n`);
+        }
+        const acceptedBeforeCollision = baseManifestRef;
+        const claimId = `unowned-target-${kind}`;
+        const collisionError = await reconcile(claimId).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect.soft(collisionError).toBeInstanceOf(ConcurrentWorkspacePathError);
+        expect.soft(collisionError).toMatchObject({ message: expect.stringContaining("unowned") });
+        if (markerBefore) {
+          await expect.soft(fs.readFile(markerPath)).resolves.toEqual(markerBefore);
+          expect.soft((await fs.lstat(markerPath)).nlink).toBe(markerLinksBefore);
+        } else {
+          await expect.soft(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        for (const [relative, bytes] of localPrivate) {
+          await expect.soft(fs.readFile(path.join(localPath, relative))).resolves.toEqual(bytes);
+          await expect
+            .soft(fs.readFile(path.join(remote, relative), "utf8"))
+            .resolves.toBe(`worker collision bytes: ${relative}\n`);
+        }
+        expect.soft(baseManifestRef).toBe(acceptedBeforeCollision);
+        expect.soft(pending).toBeUndefined();
+        if (collisionError !== undefined) {
+          await deleteStagedWorkerWorkspaceResult({
+            root: localPath,
+            stagedResultRef: workerWorkspaceResultRef(claimId),
+          });
+        }
+        await fs.rm(path.join(remote, collision), { recursive: true });
+      }
     } finally {
       owner.abort();
       await service.closeAll();

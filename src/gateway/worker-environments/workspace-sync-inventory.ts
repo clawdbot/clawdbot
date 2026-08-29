@@ -3,8 +3,13 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { root as fsRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
-import { isStagedInputPath, STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
+import {
+  createStagedInputPathMatcher,
+  stagedInputPathDirectory,
+  STAGED_INPUT_GIT_PATHSPEC,
+} from "../../media/staged-inputs.js";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { isPortableRootContainedSymlink } from "./workspace-actual-manifest.js";
@@ -20,6 +25,28 @@ import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 const STDERR_LIMIT = 4_096;
 const COMMAND_KILL_GRACE_MS = 300;
+
+/** Exact rsync exemptions, prepared once without walking input file contents. */
+export async function readWorkspaceStagedInputDirectories(rootDir: string): Promise<string[]> {
+  const root = await fsRoot(rootDir);
+  const inbound = await root.stat("media/inbound").catch(() => undefined);
+  if (!inbound?.isDirectory || inbound.isSymbolicLink) {
+    return [];
+  }
+  const isStagedInput = createStagedInputPathMatcher(root);
+  const directories: string[] = [];
+  let candidates = 0;
+  for await (const entry of await fs.opendir(path.join(rootDir, "media/inbound"))) {
+    if (++candidates > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+      throw workspaceInventoryError("Cloud workspace has too many entries");
+    }
+    const directory = stagedInputPathDirectory(`media/inbound/${entry.name}`);
+    if (entry.isDirectory() && directory && (await isStagedInput(directory))) {
+      directories.push(directory);
+    }
+  }
+  return directories.toSorted();
+}
 
 class WorkerWorkspacePreflightError extends Error {
   readonly code = "invalid_state";
@@ -370,6 +397,7 @@ async function writeEligibleGitFiles(params: {
 }): Promise<void> {
   const output = await fs.open(params.outputPath, "wx", 0o600);
   const canonicalRoot = await fs.realpath(params.gitRoot);
+  const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
   const budget = new WorkerWorkspaceInventoryBudget();
   const transferredPaths = new Set<string>();
   let buffered: string[] = [];
@@ -383,7 +411,7 @@ async function writeEligibleGitFiles(params: {
     bufferedBytes = 0;
   };
   const appendIfTransferable = async (file: string) => {
-    if (isDerivedWorkspacePath(file) || transferredPaths.has(file)) {
+    if (isDerivedWorkspacePath(file, await isStagedInput(file)) || transferredPaths.has(file)) {
       return;
     }
     const absolute = path.join(canonicalRoot, file);
@@ -440,7 +468,7 @@ async function writeEligibleGitFiles(params: {
       ) {
         selectedItem = await selected.next();
       }
-      if (isStagedInputPath(file) || (!selectedItem.done && selectedItem.value === file)) {
+      if ((await isStagedInput(file)) || (!selectedItem.done && selectedItem.value === file)) {
         await appendIfTransferable(file);
       }
     }

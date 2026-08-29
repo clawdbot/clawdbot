@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { STAGED_INPUT_DIRECTORY_PREFIX } from "../../media/staged-inputs.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import type {
@@ -68,6 +67,7 @@ import {
   createWorkspaceGitTransferList,
   filterExistingGitTransferList,
   runWorkspaceInventoryCommandToFile,
+  readWorkspaceStagedInputDirectories,
 } from "./workspace-sync-inventory.js";
 import {
   REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
@@ -337,6 +337,13 @@ export function createWorkerWorkspaceActions(
         }
       }
 
+      const stagedInputDirectories = await readWorkspaceStagedInputDirectories(gitRoot);
+      const inputIncludes = path.join(temporaryDirectory, "input-includes");
+      await fs.writeFile(
+        inputIncludes,
+        stagedInputDirectories.map((directory) => `/${directory}/***\0`).join(""),
+        { mode: 0o600 },
+      );
       const localSource = gitRoot.endsWith(path.sep) ? gitRoot : `${gitRoot}${path.sep}`;
       const transferArgv = (rsyncSsh: string, fileListPath?: string) => [
         "rsync",
@@ -344,9 +351,10 @@ export function createWorkerWorkspaceActions(
         "--checksum",
         "--delete-delay",
         "--exclude=.git",
-        `--include=/${STAGED_INPUT_DIRECTORY_PREFIX}*/***`,
+        "--from0",
+        `--include-from=${inputIncludes}`,
         ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
-        ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
+        ...(fileListPath ? ["--recursive", `--files-from=${fileListPath}`] : []),
         `--rsync-path=${mutationReceiverPath("workspace-root")}`,
         "-e",
         rsyncSsh,
