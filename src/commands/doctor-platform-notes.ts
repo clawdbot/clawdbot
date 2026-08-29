@@ -7,6 +7,11 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { resolveNodeLaunchAgentLabel } from "../daemon/constants.js";
+import {
+  detectLaunchAgentEnvFileJsonQuoteKeys,
+  repairLaunchAgentEnvFileJsonQuotes,
+} from "../daemon/launchd-service-files.js";
 import {
   findStaleOpenClawUpdateLaunchdJobs,
   isLaunchAgentEnabled,
@@ -17,6 +22,8 @@ import {
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
+import { confirmDoctorServiceRepair } from "./doctor-service-repair-policy.js";
 
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 
@@ -220,6 +227,70 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, deps);
   if (warning) {
     (deps?.noteFn ?? note)(warning, "Gateway (macOS)");
+  }
+}
+
+/**
+ * Warns about #103804 quote corruption in generated LaunchAgent env files and
+ * offers the doctor-gated rewrite. Runs on the always path: the gateway stays
+ * healthy while corrupted credentials break providers, so this must not hide
+ * behind the unhealthy-gateway repair flow.
+ */
+export async function maybeRepairMacGatewayServiceEnvQuotes(params: {
+  prompter: DoctorPrompter;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  noteFn?: typeof note;
+}): Promise<void> {
+  if ((params.platform ?? process.platform) !== "darwin") {
+    return;
+  }
+  const env = params.env ?? process.env;
+  const noteFn = params.noteFn ?? note;
+  const labels = [...new Set([resolveLaunchAgentLabel(env), resolveNodeLaunchAgentLabel()])];
+  for (const label of labels) {
+    const detected = await detectLaunchAgentEnvFileJsonQuoteKeys(env, label).catch(() => null);
+    if (!detected) {
+      continue;
+    }
+    const keyList = detected.keys.join(", ");
+    noteFn(
+      [
+        `- ${shortenHomePath(detected.envFilePath)} has ${detected.keys.length} value(s) wrapped in literal double quotes (${keyList}).`,
+        "- This is the #103804 serialization corruption; the quotes reach consumers as data and break them (e.g. AWS region validation).",
+        `- ${formatCliCommand("openclaw doctor --fix")} rewrites these entries without the wrapping quotes.`,
+      ].join("\n"),
+      "Gateway service env",
+    );
+    if (
+      !(await confirmDoctorServiceRepair(params.prompter, {
+        message: `Rewrite ${detected.keys.length} quote-corrupted value(s) in ${shortenHomePath(detected.envFilePath)} now?`,
+        initialValue: true,
+      }))
+    ) {
+      continue;
+    }
+    const repaired = await repairLaunchAgentEnvFileJsonQuotes(env, label).catch(() => null);
+    if (!repaired) {
+      noteFn("Generated service env repair made no changes.", "Gateway service env");
+      continue;
+    }
+    const inheritedCorruptKeys = repaired.healedKeys.filter((key) => {
+      const value = env[key];
+      return typeof value === "string" && value.startsWith('"') && value.endsWith('"');
+    });
+    noteFn(
+      [
+        `Rewrote ${repaired.healedKeys.length} value(s) (${repaired.healedKeys.join(", ")}).`,
+        `Restart the gateway service (${formatCliCommand("openclaw gateway restart")}) so the healed values take effect.`,
+        ...(inheritedCorruptKeys.length > 0
+          ? [
+              `This shell still carries the corrupted value(s) for ${inheritedCorruptKeys.join(", ")}; start a fresh shell before reinstalling the service or they will be persisted again.`,
+            ]
+          : []),
+      ].join("\n"),
+      "Gateway service env",
+    );
   }
 }
 

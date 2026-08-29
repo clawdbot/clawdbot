@@ -37,6 +37,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     maybeScanExtraGatewayServices,
   } = await import("../commands/doctor-gateway-services.js");
   const {
+    maybeRepairMacGatewayServiceEnvQuotes,
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
@@ -61,6 +62,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
+  await maybeRepairMacGatewayServiceEnvQuotes({ prompter: ctx.prompter });
 }
 
 export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
