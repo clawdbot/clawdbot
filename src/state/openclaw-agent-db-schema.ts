@@ -48,6 +48,7 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
   hasPendingSessionConversationRouteContextColumn,
+  hasPendingSessionTranscriptContextEligibilityColumn,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
@@ -531,6 +532,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       hasPendingSessionKeyContractSchemaMigration(database) ||
       hasRetiredAgentStateLeaseSchema(database) ||
       hasPendingSessionConversationRouteContextColumn(database) ||
+      hasPendingSessionTranscriptContextEligibilityColumn(database) ||
       hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {

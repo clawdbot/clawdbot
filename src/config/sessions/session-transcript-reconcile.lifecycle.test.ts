@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -14,7 +15,9 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   reconcileSessionTranscriptIndexes,
+  startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
@@ -94,6 +97,112 @@ async function waitForCurrentProjection(databasePath: string, sessionId: string)
 }
 
 describe("session transcript reconcile worker lifecycle", () => {
+  it("resolves one session before unrelated projection repair completes", async () => {
+    const stateDir = tempDirs.make("openclaw-active-transcript-");
+    const scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      sessionId: "active-transcript-test",
+      sessionKey: "agent:main:active-transcript-test",
+    };
+    try {
+      const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
+      for (const target of [scope, secondScope]) {
+        await persistSessionTranscriptTurn(target, {
+          messages: [
+            {
+              eventId: `${target.sessionId}-seed`,
+              parentId: null,
+              message: { role: "user", content: target.sessionId },
+            },
+          ],
+          touchSessionEntry: false,
+        });
+      }
+      const databaseOptions = { agentId: scope.agentId, env: scope.env };
+      const database = openOpenClawAgentDatabase(databaseOptions);
+      const markDirty = database.db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      );
+      markDirty.run(scope.sessionId);
+      markDirty.run(secondScope.sessionId);
+
+      const targetCommitted = createDeferred();
+      let releaseAcknowledgement: (() => void) | undefined;
+      let released = false;
+      startSessionTranscriptIndexReconcile({
+        ...databaseOptions,
+        preferredSessionId: scope.sessionId,
+        createWorker: (filename, options) => {
+          const worker = new Worker(filename, options);
+          const postMessage = worker.postMessage.bind(worker);
+          let finishingTarget = false;
+          worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
+            finishingTarget =
+              message.type === "plan-finish" && message.sessionId === scope.sessionId;
+          });
+          // Finalization commits before this ACK. Hold the real worker here instead
+          // of using thousands of writes to race its next session against a polling waiter.
+          worker.postMessage = (message: unknown, transferList) => {
+            if (finishingTarget && !released) {
+              finishingTarget = false;
+              releaseAcknowledgement = () => postMessage(message, transferList);
+              targetCommitted.resolve();
+              return;
+            }
+            postMessage(message, transferList);
+          };
+          return worker;
+        },
+      });
+      let allReconciled = false;
+      const allReconciliation = waitForSessionTranscriptIndexReconcile(databaseOptions).then(() => {
+        allReconciled = true;
+      });
+      let targetOutcome: { ready: true } | { error: unknown } | undefined;
+      const targetReconciliation = waitForSessionTranscriptProjection(scope).then(
+        () => {
+          targetOutcome = { ready: true };
+        },
+        (error: unknown) => {
+          targetOutcome = { error };
+        },
+      );
+
+      try {
+        await Promise.race([
+          targetCommitted.promise,
+          allReconciliation.then(() => {
+            throw new Error("reconciliation completed without the target acknowledgement gate");
+          }),
+        ]);
+        expect(
+          database.db
+            .prepare(
+              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+            )
+            .get(scope.sessionId),
+        ).toEqual({ needs_rebuild: 0 });
+        await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
+        expect(allReconciled).toBe(false);
+        expect(
+          database.db
+            .prepare(
+              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+            )
+            .get(secondScope.sessionId),
+        ).toEqual({ needs_rebuild: 1 });
+      } finally {
+        released = true;
+        releaseAcknowledgement?.();
+        await Promise.all([targetReconciliation, allReconciliation]);
+      }
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+    }
+  }, 30_000);
+
   it.each([
     { expectedTerminal: "done" as const, failAfterFirstPlan: false },
     { expectedTerminal: "failed" as const, failAfterFirstPlan: true },

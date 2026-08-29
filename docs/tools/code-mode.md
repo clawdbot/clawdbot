@@ -1095,9 +1095,11 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
-Nested calls project into the transcript as real tool calls so support
-bundles show what happened, with the projection identifying the parent
-code-mode tool call and the nested tool id.
+Completed nested calls persist as bounded, redacted display-only activity, retaining
+their original parent and invocation ids across history reloads. Provider replay
+contains only the actual model calls; child activity adds no synthetic model turns.
+Starts and partial updates remain transient. Older missing child history cannot be
+reconstructed from source code or outer results.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool

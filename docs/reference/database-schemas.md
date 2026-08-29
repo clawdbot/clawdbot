@@ -45,6 +45,25 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+Transcript context eligibility uses a bare nullable
+`session_transcript_active_events.context_eligible INTEGER` column without
+changing agent schema 18. Database open installs the column and a non-unique
+partial index of unclassified rows. `1` includes an entry in bounded context
+acquisition, `0` excludes display-only activity, and `NULL` means the projection
+still needs reconciliation. Bootstrap control markers remain eligible; history
+counts, positions, and cursors do not change. Raw transcript JSON stays canonical.
+
+Older same-version writers can append or rebuild without supplying eligibility.
+The existing transcript reconciler detects their `NULL` rows even when its
+sequence watermark is current, then rebuilds from raw events before publishing
+readiness. Readers return a retryable projection-unavailable result while this
+work is pending; they do not parse every payload or guess eligibility. Initial
+index creation scans projection metadata once, and startup awaits reconciliation
+with off-thread parsing and bounded write chunks. Total rebuild cost remains
+proportional to history. Rewrites invalidate or rebuild the projection in their
+own transaction, and transcript deletion removes its eligibility rows. Downgrade
+leaves the additive column and index intact; re-upgrade reconciles unknown rows.
+
 User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
 column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database

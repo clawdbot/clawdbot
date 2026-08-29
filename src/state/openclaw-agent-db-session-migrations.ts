@@ -272,6 +272,11 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
+  if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
+    // NULL records an older writer's unclassified projection; the transcript
+    // reconcile owner fills it without parsing payloads during schema open.
+    db.exec("ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible INTEGER;");
+  }
   const columns = readSqliteTableColumns(db, "session_nodes");
   if (columns && !columns.has("project_id")) {
     db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
@@ -301,6 +306,11 @@ export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
 export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync): boolean {
   const columns = readSqliteTableColumns(db, "session_conversations");
   return Boolean(columns && !columns.has("route_context_json"));
+}
+
+export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_transcript_active_events");
+  return Boolean(columns && !columns.has("context_eligible"));
 }
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */

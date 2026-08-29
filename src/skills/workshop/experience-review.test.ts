@@ -5,6 +5,10 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import {
+  createNestedToolActivity,
+  projectNestedToolActivityForHooks,
+} from "../../sessions/nested-tool-activity.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -130,6 +134,39 @@ describe("skill experience review scheduler", () => {
       }),
     );
     expect(runReview.mock.calls[0]?.[0]).not.toHaveProperty("transcript");
+    scheduler.clear();
+  });
+
+  it("does not count nested tool activity as model iterations", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+    const run = completedRun({ messages: 2 });
+    const activities = Array.from({ length: 8 }, (_, index) =>
+      createNestedToolActivity({
+        runId: "run-1",
+        scopeId: "scope-1",
+        afterEntryId: null,
+        startOrder: index,
+        parentToolCallId: "outer-exec",
+        toolCallId: `nested-${index}`,
+        toolName: "read",
+        input: {},
+        result: { content: [{ type: "text", text: "file contents" }] },
+        isError: false,
+        startedAt: index,
+        timestamp: index + 1,
+      }),
+    );
+    run.event.messages = projectNestedToolActivityForHooks(run.event.messages, activities);
+
+    scheduler.schedule(run);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
 

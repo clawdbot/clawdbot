@@ -10,13 +10,16 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
-import { buildSessionContext, type SessionTreeEntry } from "../runtime/index.js";
-import type { SessionHeader, SessionMessageEntry } from "../sessions/session-manager.js";
+import {
+  buildSessionContext,
+  SessionManager,
+  type SessionEntry,
+  type SessionMessageEntry,
+} from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
 
 /** Maximum transcript size read for CLI session history. */
@@ -249,23 +252,20 @@ export function buildCliSessionHistoryPrompt(params: {
 
 async function loadCliSessionEntries({
   sessionTarget,
-}: CliSessionHistoryParams): Promise<SessionTreeEntry[]> {
+}: CliSessionHistoryParams): Promise<SessionEntry[]> {
   if (!sessionTarget) {
     return [];
   }
   await waitForSessionTranscriptProjection(sessionTarget);
-  const context = readSessionTranscriptBoundedActiveContextCore(sessionTarget, {
+  // Normalize bounded cuts with opaque ancestry before rebuilding CLI context.
+  return SessionManager.openBounded(sessionTarget, {
     maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
     maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
-  });
-  if (context.truncated) {
-    cliBackendLog.warn(
-      `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
-    );
-  }
-  // SAFETY: The canonical accessor returns persisted events on the active branch.
-  const entries = context.events as (SessionTreeEntry | SessionHeader)[];
-  return entries.filter((entry) => entry.type !== "session");
+    onTruncated: () =>
+      cliBackendLog.warn(
+        `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
+      ),
+  }).getBranch();
 }
 
 /** Checks whether the canonical session has persisted transcript events. */
@@ -310,7 +310,7 @@ export async function loadCliSessionContextEngineMessages(
     (entry) => entry.type === "compaction" || entry.type === "reset",
   );
   if (boundary?.type === "compaction" && messages[0]?.role === "compactionSummary") {
-    // Context engines also receive the persisted compaction metadata, not just rendered summary text.
+    // Preserve compaction metadata with the normalized retained cut, not just summary text.
     return [
       {
         ...messages[0],
@@ -334,18 +334,16 @@ export async function loadCliSessionReseedMessages(
 ): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   // Persistence timestamps, rather than provider timestamps, describe recovered history.
-  const reseedEntries: SessionTreeEntry[] = [];
-  for (const entry of entries) {
-    reseedEntries.push(
+  const reseedEntries = entries.map(
+    (entry): SessionEntry =>
       entry.type === "message"
         ? { ...entry, message: { ...entry.message, timestamp: Date.parse(entry.timestamp) } }
         : entry,
-    );
-  }
-  const historyMessages = [];
-  for (const message of buildSessionContext(reseedEntries).messages) {
-    historyMessages.push({ ...message, timestamp: timestampMsToIsoString(message.timestamp) });
-  }
+  );
+  const historyMessages = buildSessionContext(reseedEntries).messages.map((message) => ({
+    ...message,
+    timestamp: timestampMsToIsoString(message.timestamp),
+  }));
   const summary = historyMessages[0];
   const hasSummary = summary?.role === "compactionSummary" && summary.summary.trim().length > 0;
   if (

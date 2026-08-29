@@ -1,17 +1,22 @@
 import { expect, it, vi } from "vitest";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { persistSessionTranscriptTurn, readTranscriptStatsSync } from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   readSessionTranscriptActiveStats,
-  readSessionTranscriptBoundedActiveContextCore,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptVisibleMessageDeltaCore,
 } from "./session-accessor.sqlite-active-events.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
+import {
+  shouldRebuildSessionTranscriptIndexSynchronously,
+  SYNC_REBUILD_MAX_BYTES,
+} from "./session-transcript-index.js";
 
 type SqliteInstruction = {
   opcode: string;
@@ -20,9 +25,19 @@ type SqliteInstruction = {
   p5: number;
 };
 
-const readers: Array<[string, (scope: SessionTranscriptReadScope) => unknown]> = [
+const readers: Array<
+  [string, (scope: SessionTranscriptReadScope & { agentId: string }) => unknown]
+> = [
   ["usage stats", readTranscriptStatsSync],
   ["active stats", readSessionTranscriptActiveStats],
+  [
+    "rebuild preflight",
+    (scope) =>
+      shouldRebuildSessionTranscriptIndexSynchronously(
+        openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env }).db,
+        scope.sessionId,
+      ),
+  ],
   ["raw delta", (scope) => readTranscriptRawDelta(scope, { maxBytes: 1024 })],
   [
     "visible delta",
@@ -64,7 +79,18 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     await persistSessionTranscriptTurn(scope, {
       messages: [
         { eventId: "large", parentId: null, message: { role: "user", content: "🦞".repeat(4096) } },
-        { eventId: "small", parentId: "large", message: { role: "assistant", content: "done" } },
+        {
+          eventId: "display",
+          parentId: "large",
+          message: {
+            role: "custom",
+            customType: "activity",
+            excludeFromContext: true,
+            display: true,
+            content: "🦞".repeat(4096),
+          },
+        },
+        { eventId: "small", parentId: "display", message: { role: "assistant", content: "done" } },
       ],
       touchSessionEntry: false,
     });
@@ -82,12 +108,24 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     clearNodeSqliteKyselyCacheForDatabase(db);
     const prepare = db.prepare.bind(db);
     const sizingQueries: string[] = [];
+    const readinessQueries: string[] = [];
     const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       if (
-        statement.columns().some(({ name }) => name === "size_bytes" || name === "serialized_bytes")
+        statement
+          .columns()
+          .some(
+            ({ name }) =>
+              name === "size_bytes" || name === "serialized_bytes" || name === "event_bytes",
+          )
       ) {
         sizingQueries.push(query);
+      }
+      if (
+        query.includes("context_eligible") &&
+        statement.columns().some(({ name }) => name === "session_id")
+      ) {
+        readinessQueries.push(query);
       }
       return statement;
     });
@@ -98,6 +136,19 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     }
 
     expect(sizingQueries.length).toBeGreaterThan(0);
+    if (_name === "active stats" || _name === "active context") {
+      expect(readinessQueries.length).toBeGreaterThan(0);
+    }
+    for (const query of readinessQueries) {
+      const plan = prepare(`EXPLAIN QUERY PLAN ${query}`).all();
+      expect(plan.map((row) => row.detail).join("\n")).toContain(
+        "idx_agent_transcript_context_pending",
+      );
+      const instructions = prepare(`EXPLAIN ${query}`).all() as SqliteInstruction[];
+      expect(instructions.some((op) => op.opcode === "OpenRead" && op.p2 === table?.rootpage)).toBe(
+        false,
+      );
+    }
     for (const query of sizingQueries) {
       const instructions = prepare(`EXPLAIN ${query}`).all() as SqliteInstruction[];
       const transcriptCursors = new Set(
@@ -115,3 +166,32 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     }
   });
 });
+
+it.each(["incoming", "stored"])(
+  "defers a rebuild when %s UTF-8 bytes exceed the synchronous budget",
+  (source) => {
+    const db = openNodeSqliteDatabase(":memory:");
+    try {
+      db.exec("CREATE TABLE transcript_events (session_id TEXT, event_json TEXT)");
+      const event = { message: { role: "user", content: "🦞".repeat(SYNC_REBUILD_MAX_BYTES / 4) } };
+      const serialized = JSON.stringify(event);
+      expect(serialized.length).toBeLessThan(SYNC_REBUILD_MAX_BYTES);
+      expect(Buffer.byteLength(serialized)).toBeGreaterThan(SYNC_REBUILD_MAX_BYTES);
+      expect(
+        shouldRebuildSessionTranscriptIndexSynchronously(db, "budget", [{ message: "small" }]),
+      ).toBe(true);
+      if (source === "stored") {
+        db.prepare("INSERT INTO transcript_events VALUES (?, ?)").run("budget", serialized);
+      }
+      expect(
+        shouldRebuildSessionTranscriptIndexSynchronously(
+          db,
+          "budget",
+          source === "incoming" ? [event] : [],
+        ),
+      ).toBe(false);
+    } finally {
+      db.close();
+    }
+  },
+);

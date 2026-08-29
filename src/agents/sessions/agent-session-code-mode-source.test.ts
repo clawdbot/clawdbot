@@ -19,6 +19,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { isCodeModeExecTool } from "../code-mode-control-tools.js";
@@ -26,7 +27,6 @@ import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { projectToolSearchTargetTranscriptMessages } from "../tool-search-transcript.js";
 import { registerHeadlessToolSearchCatalog } from "../tool-search.js";
 import { wrapStreamFnCodeModeSource } from "../transcript-code-mode-source.js";
 import {
@@ -665,24 +665,27 @@ describe("AgentSession runtime and transcript projections", () => {
         }
         session.dispose();
       }
-      const nested = projectToolSearchTargetTranscriptMessages(
-        [],
-        [
-          {
-            toolCallId: "nested_shell",
-            toolName: "exec",
-            parentToolCallId: "reused_id",
-            input: {
-              command: source,
-              code: source,
-              nested: { code: source },
-              toolKind: "code_mode_exec",
-            },
-            result: { content: [{ type: "text", text: source }], details: {} },
-            isError: false,
+      const nested = [
+        createNestedToolActivity({
+          runId: "run-test",
+          scopeId: "scope-test",
+          afterEntryId: null,
+          startOrder: 0,
+          toolCallId: "nested_shell",
+          toolName: "exec",
+          parentToolCallId: "reused_id",
+          input: {
+            command: source,
+            code: source,
+            nested: { code: source },
+            toolKind: "code_mode_exec",
           },
-        ],
-      );
+          result: { content: [{ type: "text", text: source }], details: {} },
+          isError: false,
+          startedAt: 1,
+          timestamp: 2,
+        }),
+      ];
       const messages = nested.map((message, index) => ({
         message: { ...message, idempotencyKey: `batch_${index}` },
         eventId: `batch_${index}`,
@@ -700,23 +703,23 @@ describe("AgentSession runtime and transcript projections", () => {
         ),
       ).toBe(true);
       const replay = SessionManager.open(scope, dir).buildSessionContext().messages;
-      expect(replay.at(-2)).toMatchObject({
-        role: "assistant",
-        content: [
-          {
-            id: "nested_shell",
-            arguments: {
+      expect(replay.some((message) => message.role === "custom")).toBe(false);
+      const storedActivity = SessionManager.open(scope, dir).getBranch().at(-1);
+      expect(storedActivity).toMatchObject({
+        message: {
+          details: {
+            toolCallId: "nested_shell",
+            parentToolCallId: "reused_id",
+            input: {
               command: expect.not.stringContaining("API_TOKEN = computeToken()"),
               code: expect.not.stringContaining("API_TOKEN = computeToken()"),
               nested: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
             },
+            result: {
+              content: [{ text: expect.not.stringContaining("API_TOKEN = computeToken()") }],
+            },
           },
-        ],
-      });
-      expect(replay.at(-1)).toMatchObject({
-        role: "toolResult",
-        toolCallId: "nested_shell",
-        content: [{ text: source }],
+        },
       });
     } finally {
       resetCodeModeTestState();

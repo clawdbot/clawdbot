@@ -2059,7 +2059,7 @@ src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	4
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
-src/agents/tool-search-transcript.ts	3
+src/agents/tool-search-transcript.ts	1
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
@@ -3035,7 +3035,7 @@ src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
 src/gateway/session-utils-search.ts	1
-src/gateway/session-utils.fs.ts	10
+src/gateway/session-utils.fs.ts	2
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
