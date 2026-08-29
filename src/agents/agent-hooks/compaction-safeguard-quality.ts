@@ -146,6 +146,11 @@ function parsePendingUserAskSections(summary: string): string[] {
     .map((section) => section.split(/^##[ \t]+\S.*$/mu, 1)[0]?.trim() ?? "");
 }
 
+function extractLeadingPendingAskLine(summary: string): string {
+  const pendingAskSection = parsePendingUserAskSections(summary).at(-1) ?? "";
+  return pendingAskSection.split(/\r?\n/u).find((line) => line.trim().length > 0) ?? "";
+}
+
 /**
  * Plan truncation that keeps the audit facts and lets everything else shrink.
  * Only the headings, the bounded latest-ask context, and the audited source
@@ -171,10 +176,6 @@ export function createSummaryQualityRetentionPlan(
     return null;
   }
   const enforceIdentifiers = (params.identifierPolicy ?? "strict") === "strict";
-  const auditSummary = params.auditSummary ?? summary;
-  if (!hasAskOverlap(auditSummary, params.latestAsk)) {
-    return null;
-  }
   const requiredAskContext = params.requiredAskContext?.trim() ?? "";
   const auditedIdentifiers = enforceIdentifiers ? params.identifiers : [];
   const marker = truncatedMarker.trim();
@@ -194,6 +195,10 @@ export function createSummaryQualityRetentionPlan(
   const bodyHasIdentifiers = auditedIdentifiers.every((identifier) =>
     summaryIncludesIdentifier(summary, identifier),
   );
+  const bodyHasRequiredAskContext = !requiredAskContext || summary.includes(requiredAskContext);
+  const bodyHasCanonicalAsk = params.latestAskCompleted
+    ? bodyHasRequiredAskContext
+    : hasAskOverlap(extractLeadingPendingAskLine(summary), params.latestAsk);
   const renderSections = (sectionContents: string[]) =>
     REQUIRED_SUMMARY_SECTIONS.map((heading, index) => {
       const content = sectionContents[index];
@@ -204,8 +209,13 @@ export function createSummaryQualityRetentionPlan(
     if (!tail) {
       return optional;
     }
-    if (index === PENDING_ASK_SECTION_INDEX && optional.includes(tail)) {
-      return optional;
+    if (index === PENDING_ASK_SECTION_INDEX) {
+      const leadingAsk = extractLeadingPendingAskLine(
+        `${REQUIRED_SUMMARY_SECTIONS[PENDING_ASK_SECTION_INDEX]}\n${optional}`,
+      );
+      return hasAskOverlap(leadingAsk, params.latestAsk)
+        ? optional
+        : [tail, optional].filter(Boolean).join("\n");
     }
     if (index === EXACT_IDENTIFIERS_SECTION_INDEX) {
       const missing = auditedIdentifiers.filter(
@@ -238,12 +248,12 @@ export function createSummaryQualityRetentionPlan(
 
   return {
     minimumChars: minimumSummary.length,
-    needsRebuild: (maxChars) => !bodyHasIdentifiers || !protectedWithinCap(maxChars),
+    needsRebuild: (maxChars) =>
+      !bodyHasIdentifiers || !bodyHasCanonicalAsk || !protectedWithinCap(maxChars),
     render(maxChars) {
-      const bodyHasRequiredAskContext = !requiredAskContext || summary.includes(requiredAskContext);
       if (
         summary.length <= maxChars &&
-        bodyHasRequiredAskContext &&
+        bodyHasCanonicalAsk &&
         bodyHasIdentifiers &&
         protectedWithinCap(maxChars)
       ) {
@@ -438,7 +448,17 @@ export function auditSummaryQuality(params: {
       reasons.push(`missing_identifiers:${missingIdentifiers.slice(0, 3).join(",")}`);
     }
   }
-  if (!hasAskOverlap(params.summary, params.latestAsk)) {
+  if (!params.latestAskCompleted) {
+    const pendingAskSections = parsePendingUserAskSections(params.structuralSummary);
+    const pendingAsks = pendingAskSections.at(-1) ?? "";
+    if (!hasAskOverlap(pendingAsks, params.latestAsk)) {
+      reasons.push("latest_user_ask_not_reflected");
+    } else if (
+      !hasAskOverlap(extractLeadingPendingAskLine(params.structuralSummary), params.latestAsk)
+    ) {
+      reasons.push("latest_user_ask_not_leading_in_pending_asks");
+    }
+  } else if (!hasAskOverlap(params.summary, params.latestAsk)) {
     reasons.push("latest_user_ask_not_reflected");
   }
   if (params.latestAskCompleted) {

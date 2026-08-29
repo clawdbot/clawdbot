@@ -725,7 +725,7 @@ describe("compaction-safeguard summary budgets", () => {
 
     expect(finalized.summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(finalized.structuralSummary).toContain(
-      `## Pending user asks\nContinue the active work.\n${latestAsk}`,
+      `## Pending user asks\n${latestAsk}\nContinue the active work.`,
     );
     expect(
       auditSummaryQuality({ summary: finalized.summary, identifiers: [identifier], latestAsk }).ok,
@@ -1457,6 +1457,32 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(quality.ok).toBe(false);
     expect(quality.reasons).toContain("missing_section:## Decisions");
+  });
+
+  it("rejects a superseded task foregrounded ahead of the latest pending ask", () => {
+    const latestAsk = "diagnose why the scheduled session reset did not occur";
+    const quality = auditSummaryQuality({
+      summary: [
+        "## Decisions",
+        `The user switched to: ${latestAsk}.`,
+        "## Open TODOs",
+        "Continue removing the retired agents.",
+        "## Constraints/Rules",
+        "Preserve unrelated work.",
+        "## Pending user asks",
+        "Remove the retired agents.",
+        latestAsk,
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+      identifiers: [],
+      latestAsk,
+    });
+
+    expect(quality).toEqual({
+      ok: false,
+      reasons: ["latest_user_ask_not_leading_in_pending_asks"],
+    });
   });
 
   it("does not enforce identifier retention when policy is off", () => {
