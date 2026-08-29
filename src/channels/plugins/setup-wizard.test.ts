@@ -151,7 +151,7 @@ function createConfigure() {
 
 describe("channel setup wizard account scoping", () => {
   it.each([{}, { enabled: true }])(
-    "scopes the first named legacy account without inventing an empty default: %j",
+    "preserves the empty default identity when scoping the first named legacy account: %j",
     async (root) => {
       const queued = createQueuedWizardPrompter({
         selectValues: ["__new__"],
@@ -167,62 +167,67 @@ describe("channel setup wizard account scoping", () => {
       expect(result.accountId).toBe("ada");
       expect(result.cfg.channels?.demo).toEqual({
         ...root,
-        accounts: { ada: { botId: "ada-bot", secret: "ada-secret" } },
+        accounts: { default: {}, ada: { botId: "ada-bot", secret: "ada-secret" } },
       });
     },
   );
 
-  it("preserves an owned root through declarative guided account setup", async () => {
-    const root = { botId: "root-bot", secret: "root-secret", name: "Root" };
-    const plugin = createLegacyPlugin();
-    plugin.setupContract = defineChannelSetupContract({
-      fields: {
-        token: { kind: "string", cli: { flags: "--token <token>", description: "Bot ID" } },
-        useEnv: { kind: "boolean", cli: { flags: "--use-env", description: "Use environment" } },
-      },
-      adapter: {
-        configPromotion: "preserve-root",
-        applyAccountConfig: ({ cfg, accountId, input }) =>
-          patchScopedAccountConfig({
-            cfg,
-            channelKey: "demo",
-            accountId,
-            patch: { botId: input.token },
-            ensureAccountEnabled: false,
-            ensureChannelEnabled: false,
+  it.each([{ botId: "root-bot", secret: "root-secret", name: "Root" }, {}, { enabled: true }])(
+    "preserves an owned root through declarative guided account setup: %j",
+    async (root) => {
+      const plugin = createLegacyPlugin();
+      plugin.setupContract = defineChannelSetupContract({
+        fields: {
+          token: { kind: "string", cli: { flags: "--token <token>", description: "Bot ID" } },
+          useEnv: { kind: "boolean", cli: { flags: "--use-env", description: "Use environment" } },
+        },
+        adapter: {
+          configPromotion: "preserve-root",
+          applyAccountConfig: ({ cfg, accountId, input }) =>
+            patchScopedAccountConfig({
+              cfg,
+              channelKey: "demo",
+              accountId,
+              patch: { botId: input.token },
+              ensureAccountEnabled: false,
+              ensureChannelEnabled: false,
+            }),
+        },
+      });
+      const wizard = createLegacyWizard();
+      wizard.credentials = [
+        {
+          ...wizard.credentials[0]!,
+          inspect: ({ cfg, accountId }) => ({
+            accountConfigured: Boolean(
+              getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
+            ),
+            hasConfiguredValue: Boolean(
+              getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
+            ),
           }),
-      },
-    });
-    const wizard = createLegacyWizard();
-    wizard.credentials = [
-      {
-        ...wizard.credentials[0]!,
-        inspect: ({ cfg, accountId }) => ({
-          accountConfigured: Boolean(
-            getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
-          ),
-          hasConfiguredValue: Boolean(
-            getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
-          ),
-        }),
-        applySet: undefined,
-      },
-    ];
-    const queued = createQueuedWizardPrompter({
-      selectValues: ["__new__"],
-      textValues: ["ada", "ada-bot"],
-    });
-    const result = await runSetupWizardConfigure({
-      configure: buildChannelSetupWizardAdapterFromSetupWizard({ plugin, wizard }).configure,
-      cfg: { channels: { demo: root } } as OpenClawConfig,
-      prompter: queued.prompter,
-      shouldPromptAccountIds: true,
-      options: { secretInputMode: "plaintext" as const },
-    });
-    expect(result.accountId).toBe("ada");
-    expect(result.cfg.channels?.demo).toEqual({ ...root, accounts: { ada: { botId: "ada-bot" } } });
-    expect(queued.confirm).not.toHaveBeenCalled();
-  });
+          applySet: undefined,
+        },
+      ];
+      const queued = createQueuedWizardPrompter({
+        selectValues: ["__new__"],
+        textValues: ["ada", "ada-bot"],
+      });
+      const result = await runSetupWizardConfigure({
+        configure: buildChannelSetupWizardAdapterFromSetupWizard({ plugin, wizard }).configure,
+        cfg: { channels: { demo: root } } as OpenClawConfig,
+        prompter: queued.prompter,
+        shouldPromptAccountIds: true,
+        options: { secretInputMode: "plaintext" as const },
+      });
+      expect(result.accountId).toBe("ada");
+      expect(result.cfg.channels?.demo).toEqual({
+        ...root,
+        accounts: { ada: { botId: "ada-bot" } },
+      });
+      expect(queued.confirm).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not prefill or overwrite the existing account when adding a new account", async () => {
     const main = {

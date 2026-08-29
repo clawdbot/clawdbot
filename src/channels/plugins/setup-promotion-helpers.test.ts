@@ -23,10 +23,18 @@ vi.mock("./registry-loaded.js", () => ({
 }));
 
 import { resolveDiscoveredChannelSetupPromotionSurface } from "./setup-promotion-discovery.js";
-import {
-  resolveSingleAccountKeysToMove,
-  resolveSingleAccountPromotion,
-} from "./setup-promotion-helpers.js";
+import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
+
+function resolveSingleAccountKeysToMove(
+  params: Parameters<typeof resolveSingleAccountPromotion>[0],
+): string[] {
+  const promotion = resolveSingleAccountPromotion(params);
+  expect(promotion.kind).toBe("promote");
+  if (promotion.kind !== "promote") {
+    throw new Error("Expected ordinary account promotion");
+  }
+  return promotion.keysToMove;
+}
 
 const legacyCommonKeys = [
   "accessToken",
@@ -94,25 +102,31 @@ describe("setup promotion helpers", () => {
     expect(getBundledChannelSetupPluginMock).not.toHaveBeenCalled();
   });
 
-  it.each(["caller", "loaded", "discovered"])(
-    "honors explicit preserve-root from the %s surface before generic fields",
+  describe.each(["caller", "loaded", "discovered"])(
+    "explicit preserve-root from the %s surface",
     (source) => {
-      const surface = { configPromotion: "preserve-root" as const };
-      if (source === "loaded") {
-        getLoadedChannelPluginMock.mockReturnValue({ setupContract: surface });
-      }
-      resolveBundledSurfaceMock.mockReturnValue(surface);
-      expect(
-        resolveSingleAccountPromotion({
-          channelKey: "demo",
-          channel: { name: "Root", groupPolicy: "allowlist", accounts: { ada: {} } },
-          ...(source === "caller" ? { setupSurface: surface } : {}),
-          resolveBundledSurface: resolveBundledSurfaceMock,
-        }),
-      ).toEqual({ keysToMove: [], shouldDeferPromotion: false });
-      if (source !== "discovered") {
-        expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
-      }
+      it.each([
+        { name: "Root", groupPolicy: "allowlist", accounts: { ada: {} } },
+        { enabled: true },
+        { enabled: true, accounts: {} },
+      ])("preserves the owned root including an empty promotion key set: %j", (channel) => {
+        const surface = { configPromotion: "preserve-root" as const };
+        if (source === "loaded") {
+          getLoadedChannelPluginMock.mockReturnValue({ setupContract: surface });
+        }
+        resolveBundledSurfaceMock.mockReturnValue(surface);
+        expect(
+          resolveSingleAccountPromotion({
+            channelKey: "demo",
+            channel,
+            ...(source === "caller" ? { setupSurface: surface } : {}),
+            resolveBundledSurface: resolveBundledSurfaceMock,
+          }),
+        ).toEqual({ kind: "preserve-root" });
+        if (source !== "discovered") {
+          expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+        }
+      });
     },
   );
 

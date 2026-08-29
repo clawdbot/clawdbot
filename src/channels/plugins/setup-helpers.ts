@@ -5,7 +5,7 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { resolveSingleAccountKeysToMove } from "./setup-promotion-helpers.js";
+import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -373,13 +373,18 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
 
   const accounts = base.accounts ?? {};
   const hasAccounts = Object.keys(accounts).length > 0;
-  const keysToMove = resolveSingleAccountKeysToMove({
+  const promotion = resolveSingleAccountPromotion({
     channelKey: params.channelKey,
     channel: base,
     setupSurface: params.setupSurface,
     includeSetupKeys: true,
   });
-  if (keysToMove.length === 0) {
+  if (promotion.kind === "preserve-root") {
+    return params.cfg;
+  }
+  const { keysToMove } = promotion;
+  // Preserve the default identity for env-only single-account configurations.
+  if (hasAccounts && keysToMove.length === 0) {
     return params.cfg;
   }
   const targetAccountId = hasAccounts

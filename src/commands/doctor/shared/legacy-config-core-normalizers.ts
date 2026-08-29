@@ -156,6 +156,9 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
       channel: rawChannel,
       resolveBundledSurface: (key) => resolveDiscoveredChannelSetupPromotionSurface(key, cfg),
     });
+    if (promotion.kind === "preserve-root") {
+      continue;
+    }
     // Defer only undeclared keys outside generic + legacy coverage. A partial
     // accounts.default would make later runs skip and permanently strand them at root.
     if (promotion.shouldDeferPromotion) {
