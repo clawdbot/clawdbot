@@ -212,6 +212,7 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
+    measureLaunchTurn: vi.fn(),
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
