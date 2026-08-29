@@ -65,6 +65,7 @@ export type ToolTranscriptCallInput = {
   id: string;
   name: string;
   arguments?: unknown;
+  hideFromChannelProgress?: boolean;
 };
 
 export type ToolTranscriptResultInput = {
@@ -391,11 +392,14 @@ export class CodexToolProgressProjection {
 
   recordTranscriptCall(params: ToolTranscriptCallInput): void {
     this.transcriptArgumentsById.set(params.id, params.arguments);
-    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+    if (
+      params.hideFromChannelProgress === true ||
+      !shouldEmitTranscriptToolProgress(params.name, params.arguments)
+    ) {
       this.transcriptProgressSuppressedIds.add(params.id);
-    } else {
-      this.transcriptProgressSuppressedIds.delete(params.id);
+      return;
     }
+    this.transcriptProgressSuppressedIds.delete(params.id);
     this.emitTranscriptToolCallProgress(params);
   }
 

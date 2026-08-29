@@ -209,11 +209,17 @@ export class CodexToolTranscriptProjection {
     return toolApprovalReviewOutcome(state);
   }
 
-  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+  recordDynamicToolCall(params: {
+    callId: string;
+    tool: string;
+    arguments?: JsonValue;
+    hideFromChannelProgress?: boolean;
+  }): void {
     this.recordToolCall({
       id: params.callId,
       name: params.tool,
       arguments: sanitizeCodexToolArguments(params.arguments),
+      ...(params.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     });
   }
 

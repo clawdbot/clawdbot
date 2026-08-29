@@ -1853,7 +1853,10 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     const onRunAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
     params.onAgentEvent = onRunAgentEvent;
+    params.onToolResult = onToolResult;
+    params.verboseLevel = "on";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
@@ -1898,6 +1901,9 @@ describe("runCodexAppServerAttempt", () => {
     for (const toolEvent of toolEvents.filter((event) => event.data?.name === "visible_widget")) {
       expect(toolEvent.data).not.toHaveProperty("hideFromChannelProgress");
     }
+    const toolResultTexts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
+    expect(toolResultTexts.filter((text) => text.includes("Hidden Widget"))).toHaveLength(0);
+    expect(toolResultTexts.filter((text) => text.includes("Visible Widget"))).toHaveLength(1);
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
