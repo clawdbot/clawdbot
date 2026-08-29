@@ -23,6 +23,7 @@ import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-ou
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
+import { withRecentHistoryImageNotes } from "./history-media.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
@@ -316,7 +317,7 @@ export async function runCliFallbackCandidate(
             cwd: turn.followupRun.run.cwd,
             config: params.runtimeConfig,
             toolOverrides: turn.followupRun.run.toolOverrides,
-            prompt: turn.commandBody,
+            prompt: withRecentHistoryImageNotes(turn.commandBody, params.currentTurnImages),
             transcriptPrompt: turn.transcriptCommandBody,
             media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,

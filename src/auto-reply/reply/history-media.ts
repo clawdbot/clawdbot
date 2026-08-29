@@ -131,3 +131,13 @@ export function appendRecentHistoryImageContext(params: {
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
 }
+
+/** Attach inherited-image provenance to a turn prompt so the model can place them. */
+export function withRecentHistoryImageNotes(
+  prompt: string,
+  images: { historyImageNotes?: string },
+): string {
+  return images.historyImageNotes
+    ? [prompt, images.historyImageNotes].filter((part) => part.trim().length > 0).join("\n\n")
+    : prompt;
+}

@@ -18,8 +18,10 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import {
   collectDescribedImageAttachmentIndexes,
+  hasInboundHistoryMedia,
   resolveAgentTurnAttachments,
 } from "./agent-turn-attachments.js";
+import { appendRecentHistoryImageContext } from "./history-media.js";
 
 type CurrentImageAttachment = MediaAttachment & { path: string };
 
@@ -37,6 +39,8 @@ export type CurrentTurnImages = {
   unresolvedSourceIndexes?: number[];
   /** Admission-owned slot-to-media identity used by later runtime adapters. */
   mediaImageLayout?: MediaImageLayout;
+  /** Provenance for images this turn inherited from room history, appended to the prompt. */
+  historyImageNotes?: string;
 };
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
@@ -132,14 +136,15 @@ export async function resolveCurrentTurnImages(params: {
   }
 
   const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
-  if (currentImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
-  }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   const undescribedImageAttachments = currentImageAttachments.filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
-  if (undescribedImageAttachments.length === 0) {
+  // A room that kept media on a gated message answers the turn that finally asks
+  // about it. The resolver only reaches those images when this turn resolved none
+  // of its own, so asking for them costs nothing when it did.
+  const includeRecentHistoryImages = hasInboundHistoryMedia(params.ctx);
+  if (undescribedImageAttachments.length === 0 && !includeRecentHistoryImages) {
     return resolveMergedTurnImages(entries);
   }
 
@@ -148,7 +153,7 @@ export async function resolveCurrentTurnImages(params: {
     const resolved = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
-      includeRecentHistoryImages: false,
+      includeRecentHistoryImages,
       includeAttachmentIndexes: true,
     });
     const images = resolved.attachments.map(
@@ -180,10 +185,29 @@ export async function resolveCurrentTurnImages(params: {
         unresolvedSourceIndexes.push(attachment.index);
       }
     }
+    // History images carry synthetic source indexes past the current turn's, so
+    // they append after it without a second ordering rule.
+    const currentSourceIndexes = new Set(
+      undescribedImageAttachments.map((attachment) => attachment.index),
+    );
+    for (const [resolvedIndex, image] of imageByResolvedIndex) {
+      if (image && !currentSourceIndexes.has(resolvedIndex)) {
+        appendOrderedImages({ entries, images: [image], sourceIndex: resolvedIndex });
+      }
+    }
     const merged = resolveMergedTurnImages(entries);
+    // Without provenance an inherited image reads as this turn's own attachment.
+    const historyImageNotes =
+      resolved.recentHistoryImages.length > 0
+        ? appendRecentHistoryImageContext({
+            promptText: "",
+            images: resolved.recentHistoryImages,
+          })
+        : undefined;
+    const withHistory = historyImageNotes ? Object.assign(merged, { historyImageNotes }) : merged;
     return unresolvedSourceIndexes.length > 0
-      ? Object.assign(merged, { unresolvedSourceIndexes })
-      : merged;
+      ? Object.assign(withHistory, { unresolvedSourceIndexes })
+      : withHistory;
   } catch (error) {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,

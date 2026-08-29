@@ -92,6 +92,7 @@ type InternalFollowupRun = FollowupRun & {
   /** Keep admission state out of the public plugin-facing FollowupRun contract. */
   currentTurnImagesPrepared?: true;
   mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
+  historyImageNotes?: CurrentTurnImages["historyImageNotes"];
 };
 
 function resolveRunStartupPhase(
@@ -235,6 +236,9 @@ async function executeAgentTurnInternalWithRetryState(
           images: params.followupRun.images,
           imageOrder: params.followupRun.imageOrder,
           mediaImageLayout: internalFollowupRun.mediaImageLayout,
+          // Provenance travels with the images it explains; a queued turn that
+          // drops it hands the model an image it cannot place.
+          historyImageNotes: internalFollowupRun.historyImageNotes,
         }
       : await agentTurnTiming.measure("current_turn_images", () =>
           resolveCurrentTurnImages({

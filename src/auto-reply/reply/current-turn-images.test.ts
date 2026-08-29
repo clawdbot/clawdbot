@@ -393,6 +393,55 @@ describe("resolveCurrentTurnImages", () => {
     expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
   });
 
+  it("hands a room's kept image to a text-only turn with its provenance", async () => {
+    await withTestDir({ prefix: "openclaw-history-image-" }, async (base) => {
+      const now = Date.now();
+      const stateDir = path.join(base, "state");
+      const relativePath = "media/inbound/kept.png";
+      const imagePath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(imagePath), { recursive: true });
+      await fs.writeFile(imagePath, PNG_IMAGE_BYTES);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const ctx: MsgContext = {
+        Body: "what was in that photo?",
+        Timestamp: new Date(now).toISOString(),
+        InboundHistory: [
+          {
+            sender: "Ada",
+            body: "<image>",
+            timestamp: now - 1000,
+            messageId: "m-kept",
+            media: [
+              { path: imagePath, contentType: "image/png", kind: "image", messageId: "m-kept" },
+            ],
+          },
+        ],
+      } as unknown as MsgContext;
+
+      const result = await resolveCurrentTurnImages({ ctx, cfg: {} as OpenClawConfig });
+
+      expect(vi.mocked(resolveAgentTurnAttachments)).toHaveBeenCalledWith(
+        expect.objectContaining({ includeRecentHistoryImages: true }),
+      );
+      expect(result.images).toEqual([
+        expect.objectContaining({ type: "image", mimeType: "image/png" }),
+      ]);
+      expect(result.historyImageNotes).toContain("Recent image 1 from Ada");
+      expect(result.historyImageNotes).toContain("attached as media");
+    });
+  });
+
+  it("keeps a text-only turn off the media runtime when the room kept nothing", async () => {
+    const ctx: MsgContext = { Body: "hello" } as unknown as MsgContext;
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+
+    const result = await resolveCurrentTurnImages({ ctx, cfg: {} as OpenClawConfig });
+
+    expect(vi.mocked(resolveAgentTurnAttachments)).not.toHaveBeenCalled();
+    expect(result.images).toBeUndefined();
+    expect(result.historyImageNotes).toBeUndefined();
+  });
+
   it("hydrates only current image facts missing prompt descriptions", async () => {
     const imageData = Buffer.from("second image").toString("base64");
     vi.mocked(resolveAgentTurnAttachments).mockResolvedValueOnce({
