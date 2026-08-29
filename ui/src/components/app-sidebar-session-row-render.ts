@@ -202,6 +202,11 @@ export function renderRecentSession(params: {
             user.watchedSessions.includes(session.key),
         )
       : undefined;
+  // Person sections already own durable attribution. Restore the row avatar
+  // only for live presence; pinned and archive-attribution rows have no matching header.
+  const ownerRepeatedBySection =
+    host.sessionsGrouping === "person" && !session.pinned && ownerAttribution !== "archived";
+  const leadingOwner = ownerRepeatedBySection && ownerViewing !== true ? undefined : ownerActor;
   const gateway = host.sessionDataContext?.gateway;
   const channelAvatarAuth = {
     authTokens: gateway
@@ -221,7 +226,7 @@ export function renderRecentSession(params: {
   const { running, leadingIndicator, trailingIndicator, renderedOwnerIdentity } =
     renderSessionLeadingState(
       session,
-      ownerActor,
+      leadingOwner,
       ownerAttribution,
       ownerViewing,
       session.participants,
