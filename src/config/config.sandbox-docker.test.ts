@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS,
   resolveSandboxBrowserConfig,
+  resolveSandboxConfigForAgent,
   resolveSandboxDockerConfig,
 } from "../agents/sandbox/config.js";
 import { validateConfigObject } from "./validation.js";
@@ -142,6 +143,57 @@ describe("sandbox docker config", () => {
       },
     });
     expect(invalid.ok).toBe(false);
+  });
+
+  it("resolves Docker runtime from global and per-agent sandbox configuration", () => {
+    expect(
+      resolveSandboxDockerConfig({
+        scope: "agent",
+        globalDocker: { runtime: "runc" },
+      }).runtime,
+    ).toBe("runc");
+
+    expect(
+      resolveSandboxDockerConfig({
+        scope: "agent",
+        globalDocker: { runtime: "runc" },
+        agentDocker: { runtime: "sysbox-runc" },
+      }).runtime,
+    ).toBe("sysbox-runc");
+
+    expect(
+      resolveSandboxDockerConfig({
+        scope: "shared",
+        globalDocker: { runtime: "runc" },
+        agentDocker: { runtime: "sysbox-runc" },
+      }).runtime,
+    ).toBe("runc");
+  });
+
+  it("preserves a parsed per-agent Docker runtime in the effective sandbox config", () => {
+    const parsed = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: { runtime: "runc" },
+          },
+        },
+        entries: {
+          worker: {
+            sandbox: {
+              docker: { runtime: "sysbox-runc" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(resolveSandboxConfigForAgent(parsed.config, "worker").docker.runtime).toBe(
+        "sysbox-runc",
+      );
+    }
   });
 
   it("rejects empty Docker GPU passthrough config", () => {

@@ -113,6 +113,7 @@ export function resolveSandboxDockerConfig(params: {
     readOnlyRoot: agentDocker?.readOnlyRoot ?? globalDocker?.readOnlyRoot ?? true,
     tmpfs: agentDocker?.tmpfs ?? globalDocker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
     network: agentDocker?.network ?? globalDocker?.network ?? "none",
+    runtime: agentDocker?.runtime ?? globalDocker?.runtime,
     user: agentDocker?.user ?? globalDocker?.user,
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,

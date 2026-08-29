@@ -297,6 +297,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(collectDockerFlagValues(dockerCreate.args, "--runtime")).toEqual(["sysbox-runc"]);
 
     spawnState.calls.length = 0;
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
     const podmanCreate = await ensureSandboxCreateCallForTest({
       cfg,
       workspaceDir,

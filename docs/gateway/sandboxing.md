@@ -111,6 +111,20 @@ enable privileged mode, extra capabilities, devices, or host Docker-socket
 mounts. It applies only to Docker backend tool containers; Podman and sandbox
 browser containers ignore it.
 
+For example, an explicit opt-in to Sysbox is:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: { runtime: "sysbox-runc" },
+      },
+    },
+  },
+}
+```
+
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
 
