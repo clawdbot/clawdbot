@@ -39,7 +39,7 @@ function requiredTextFields(value: unknown): string[] {
 
 async function renderedMessage(
   args: string,
-): Promise<messagingApi.FlexMessage | messagingApi.TemplateMessage> {
+): Promise<messagingApi.FlexMessage | messagingApi.TemplateMessage | messagingApi.TextMessage> {
   const line = await runCardCommand(args);
   if (line.flexMessage) {
     return {
@@ -71,7 +71,11 @@ describe("/card with blank arguments", () => {
     async (args) => {
       const message = await renderedMessage(args);
 
-      expect(message.altText.trim()).not.toBe("");
+      // A template that cannot be rendered validly degrades to a text message,
+      // which carries no altText; requiredTextFields covers its text instead.
+      if ("altText" in message) {
+        expect(message.altText.trim()).not.toBe("");
+      }
       const texts = requiredTextFields(message);
       expect(texts.length).toBeGreaterThan(0);
       expect(texts.filter((text) => text.trim() === "")).toEqual([]);
