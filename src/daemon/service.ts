@@ -176,7 +176,7 @@ function collectGatewayServiceStartRepairIssues(
 /** Reads the installed service and reports definition drift that must be repaired before launch. */
 export async function inspectGatewayServiceStartRepair(
   service: GatewayService,
-  args: GatewayServiceEnvArgs,
+  args: ReadGatewayServiceStateArgs,
   expectedPort?: number,
 ): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
   const state = await readGatewayServiceState(service, args);
@@ -244,9 +244,14 @@ export async function startGatewayService(
   expectedPort?: number,
   expectedCommandFingerprint?: string,
 ): Promise<GatewayServiceStartResult> {
+  // Fingerprinted recovery is the future-config exception. The last
+  // inspection before start or already-running must be manager-effective:
+  // a local-unit fallback can match the pin while the platform start still
+  // applies a changed drop-in.
+  const requireEffective = expectedCommandFingerprint !== undefined;
   const { state, issues: repairIssues } = await inspectGatewayServiceStartRepair(
     service,
-    { env: args.env },
+    { env: args.env, requireEffective },
     expectedPort,
   );
   if (state.loadState.status === "unknown") {
@@ -257,6 +262,15 @@ export async function startGatewayService(
       outcome: "missing-install",
       state,
     };
+  }
+
+  if (
+    expectedCommandFingerprint !== undefined &&
+    (!state.command || sha256Hex(stableStringify(state.command)) !== expectedCommandFingerprint)
+  ) {
+    throw new Error(
+      "effective service definition no longer matches the stopped-service pin; inspect it before starting manually.",
+    );
   }
 
   if (state.loadState.status === "loaded" && state.running) {
@@ -273,17 +287,6 @@ export async function startGatewayService(
       state,
       issues: repairIssues,
     };
-  }
-
-  // Recovery is the future-config exception: the last inspection before
-  // privileged start must still match the stopped command pin.
-  if (
-    expectedCommandFingerprint !== undefined &&
-    (!state.command || sha256Hex(stableStringify(state.command)) !== expectedCommandFingerprint)
-  ) {
-    throw new Error(
-      "effective service definition no longer matches the stopped-service pin; inspect it before starting manually.",
-    );
   }
 
   let nextState: GatewayServiceState;

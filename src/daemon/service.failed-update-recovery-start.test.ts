@@ -94,4 +94,54 @@ describe("startGatewayServiceAfterFailedUpdate", () => {
     ).rejects.toThrow("no longer matches the stopped-service pin");
     expect(mocks.start).not.toHaveBeenCalled();
   });
+
+  it("fails closed when manager-effective inspection is unavailable", async () => {
+    mockProcessPlatform("linux");
+    const programArguments = [process.execPath, process.execPath, "gateway"];
+    mocks.readCommand.mockImplementation(async (_env, opts) => {
+      if (opts?.requireEffective) {
+        throw new Error("manager-effective-secret-canary");
+      }
+      return { programArguments };
+    });
+
+    await expect(
+      startGatewayServiceAfterFailedUpdate({
+        env: {},
+        stdout: process.stdout,
+        expectedCommandFingerprint: commandFingerprint(programArguments),
+      }),
+    ).rejects.toThrow("manager-effective-secret-canary");
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a changed already-running command",
+      running: [process.execPath, process.execPath, "gateway", "--port", "9"],
+      expected: "no longer matches the stopped-service pin",
+    },
+    {
+      name: "the pinned already-running command",
+      running: [process.execPath, process.execPath, "gateway"],
+      expected: undefined,
+    },
+  ])("handles $name without calling platform start", async ({ running, expected }) => {
+    mockProcessPlatform("linux");
+    const stopped = [process.execPath, process.execPath, "gateway"];
+    mocks.readCommand.mockResolvedValue({ programArguments: running });
+    mocks.readRuntime.mockResolvedValue({ status: "running" });
+
+    const recovery = startGatewayServiceAfterFailedUpdate({
+      env: {},
+      stdout: process.stdout,
+      expectedCommandFingerprint: commandFingerprint(stopped),
+    });
+    if (expected) {
+      await expect(recovery).rejects.toThrow(expected);
+    } else {
+      await expect(recovery).resolves.toBeUndefined();
+    }
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
 });
