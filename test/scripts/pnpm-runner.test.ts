@@ -33,21 +33,35 @@ describe("resolvePnpmRunner", () => {
           }));\n`,
         );
       }
-      vi.stubEnv("npm_execpath", parentPath);
       const env =
         envMode === "selected"
           ? { npm_execpath: selectedPath }
           : envMode === "empty"
             ? {}
             : undefined;
-      const spec = createPnpmRunnerSpawnSpec({
+      const params = {
         cwd: tempDir,
         env,
         npmExecPath: override ? overridePath : undefined,
         pnpmArgs: ["literal & argument"],
         stdio: "pipe",
+      };
+      // Windows worker env copies are case-sensitive. Set the default environment
+      // in a real main thread so launcher selection and child inheritance agree.
+      const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+        encoding: "utf8",
+        input: `
+          import { spawnSync } from "node:child_process";
+          process.env.npm_execpath = ${JSON.stringify(parentPath)};
+          const { createPnpmRunnerSpawnSpec } = await import(${JSON.stringify(new URL("../../scripts/pnpm-runner.mts", import.meta.url).href)});
+          const spec = createPnpmRunnerSpawnSpec(${JSON.stringify(params)});
+          const result = spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
+          if (result.error) throw result.error;
+          process.stdout.write(result.stdout);
+          process.stderr.write(result.stderr);
+          process.exitCode = result.status ?? 1;
+        `,
       });
-      const result = spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
         entrypoint: path.join(tempDir, entrypoint),

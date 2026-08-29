@@ -1649,7 +1649,8 @@ function Assert-GitCheckoutHasCommit {
 function Resolve-PhysicalDirectoryPath {
     param([string]$Path)
 
-    $resolved = & node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' $Path
+    # Legacy PowerShell/.cmd argument passing strips embedded quotes; keep code on stdin.
+    $resolved = 'process.stdout.write(require("node:fs").realpathSync(process.argv[2]))' | & node - $Path
     if ($LASTEXITCODE -ne 0 -or -not $resolved) {
         throw "Could not resolve directory path: $Path"
     }
