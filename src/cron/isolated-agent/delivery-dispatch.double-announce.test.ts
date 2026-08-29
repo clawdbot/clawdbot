@@ -4244,12 +4244,24 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   describe("stale delivery (#131491)", () => {
-    it("delivers a late run with a lateness annotation instead of discarding it", async () => {
+    const setJobSchedule = (
+      params: Parameters<typeof dispatchCronDelivery>[0],
+      schedule: Record<string, unknown>,
+      nextRunAtMs: number,
+    ) => {
+      const job = params.job as { schedule?: unknown; state?: { nextRunAtMs?: number } };
+      job.schedule = schedule;
+      job.state = { nextRunAtMs };
+    };
+
+    it("delivers a late one-shot with a lateness annotation instead of discarding it", async () => {
       const runStartedAt = Date.now();
       const params = makeBaseParams({ synthesizedText: "lane results report", runStartedAt });
-      (params.job as { state?: { nextRunAtMs?: number } }).state = {
-        nextRunAtMs: runStartedAt - 4 * 60 * 60_000,
-      };
+      setJobSchedule(
+        params,
+        { kind: "at", at: new Date(runStartedAt - 4 * 60 * 60_000).toISOString() },
+        runStartedAt - 4 * 60 * 60_000,
+      );
 
       const state = await dispatchCronDelivery(params);
 
@@ -4262,12 +4274,27 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       expect(state.deliveryError).toBeUndefined();
     });
 
-    it("does not annotate a run that starts within the staleness window", async () => {
+    it("keeps skipping stale recurring deliveries so a newer run supersedes them", async () => {
+      const runStartedAt = Date.now();
+      const params = makeBaseParams({ synthesizedText: "yesterday's briefing", runStartedAt });
+      setJobSchedule(params, { kind: "every", everyMs: 60_000 }, runStartedAt - 4 * 60 * 60_000);
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(state.delivered).toBe(false);
+      expect(state.deliveryAttempted).toBe(true);
+      expect(state.deliveryError).toContain("skipping stale delivery");
+    });
+
+    it("does not annotate a one-shot that starts within the staleness window", async () => {
       const runStartedAt = Date.now();
       const params = makeBaseParams({ synthesizedText: "fresh report", runStartedAt });
-      (params.job as { state?: { nextRunAtMs?: number } }).state = {
-        nextRunAtMs: runStartedAt - 60_000,
-      };
+      setJobSchedule(
+        params,
+        { kind: "at", at: new Date(runStartedAt - 60_000).toISOString() },
+        runStartedAt - 60_000,
+      );
 
       const state = await dispatchCronDelivery(params);
 

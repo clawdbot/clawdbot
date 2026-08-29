@@ -41,16 +41,15 @@ import {
   buildDirectCronDeliveryIdempotencyKey,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
-  isStaleCronDelivery,
   logCronDeliveryError,
   logCronDeliveryErrorDeferred,
   logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   normalizeSilentReplyText,
+  prependStaleCronDeliveryNotice,
   resolveCronDeliveryBestEffort,
-  resolveCronDeliveryScheduledAtMs,
   resolveDescendantSubagentFollowup,
-  resolveCronDeliveryStartDelayMs,
+  resolveStaleCronDeliveryAction,
   retryTransientDirectCronDelivery,
   waitForCompletedDirectCronDelivery,
 } from "./delivery-dispatch-policy.js";
@@ -243,38 +242,31 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      // A late run still executed fully; discarding its deliverable recorded a
-      // false success and silently lost the operator's report (#131491).
-      // Deliver with an explicit lateness annotation instead — the guard's
-      // original anti-confusion goal (#50092) is met by labeling.
       let staleAnnotatedPayloads = normalizedPayloads;
-      if (
-        params.deliveryRequested &&
-        isStaleCronDelivery({ job: params.job, runStartedAt: params.runStartedAt })
-      ) {
-        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
+      const staleAction = params.deliveryRequested
+        ? resolveStaleCronDeliveryAction({ job: params.job, runStartedAt: params.runStartedAt })
+        : ({ kind: "fresh" } as const);
+      if (staleAction.kind !== "fresh") {
+        await logCronDeliveryWarn(`[cron:${params.job.id}] ${staleAction.logMessage}`);
+      }
+      if (staleAction.kind === "skip") {
+        deliveryAttempted = true;
+        recordDelivery("not-delivered", staleAction.deliveryError);
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          delivered: false,
+          deliveryError: staleAction.deliveryError,
+          ...params.telemetry,
         });
-        const startDelayMs = resolveCronDeliveryStartDelayMs({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        });
-        const scheduledAtIso = new Date(scheduledAtMs).toISOString();
-        const lateMinutes = Math.round(startDelayMs / 60_000);
-        const notice = `⏰ Late automation run: scheduled for ${scheduledAtIso}, started ${lateMinutes}m late.`;
-        await logCronDeliveryWarn(
-          `[cron:${params.job.id}] delivering stale run scheduled at ${scheduledAtIso}, started ${lateMinutes}m late`,
+      }
+      if (staleAction.kind === "deliver-annotated") {
+        staleAnnotatedPayloads = prependStaleCronDeliveryNotice(
+          normalizedPayloads,
+          staleAction.notice,
         );
-        const firstTextIndex = normalizedPayloads.findIndex((p) => p.text?.trim());
-        const firstTextPayload = normalizedPayloads[firstTextIndex];
-        staleAnnotatedPayloads =
-          firstTextIndex === -1 || !firstTextPayload
-            ? [{ text: notice }, ...normalizedPayloads]
-            : normalizedPayloads.with(firstTextIndex, {
-                ...firstTextPayload,
-                text: `${notice}\n\n${firstTextPayload.text}`,
-              });
       }
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
