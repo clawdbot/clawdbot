@@ -968,9 +968,9 @@ describe("Slack live QA runtime helpers", () => {
     expect(() => verify([{ text: output ?? "", ts: "tool" }])).toThrow(
       "expected exact tool output",
     );
-    expect(() => verify([{ text: `🛠️ Exec: # ${command}\n${output}`, ts: "tool" }])).toThrow(
-      "command details must stay hidden",
-    );
+    expect(() =>
+      verify([{ text: `🛠️ Run command: # ${command}\n${output}`, ts: "tool" }]),
+    ).not.toThrow();
     expect(() =>
       verify([
         { text: `🛠️ Exec\n${output}`, ts: "tool-1" },
@@ -979,10 +979,19 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("expected exact tool output in one standalone verbose message");
     expect(() =>
       verify([
-        { text: "🛠️ Exec", ts: "summary" },
-        { text: `🛠️ Exec\n${output}`, ts: "output" },
+        { text: "🛠️ run sleep → print text", ts: "summary" },
+        { text: `🛠️ run sleep → print text\n${output}`, ts: "output" },
       ]),
-    ).toThrow("expected exact tool output in one standalone verbose message");
+    ).not.toThrow();
+    expect(() =>
+      verify([
+        { text: "🛠️ run sleep → print text", ts: "summary-1" },
+        { text: "🛠️ run sleep → print text", ts: "summary-2" },
+        { text: `🛠️ run sleep → print text\n${output}`, ts: "output" },
+      ]),
+    ).toThrow(
+      "expected exact tool output in one standalone verbose message and at most one summary",
+    );
     expect(() =>
       verify([
         { text: "🛠️ Exec", ts: "tool" },
@@ -990,6 +999,30 @@ describe("Slack live QA runtime helpers", () => {
       ]),
     ).not.toThrow();
   });
+
+  it.each(["🛠️ run sleep → print text", "🛠️ Exec\nunmarked output"])(
+    "rejects verbose-on metadata or output updates without protocol markers: %s",
+    (text) => {
+      const run = testing
+        .findScenario(["slack-progress-commentary-verbose-dedupe"])[0]
+        ?.buildRun("U_SUT");
+      if (!run || !("input" in run) || !run.verifyObserved) {
+        throw new Error("expected Slack progress message scenario");
+      }
+      const commentary = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+      expect(() =>
+        run.verifyObserved?.({
+          finalMessage: { text: run.matchText, ts: "final" },
+          messages: [
+            { channelId: "C123456789", text: `💬 ${commentary}`, ts: "commentary" },
+            { channelId: "C123456789", text: "🛠️ Exec", ts: "tool" },
+            { channelId: "C123456789", text, ts: "tool" },
+            { channelId: "C123456789", text: run.matchText, ts: "final" },
+          ],
+        }),
+      ).toThrow("command details and output must stay hidden in verbose-on progress");
+    },
+  );
 
   it.each(["slack-progress-commentary-verbose-dedupe", "slack-progress-commentary-verbose-full"])(
     "rejects absent or merged standalone tool identities for %s",

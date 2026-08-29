@@ -730,8 +730,10 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   default, and single-delivery behavior for durable verbose progress. The `on`
   probe requires a safe Exec summary without command text or output; the `full`
   probe requires the exact stdout marker in a separate tool-output message.
-  Both use the same command, retain command privacy, and require one commentary
-  identity separate from the final answer. Failures retain bounded
+  Both use the same command and require one commentary identity separate from
+  the final answer. Full verbosity allows the runtime's command metadata and
+  one separate start summary, while requiring a unique completed-output identity.
+  Failures retain bounded
   presentation facts without raw Slack messages or platform identities,
   including marker formatting and `sleep` summaries missing the command marker.
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
