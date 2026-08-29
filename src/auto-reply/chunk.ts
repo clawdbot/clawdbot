@@ -422,12 +422,11 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     let fenceToSplit = initialFence;
     if (initialFence) {
       const closeLine = `${initialFence.indent}${initialFence.marker}`;
-      const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
-
-      if (maxIdxIfNeedNewline <= start) {
+      if (!resolveFenceReopenLine(initialFence, normalizedLimit)) {
         breakIdx = windowEnd;
         fenceToSplit = undefined;
       } else {
+        const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
         const minProgressIdx = Math.min(
           text.length,
           Math.max(start + 1, initialFence.start + initialFence.openLine.length + 2),
@@ -451,7 +450,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         }
 
         if (!pickedNewline) {
-          if (minProgressIdx > maxIdxIfAlreadyNewline) {
+          if (minProgressIdx >= maxIdxIfAlreadyNewline) {
             breakIdx = maxIdxIfNeedNewline;
           } else {
             breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);
@@ -488,9 +487,11 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       reopenFence = fenceToSplit;
     } else {
       // Only prose separators are disposable; fenced whitespace can be code indentation.
-      const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
-      nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
-      nextStart = skipLeadingNewlines(text, nextStart);
+      if (!initialFence) {
+        const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
+        nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+        nextStart = skipLeadingNewlines(text, nextStart);
+      }
       reopenFence = undefined;
     }
 
@@ -504,12 +505,12 @@ function resolveFenceReopenLine(
   fence: NonNullable<ReturnType<typeof findFenceSpanAt>>,
   limit: number,
 ): string {
-  const budget = Math.floor(limit / 2);
-  if (fence.openLine.length + 1 <= budget) {
+  const markerLine = `${fence.indent}${fence.marker}`;
+  // Reserve the closing marker, two newlines, and one body character.
+  if (fence.openLine.length + markerLine.length + 3 <= limit) {
     return fence.openLine;
   }
-  const markerLine = `${fence.indent}${fence.marker}`;
-  return markerLine.length + 1 <= budget ? markerLine : "";
+  return markerLine.length * 2 + 3 <= limit ? markerLine : "";
 }
 
 function skipLeadingNewlines(value: string, start = 0): number {

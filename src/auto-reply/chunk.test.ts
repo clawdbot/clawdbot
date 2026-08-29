@@ -523,7 +523,7 @@ describe("chunkMarkdownText", () => {
         for (const chunk of chunks) {
           expect(chunk.length).toBeLessThanOrEqual(4000);
         }
-        expect(chunks.join("").replaceAll("\`", "").replaceAll("\n", "")).toBe(payload);
+        expect(chunks.join("").replaceAll("`", "").replaceAll("\n", "")).toBe(payload);
         expectFencesBalanced(chunks);
       },
     },
@@ -532,7 +532,7 @@ describe("chunkMarkdownText", () => {
       run: () => {
         const chunks = chunkMarkdownText(`\`\`\`${"A".repeat(4200)}\n\`\`\``, 2000);
         expect(chunks.length).toBeLessThanOrEqual(4);
-        expect(requireChunk(chunks, 1).startsWith("\`\`\`\n")).toBe(true);
+        expect(requireChunk(chunks, 1).startsWith("```\n")).toBe(true);
         for (const chunk of chunks) {
           expect(chunk.length).toBeLessThanOrEqual(2000);
         }
@@ -542,12 +542,31 @@ describe("chunkMarkdownText", () => {
     {
       name: "keeps the full opening line when it fits the reopen budget",
       run: () => {
-        const chunks = chunkMarkdownText(`\`\`\`js\n${"const a = 1;\n".repeat(80)}\`\`\``, 200);
+        const openLine = `\`\`\`language-${"A".repeat(1_488)}`;
+        const chunks = chunkMarkdownText(`${openLine}\n${"x".repeat(1_200)}\n\`\`\``, 2_000);
         expect(chunks.length).toBeGreaterThan(1);
         for (const chunk of chunks.slice(1)) {
-          expect(chunk.startsWith("\`\`\`js\n")).toBe(true);
+          expect(chunk.startsWith(`${openLine}\n`)).toBe(true);
         }
+        expect(chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
         expectFencesBalanced(chunks);
+      },
+    },
+    {
+      name: "keeps the hard limit when synthetic fence balancing cannot fit",
+      run: () => {
+        const text = `\`\`\`\n${"x".repeat(20)}\n\`\`\``;
+        for (const limit of [5, 6, 8]) {
+          const chunks = chunkMarkdownText(text, limit);
+          expect(
+            chunks.every((chunk) => chunk.length <= limit),
+            `limit ${limit}`,
+          ).toBe(true);
+          expect(chunks.length, `limit ${limit}`).toBeLessThanOrEqual(
+            Math.ceil(text.length / limit),
+          );
+          expect(chunks.join(""), `limit ${limit}`).toBe(text);
+        }
       },
     },
   ] as const)("$name", ({ run }) => {
