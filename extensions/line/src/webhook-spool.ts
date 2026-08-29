@@ -214,9 +214,15 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         // Hold the lane until this delivery is done, or a message sent after the
         // images overtakes them while this turn is still fetching their media.
         finishSet = set.finish;
-      } else {
-        // The lane was released so a set could form; keep this behind it so a
-        // message sent after the images is not delivered before them.
+      } else if (imageSets.isPending(laneKey)) {
+        if (!acceptsDeferredClaims) {
+          await lifecycle.onAbandoned();
+          return undefined;
+        }
+        // Release the lane before waiting. Holding it makes this event the lane
+        // owner, and the remaining parts of the set it is waiting for could then
+        // never be claimed - the set would time out partial and split in two.
+        lifecycle.onDeferred();
         await imageSets.awaitLane(laneKey);
       }
       // One ownership lifecycle spanning every durable claim this turn consumed.

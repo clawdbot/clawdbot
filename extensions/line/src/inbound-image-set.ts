@@ -69,6 +69,8 @@ function orderedParts<TEvent, TLifecycle>(
  * admission, so a set that never completes would never be delivered at all.
  */
 export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
+  /** Whether a set is still forming on this lane, checked before deferring. */
+  isPending: (laneKey: string) => boolean;
   admit: (input: {
     laneKey: string;
     setId: string;
@@ -165,5 +167,5 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     };
   };
 
-  return { admit, awaitLane };
+  return { admit, awaitLane, isPending: (laneKey) => pendingByLane.has(laneKey) };
 }

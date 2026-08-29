@@ -783,6 +783,56 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  // A text landing between image parts must not become the lane owner: the parts
+  // that follow could then never be claimed, and the set would split into a
+  // partial image turn, the text, and a second image turn.
+  it("still aggregates a set when a text lands between its parts", async () => {
+    await withQueue(async (queue) => {
+      const turns: string[] = [];
+      const deliver = vi.fn(
+        async (
+          events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          const kinds = events.map((event) => (event as webhook.MessageEvent).message.type);
+          turns.push(`${kinds[0]}x${events.length}`);
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      const imagePart = (index: number) =>
+        callback(
+          createEvent({
+            webhookEventId: `event-split-${index}`,
+            userId: "user-split",
+            imageSet: { id: "set-split", index, total: 3 },
+          }),
+        );
+
+      spool.start();
+      try {
+        await spool.accept(imagePart(1));
+        await spool.accept(
+          callback(createEvent({ webhookEventId: "event-split-text", userId: "user-split" })),
+        );
+        await spool.accept(imagePart(2));
+        await spool.accept(imagePart(3));
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2), { timeout: 20_000 });
+        // One image turn carrying all three parts, then the text behind it.
+        expect(turns).toEqual(["imagex3", "textx1"]);
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
   // A combined delivery that rejects before the handoff rides back to the holder's
   // drain only. Every other part already returned as deferred, so the failure has
   // to reach their claims too or they stay held until recovery.
