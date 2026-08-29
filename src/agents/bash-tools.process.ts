@@ -208,11 +208,8 @@ function finishedPollResult(
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
   acknowledgeNotifyOnExit(finished);
-  const {
-    output: unreadOutput,
-    outputDropped,
-    acknowledge,
-  } = prepareSessionPoll(finished, pollScope);
+  const delivery = prepareSessionPoll(finished, pollScope);
+  const { output: unreadOutput, outputDropped } = delivery;
   const output = unreadOutput.trim();
   // Omitted retained output is pageable only while this public id still owns
   // the exact process; a reused slug must never point the model at successor logs.
@@ -240,7 +237,7 @@ function finishedPollResult(
         aggregated: finished.aggregated,
       },
     },
-    acknowledge,
+    () => delivery.acknowledge(),
   );
 }
 
@@ -482,11 +479,8 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
             return failText(`No session found for ${params.sessionId}`);
           }
-          const {
-            output: unreadOutput,
-            outputDropped,
-            acknowledge,
-          } = prepareSessionPoll(scopedSession, pollScope);
+          const delivery = prepareSessionPoll(scopedSession, pollScope);
+          const { output: unreadOutput, outputDropped } = delivery;
           const output = unreadOutput.trim();
           const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
@@ -516,7 +510,7 @@ export function createProcessTool(
                 ...(typeof retryInMs === "number" ? { retryInMs } : {}),
               },
             },
-            acknowledge,
+            () => delivery.acknowledge(),
           );
         }
 
