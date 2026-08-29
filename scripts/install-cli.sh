@@ -1054,6 +1054,20 @@ checkout_git_openclaw_ref() {
     return 0
   fi
 
+  # Full commit IDs pin source bytes, even when a remote ref has the same name.
+  # Bundled/existing checkouts already have the object and need no remote lookup.
+  if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
+    if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
+      git -C "$repo_dir" fetch --no-tags origin "$ref" ||
+        fail "Could not fetch requested git commit: ${ref}"
+    fi
+    git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null ||
+      fail "Requested git version is not a commit: ${ref}"
+    git -C "$repo_dir" checkout --detach "$ref"
+    GIT_REF_KIND="immutable"
+    return 0
+  fi
+
   if [[ "$ref" == "main" ]]; then
     git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
     git -C "$repo_dir" checkout main

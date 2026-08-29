@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
@@ -1007,6 +1008,16 @@ describe("install-cli.sh", () => {
     expect(script).toContain('git -C "$repo_dir" checkout --detach "refs/tags/${ref}"');
     expect(script).toContain('git -C "$repo_dir" rebase origin/main');
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+  });
+
+  it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
+    const result = runInstallCliShell(createInstallGitCommitFixtureScript(source), {
+      OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
+    });
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("rejected=HEAD~1");
   });
 
   it("prefers a release tag over a same-named branch", () => {
