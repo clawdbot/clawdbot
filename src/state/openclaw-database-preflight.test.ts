@@ -565,7 +565,10 @@ describe("OpenClaw database schema preflight", () => {
       const result = preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 18 },
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
       });
       expect(result.incompatible).toEqual([]);
       expect(result.indeterminate).toEqual(
@@ -588,7 +591,9 @@ describe("OpenClaw database schema preflight", () => {
             )
             .get(),
         ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
-        expect(inspected.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+        expect(inspected.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
       } finally {
         inspected.close();
       }
