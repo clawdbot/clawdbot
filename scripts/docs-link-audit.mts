@@ -486,6 +486,22 @@ function collectNavPageEntries(node: unknown): string[] {
 
 const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
+type FenceDelimiter = { marker: "`" | "~"; length: number };
+
+export function parseFenceDelimiter(line: string): FenceDelimiter | null {
+  const trimmed = line.trimStart();
+  const match = /^(?<token>`{3,}|~{3,})/u.exec(trimmed);
+  const token = match?.groups?.token;
+  if (!token) {
+    return null;
+  }
+  const marker = token[0];
+  if (marker !== "`" && marker !== "~") {
+    return null;
+  }
+  return { marker, length: token.length };
+}
+
 export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value
@@ -720,7 +736,7 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
     const rawText = fs.readFileSync(abs, "utf8");
     const lines = rawText.split("\n");
 
-    let inCodeFence = false;
+    let codeFence: FenceDelimiter | null = null;
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
       let line = lines[lineNum];
@@ -728,11 +744,16 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
         continue;
       }
 
-      if (line.trim().startsWith("```")) {
-        inCodeFence = !inCodeFence;
+      const fence = parseFenceDelimiter(line);
+      if (fence) {
+        if (!codeFence) {
+          codeFence = fence;
+        } else if (fence.marker === codeFence.marker && fence.length >= codeFence.length) {
+          codeFence = null;
+        }
         continue;
       }
-      if (inCodeFence) {
+      if (codeFence) {
         continue;
       }
 
