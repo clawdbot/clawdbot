@@ -4,6 +4,10 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { buildShellCommandInvocation } from "../../shell-utils.js";
+import {
+  expectNativeBashSpill,
+  nativeBashSpillScenarios,
+} from "../bash-output-spill.test-support.js";
 import type { BashOperations } from "./bash-operations.js";
 import { createBashTool, createLocalBashOperations } from "./bash.js";
 import { resolveBashTimeoutMs } from "./bash.test-support.js";
@@ -56,6 +60,13 @@ describe("bash tool timeout helpers", () => {
 });
 
 describe("bash tool output lifecycle", () => {
+  it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
+    "settles real Bash output for %s",
+    async (scenario) => {
+      await expectNativeBashSpill("tool", scenario);
+    },
+  );
+
   it.runIf(process.platform !== "win32")("surfaces a configured shell launch error", async () => {
     const operations = createLocalBashOperations({
       shellPath: path.join(process.cwd(), "package.json"),
