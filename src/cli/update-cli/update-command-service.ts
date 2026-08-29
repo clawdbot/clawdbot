@@ -638,23 +638,26 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       }
       return;
     }
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: before.serviceEnv,
-      requireEffective: true,
-      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-    });
-    if (!state.installed) {
-      const message =
-        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
-        "recovery start skipped because no managed service is installed.";
-      if (params.jsonMode) {
-        defaultRuntime.error(message);
-      } else {
-        defaultRuntime.log(theme.warn(message));
-      }
-      return;
-    }
     try {
+      // Keep this manager-effective re-read inside the recovery catch so a
+      // failed second inspection reports through the failed-update path
+      // instead of rejecting finishUpdate before exit(1).
+      const state = await readGatewayServiceState(resolveGatewayService(), {
+        env: before.serviceEnv,
+        requireEffective: true,
+        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+      });
+      if (!state.installed) {
+        const message =
+          `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+          "recovery start skipped because no managed service is installed.";
+        if (params.jsonMode) {
+          defaultRuntime.error(message);
+        } else {
+          defaultRuntime.log(theme.warn(message));
+        }
+        return;
+      }
       // Recovery is the future-config exception, not an ordinary refresh:
       // pin the stopped command fingerprint even for writable definitions.
       const recoveryStop =

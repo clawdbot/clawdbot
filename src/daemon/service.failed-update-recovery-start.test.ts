@@ -6,6 +6,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import type { GatewayServiceReadOptions } from "./service-types.js";
 
 vi.mock("../config/paths.js", async () => {
   const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
@@ -15,10 +16,10 @@ vi.mock("../config/paths.js", async () => {
 const mocks = vi.hoisted(() => ({
   start: vi.fn(async () => undefined),
   isEnabled: vi.fn(async () => true),
-  readCommand: vi.fn(async () => ({
+  readCommand: vi.fn(async (_env?: unknown, _opts?: GatewayServiceReadOptions) => ({
     programArguments: [process.execPath, path.resolve("missing-gateway-entrypoint.cjs"), "gateway"],
   })),
-  readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
+  readRuntime: vi.fn(async (): Promise<{ status: string }> => ({ status: "stopped" })),
   findScope: vi.fn(async () => ({
     scope: "user" as const,
     unitName: "openclaw-gateway.service",

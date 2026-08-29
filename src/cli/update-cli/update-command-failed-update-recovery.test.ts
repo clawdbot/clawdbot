@@ -285,6 +285,22 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     expect(messages()).toContain("recovery start skipped because no managed service is installed");
   });
 
+  it("reports recovery failure when the second manager-effective state read rejects", async () => {
+    mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
+    mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
+    mocks.readState
+      .mockResolvedValueOnce({ ...OWNED_STATE })
+      .mockRejectedValueOnce(new Error("manager-effective-secret-canary"));
+
+    await recover();
+
+    expect(mocks.readState).toHaveBeenCalledTimes(2);
+    expect(mocks.recoveryStart).not.toHaveBeenCalled();
+    expect(messages()).toContain("Failed to restart managed gateway service after failed update");
+    expect(messages()).toContain("recovery start also failed");
+    expect(messages()).toContain("manager-effective-secret-canary");
+  });
+
   it("keeps the guarded restart only for Git-rollback paths without a verified package swap", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
     mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
