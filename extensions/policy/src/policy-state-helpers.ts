@@ -26,11 +26,13 @@ export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
   const entries = agents.entries;
   if (Object.hasOwn(agents, "entries") && entries !== undefined) {
     return isRecord(entries)
-      ? Object.entries(entries).map(([agentId, value]) => ({
-          agentId,
-          sourceBase: `oc://openclaw.config/agents/entries/${ocPathSegment(agentId)}`,
-          value,
-        }))
+      ? Object.entries(entries)
+          .toSorted(([a], [b]) => a.localeCompare(b))
+          .map(([agentId, value]) => ({
+            agentId,
+            sourceBase: `oc://openclaw.config/agents/entries/${ocPathSegment(agentId)}`,
+            value,
+          }))
       : [];
   }
   return Array.isArray(agents.list)

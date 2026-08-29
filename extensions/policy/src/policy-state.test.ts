@@ -1,7 +1,11 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
-import { collectPolicyEvidence } from "./policy-state.js";
+import {
+  collectPolicyEvidence,
+  createPolicyAttestation,
+  policyDocumentHash,
+} from "./policy-state.js";
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
 
@@ -113,6 +117,26 @@ describe("configured agent scanning", () => {
     });
     expect(evidence.sandboxPosture).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ agentId: "legacy" })]),
+    );
+  });
+
+  it("keeps attestations stable across keyed entry order", () => {
+    const first = {
+      alpha: { models: { "openai/gpt-5.6-luna": {} } },
+      omega: { models: { "openai/gpt-5.6-luna": {} } },
+    };
+    const attestationHash = (entries: Record<string, unknown>) =>
+      createPolicyAttestation({
+        ok: true,
+        checkedAt: new Date(0).toISOString(),
+        policyPath: "policy.jsonc",
+        policyHash: policyDocumentHash({}),
+        evidence: collectPolicyEvidence({ agents: { entries } }),
+        findings: [],
+      }).attestationHash;
+
+    expect(attestationHash(first)).toBe(
+      attestationHash({ omega: first.omega, alpha: first.alpha }),
     );
   });
 
