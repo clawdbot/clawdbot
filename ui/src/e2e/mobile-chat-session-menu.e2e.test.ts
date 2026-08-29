@@ -74,7 +74,7 @@ suite.define(() => {
               items.map((item) => Math.round(item.getBoundingClientRect().height)),
             ),
           )
-          .toEqual(Array.from({ length: 15 }, () => 34));
+          .toEqual(Array.from({ length: 16 }, () => 34));
         await expect
           .poll(() => menu.evaluate((element) => element.getBoundingClientRect().height))
           .toBeLessThan(550);
