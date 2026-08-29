@@ -357,10 +357,14 @@ suite.define(() => {
                     .map((bubble) => readRow(bubble, "data-message-id")),
                   queued: [
                     ...active.querySelectorAll(".agent-chat__composer-shell .chat-queue__item"),
-                  ].map((row) => ({
-                    ...readRow(row, "data-chat-queue-item"),
-                    text: row.querySelector(".chat-queue__text")?.textContent?.trim(),
-                  })),
+                  ].map((row) => {
+                    const { id, visible } = readRow(row, "data-chat-queue-item");
+                    return {
+                      id,
+                      visible,
+                      text: row.querySelector(".chat-queue__text")?.textContent?.trim(),
+                    };
+                  }),
                 };
               },
               attachment ? fileName : followUpText,
