@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SessionCatalogPullRequestSummary } from "openclaw/plugin-sdk/session-catalog";
 import {
@@ -16,7 +17,6 @@ import {
   desktopSessionsDir,
   type ClaudeProjectsTreeSnapshot,
   type ClaudeSessionScanContext,
-  mapConcurrent,
   projectsDir,
   readClaudeCatalogMetadata,
   readJsonFile,
@@ -283,10 +283,8 @@ async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
   if (!context.resolvedRoot) {
     return { records, sidechainIds };
   }
-  const indexes = await mapConcurrent(
-    context.projectDirectories,
-    CLAUDE_CATALOG_IO_CONCURRENCY,
-    async ({ directory, childNames }) => ({
+  const { results: indexes } = await runTasksWithConcurrency({
+    tasks: context.projectDirectories.map(({ directory, childNames }) => async () => ({
       directory,
       raw: childNames.includes("sessions-index.json")
         ? await readJsonFile(path.join(directory, "sessions-index.json"), {
@@ -295,8 +293,10 @@ async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
             },
           })
         : undefined,
-    }),
-  );
+    })),
+    limit: CLAUDE_CATALOG_IO_CONCURRENCY,
+    throwOnError: true,
+  });
   const candidates: Array<{
     directory: string;
     entry: SessionIndexEntry;
@@ -318,10 +318,8 @@ async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
       candidates.push({ directory, entry, sessionId });
     }
   }
-  const safeFiles = await mapConcurrent(
-    candidates,
-    CLAUDE_CATALOG_IO_CONCURRENCY,
-    async ({ directory, entry, sessionId }) => {
+  const { results: safeFiles } = await runTasksWithConcurrency({
+    tasks: candidates.map(({ directory, entry, sessionId }) => async () => {
       if (entry.isSidechain === true) {
         return undefined;
       }
@@ -331,8 +329,10 @@ async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
         indexedPath ?? path.join(directory, `${sessionId}.jsonl`),
         sessionId,
       );
-    },
-  );
+    }),
+    limit: CLAUDE_CATALOG_IO_CONCURRENCY,
+    throwOnError: true,
+  });
   for (const [index, candidate] of candidates.entries()) {
     const { entry, sessionId } = candidate;
     if (entry.isSidechain === true) {
@@ -425,14 +425,17 @@ async function discoverCliRecords(
       }
     }
   }
-  const safeFiles = await mapConcurrent(
-    candidates,
-    CLAUDE_CATALOG_IO_CONCURRENCY,
-    async ({ directory, name, sessionId }) =>
-      sidechainIds.has(sessionId)
-        ? undefined
-        : await safeSessionFileForScan(context, path.join(directory, name), sessionId),
-  );
+  const { results: safeFiles } = await runTasksWithConcurrency({
+    tasks: candidates.map(
+      ({ directory, name, sessionId }) =>
+        async () =>
+          sidechainIds.has(sessionId)
+            ? undefined
+            : await safeSessionFileForScan(context, path.join(directory, name), sessionId),
+    ),
+    limit: CLAUDE_CATALOG_IO_CONCURRENCY,
+    throwOnError: true,
+  });
   for (const [candidateIndex, candidate] of candidates.entries()) {
     const { sessionId } = candidate;
     // Resolve metadata concurrently, but make every semantic decision in the original directory
