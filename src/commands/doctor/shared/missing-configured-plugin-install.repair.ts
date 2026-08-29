@@ -17,6 +17,7 @@ import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-leas
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
@@ -321,6 +322,13 @@ async function repairMissingPluginInstallsWithLease(
           skipDisabledPlugins: true,
           updateChannel,
           coreVersion: resolveCompatibilityHostVersion(env),
+          versionBoundToCorePluginIds: new Set(
+            preparedMissingRecordedPluginIds.filter(
+              (pluginId) =>
+                installedPluginIdsWithMissingRequiredDependencies.has(pluginId) &&
+                VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId),
+            ),
+          ),
           logger: {
             terminalLinks: false,
             warn: (message) => {
