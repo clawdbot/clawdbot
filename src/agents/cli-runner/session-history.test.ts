@@ -135,9 +135,16 @@ describe("canonical CLI history", () => {
   });
 
   it("distinguishes a session row from a persisted transcript and allows ephemeral runs", async () => {
-    const { params, manager } = await createSession();
+    const { params, target, manager } = await createSession();
     await expect(hasCliSessionTranscript(params)).resolves.toBe(false);
-    manager.appendCustomEntry("state", {});
+    const header = manager.getHeader();
+    if (!header) {
+      throw new Error("Expected the new session header");
+    }
+    await appendTranscriptEvent(target, header);
+    await expect(hasCliSessionTranscript(params)).resolves.toBe(true);
+    await expect(loadCliSessionHistoryMessages(params)).resolves.toEqual([]);
+    SessionManager.open(target).appendCustomEntry("state", {});
     await expect(hasCliSessionTranscript(params)).resolves.toBe(true);
     await expect(loadCliSessionHistoryMessages(params)).resolves.toEqual([]);
     const ephemeral = { sessionTarget: undefined };

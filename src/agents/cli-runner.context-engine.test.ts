@@ -311,9 +311,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
     expect(bootstrap).toHaveBeenCalledTimes(1);
     const bootstrapParams = bootstrap.mock.calls[0]?.[0];
-    expect(bootstrapParams).toMatchObject({
+    expect.soft(bootstrapParams).toMatchObject({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
+      sessionTarget: CONTEXT_ENGINE_SESSION_TARGET,
       sessionFile: "session.jsonl",
       runtimeSettings: {
         schemaVersion: 1,
@@ -335,9 +336,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     });
     expect(afterTurn).toHaveBeenCalledTimes(1);
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
-    expect(afterTurnParams).toMatchObject({
+    expect.soft(afterTurnParams).toMatchObject({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
+      sessionTarget: CONTEXT_ENGINE_SESSION_TARGET,
       sessionFile: "session.jsonl",
       prePromptMessageCount: 2,
       isHeartbeat: false,
@@ -358,9 +360,13 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       usage: { input: 11, output: 7, total: 18 },
     });
     expect(maintain).toHaveBeenCalledTimes(2);
-    expect(maintain.mock.calls[1]?.[0]).toMatchObject({
+    expect.soft(maintain.mock.calls[0]?.[0]).toMatchObject({
+      sessionTarget: CONTEXT_ENGINE_SESSION_TARGET,
+    });
+    expect.soft(maintain.mock.calls[1]?.[0]).toMatchObject({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
+      sessionTarget: CONTEXT_ENGINE_SESSION_TARGET,
       sessionFile: "session.jsonl",
       runtimeContext: {
         rewriteTranscriptEntries: expect.any(Function),
