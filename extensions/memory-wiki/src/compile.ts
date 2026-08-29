@@ -391,6 +391,7 @@ export type RefreshMemoryWikiIndexesResult = {
 
 type CompileMemoryWikiOptions = {
   sourcePageWrites?: "update" | "preserve";
+  signal?: AbortSignal;
 };
 
 function yieldToEventLoop(): Promise<void> {
@@ -1265,10 +1266,14 @@ async function compileMemoryWikiVaultUnlocked(
   options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
   if (options?.sourcePageWrites === "preserve") {
-    await activateExistingMemoryWikiVault(config);
+    await activateExistingMemoryWikiVault(config, options.signal);
   } else {
-    await initializeMemoryWikiVault(config);
+    await initializeMemoryWikiVault(
+      config,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
   }
+  options?.signal?.throwIfAborted();
   const rootDir = config.vault.path;
   const compiledInputIdentity = await loadMemoryWikiVaultIdentity(rootDir);
   if (!compiledInputIdentity.vaultGeneration) {
@@ -1355,6 +1360,7 @@ async function compileMemoryWikiVaultUnlocked(
 
   // Persist an immutable candidate, then commit its causal publication. A stale
   // compiler cannot overwrite the accepted row or activate before validation.
+  options?.signal?.throwIfAborted();
   await writeMemoryWikiCompiledCache(
     config,
     compiledSnapshot,
@@ -1362,6 +1368,7 @@ async function compileMemoryWikiVaultUnlocked(
     compiledCachePublicationId,
     compiledInputIdentity.compiledCachePublicationId,
     async () => {
+      options?.signal?.throwIfAborted();
       const currentIdentity = await loadMemoryWikiVaultIdentity(rootDir);
       if (
         currentIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
@@ -1393,8 +1400,10 @@ async function compileMemoryWikiVaultUnlocked(
       ) {
         throw new Error("Memory Wiki vault changed while its compiled cache was being verified.");
       }
+      options?.signal?.throwIfAborted();
     },
     async () => {
+      options?.signal?.throwIfAborted();
       if (!compiledCacheSourceGeneration) {
         throw new Error("Memory Wiki compiled cache source generation is missing.");
       }
@@ -1408,6 +1417,7 @@ async function compileMemoryWikiVaultUnlocked(
           compiledCacheSourceGeneration,
         },
       });
+      options?.signal?.throwIfAborted();
     },
     () => loadMemoryWikiValidatedVaultIdentity(rootDir),
   );
@@ -1435,12 +1445,16 @@ export async function compileMemoryWikiVault(
   options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
   try {
+    options?.signal?.throwIfAborted();
     return await withMemoryWikiVaultMutation(config.vault.path, () => {
+      options?.signal?.throwIfAborted();
       setMemoryWikiDashboardState(config, { state: "rebuilding" });
       return compileMemoryWikiVaultUnlocked(config, options);
     });
   } catch (error) {
-    setMemoryWikiDashboardState(config, { state: "failed" });
+    if (!options?.signal?.aborted) {
+      setMemoryWikiDashboardState(config, { state: "failed" });
+    }
     throw error;
   }
 }
@@ -1465,12 +1479,15 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
+  signal?: AbortSignal;
 }): Promise<RefreshMemoryWikiIndexesResult> {
+  params.signal?.throwIfAborted();
   const importChanged =
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
   const dashboardState = await readMemoryWikiDashboardState(params.config);
+  params.signal?.throwIfAborted();
   const dashboardNeedsCompile = dashboardState.state !== "ready";
   if (!params.config.ingest.autoCompile) {
     if (importChanged || dashboardNeedsCompile) {
@@ -1480,11 +1497,15 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   }
 
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
+  params.signal?.throwIfAborted();
   if (!importChanged && !missingIndexes && !dashboardNeedsCompile) {
     return { refreshed: false, reason: "no-import-changes" };
   }
 
-  const compile = await compileMemoryWikiVault(params.config);
+  const compile = await compileMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
   return {
     refreshed: true,
     reason: importChanged

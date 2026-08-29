@@ -253,6 +253,7 @@ async function writeBridgeSourcePage(params: {
 export async function syncMemoryWikiBridgeSources(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<BridgeMemoryWikiResult> {
   resolveMemoryWikiVaultAgentId(params.config);
   if (
@@ -287,7 +288,15 @@ export async function syncMemoryWikiBridgeSources(params: {
   );
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
-  const prepareWrite = () => (initializePromise ??= initializeMemoryWikiVault(params.config));
+  const prepareWrite = async () => {
+    params.signal?.throwIfAborted();
+    const result = await (initializePromise ??= initializeMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    ));
+    params.signal?.throwIfAborted();
+    return result;
+  };
   assertMemoryWikiSourceSyncStateCapacity({
     state,
     group: "bridge",

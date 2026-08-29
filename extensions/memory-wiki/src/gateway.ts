@@ -112,6 +112,7 @@ export function registerMemoryWikiGatewayMethods(params: {
   appConfig?: OpenClawConfig;
   getAppConfig?: () => OpenClawConfig | undefined;
   resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
+  resolveSourceSyncSignal?: () => AbortSignal | undefined;
 }) {
   const { api, config: baseConfig } = params;
 
@@ -119,7 +120,18 @@ export function registerMemoryWikiGatewayMethods(params: {
     config: ResolvedMemoryWikiConfig,
     appConfig?: OpenClawConfig,
   ) => {
-    void syncMemoryWikiImportedSources({ config, appConfig }).catch((error: unknown) => {
+    const signal = params.resolveSourceSyncSignal?.();
+    if (params.resolveSourceSyncSignal && !signal) {
+      return;
+    }
+    void syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      ...(signal ? { signal } : {}),
+    }).catch((error: unknown) => {
+      if (signal?.aborted) {
+        return;
+      }
       setMemoryWikiDashboardState(config, { state: "failed" });
       api.logger.warn(`memory-wiki: background source sync failed: ${formatErrorMessage(error)}`);
     });

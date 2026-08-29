@@ -208,6 +208,7 @@ async function writeUnsafeLocalSourcePage(params: {
 
 export async function syncMemoryWikiUnsafeLocalSources(
   config: ResolvedMemoryWikiConfig,
+  options: { signal?: AbortSignal } = {},
 ): Promise<BridgeMemoryWikiResult> {
   if (
     config.vaultMode !== "unsafe-local" ||
@@ -230,7 +231,15 @@ export async function syncMemoryWikiUnsafeLocalSources(
   );
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
   let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
-  const prepareWrite = () => (initializePromise ??= initializeMemoryWikiVault(config));
+  const prepareWrite = async () => {
+    options.signal?.throwIfAborted();
+    const result = await (initializePromise ??= initializeMemoryWikiVault(
+      config,
+      options.signal ? { signal: options.signal } : undefined,
+    ));
+    options.signal?.throwIfAborted();
+    return result;
+  };
   const activeKeys = new Set<string>();
   for (const [syncKey, entry] of Object.entries(state.entries)) {
     if (
