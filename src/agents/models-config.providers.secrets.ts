@@ -4,8 +4,8 @@
  * auth availability without writing secret material into generated config.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -20,7 +20,6 @@ import {
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
-  normalizeApiKeyConfig,
   resolveApiKeyFromCredential,
   resolveApiKeyFromProfiles,
   resolveEnvApiKeyVarName,
@@ -289,10 +288,13 @@ function resolveConfigBackedProviderAuth(params: {
     }
   | undefined {
   const authProvider = params.provider;
-  const sourceRef = resolveSecretInputRef({
+  const apiKeyPath = `models.providers.${authProvider}.apiKey`;
+  const sourceRef = resolveConfigSecretRef({
+    config: params.sourceConfigForSecrets,
+    path: apiKeyPath,
     value: params.sourceConfigForSecrets?.models?.providers?.[authProvider]?.apiKey,
     defaults: params.sourceConfigForSecrets?.secrets?.defaults,
-  }).ref;
+  });
   if (sourceRef && sourceRef.source !== "env") {
     // Runtime preparation leaves unavailable refs as objects. A paired string
     // is opaque credential data, even when its bytes spell a marker or env name.
@@ -335,10 +337,12 @@ function resolveConfigBackedProviderAuth(params: {
 
   const configuredProvider = params.config?.models?.providers?.[authProvider];
   const configuredProviderApiKey = configuredProvider?.apiKey;
-  const configuredApiKeyRef = resolveSecretInputRef({
+  const configuredApiKeyRef = resolveConfigSecretRef({
+    config: params.config,
+    path: apiKeyPath,
     value: configuredProviderApiKey,
     defaults: params.config?.secrets?.defaults,
-  }).ref;
+  });
   if (configuredApiKeyRef) {
     // Secret refs are preserved as markers. Env refs can still provide a
     // discovery value from the current process without exposing the secret name's value.
@@ -361,7 +365,7 @@ function resolveConfigBackedProviderAuth(params: {
   if (typeof configuredProviderApiKey !== "string") {
     return undefined;
   }
-  const configuredApiKey = normalizeApiKeyConfig(configuredProviderApiKey);
+  const configuredApiKey = configuredProviderApiKey.trim();
   if (!configuredApiKey) {
     return undefined;
   }

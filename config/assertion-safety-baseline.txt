@@ -1931,7 +1931,6 @@ src/agents/models-config-state.ts	1
 src/agents/models-config.merge.ts	2
 src/agents/models-config.plan.ts	4
 src/agents/models-config.providers.policy.lookup.ts	1
-src/agents/models-config.providers.source-managed.ts	4
 src/agents/models-config.ts	1
 src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1

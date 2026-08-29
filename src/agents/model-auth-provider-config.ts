@@ -680,13 +680,25 @@ export function sentinelizeConfigSecretRefEnvApiKey(params: {
     : params.apiKey;
 }
 
-export function resolveLiteralProviderConfigApiKeyAuth(params: {
-  cfg: OpenClawConfig | undefined;
+export function resolveRuntimeProviderConfigApiKeyAuth(params: {
+  cfg: OpenClawConfig;
+  sourceConfig: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
   const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
-  const apiKey = ref ? undefined : normalizeOptionalSecretInput(providerConfig?.apiKey);
-  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+  const sourceRef = resolveProviderConfigSecretInput(params.sourceConfig, params.provider).ref;
+  // Prepared Ref values are opaque bytes, not authored markers or copy/paste input.
+  // Legacy metadata markers without a source Ref still use literal validation.
+  const apiKey = sourceRef
+    ? providerConfig?.apiKey
+    : ref
+      ? undefined
+      : normalizeOptionalSecretInput(providerConfig?.apiKey);
+  if (
+    typeof apiKey !== "string" ||
+    !apiKey.trim() ||
+    (!sourceRef && isNonSecretApiKeyMarker(apiKey))
+  ) {
     return undefined;
   }
   return {

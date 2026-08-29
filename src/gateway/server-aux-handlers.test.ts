@@ -25,6 +25,7 @@ import {
   getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   setActiveCredentialDegradedOwner,
@@ -39,6 +40,7 @@ import {
 } from "../secrets/runtime.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
 import {
   registerGatewaySecretCredentialReloadCases,
   type CredentialReloadHarnessOptions,
@@ -305,6 +307,10 @@ function createCredentialReloadHarness(options: CredentialReloadHarnessOptions =
 // the channel restart loop from firing. Reset them before every test so this
 // suite is independent of worker import order.
 beforeEach(() => {
+  // These channel-only snapshots are not model fixtures; the real publication boundary is
+  // exercised in server-secrets-reload.model-runtime.test.ts.
+  vi.spyOn(modelRuntimeReload, "refreshModelRuntimeAfterHotReload").mockResolvedValue(undefined);
+  resetPreparedModelRuntimeSnapshotsForTest();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
   secretStoreMocks.deleteEntry.mockReset();
@@ -314,6 +320,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetPreparedModelRuntimeSnapshotsForTest();
   clearSecretsRuntimeSnapshot();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;

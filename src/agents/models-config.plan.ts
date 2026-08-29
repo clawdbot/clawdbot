@@ -308,8 +308,7 @@ async function planOpenClawModelsJsonWithDeps(
       agentDir,
       env,
       secretDefaults: cfg.secrets?.defaults,
-      sourceProviders: context.sourceConfigForSecrets.models?.providers,
-      sourceSecretDefaults: context.sourceConfigForSecrets.secrets?.defaults,
+      sourceConfigForSecrets: context.sourceConfigForSecrets,
       secretRefManagedProviders,
       manifestPlugins,
       ...(providerPolicyManifestRegistry
@@ -329,8 +328,7 @@ async function planOpenClawModelsJsonWithDeps(
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,
-      sourceProviders: context.sourceConfigForSecrets.models?.providers,
-      sourceSecretDefaults: context.sourceConfigForSecrets.secrets?.defaults,
+      sourceConfigForSecrets: context.sourceConfigForSecrets,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = filterWritableProviders(secretEnforcedProviders);

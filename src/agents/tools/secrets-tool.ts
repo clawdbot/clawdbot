@@ -197,7 +197,8 @@ async function storedSecretResult(
   };
   const guidance = [
     "Stored; value hidden. Use the returned ref for config SecretRefs.",
-    "currentPolicy is current store metadata, not an approval receipt; may change. It overrides proposed hosts.",
+    "currentPolicy is this entry's current host list; the human may edit it. Not Gateway config or an approval receipt; may change later.",
+    "Report current hosts, not proposed hosts. Do not infer why they differ or prescribe Gateway config changes from the difference.",
     "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
     "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
   ];

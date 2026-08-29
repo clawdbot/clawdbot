@@ -211,9 +211,14 @@ describe("secrets tool", () => {
     expect(result.content[0]).toMatchObject({
       text: expect.stringContaining("Use the returned ref"),
     });
-    expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("currentPolicy"),
-    });
+    for (const guidance of [
+      "this entry's current host list; the human may edit it",
+      "Not Gateway config or an approval receipt; may change later",
+      "Report current hosts, not proposed hosts",
+      "Do not infer why they differ or prescribe Gateway config changes from the difference",
+    ]) {
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining(guidance) });
+    }
     expect(JSON.stringify(result)).not.toContain("api.example.test");
     expect(JSON.stringify(result)).not.toContain("UNRELATED_ENV");
     expect(JSON.stringify(result)).not.toContain("private-env-value");
