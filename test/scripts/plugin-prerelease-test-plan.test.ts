@@ -1063,7 +1063,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
 
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
-        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
       "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
     });
     expect(readPluginPrereleaseWorkflow().concurrency).toEqual({
@@ -1072,7 +1072,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group:
-        "full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
+        "full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
       "cancel-in-progress": false,
     });
     for (const workflow of [fullReleaseWorkflow, releaseChecksWorkflow]) {
@@ -1101,6 +1101,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           coverageKey("full", false),
         ]).size,
       ).toBe(4);
+      expect(coverageKey("minimum", false)).toBe(coverageKey("beta", false));
       for (const profile of ["stable", "full"]) {
         expect(coverageKey(profile, false)).toBe(coverageKey(profile, true));
       }
