@@ -2702,11 +2702,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       ]),
     );
 
+    const targetDir = tempDirs.make("openclaw-doctor-current-runtime-");
+    fs.writeFileSync(
+      path.join(targetDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+    );
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
       successfulInstall({
         pluginId: "codex",
         npmSpec: "@openclaw/codex",
-        version: "2026.7.2",
+        version: VERSION,
+        targetDir,
         resolution: {
           integrity: "sha512-codex-supervisor-upgrade",
           resolvedAt: "2026-07-10T00:00:00.000Z",
@@ -2742,10 +2748,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
       spec: "@openclaw/codex",
-      installPath: "/tmp/openclaw-plugins/codex",
-      version: "2026.7.2",
+      installPath: targetDir,
+      version: VERSION,
       resolvedName: "@openclaw/codex",
-      resolvedSpec: "@openclaw/codex@2026.7.2",
+      resolvedSpec: `@openclaw/codex@${VERSION}`,
       integrity: "sha512-codex-supervisor-upgrade",
     });
     expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
@@ -3389,8 +3395,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       diagnostics: [],
       byPluginId: new Map([["codex", pluginMetadata]]),
     });
-    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-      successfulInstall({
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(async () => {
+      fs.writeFileSync(
+        path.join(installDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/codex", version: codexBetaVersion }),
+      );
+      return successfulInstall({
         pluginId: "codex",
         npmSpec: "@openclaw/codex",
         targetDir: installDir,
@@ -3398,8 +3408,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         resolution: {
           integrity: "sha512-new-codex-beta",
         },
-      }),
-    );
+      });
+    });
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
         id: "codex",
@@ -3609,11 +3619,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       {},
     ],
   ])("repairs a missing Codex plugin selected by %s", async (_label, cfg, env) => {
+    const targetDir = tempDirs.make("openclaw-doctor-current-runtime-");
+    fs.writeFileSync(
+      path.join(targetDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+    );
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
       successfulInstall({
         pluginId: "codex",
         npmSpec: "@openclaw/codex",
-        version: "2026.5.2",
+        version: VERSION,
+        targetDir,
       }),
     );
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
@@ -3643,8 +3659,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
       spec: "@openclaw/codex",
-      installPath: "/tmp/openclaw-plugins/codex",
-      version: "2026.5.2",
+      installPath: targetDir,
+      version: VERSION,
     });
     expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
       config: cfg,
@@ -3658,10 +3674,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expectRecordFields(result.records.codex, {
       source: "npm",
       spec: "@openclaw/codex",
-      installPath: "/tmp/openclaw-plugins/codex",
-      version: "2026.5.2",
+      installPath: targetDir,
+      version: VERSION,
       resolvedName: "@openclaw/codex",
-      resolvedSpec: "@openclaw/codex@2026.5.2",
+      resolvedSpec: `@openclaw/codex@${VERSION}`,
       integrity: "sha512-codex",
       resolvedAt: "2026-05-01T00:00:00.000Z",
     });
