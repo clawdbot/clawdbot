@@ -72,6 +72,7 @@ if (tool === 'swift' && args[0] === 'test') {
     GITHUB_ACTIONS: "true",
     RUNNER_OS: "macOS",
     RUNNER_TEMP: runnerTemp,
+    RUNNER_TRACKING_ID: "synthetic-native-runner-tracking",
     GITHUB_OUTPUT: path.join(root, "outputs"),
     HISTORICAL_TARGET: "false",
     SWIFT_TEST_EXECUTION: "parallel",
@@ -163,7 +164,12 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         }
         expect(test.env.OPENCLAW_PROFILE).not.toBe(f.env.OPENCLAW_PROFILE);
         expect(test.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        for (const key of ["DEVELOPER_DIR", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"] as const) {
+        for (const key of [
+          "DEVELOPER_DIR",
+          "DYLD_FRAMEWORK_PATH",
+          "DYLD_LIBRARY_PATH",
+          "RUNNER_TRACKING_ID",
+        ] as const) {
           expect(test.env[key]).toBe(f.env[key]);
         }
         expect(test.env.CFFIXED_USER_HOME).toBe(test.env.HOME);

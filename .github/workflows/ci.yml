@@ -4028,6 +4028,65 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swift-build-v5-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
 
+      # TEMPORARY PR132251: remove before final unsampled proof; never repair caches here.
+      - name: Inspect restored Swift dependency identities (temporary)
+        continue-on-error: true
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const read = (file) => {
+            const fd = fs.openSync(file, 'r');
+            try {
+              const bytes = Buffer.alloc(262145);
+              const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
+              if (size > 262144) throw new Error('diagnostic input cap');
+              return bytes.subarray(0, size);
+            } finally { fs.closeSync(fd); }
+          };
+          const json = (file) => { try { return JSON.parse(read(file)); } catch { return null; } };
+          const revision = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value) ? value : 'missing';
+          const version = (value) => typeof value === 'string' && /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(value) ? value : 'missing';
+          const report = (kind, facts) => console.log(`[macos-native] TEMP ${kind}: ${JSON.stringify(facts)}`);
+          const resolved = json('apps/macos/Package.resolved');
+          const pins = resolved?.version === 3 && Array.isArray(resolved.pins) ? resolved.pins : [];
+          // Emit only public identity/revision/version, never locations or arbitrary metadata.
+          for (const pin of pins.slice(0, 64)) {
+            if (/^[a-z0-9][a-z0-9._-]{0,79}$/.test(pin.identity))
+              report('pin', { identity: pin.identity, revision: revision(pin.state?.revision), version: version(pin.state?.version) });
+          }
+          if (!pins.length) report('pins', 'missing or unsupported Package.resolved');
+          // SwiftPM 6.3.3 Workspace+State.swift: V6/V7 object.dependencies[].
+          const workspace = json('apps/macos/.build/workspace-state.json');
+          const dependencies = [6, 7].includes(workspace?.version) && Array.isArray(workspace?.object?.dependencies) ? workspace.object.dependencies : [];
+          const matches = dependencies.filter((dep) => dep.packageRef?.identity === 'swift-subprocess');
+          const dep = matches.length === 1 ? matches[0] : undefined;
+          report('workspace swift-subprocess', {
+            format: [6, 7].includes(workspace?.version) ? workspace.version : 'missing or unsupported',
+            revision: revision(dep?.state?.checkoutState?.revision),
+            version: version(dep?.state?.checkoutState?.version),
+          });
+          try {
+            if (dep?.state?.name !== 'sourceControlCheckout' || !/^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,127}$/.test(dep?.subpath)) throw new Error('missing checkout');
+            const checkouts = fs.realpathSync('apps/macos/.build/checkouts');
+            const checkout = fs.realpathSync(path.join(checkouts, dep.subpath));
+            if (!checkout.startsWith(`${checkouts}/`) || !fs.existsSync(path.join(checkout, '.git'))) throw new Error('missing owned checkout');
+            const head = execFileSync('/usr/bin/git', ['-C', checkout, 'rev-parse', '--verify', 'HEAD'], {
+              encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 1024, stdio: ['ignore', 'pipe', 'ignore'],
+              env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_OPTIONAL_LOCKS: '0' },
+            }).trim();
+            report('cached swift-subprocess', { head: revision(head) });
+            const manifests = fs.readdirSync(checkout).filter((file) => /^Package(?:@swift-\d+(?:\.\d+){0,2})?\.swift$/.test(file)).sort();
+            if (!manifests.length) report('cached manifests', 'missing');
+            for (const file of manifests.slice(0, 8)) {
+              const bytes = read(path.join(checkout, file));
+              report('cached manifest', { file, sha256: createHash('sha256').update(bytes).digest('hex'), hasRetiredSubprocessSpan: bytes.includes('SubprocessSpan') });
+            }
+          } catch { report('cached swift-subprocess', 'missing or unreadable checkout/manifest facts; no cache changes'); }
+          NODE
+
       - name: Validate Swift build cache
         id: validate-swift-build-cache
         run: |
