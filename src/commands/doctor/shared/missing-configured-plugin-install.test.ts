@@ -3048,6 +3048,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       recordSpec: "@example/codex",
       resolvedName: "@example/codex",
       resolvedSpec: `@example/codex@${VERSION}`,
+      activePackageName: "@example/codex",
       expectedPackageName: "@example/codex",
     },
     {
@@ -3055,6 +3056,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       recordSpec: "@example/codex",
       resolvedName: "@openclaw/codex",
       resolvedSpec: `@openclaw/codex@${VERSION}`,
+      activePackageName: "@example/codex",
       expectedPackageName: "@example/codex",
     },
     {
@@ -3062,6 +3064,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       recordSpec: "@example/codex",
       resolvedName: undefined,
       resolvedSpec: undefined,
+      activePackageName: "@example/codex",
       expectedPackageName: "@example/codex",
     },
     {
@@ -3069,6 +3072,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       recordSpec: "@example/codex",
       resolvedName: "@openclaw/codex",
       resolvedSpec: "not-an-npm-spec",
+      activePackageName: "@example/codex",
       expectedPackageName: "@example/codex",
     },
     {
@@ -3076,11 +3080,20 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       recordSpec: "@openclaw/codex",
       resolvedName: "@example/codex",
       resolvedSpec: `@example/codex@${VERSION}`,
+      activePackageName: "@example/codex",
       expectedPackageName: "@openclaw/codex",
     },
+    {
+      name: "a third-party selector replaces a still-active official package",
+      recordSpec: "@example/codex",
+      resolvedName: "@openclaw/codex",
+      resolvedSpec: `@openclaw/codex@${VERSION}`,
+      activePackageName: "@openclaw/codex",
+      expectedPackageName: "@example/codex",
+    },
   ])(
-    "does not grant the official release cohort to a non-official active runtime ($name)",
-    async ({ recordSpec, resolvedName, resolvedSpec, expectedPackageName }) => {
+    "does not grant the official release cohort without both official active-package and selector identity ($name)",
+    async ({ recordSpec, resolvedName, resolvedSpec, activePackageName, expectedPackageName }) => {
       const installDir = path.join(
         tempDirs.make("openclaw-plugin-stub-repair-"),
         "node_modules",
@@ -3093,7 +3106,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         createColdPluginFixture({
           rootDir,
           pluginId: "codex",
-          packageName: "@example/codex",
+          packageName: activePackageName,
           packageVersion: VERSION,
         });
       }
@@ -3111,7 +3124,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       };
       const pluginMetadata = {
         id: "codex",
-        packageName: "@example/codex",
+        packageName: activePackageName,
         packageVersion: VERSION,
         providers: ["codex"],
         channels: [],
