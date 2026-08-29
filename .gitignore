@@ -10,6 +10,8 @@ dist-sea/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
+# The standalone QA broker uses Bun and owns its dependency lock.
+!qa/convex-credential-broker/bun.lock
 coverage
 __openclaw_vitest__/
 __pycache__/
