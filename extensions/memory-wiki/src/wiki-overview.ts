@@ -1,7 +1,10 @@
 // Memory Wiki plugin module implements the memory wiki overview.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   loadMemoryWikiCompiledCache,
+  MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
+  type MemoryWikiOverviewCluster,
   type MemoryWikiOverviewItem,
   type MemoryWikiOverviewPageCounts,
   type MemoryWikiOverviewStatus,
@@ -26,6 +29,24 @@ const EMPTY_OVERVIEW_PAGE_COUNTS: MemoryWikiOverviewPageCounts = {
   source: 0,
   report: 0,
 };
+
+function capOverviewText(value: string, maxChars = 240): string {
+  return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), maxChars);
+}
+
+function capOverviewItem(item: MemoryWikiOverviewItem): MemoryWikiOverviewItem {
+  return {
+    ...item,
+    title: capOverviewText(item.title, 240),
+    ...(item.id ? { id: capOverviewText(item.id, 240) } : {}),
+    ...(item.updatedAt ? { updatedAt: capOverviewText(item.updatedAt, 64) } : {}),
+    ...(item.sourceType ? { sourceType: capOverviewText(item.sourceType, 120) } : {}),
+    claims: item.claims.slice(0, 3).map((value) => capOverviewText(value)),
+    questions: item.questions.slice(0, 3).map((value) => capOverviewText(value)),
+    contradictions: item.contradictions.slice(0, 3).map((value) => capOverviewText(value)),
+    ...(item.snippet ? { snippet: capOverviewText(item.snippet, 700) } : {}),
+  };
+}
 
 function extractSnippet(body: string): string | undefined {
   for (const rawLine of body.split(/\r?\n/)) {
@@ -61,7 +82,7 @@ export async function listMemoryWikiOverview(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiOverviewStatus> {
   const snapshot = await loadMemoryWikiCompiledCache(config);
-  if (!snapshot) {
+  if (!snapshot?.dashboards) {
     throw new Error('Memory Wiki has no compiled dashboard snapshot. Run "openclaw wiki compile".');
   }
   return snapshot.dashboards.overview;
@@ -105,7 +126,8 @@ export function buildMemoryWikiOverview(
   const totalClaims = pages.reduce((sum, page) => sum + page.claims.length, 0);
   const totalQuestions = pages.reduce((sum, page) => sum + page.questions.length, 0);
   const totalContradictions = pages.reduce((sum, page) => sum + page.contradictions.length, 0);
-  const items = projectedItems
+  const allItems = projectedItems
+    .map(capOverviewItem)
     .filter(
       (item) =>
         PRIMARY_OVERVIEW_KINDS.has(item.kind) ||
@@ -114,6 +136,7 @@ export function buildMemoryWikiOverview(
         item.contradictionCount > 0,
     )
     .toSorted(compareOverviewItems);
+  const items = allItems.slice(0, MEMORY_WIKI_DASHBOARD_ITEM_LIMIT);
 
   const clusters = OVERVIEW_KIND_ORDER.map((kind) => {
     const clusterItems = items.filter((item) => item.kind === kind);
@@ -135,12 +158,13 @@ export function buildMemoryWikiOverview(
   }).filter((entry): entry is MemoryWikiOverviewCluster => entry !== null);
 
   return {
-    totalItems: items.length,
+    totalItems: allItems.length,
     totalPages: pages.length,
     pageCounts,
     totalClaims,
     totalQuestions,
     totalContradictions,
     clusters,
+    truncated: items.length < allItems.length,
   };
 }

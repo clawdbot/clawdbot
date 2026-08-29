@@ -16,7 +16,8 @@ const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
 const COMPILED_CACHE_MAX_BYTES_PER_ENTRY = 100 * 1024 * 1024;
 const COMPILED_CACHE_MAX_BYTES = 512 * 1024 * 1024;
-const COMPILED_CACHE_VERSION = 3;
+const COMPILED_CACHE_VERSION = 2;
+export const MEMORY_WIKI_DASHBOARD_ITEM_LIMIT = 2_500;
 
 export type MemoryWikiCompiledDigestClaim = {
   id?: string;
@@ -91,7 +92,7 @@ export type MemoryWikiImportInsightItem = {
   updatedAt?: string;
 };
 
-type MemoryWikiImportInsightCluster = {
+export type MemoryWikiImportInsightCluster = {
   key: string;
   label: string;
   itemCount: number;
@@ -107,6 +108,7 @@ export type MemoryWikiImportInsightsStatus = {
   totalItems: number;
   totalClusters: number;
   clusters: MemoryWikiImportInsightCluster[];
+  truncated?: boolean;
 };
 
 export type MemoryWikiOverviewItem = {
@@ -125,7 +127,7 @@ export type MemoryWikiOverviewItem = {
   snippet?: string;
 };
 
-type MemoryWikiOverviewCluster = {
+export type MemoryWikiOverviewCluster = {
   key: WikiPageKind;
   label: string;
   itemCount: number;
@@ -146,6 +148,7 @@ export type MemoryWikiOverviewStatus = {
   totalQuestions: number;
   totalContradictions: number;
   clusters: MemoryWikiOverviewCluster[];
+  truncated?: boolean;
 };
 
 export type MemoryWikiCompiledCacheSnapshot = {
@@ -155,7 +158,7 @@ export type MemoryWikiCompiledCacheSnapshot = {
     pages: MemoryWikiCompiledDigestPage[];
   };
   claims: MemoryWikiCompiledClaim[];
-  dashboards: {
+  dashboards?: {
     importInsights: MemoryWikiImportInsightsStatus;
     overview: MemoryWikiOverviewStatus;
   };
@@ -296,14 +299,14 @@ function parseSnapshot(
       typeof parsed.digest !== "object" ||
       !Array.isArray(parsed.digest.pages) ||
       !Array.isArray(parsed.claims) ||
-      !parsed.dashboards ||
-      typeof parsed.dashboards !== "object" ||
-      !parsed.dashboards.importInsights ||
-      typeof parsed.dashboards.importInsights !== "object" ||
-      !Array.isArray(parsed.dashboards.importInsights.clusters) ||
-      !parsed.dashboards.overview ||
-      typeof parsed.dashboards.overview !== "object" ||
-      !Array.isArray(parsed.dashboards.overview.clusters)
+      (parsed.dashboards !== undefined &&
+        (typeof parsed.dashboards !== "object" ||
+          !parsed.dashboards.importInsights ||
+          typeof parsed.dashboards.importInsights !== "object" ||
+          !Array.isArray(parsed.dashboards.importInsights.clusters) ||
+          !parsed.dashboards.overview ||
+          typeof parsed.dashboards.overview !== "object" ||
+          !Array.isArray(parsed.dashboards.overview.clusters)))
     ) {
       return null;
     }

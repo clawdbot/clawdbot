@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
-import {
-  invalidateMemoryWikiCompiledCache,
-  loadMemoryWikiCompiledCache,
-} from "./compiled-cache.js";
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
 import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -118,8 +115,8 @@ describe("compileMemoryWikiVault", () => {
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
   });
 
-  it("rebuilds a missing compiled cache when import auto-compile is disabled", async () => {
-    const { config } = await createVault({
+  it("refreshes only the compiled cache after changed imports when auto-compile is disabled", async () => {
+    const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
       config: {
         ingest: { autoCompile: false },
@@ -127,17 +124,40 @@ describe("compileMemoryWikiVault", () => {
       },
       initialize: true,
     });
-    await compileMemoryWikiVault(config);
-    await invalidateMemoryWikiCompiledCache(config);
+    const sourcePath = path.join(rootDir, "sources", "cache-only.md");
+    const renderSource = (value: string) =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          sourceType: "chatgpt-export",
+          title: "Cache only",
+        },
+        body: `# Cache only\n\n## Auto Digest\n- First user line: ${value}\n`,
+      });
+    await fs.writeFile(sourcePath, renderSource("before"), "utf8");
+    const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
 
-    const result = await refreshMemoryWikiIndexesAfterImport({
+    const first = await refreshMemoryWikiIndexesAfterImport({
       config,
-      syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+      syncResult: { importedCount: 1, updatedCount: 0, removedCount: 0 },
     });
+    const firstSnapshot = await loadMemoryWikiCompiledCache(config);
 
-    expect(result.reason).toBe("missing-compiled-cache");
-    expect(result.refreshed).toBe(true);
-    await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
+    await fs.writeFile(sourcePath, renderSource("after"), "utf8");
+    const second = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 1, removedCount: 0 },
+    });
+    const secondSnapshot = await loadMemoryWikiCompiledCache(config);
+
+    expect(first).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
+    expect(first.compile?.updatedFiles).toEqual([]);
+    expect(JSON.stringify(firstSnapshot?.dashboards)).toContain("before");
+    expect(second).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
+    expect(second.compile?.updatedFiles).toEqual([]);
+    expect(JSON.stringify(secondSnapshot?.dashboards)).toContain("after");
+    expect(JSON.stringify(secondSnapshot?.dashboards)).not.toContain("before");
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {

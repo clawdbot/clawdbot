@@ -3,6 +3,8 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Memory Wiki plugin module implements import insights behavior.
 import {
   loadMemoryWikiCompiledCache,
+  MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
+  type MemoryWikiImportInsightCluster,
   type MemoryWikiImportInsightItem,
   type MemoryWikiImportInsightsStatus,
 } from "./compiled-cache.js";
@@ -259,11 +261,37 @@ function compareItemsByUpdated(
   return left.title.localeCompare(right.title);
 }
 
+function capStrings(values: string[], maxItems: number, maxChars: number): string[] {
+  return values.slice(0, maxItems).map((value) => shortenSentence(value, maxChars));
+}
+
+function capImportInsightItem(item: MemoryWikiImportInsightItem): MemoryWikiImportInsightItem {
+  return {
+    ...item,
+    title: shortenSentence(item.title, 240),
+    riskReasons: capStrings(item.riskReasons, 8, 120),
+    labels: capStrings(item.labels, 8, 120),
+    topicKey: shortenSentence(item.topicKey, 120),
+    topicLabel: shortenSentence(item.topicLabel, 120),
+    ...(item.firstUserLine ? { firstUserLine: shortenSentence(item.firstUserLine, 240) } : {}),
+    ...(item.lastUserLine ? { lastUserLine: shortenSentence(item.lastUserLine, 240) } : {}),
+    ...(item.assistantOpener
+      ? { assistantOpener: shortenSentence(item.assistantOpener, 240) }
+      : {}),
+    summary: shortenSentence(item.summary, 180),
+    candidateSignals: capStrings(item.candidateSignals, 4, 240),
+    correctionSignals: capStrings(item.correctionSignals, 2, 160),
+    preferenceSignals: capStrings(item.preferenceSignals, 8, 240),
+    ...(item.createdAt ? { createdAt: shortenSentence(item.createdAt, 64) } : {}),
+    ...(item.updatedAt ? { updatedAt: shortenSentence(item.updatedAt, 64) } : {}),
+  };
+}
+
 export async function listMemoryWikiImportInsights(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiImportInsightsStatus> {
   const snapshot = await loadMemoryWikiCompiledCache(config);
-  if (!snapshot) {
+  if (!snapshot?.dashboards) {
     throw new Error('Memory Wiki has no compiled dashboard snapshot. Run "openclaw wiki compile".');
   }
   return snapshot.dashboards.importInsights;
@@ -344,7 +372,8 @@ export function projectMemoryWikiImportInsight(
 export function buildMemoryWikiImportInsights(
   input: MemoryWikiImportInsightItem[],
 ): MemoryWikiImportInsightsStatus {
-  const items = [...input].toSorted(compareItemsByUpdated);
+  const allItems = input.map(capImportInsightItem).toSorted(compareItemsByUpdated);
+  const items = allItems.slice(0, MEMORY_WIKI_DASHBOARD_ITEM_LIMIT);
 
   const clustersByKey = new Map<string, MemoryWikiImportInsightItem[]>();
   for (const item of items) {
@@ -389,8 +418,9 @@ export function buildMemoryWikiImportInsights(
 
   return {
     sourceType: "chatgpt",
-    totalItems: items.length,
-    totalClusters: clusters.length,
+    totalItems: allItems.length,
+    totalClusters: new Set(allItems.map((item) => item.topicKey)).size,
     clusters,
+    truncated: items.length < allItems.length,
   };
 }

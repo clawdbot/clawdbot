@@ -388,6 +388,11 @@ export type RefreshMemoryWikiIndexesResult = {
   compile?: CompileMemoryWikiResult;
 };
 
+type CompileMemoryWikiOptions = {
+  sourcePageWrites?: "update" | "preserve";
+  derivedPageWrites?: "update" | "preserve";
+};
+
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
   return entries
@@ -1144,9 +1149,13 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
   });
 }
 
+type CompleteMemoryWikiCompiledCacheSnapshot = MemoryWikiCompiledCacheSnapshot & {
+  dashboards: NonNullable<MemoryWikiCompiledCacheSnapshot["dashboards"]>;
+};
+
 function buildCompiledCacheSnapshot(
   scan: Awaited<ReturnType<typeof readPageSummaries>>,
-): MemoryWikiCompiledCacheSnapshot {
+): CompleteMemoryWikiCompiledCacheSnapshot {
   const pagesInput = scan.pages;
   const pages = [...pagesInput]
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
@@ -1248,7 +1257,7 @@ function buildCompiledCacheSnapshot(
 
 async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
-  options?: { sourcePageWrites?: "update" | "preserve" },
+  options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
   if (options?.sourcePageWrites === "preserve") {
     await activateExistingMemoryWikiVault(config);
@@ -1291,12 +1300,15 @@ async function compileMemoryWikiVaultUnlocked(
     scan = await readPageSummaries(rootDir);
     pages = scan.pages;
   }
-  const dashboardUpdatedFiles = await refreshDashboardPages({
-    config,
-    managedImportedSourcePagePaths,
-    rootDir,
-    pages,
-  });
+  const dashboardUpdatedFiles =
+    options?.derivedPageWrites === "preserve"
+      ? []
+      : await refreshDashboardPages({
+          config,
+          managedImportedSourcePagePaths,
+          rootDir,
+          pages,
+        });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
     scan = await readPageSummaries(rootDir);
@@ -1308,34 +1320,36 @@ async function compileMemoryWikiVaultUnlocked(
   const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
   let compiledCacheSourceGeneration: string | undefined;
 
-  const rootIndexPath = path.join(rootDir, "index.md");
-  if (
-    await writeManagedMarkdownFile({
-      rootDir,
-      relativePath: "index.md",
-      title: "Wiki Index",
-      startMarker: "<!-- openclaw:wiki:index:start -->",
-      endMarker: "<!-- openclaw:wiki:index:end -->",
-      body: buildRootIndexBody({ config, pages, counts }),
-    })
-  ) {
-    updatedFiles.push(rootIndexPath);
-  }
-
-  for (const group of COMPILE_PAGE_GROUPS) {
-    const relativePath = path.join(group.dir, "index.md").replace(/\\/g, "/");
-    const filePath = path.join(rootDir, relativePath);
+  if (options?.derivedPageWrites !== "preserve") {
+    const rootIndexPath = path.join(rootDir, "index.md");
     if (
       await writeManagedMarkdownFile({
         rootDir,
-        relativePath,
-        title: group.heading,
-        startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
-        endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
-        body: buildDirectoryIndexBody({ config, pages, group }),
+        relativePath: "index.md",
+        title: "Wiki Index",
+        startMarker: "<!-- openclaw:wiki:index:start -->",
+        endMarker: "<!-- openclaw:wiki:index:end -->",
+        body: buildRootIndexBody({ config, pages, counts }),
       })
     ) {
-      updatedFiles.push(filePath);
+      updatedFiles.push(rootIndexPath);
+    }
+
+    for (const group of COMPILE_PAGE_GROUPS) {
+      const relativePath = path.join(group.dir, "index.md").replace(/\\/g, "/");
+      const filePath = path.join(rootDir, relativePath);
+      if (
+        await writeManagedMarkdownFile({
+          rootDir,
+          relativePath,
+          title: group.heading,
+          startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
+          endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
+          body: buildDirectoryIndexBody({ config, pages, group }),
+        })
+      ) {
+        updatedFiles.push(filePath);
+      }
     }
   }
 
@@ -1418,7 +1432,7 @@ async function compileMemoryWikiVaultUnlocked(
 
 export async function compileMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
-  options?: { sourcePageWrites?: "update" | "preserve" },
+  options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
   return await withMemoryWikiVaultMutation(config.vault.path, () =>
     compileMemoryWikiVaultUnlocked(config, options),
@@ -1447,17 +1461,31 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
 }): Promise<RefreshMemoryWikiIndexesResult> {
   await initializeMemoryWikiVault(params.config);
-  const missingCompiledCache = (await loadMemoryWikiCompiledCache(params.config)) === null;
-  if (!params.config.ingest.autoCompile && !missingCompiledCache) {
-    return {
-      refreshed: false,
-      reason: "auto-compile-disabled",
-    };
-  }
   const importChanged =
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
+  const compiledCache = await loadMemoryWikiCompiledCache(params.config);
+  const missingCompiledCache = !compiledCache?.dashboards;
+  if (!params.config.ingest.autoCompile) {
+    if (!importChanged && !missingCompiledCache) {
+      return {
+        refreshed: false,
+        reason: "auto-compile-disabled",
+      };
+    }
+    // This mode disables generated index writes, not the dashboard snapshot
+    // that read RPCs need after source sync or a cache-format upgrade.
+    const compile = await compileMemoryWikiVault(params.config, {
+      sourcePageWrites: "preserve",
+      derivedPageWrites: "preserve",
+    });
+    return {
+      refreshed: false,
+      reason: "auto-compile-disabled",
+      compile,
+    };
+  }
   const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
   if (!importChanged && !missingIndexes && !missingCompiledCache) {
     return {
