@@ -980,6 +980,34 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("runs a targeted restart-sentinel wake for an agent without a heartbeat schedule", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:ops:main",
+        heartbeat: { target: "last" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:ops:main",
+        heartbeat: { target: "last" },
+      },
+    });
+    runner.stop();
+  });
+
   it("rejects targeted notification wakes for unconfigured agents", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
