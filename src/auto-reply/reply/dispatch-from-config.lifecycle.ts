@@ -4,7 +4,7 @@ import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-r
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -95,7 +95,7 @@ async function restoreArchivedDispatchSession(params: {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () =>
-      (await updateSessionEntry(
+      (await patchSessionEntryCore(
         { sessionKey, storePath },
         async (currentEntry) => {
           if (

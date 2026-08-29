@@ -44,12 +44,12 @@ export async function removeSessionWorktree(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<PreservedSessionWorktree | undefined> {
   if (!params.id) {
-    return;
+    return undefined;
   }
   const env = params.env ?? process.env;
   const record = getRegistryWorktree(env, params.id);
   if (!record || record.removedAt !== undefined) {
-    return;
+    return undefined;
   }
   const preserved = (
     current: ManagedWorktreeRecord,
@@ -94,6 +94,7 @@ export async function removeSessionWorktree(params: {
       return preserved(current, reason);
     }
   }
+  return undefined;
 }
 
 /** Snapshot removal and restore never change conversation or session metadata themselves. */

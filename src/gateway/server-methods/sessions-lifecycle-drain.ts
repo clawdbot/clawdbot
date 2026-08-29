@@ -216,7 +216,10 @@ export async function prepareSessionLifecycleDrain(
     }
     // Safe reclaim must finish before the archive or delete can commit.
     await reclaim();
-    const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck(params);
+    const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+      context: params.context,
+      sessionId: params.sessionId,
+    });
     return {
       release,
       hasAuthoritativeWork: () => {

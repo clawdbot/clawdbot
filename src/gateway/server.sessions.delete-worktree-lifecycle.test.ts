@@ -37,6 +37,7 @@ import {
   setupGatewaySessionsHandlerTestHarness,
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const execFileAsync = promisify(execFile);
@@ -267,17 +268,17 @@ test.each(["unarchived", "rearchived"] as const)(
     const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
     const successorArchive = change === "rearchived" ? Date.now() + 1000 : undefined;
     let archivedBeforeCleanup: number | undefined;
-    const originalRemove = ManagedWorktreeService.prototype.remove;
+    const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
     const remove = vi
       .spyOn(ManagedWorktreeService.prototype, "remove")
-      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+      .mockImplementationOnce(async (params) => {
         archivedBeforeCleanup = loadSessionEntry({ storePath, sessionKey: key })?.archivedAt;
         await patchSessionEntryCore(
           { storePath, sessionKey: key },
           () => ({ archivedAt: successorArchive }),
           { skipMaintenance: true },
         );
-        return await originalRemove.call(this, params);
+        return await originalRemove(params);
       });
     try {
       const result = await applySessionEntryLifecycleMutation({
@@ -357,7 +358,7 @@ test.each(["checkout-failed", "expired", "source-missing"] as const)(
   },
 );
 
-test.each([false, true])(
+test.each(["none", "restore-failed", "placement-changed"] as const)(
   "inbound admission restores the archived worktree before opening its session (failure=%s)",
   async (failure) => {
     const fixture = await createArchiveWorktreeFixture();
@@ -381,6 +382,9 @@ test.each([false, true])(
       import("../auto-reply/reply/reply-dispatcher.js"),
       import("../auto-reply/reply/test-ctx.js"),
     ]);
+    const placements =
+      failure === "placement-changed" ? createWorkerSessionPlacementStore() : undefined;
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
     const coordinator = createDispatchReplyOperationCoordinator({
       agentId: "main",
       cfg: { agents: { defaults: { workspace } } },
@@ -398,17 +402,38 @@ test.each([false, true])(
         storePath,
         entry: loadSessionEntry({ storePath, sessionKey: key }),
       },
-      sessionWorkerPlacementContext: {},
+      sessionWorkerPlacementContext: placements
+        ? { workerSessionPlacementService: placements }
+        : {},
       resolveOperationExpectedSessionId: () => sessionId,
     });
-    const restore = failure
+    const restore =
+      failure === "restore-failed"
+        ? vi
+            .spyOn(managedWorktrees, "restore")
+            .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
+        : undefined;
+    const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
+    const synchronize = worktreeLifecycle.synchronizeSessionWorktreeArchive;
+    const placementChange = placements
       ? vi
-          .spyOn(managedWorktrees, "restore")
-          .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
+          .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
+          .mockImplementationOnce(async (params) => {
+            await synchronize(params);
+            // Another durable owner can advance after filesystem preparation has returned.
+            placements.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
+          })
       : undefined;
     try {
       const admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
-      if (failure) {
+      if (failure === "placement-changed") {
+        await expect(admission).rejects.toThrow("changed before mutation");
+        expect(placements?.get(sessionId)).toMatchObject({ state: "requested", generation: 1 });
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+        await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+          "inbound restore keeps work\n",
+        );
+      } else if (failure === "restore-failed") {
         await expect(admission).rejects.toThrow(/worktree/i);
         expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
         await expect(fs.access(worktree.path)).rejects.toThrow();
@@ -419,7 +444,11 @@ test.each([false, true])(
         );
         expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
       }
+      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
+        transcript,
+      );
     } finally {
+      placementChange?.mockRestore();
       restore?.mockRestore();
       coordinator.completeDispatchReplyOperation();
       await coordinator.releasePreDispatchLifecycleAdmission();

@@ -54,10 +54,14 @@ describe("ManagedWorktreeService capacity", () => {
     availableBytes = 100 * GiB;
     totalBytes = 1024 * GiB;
     vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
-      ...stats,
+      type: stats.type,
       bsize: 4096,
+      bfree: Math.floor(availableBytes / 4096),
       bavail: Math.floor(availableBytes / 4096),
       blocks: totalBytes / 4096,
+      files: stats.files,
+      frsize: stats.frsize,
+      ffree: stats.ffree,
     }));
   });
 
