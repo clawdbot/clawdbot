@@ -86,7 +86,6 @@ extensions/browser/src/browser/playwright-core.runtime.ts	2
 extensions/browser/src/browser/pw-download-capture.ts	1
 extensions/browser/src/browser/pw-role-snapshot.ts	1
 extensions/browser/src/browser/pw-session-actions.ts	2
-extensions/browser/src/browser/pw-session-cdp-transport.ts	1
 extensions/browser/src/browser/pw-session-navigation.ts	1
 extensions/browser/src/browser/pw-session.page-cdp.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.actions.ts	2

@@ -14,6 +14,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 
+vi.mock(
+  "./pw-session-cdp-transport.js",
+  () => import("./pw-session-cdp-transport.test-support.js"),
+);
+
 export type BrowserMockBundle = {
   browser: import("playwright-core").Browser;
   browserClose: ReturnType<typeof vi.fn>;
