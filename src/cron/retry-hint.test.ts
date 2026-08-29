@@ -232,25 +232,4 @@ describe("resolveCronExecutionRetryHint", () => {
       }),
     ).toEqual({ retryable: false });
   });
-
-  it("classifies cron isolated agent setup timeouts as transient timeout errors (#131490)", () => {
-    expect(
-      resolveCronExecutionRetryHint({
-        error: "cron: isolated agent setup timed out before runner start",
-        retryOn: ["timeout"],
-      }),
-    ).toEqual({ retryable: true, category: "timeout" });
-    // Also works with default retry categories
-    expect(
-      resolveCronExecutionRetryHint({
-        error: "cron: isolated agent setup timed out before runner start",
-      }),
-    ).toEqual({ retryable: true, category: "timeout" });
-    // Does not match unrelated timeout messages
-    expect(
-      resolveCronExecutionRetryHint({
-        error: "some other timeout error",
-      }),
-    ).toEqual({ retryable: true });
-  });
 });

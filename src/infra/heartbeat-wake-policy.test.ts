@@ -1,4 +1,5 @@
-import { isTargetedUnscheduledWake, HeartbeatWakeIntent } from "./heartbeat-wake-policy";
+import { isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
+import type { HeartbeatWakeIntent } from "./heartbeat-wake-contracts.js";
 
 describe("isTargetedUnscheduledWake", () => {
   const mockParams: Partial<Parameters<typeof isTargetedUnscheduledWake>[0]> = {
