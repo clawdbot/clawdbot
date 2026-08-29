@@ -21,7 +21,6 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
 import { registerTrustedToolInputError } from "../tool-result-error.js";
 import { textResult } from "./tool-results.js";
 
@@ -517,6 +516,7 @@ async function imageResult(params: {
       },
     },
   };
+  const { sanitizeToolResultImages } = await import("../tool-images.js");
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 
