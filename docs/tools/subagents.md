@@ -82,7 +82,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
 
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
-    - `sessions_spawn` is non-blocking; it returns a run id immediately.
+    - `sessions_spawn` returns a run id after startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment.
     - On completion, the sub-agent reports back to the parent/requester session.
     - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets the completion event arrive as the next model-visible message.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
@@ -742,7 +742,7 @@ still need normal device approval for scope upgrades.
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
-- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
+- `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1-5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).

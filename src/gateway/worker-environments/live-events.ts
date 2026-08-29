@@ -36,6 +36,7 @@ import {
   type LiveEventTarget,
   type WorkerLiveSessionBinding,
 } from "./live-event-session-binding.js";
+import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -46,6 +47,7 @@ const MAX_FENCED_ENVIRONMENTS = 4096;
 type PendingLiveEvent = {
   request: WorkerLiveEventParams;
   sizeBytes: number;
+  recordDiagnostic?: ReturnType<typeof captureWorkerTurnDiagnosticRecorder>;
 };
 
 type OwnedLiveRun = {
@@ -574,6 +576,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
+    recordDiagnostic: PendingLiveEvent["recordDiagnostic"],
   ): WorkerLiveEventFailure | undefined => {
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
@@ -601,6 +604,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       emitAgentEventForOwner(event, owned.claimId);
     }
     recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
+    recordDiagnostic?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -608,13 +612,15 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const drain = (
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
+    firstDiagnostic: PendingLiveEvent["recordDiagnostic"],
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
+    let recordDiagnostic = firstPending ? firstPending.recordDiagnostic : firstDiagnostic;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined);
+      const failed = publish(window, request, buffered !== undefined, recordDiagnostic);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -654,6 +660,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       request = next.request;
       buffered = next;
+      recordDiagnostic = next.recordDiagnostic;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -678,6 +685,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in window) {
       return window;
     }
+    const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -685,7 +693,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, pending);
+      return drain(window, pending?.request ?? params.request, recordDiagnostic, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -694,7 +702,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes });
+    window.pending.set(seq, { request: params.request, sizeBytes, recordDiagnostic });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

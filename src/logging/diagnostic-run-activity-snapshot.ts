@@ -14,13 +14,19 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  activeToolDeadlineAtMs?: number;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
   activeModelCallRequestTimeoutMs?: number;
 };
 
-type SnapshotTool = { toolName: string; toolCallId?: string; startedAt: number };
+type SnapshotTool = {
+  toolName: string;
+  toolCallId?: string;
+  startedAt: number;
+  deadlineAtMs?: number;
+};
 type SnapshotActivity = DiagnosticArgumentChurnActivity &
   DiagnosticRepeatedRequestActivity & {
     activeEmbeddedRuns: ReadonlyMap<string, { runId: string; sequence: number }>;
@@ -74,6 +80,7 @@ export function buildDiagnosticSessionActivitySnapshot(
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
+    activeToolDeadlineAtMs: activeTool?.deadlineAtMs,
     lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
     lastProgressReason: churnProgress.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
@@ -83,4 +90,30 @@ export function buildDiagnosticSessionActivitySnapshot(
     ),
     activeModelCallRequestTimeoutMs,
   };
+}
+
+// Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
+// truly silent children within its own deadline. This floor bounds every
+// staleness consumer (diagnostic recovery aborts, reply-run stale takeover,
+// steer gates): lowering it reopens #88870, removing it reopens #96168.
+export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
+
+// Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
+export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
+
+// Quiet-but-alive tool phases get the blocked-tool floor so a human message
+// cannot reclaim a healthy long tool that stuck recovery would not touch yet.
+export function resolveRunStaleThresholdMs(
+  activity: Pick<
+    DiagnosticSessionActivitySnapshot,
+    "activeWorkKind" | "activeToolDeadlineAtMs" | "lastProgressAgeMs"
+  >,
+  progressAgeMs = activity.lastProgressAgeMs ?? 0,
+): number {
+  if (activity.activeToolDeadlineAtMs !== undefined) {
+    return Math.max(0, progressAgeMs + activity.activeToolDeadlineAtMs - Date.now());
+  }
+  return activity.activeWorkKind === "tool_call"
+    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : RUN_STALE_TAKEOVER_MS;
 }
