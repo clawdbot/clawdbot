@@ -754,6 +754,18 @@ export type ChannelMessageActionContext = {
    * them. Plugins forward it into durable sends so recovery does not replay too.
    */
   deliveryRetryOwner?: "caller";
+  /**
+   * Closure-bound revalidation of the active delegated runtime authority.
+   * Server-injected; plugins must never source it from tool/model params.
+   *
+   * Privileged plugin mutations (chat/membership changes, persistent side
+   * effects) revalidate at the final-effect boundary — immediately before each
+   * provider I/O that follows awaited client/runtime preparation — so a
+   * delegated turn that closes or is revoked during that interval cannot reach
+   * the provider. Throws when authority is no longer active. Absent on
+   * direct-handler paths with no live authority owner.
+   */
+  revalidateRuntimeAuthority?: () => void;
 };
 
 export type ChannelToolSend = {

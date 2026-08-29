@@ -687,6 +687,7 @@ export async function executeMessagePlugin(
     gateway,
     toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
     dryRun,
+    revalidateRuntimeAuthority: input.revalidateRuntimeAuthority,
   });
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);

@@ -1,4 +1,5 @@
 // Feishu tests cover channel plugin behavior.
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -52,6 +53,10 @@ const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendTextMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendPayloadMock = vi.hoisted(() => vi.fn());
+const createFeishuChatMock = vi.hoisted(() => vi.fn());
+const renameFeishuChatMock = vi.hoisted(() => vi.fn());
+const addFeishuChatMemberMock = vi.hoisted(() => vi.fn());
+const removeFeishuChatMemberMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -64,6 +69,8 @@ vi.mock("./client.js", () => ({
 vi.mock("./channel.runtime.js", () => ({
   feishuChannelRuntime: {
     addReactionFeishu: addReactionFeishuMock,
+    addFeishuChatMember: addFeishuChatMemberMock,
+    createFeishuChat: createFeishuChatMock,
     createPinFeishu: createPinFeishuMock,
     editMessageFeishu: editMessageFeishuMock,
     getChatInfo: getChatInfoMock,
@@ -77,8 +84,10 @@ vi.mock("./channel.runtime.js", () => ({
     listPinsFeishu: listPinsFeishuMock,
     listReactionsFeishu: listReactionsFeishuMock,
     probeFeishu: probeFeishuMock,
+    removeFeishuChatMember: removeFeishuChatMemberMock,
     removePinFeishu: removePinFeishuMock,
     removeReactionFeishu: removeReactionFeishuMock,
+    renameFeishuChat: renameFeishuChatMock,
     sendCardFeishu: sendCardFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
     sendStickerFeishu: sendStickerFeishuMock,
@@ -90,12 +99,32 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-function describeFeishuMessageTool(cfg: OpenClawConfig, accountId?: string) {
-  return feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId });
+function describeFeishuMessageTool(
+  cfg: OpenClawConfig,
+  accountId?: string,
+  discovery?: { currentChannelProvider?: string; senderIsOwner?: boolean },
+) {
+  return feishuPlugin.actions?.describeMessageTool?.({
+    cfg,
+    accountId,
+    ...discovery,
+  });
 }
 
-function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
-  return [...(describeFeishuMessageTool(cfg, accountId)?.actions ?? [])];
+function getDescribedActions(
+  cfg: OpenClawConfig,
+  accountId?: string,
+  discovery?: { currentChannelProvider?: string; senderIsOwner?: boolean },
+): string[] {
+  return [...(describeFeishuMessageTool(cfg, accountId, discovery)?.actions ?? [])];
+}
+
+function requireTrustedRequesterSender(
+  plugin: typeof feishuPlugin,
+  action: ChannelMessageActionName,
+  toolContext?: { currentChannelProvider?: string },
+): boolean {
+  return Boolean(plugin.actions?.requiresTrustedRequesterSender?.({ action, toolContext }));
 }
 
 type FeishuSecretProviderConfig = NonNullable<
@@ -324,6 +353,10 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+      "channel-create",
       "react",
       "reactions",
     ]);
@@ -421,6 +454,10 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+      "channel-create",
     ]);
   });
 
@@ -459,6 +496,10 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+      "channel-create",
     ]);
     expect(getDescribedActions(cfgLocal, "work")).toEqual([
       "send",
@@ -471,6 +512,10 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+      "channel-create",
       "react",
       "reactions",
     ]);
@@ -539,6 +584,432 @@ describe("feishuPlugin actions", () => {
       ).rejects.toThrow("actions.sticker");
     }
     expect(sendStickerFeishuMock).not.toHaveBeenCalled();
+  });
+
+  describe("group management actions", () => {
+    it("exposes management actions at discovery regardless of sender trust", () => {
+      // Management actions are gated at runtime, not at discovery. The discovery
+      // context carries no operator-scope fact, so hiding by provider would also
+      // hide the actions from an authorized direct Gateway operator whose target
+      // channel is Feishu. A non-owner Feishu chat member is rejected later by
+      // `requiresTrustedRequesterSender` (dispatcher) and
+      // `requireFeishuGroupManagementAuthorization` (handler) — see the runtime
+      // auth tests below. This mirrors the msteams reference, which does not hide
+      // management actions at discovery.
+      const untrustedFeishu = getDescribedActions(cfg, undefined, {
+        currentChannelProvider: "feishu",
+        senderIsOwner: false,
+      });
+      const ownerFeishu = getDescribedActions(cfg, undefined, {
+        currentChannelProvider: "feishu",
+        senderIsOwner: true,
+      });
+      const gatewayOperator = getDescribedActions(cfg, undefined, {});
+      const otherProvider = getDescribedActions(cfg, undefined, {
+        currentChannelProvider: "msteams",
+        senderIsOwner: false,
+      });
+      for (const actions of [untrustedFeishu, ownerFeishu, gatewayOperator, otherProvider]) {
+        for (const action of [
+          "addParticipant",
+          "removeParticipant",
+          "renameGroup",
+          "channel-create",
+        ]) {
+          expect(actions).toContain(action);
+        }
+        expect(actions).toContain("send");
+        expect(actions).toContain("channel-list");
+      }
+    });
+
+    it("does not advertise management actions in the auth-unaware prompt hint", () => {
+      // messageToolHints cannot see sender context, so it must not name the
+      // privileged management actions — the prompt should not coach the model
+      // toward mutation actions whose authorization is enforced only at runtime.
+      const hints =
+        feishuPlugin.agentPrompt?.messageToolHints?.({ cfg, accountId: undefined })?.join("\n") ??
+        "";
+      expect(hints).not.toContain("channel-create");
+      expect(hints).not.toContain("renameGroup");
+      expect(hints).not.toContain("addParticipant");
+    });
+
+    it("contributes a strict-compatible, cross-channel channel-create schema", () => {
+      // channel-create's initial members are carried by a distinct `memberIds`
+      // array, not by overloading `members`. The shared message-tool schema
+      // already defines `members` as a boolean (channel-info "include members"),
+      // and the shared builder flat-merges contributed properties last — so
+      // reusing `members` as an array or a boolean-or-array union would either
+      // overwrite that boolean or emit `anyOf`, which the OpenAI strict-schema
+      // adapter rejects (downgrading the whole tool to strict=false). A separate
+      // Feishu-only array keeps the shared field strict-compatible. `memberIdType`
+      // binds the array's id kind (flat enum, no `anyOf`) so a user_id/union_id
+      // list is not sent to Lark as open_id. `visibility: "all-configured"` keeps
+      // channel-create discoverable when Feishu is configured but another channel
+      // is active (cross-channel send); the default `current-channel` would filter
+      // the action out of that path.
+      const schema = describeFeishuMessageTool(cfg)?.schema;
+      expect(schema).not.toBeNull();
+      expect(Array.isArray(schema)).toBe(false);
+      const fragment = schema as Extract<
+        typeof schema,
+        { properties: Record<string, unknown>; visibility?: string }
+      >;
+      expect(fragment.actions).toEqual(["channel-create"]);
+      expect(fragment.visibility).toBe("all-configured");
+      expect(Object.keys(fragment.properties).toSorted()).toEqual([
+        "description",
+        "memberIdType",
+        "memberIds",
+      ]);
+      const memberIdsSchema = fragment.properties.memberIds as { type?: string; anyOf?: unknown[] };
+      expect(memberIdsSchema.type).toBe("array");
+      expect(memberIdsSchema.anyOf).toBeUndefined();
+      const memberIdTypeSchema = fragment.properties.memberIdType as {
+        type?: string;
+        enum?: string[];
+        anyOf?: unknown[];
+      };
+      expect(memberIdTypeSchema.type).toBe("string");
+      expect(memberIdTypeSchema.enum).toEqual(["open_id", "user_id", "union_id"]);
+      expect(memberIdTypeSchema.anyOf).toBeUndefined();
+    });
+
+    it("rejects group management without an owner or operator.admin requester", async () => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "renameGroup",
+          params: { name: "new", chatId: "oc_group_1" },
+          cfg,
+          accountId: undefined,
+          toolContext: {},
+        } as never),
+      ).rejects.toThrow("owner or operator.admin");
+      expect(renameFeishuChatMock).not.toHaveBeenCalled();
+    });
+
+    it("allows group management for an owner requester", async () => {
+      renameFeishuChatMock.mockResolvedValue({ chat_id: "oc_group_1", name: "new" });
+      const result = await feishuPlugin.actions?.handleAction?.({
+        action: "renameGroup",
+        params: { name: "new", chatId: "oc_group_1" },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        senderIsOwner: true,
+      } as never);
+      expect(renameFeishuChatMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1", "new");
+      expect(resultDetails(result).ok).toBe(true);
+    });
+
+    it("allows channel-create for an operator.admin requester", async () => {
+      createFeishuChatMock.mockResolvedValue({ chat_id: "oc_new" });
+      const result = await feishuPlugin.actions?.handleAction?.({
+        action: "channel-create",
+        params: { name: "team" },
+        cfg,
+        accountId: undefined,
+        gatewayClientScopes: ["operator.admin"],
+        toolContext: {},
+      } as never);
+      expect(createFeishuChatMock).toHaveBeenCalledWith(
+        { tag: "client" },
+        expect.objectContaining({ name: "team" }),
+      );
+      expect(resultDetails(result).chatId).toBe("oc_new");
+    });
+
+    it("honors a scalar openId member for channel-create", async () => {
+      createFeishuChatMock.mockResolvedValue({ chat_id: "oc_new" });
+      await feishuPlugin.actions?.handleAction?.({
+        action: "channel-create",
+        params: { name: "team", openId: "ou_user_1" },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(createFeishuChatMock).toHaveBeenCalledWith(
+        { tag: "client" },
+        expect.objectContaining({
+          name: "team",
+          userIds: ["ou_user_1"],
+          userIdType: "open_id",
+        }),
+      );
+    });
+
+    it("honors the memberIds array for channel-create", async () => {
+      createFeishuChatMock.mockResolvedValue({ chat_id: "oc_new" });
+      await feishuPlugin.actions?.handleAction?.({
+        action: "channel-create",
+        params: { name: "team", memberIds: ["ou_user_1", "ou_user_2"] },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(createFeishuChatMock).toHaveBeenCalledWith(
+        { tag: "client" },
+        expect.objectContaining({
+          name: "team",
+          userIds: ["ou_user_1", "ou_user_2"],
+        }),
+      );
+    });
+
+    it("binds memberIds to a declared memberIdType for channel-create", async () => {
+      createFeishuChatMock.mockResolvedValue({ chat_id: "oc_new" });
+      await feishuPlugin.actions?.handleAction?.({
+        action: "channel-create",
+        params: { name: "team", memberIds: ["u_1"], memberIdType: "user_id" },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(createFeishuChatMock).toHaveBeenCalledWith(
+        { tag: "client" },
+        expect.objectContaining({
+          name: "team",
+          userIds: ["u_1"],
+          userIdType: "user_id",
+        }),
+      );
+    });
+
+    it("requires a name for channel-create", async () => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "channel-create",
+          params: {},
+          cfg,
+          accountId: undefined,
+          senderIsOwner: true,
+          toolContext: {},
+        } as never),
+      ).rejects.toThrow("requires name");
+    });
+
+    it("requires a chatId for renameGroup", async () => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "renameGroup",
+          params: { name: "new" },
+          cfg,
+          accountId: undefined,
+          senderIsOwner: true,
+          toolContext: {},
+        } as never),
+      ).rejects.toThrow("requires chatId or channelId");
+    });
+
+    it("adds a participant via addParticipant", async () => {
+      addFeishuChatMemberMock.mockResolvedValue({
+        chat_id: "oc_group_1",
+        member_id: "ou_user_1",
+        member_id_type: "open_id",
+      });
+      const result = await feishuPlugin.actions?.handleAction?.({
+        action: "addParticipant",
+        params: { chatId: "oc_group_1", openId: "ou_user_1" },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(addFeishuChatMemberMock).toHaveBeenCalledWith(
+        { tag: "client" },
+        "oc_group_1",
+        "ou_user_1",
+        "open_id",
+      );
+      expect(resultDetails(result).ok).toBe(true);
+    });
+
+    it("removes a participant via removeParticipant with an explicit member id type", async () => {
+      removeFeishuChatMemberMock.mockResolvedValue({
+        chat_id: "oc_group_1",
+        member_id: "ou_user_1",
+        member_id_type: "user_id",
+      });
+      const result = await feishuPlugin.actions?.handleAction?.({
+        action: "removeParticipant",
+        params: { chatId: "oc_group_1", userId: "ou_user_1", userIdType: "user_id" },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(removeFeishuChatMemberMock).toHaveBeenCalledWith(
+        { tag: "client" },
+        "oc_group_1",
+        "ou_user_1",
+        "user_id",
+      );
+      expect(resultDetails(result).ok).toBe(true);
+    });
+
+    // Membership lifecycle: an authorized owner adds a member (state 0→1),
+    // confirms the member is present via getChatMembers, then removes the
+    // member (state 1→0) and confirms absence. Proves add-then-remove drives a
+    // real membership state change through the plugin handler, not just a
+    // lone mutation call.
+    it("drives an add-then-remove membership state change for an owner requester", async () => {
+      const member = {
+        member_id: "ou_user_1",
+        name: undefined,
+        tenant_key: undefined,
+        member_id_type: "open_id",
+      };
+      getChatMembersMock.mockImplementation(async () => ({
+        chat_id: "oc_group_1",
+        has_more: false,
+        page_token: undefined,
+        members:
+          addFeishuChatMemberMock.mock.calls.length > 0 &&
+          removeFeishuChatMemberMock.mock.calls.length === 0
+            ? [member]
+            : [],
+      }));
+
+      const addResult = await feishuPlugin.actions?.handleAction?.({
+        action: "addParticipant",
+        params: { chatId: "oc_group_1", openId: "ou_user_1" },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(resultDetails(addResult).ok).toBe(true);
+      expect(addFeishuChatMemberMock).toHaveBeenCalledTimes(1);
+      const present = await getChatMembersMock();
+      expect(present.members).toHaveLength(1);
+      expect(present.members[0]?.member_id).toBe("ou_user_1");
+
+      const removeResult = await feishuPlugin.actions?.handleAction?.({
+        action: "removeParticipant",
+        params: { chatId: "oc_group_1", openId: "ou_user_1" },
+        cfg,
+        accountId: undefined,
+        senderIsOwner: true,
+        toolContext: {},
+      } as never);
+      expect(resultDetails(removeResult).ok).toBe(true);
+      expect(removeFeishuChatMemberMock).toHaveBeenCalledTimes(1);
+      const absent = await getChatMembersMock();
+      expect(absent.members).toHaveLength(0);
+    });
+
+    // A delegated run can close or be revoked between handler-entry authorization
+    // and the Lark mutation: the handler authorizes once, then awaits
+    // client/runtime preparation before provider I/O. The closure-bound
+    // `revalidateRuntimeAuthority` guard runs after those awaits and before each
+    // mutation, so a turn that is no longer active cannot reach Lark. Each case
+    // proves the guard fires after preparation succeeds (the client/runtime mocks
+    // resolve) and blocks the provider mutation from being issued.
+    it.each([
+      {
+        action: "channel-create",
+        params: { name: "new" },
+        mutation: createFeishuChatMock,
+        label: "createFeishuChat",
+      },
+      {
+        action: "renameGroup",
+        params: { name: "new", chatId: "oc_group_1" },
+        mutation: renameFeishuChatMock,
+        label: "renameFeishuChat",
+      },
+      {
+        action: "addParticipant",
+        params: { chatId: "oc_group_1", openId: "ou_user_1" },
+        mutation: addFeishuChatMemberMock,
+        label: "addFeishuChatMember",
+      },
+      {
+        action: "removeParticipant",
+        params: { chatId: "oc_group_1", openId: "ou_user_1" },
+        mutation: removeFeishuChatMemberMock,
+        label: "removeFeishuChatMember",
+      },
+    ] as const)(
+      "blocks $action when delegated authority closes before the Lark mutation",
+      async ({ action, params, mutation }) => {
+        mutation.mockResolvedValue({ chat_id: "oc_group_1" });
+        // Guard throws synchronously when the active runtime authority is gone.
+        const revoked: () => void = () => {
+          throw new TypeError("agent runtime authority is no longer active");
+        };
+        await expect(
+          feishuPlugin.actions?.handleAction?.({
+            action,
+            params,
+            cfg,
+            accountId: undefined,
+            senderIsOwner: true,
+            toolContext: {},
+            revalidateRuntimeAuthority: revoked,
+          } as never),
+        ).rejects.toThrow("agent runtime authority is no longer active");
+        // Preparation (client + runtime) ran, but the mutation never did.
+        expect(createFeishuClientMock).toHaveBeenCalledWith(expect.anything());
+        expect(mutation).not.toHaveBeenCalled();
+      },
+    );
+
+    it("requires a member id for addParticipant", async () => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "addParticipant",
+          params: { chatId: "oc_group_1" },
+          cfg,
+          accountId: undefined,
+          senderIsOwner: true,
+          toolContext: {},
+        } as never),
+      ).rejects.toThrow("requires memberId or userId");
+    });
+
+    it("scopes the trusted-sender gate to feishu-originated contexts", () => {
+      // A Feishu-originated tool request needs a trusted sender identity so the
+      // plugin can authorize chat mutation against the message sender.
+      for (const action of [
+        "addParticipant",
+        "removeParticipant",
+        "renameGroup",
+        "channel-create",
+      ] as const) {
+        expect(
+          requireTrustedRequesterSender(feishuPlugin, action, {
+            currentChannelProvider: "feishu",
+          }),
+        ).toBe(true);
+      }
+      // A direct Gateway operator request carries no Feishu channel context; the
+      // dispatcher must NOT reject it here, so handleAction can evaluate the
+      // operator.admin scope itself. Regression for the dispatch blocker where
+      // the predicate returned true unconditionally.
+      for (const action of [
+        "addParticipant",
+        "removeParticipant",
+        "renameGroup",
+        "channel-create",
+      ] as const) {
+        expect(requireTrustedRequesterSender(feishuPlugin, action, {})).toBe(false);
+        expect(
+          requireTrustedRequesterSender(feishuPlugin, action, {
+            currentChannelProvider: "msteams",
+          }),
+        ).toBe(false);
+      }
+      expect(
+        requireTrustedRequesterSender(feishuPlugin, "send", {
+          currentChannelProvider: "feishu",
+        }),
+      ).toBe(false);
+    });
   });
 
   describe("sticker-search", () => {

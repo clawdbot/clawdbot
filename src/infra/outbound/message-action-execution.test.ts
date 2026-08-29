@@ -601,4 +601,91 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
   });
+
+  describe("privileged plugin action final-effect authority revalidation", () => {
+    // A privileged plugin mutation (e.g. Feishu chat/membership changes)
+    // authorizes once at handler entry, then awaits client/runtime preparation
+    // before provider I/O. The closure-bound `revalidateRuntimeAuthority` guard
+    // must traverse the normal local message-tool route — `runMessageAction` →
+    // `executeMessagePlugin` → `dispatchChannelMessageAction` → `handleAction` —
+    // so a delegated turn revoked during that interval cannot reach the provider.
+    const mutationMock = vi.fn();
+    const handleAction = vi.fn(async (ctx: { revalidateRuntimeAuthority?: () => void }) => {
+      // Mimic the Feishu handler shape: await preparation, then revalidate at
+      // the final-effect boundary, then issue the provider mutation.
+      await Promise.resolve();
+      ctx.revalidateRuntimeAuthority?.();
+      mutationMock();
+      return jsonResult({ ok: true });
+    });
+    const plugin = createGatewayActionPlugin({
+      pluginId: "privileged",
+      label: "Privileged",
+      blurb: "Privileged action dispatch test plugin.",
+      actions: ["channel-create"],
+      messaging: {
+        targetPrefixes: ["privileged"],
+        normalizeTarget: (raw) => raw,
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      handleAction: handleAction as unknown as Parameters<
+        typeof createGatewayActionPlugin
+      >[0]["handleAction"],
+    });
+
+    beforeEach(() => {
+      setTestPlugin(plugin, "privileged");
+      handleAction.mockClear();
+      mutationMock.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it("forwards revalidateRuntimeAuthority from runMessageAction input to the plugin handler", async () => {
+      const guard = vi.fn();
+      await runMessageAction({
+        cfg: {
+          channels: { privileged: { enabled: true } },
+        } as OpenClawConfig,
+        action: "channel-create",
+        params: { channel: "privileged", name: "new" },
+        conversationReadOrigin: "direct-operator",
+        dryRun: false,
+        revalidateRuntimeAuthority: guard,
+      });
+      // The guard reached the plugin handler and was invoked at the final
+      // effect, immediately before the provider mutation.
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(mutationMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("blocks the provider mutation when authority is revoked after preparation", async () => {
+      // Guard throws synchronously when the active delegated authority is gone,
+      // simulating a turn revoked during the awaited preparation interval.
+      const revoked = (): void => {
+        throw new TypeError("agent runtime authority is no longer active");
+      };
+      await expect(
+        runMessageAction({
+          cfg: {
+            channels: { privileged: { enabled: true } },
+          } as OpenClawConfig,
+          action: "channel-create",
+          params: { channel: "privileged", name: "new" },
+          conversationReadOrigin: "direct-operator",
+          dryRun: false,
+          revalidateRuntimeAuthority: revoked,
+        }),
+      ).rejects.toThrow("agent runtime authority is no longer active");
+      // Preparation ran (handleAction was entered), but the mutation never did.
+      expect(handleAction).toHaveBeenCalledTimes(1);
+      expect(mutationMock).not.toHaveBeenCalled();
+    });
+  });
 });

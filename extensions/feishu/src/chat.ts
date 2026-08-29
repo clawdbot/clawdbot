@@ -163,6 +163,111 @@ export async function getChatMembers(
   };
 }
 
+export async function createFeishuChat(
+  client: Lark.Client,
+  params: {
+    name: string;
+    description?: string;
+    userIds?: string[];
+    userIdType?: "open_id" | "user_id" | "union_id";
+  },
+) {
+  const res = await client.im.chat.create({
+    ...(params.userIdType ? { params: { user_id_type: params.userIdType } } : {}),
+    data: {
+      name: params.name,
+      ...(params.description ? { description: params.description } : {}),
+      ...(params.userIds && params.userIds.length > 0 ? { user_id_list: params.userIds } : {}),
+    },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  // Lark may accept the chat (code 0) yet reject some requested initial
+  // members, returning invalid_id_list / not_existed_id_list. Treat that as a
+  // failure — parallel to addFeishuChatMember — so a partial-member creation
+  // never reports silent success. These fields are not on the typed create
+  // response shape, so read them defensively.
+  const data = (res.data ?? {}) as Record<string, unknown>;
+  const invalid = (data.invalid_id_list as string[] | undefined) ?? [];
+  const notExisted = (data.not_existed_id_list as string[] | undefined) ?? [];
+  if (invalid.length > 0 || notExisted.length > 0) {
+    throw new Error(
+      `Feishu createChat rejected initial member(s): ${[...invalid, ...notExisted].join(", ")}`,
+    );
+  }
+  return {
+    chat_id: res.data?.chat_id,
+  };
+}
+
+export async function renameFeishuChat(client: Lark.Client, chatId: string, name: string) {
+  const res = await client.im.chat.update({
+    path: { chat_id: chatId },
+    data: { name },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  return {
+    chat_id: chatId,
+    name,
+  };
+}
+
+export async function addFeishuChatMember(
+  client: Lark.Client,
+  chatId: string,
+  memberId: string,
+  memberIdType: "open_id" | "user_id" | "union_id" = "open_id",
+) {
+  const res = await client.im.chatMembers.create({
+    path: { chat_id: chatId },
+    params: { member_id_type: memberIdType },
+    data: { id_list: [memberId] },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  const invalid = res.data?.invalid_id_list ?? [];
+  const notExisted = res.data?.not_existed_id_list ?? [];
+  if (invalid.length > 0 || notExisted.length > 0) {
+    throw new Error(
+      `Feishu addMember rejected member(s): ${[...invalid, ...notExisted].join(", ")}`,
+    );
+  }
+  return {
+    chat_id: chatId,
+    member_id: memberId,
+    member_id_type: memberIdType,
+  };
+}
+
+export async function removeFeishuChatMember(
+  client: Lark.Client,
+  chatId: string,
+  memberId: string,
+  memberIdType: "open_id" | "user_id" | "union_id" = "open_id",
+) {
+  const res = await client.im.chatMembers.delete({
+    path: { chat_id: chatId },
+    params: { member_id_type: memberIdType },
+    data: { id_list: [memberId] },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  const invalid = res.data?.invalid_id_list ?? [];
+  if (invalid.length > 0) {
+    throw new Error(`Feishu removeMember rejected member(s): ${invalid.join(", ")}`);
+  }
+  return {
+    chat_id: chatId,
+    member_id: memberId,
+    member_id_type: memberIdType,
+  };
+}
+
 export async function assertFeishuChatMember(
   client: Lark.Client,
   chatId: string,

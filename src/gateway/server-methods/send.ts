@@ -1153,6 +1153,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
+            // Privileged plugin mutations (e.g. Feishu chat/membership changes)
+            // revalidate delegated runtime authority at the final-effect boundary,
+            // immediately before provider I/O that follows awaited preparation.
+            revalidateRuntimeAuthority: agentRuntimeAuthority.commitGuard,
           };
           let payload: unknown;
           if (canonicalAction) {

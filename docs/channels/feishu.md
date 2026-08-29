@@ -196,6 +196,27 @@ Look for `open_id` in the log output. You can also check pending pairing request
 openclaw pairing list feishu
 ```
 
+## Group/chat management
+
+The bot can manage chats through the Feishu message tool. These actions **mutate chat state**, so they are gated at runtime in two layers: only an OpenClaw **owner** requester (`senderIsOwner` — an explicit OpenClaw owner-authorization fact, not the native Feishu chat owner) or a Gateway client with the **`operator.admin`** scope can invoke them. An _anonymous_ Feishu tool turn (no trusted sender identity) is rejected by the shared message-action dispatcher before `handleAction`; an _identified_ non-owner Feishu sender passes the dispatcher and is then rejected at the `handleAction` authorization check. In both cases the mutation never reaches Lark.
+
+| Action              | Lark API                               | Required bot scope                        |
+| ------------------- | -------------------------------------- | ----------------------------------------- |
+| `channel-create`    | `POST /im/v1/chats`                    | `im:chat:write` or `im:chat`              |
+| `renameGroup`       | `PUT /im/v1/chats/:chat_id`            | `im:chat:write` or `im:chat`              |
+| `addParticipant`    | `POST /im/v1/chats/:chat_id/members`   | `im:chat.members:write_only` or `im:chat` |
+| `removeParticipant` | `DELETE /im/v1/chats/:chat_id/members` | `im:chat.members:write_only` or `im:chat` |
+
+Prerequisites:
+
+- Grant the bot the Lark scopes above in the Feishu Developer Console, otherwise the action fails with a Lark permission error at runtime.
+- The bot must already be a member of the target chat for `renameGroup`/`addParticipant`/`removeParticipant`, and must have owner/admin rights in that chat to mutate membership.
+- `channel-create` accepts `name` (required), plus optional `description`, initial member IDs — `memberIds` (an `open_id`/`user_id`/`union_id` array) or a scalar `openId`/`userId`/`unionId` — and `memberIdType` (`open_id`/`user_id`/`union_id`, defaults to `open_id`) to declare the id kind of `memberIds`. `addParticipant`/`removeParticipant` accept `chatId` plus a member ID; `renameGroup` accepts `chatId` plus `name`.
+
+<Note>
+Authorization is OpenClaw-owner scoping, not native Feishu chat ownership: a native Feishu chat owner who is not an OpenClaw owner is still rejected. A direct Gateway operator request (no Feishu chat context) is authorized by the `operator.admin` scope; a request originating from a Feishu chat is authorized only when the sender is an OpenClaw owner.
+</Note>
+
 ## Common commands
 
 | Command   | Description                 |

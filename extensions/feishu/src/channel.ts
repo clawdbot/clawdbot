@@ -47,6 +47,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { Type } from "typebox";
 import type {
   ChannelMessageActionName,
   ChannelMeta,
@@ -429,6 +430,23 @@ const collectFeishuOpenGroupFindings = createConditionalWarningCollector.finding
   title: "Feishu security warning",
 });
 
+const FEISHU_GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
+  "addParticipant",
+  "removeParticipant",
+  "renameGroup",
+  "channel-create",
+]);
+
+function requireFeishuGroupManagementAuthorization(ctx: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): string | undefined {
+  if (ctx.senderIsOwner === true || ctx.gatewayClientScopes?.includes("operator.admin")) {
+    return undefined;
+  }
+  return "Feishu group management requires an owner or operator.admin requester.";
+}
+
 function describeFeishuMessageTool({
   cfg,
   accountId,
@@ -451,6 +469,21 @@ function describeFeishuMessageTool({
       capabilities: enabled ? ["presentation"] : [],
     };
   }
+  // Management actions mutate chat state. They are gated at runtime, not at
+  // discovery time, in two layers:
+  //  1. `requiresTrustedRequesterSender` (scoped to Feishu-originated tool turns)
+  //     makes the shared dispatcher reject an *anonymous* Feishu tool turn — one
+  //     with no `requesterSenderId` — before `handleAction`. An identified Feishu
+  //     sender passes this layer.
+  //  2. `requireFeishuGroupManagementAuthorization` at `handleAction` entry then
+  //     requires `senderIsOwner` or an `operator.admin` scope, so an identified
+  //     non-owner Feishu member is rejected here, before any Lark call.
+  // This mirrors the msteams reference (extensions/msteams/src/channel.ts),
+  // which does not hide management actions at discovery and relies on the same
+  // runtime gates. Hiding at discovery was considered but rejected: the
+  // discovery context carries no operator-scope fact, so any provider-based
+  // hide also hides the actions from an authorized direct Gateway operator
+  // whose target channel is Feishu — breaking the supported operator path.
   const actions = new Set<ChannelMessageActionName>([
     "send",
     "read",
@@ -462,6 +495,7 @@ function describeFeishuMessageTool({
     "member-info",
     "channel-info",
     "channel-list",
+    ...FEISHU_GROUP_MANAGEMENT_ACTIONS,
   ]);
   if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "reactions"))) {
     actions.add("react");
@@ -480,6 +514,46 @@ function describeFeishuMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: enabled ? ["presentation"] : [],
+    schema: enabled
+      ? {
+          // channel-create's initial members are carried by a distinct
+          // `memberIds` field rather than overloading `members`: the shared
+          // message-tool schema already defines `members` as a boolean
+          // (channel-info "include members"), and the shared builder flat-merges
+          // contributed properties last, so reusing `members` as an array — or a
+          // boolean-or-array union — would either overwrite that boolean or emit
+          // `anyOf`, which the OpenAI strict-schema adapter rejects, downgrading
+          // the whole tool to strict=false. A separate Feishu-only array keeps the
+          // shared field strict-compatible. `memberIdType` binds the array's id
+          // kind so a user_id/union_id list is not sent to Lark as open_id.
+          // `visibility: "all-configured"` keeps channel-create discoverable when
+          // Feishu is configured but another channel is the active runtime channel
+          // (e.g. a cron/agent cross-channel send targeting Feishu); the default
+          // `current-channel` would filter the action out of that path.
+          actions: ["channel-create"],
+          visibility: "all-configured",
+          properties: {
+            description: Type.Optional(
+              Type.String({
+                description: "Chat description for channel-create (Lark chat description field).",
+              }),
+            ),
+            memberIds: Type.Optional(
+              Type.Array(Type.String(), {
+                description:
+                  "Initial member list for channel-create. Pair with memberIdType to declare the id kind.",
+              }),
+            ),
+            memberIdType: Type.Optional(
+              Type.String({
+                enum: ["open_id", "user_id", "union_id"],
+                description:
+                  "Identifier kind of memberIds for channel-create. Defaults to open_id if omitted.",
+              }),
+            ),
+          },
+        }
+      : null,
   };
 }
 
@@ -1063,6 +1137,45 @@ function resolveRequestedFeishuMemberIdType(
   return undefined;
 }
 
+function resolveFeishuChatMemberIds(params: Record<string, unknown>): string[] | undefined {
+  // `memberIds` is the canonical creation key (matches the contributed schema).
+  // `userIds`/`user_id_list` and scalar single-member keys (openId/userId/
+  // unionId) are also accepted because the id-type resolver and docs advertise
+  // them. `members` is intentionally NOT read here: it is the shared boolean
+  // "include members" flag for channel-info, not a creation member list.
+  const keys = [
+    "memberIds",
+    "userIds",
+    "user_id_list",
+    "openId",
+    "open_id",
+    "userId",
+    "user_id",
+    "unionId",
+    "union_id",
+  ] as const;
+  for (const key of keys) {
+    const value = params[key];
+    if (Array.isArray(value)) {
+      const ids = value
+        .filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+        .map((entry) => entry.trim());
+      if (ids.length > 0) {
+        return ids;
+      }
+    } else if (typeof value === "string" && value.trim()) {
+      const ids = value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      if (ids.length > 0) {
+        return ids;
+      }
+    }
+  }
+  return undefined;
+}
+
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResult> =
   createChatChannelPlugin({
     base: {
@@ -1071,7 +1184,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         ...meta,
       },
       capabilities: {
-        chatTypes: ["direct", "channel"],
+        chatTypes: ["direct", "channel", "group"],
         polls: false,
         threads: true,
         media: true,
@@ -1177,11 +1290,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         providerOwnedReadGates: true,
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
+        requiresTrustedRequesterSender: ({ action, toolContext }) =>
+          normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() ===
+            "feishu" && FEISHU_GROUP_MANAGEMENT_ACTIONS.has(action),
         handleAction: async (ctx) => {
           const account = resolveFeishuAccount({
             cfg: ctx.cfg,
             accountId: ctx.accountId ?? undefined,
           });
+          if (FEISHU_GROUP_MANAGEMENT_ACTIONS.has(ctx.action)) {
+            const authError = requireFeishuGroupManagementAuthorization(ctx);
+            if (authError) {
+              throw new Error(authError);
+            }
+          }
           if (
             (ctx.action === "react" || ctx.action === "reactions") &&
             !isFeishuActionEnabled(account, "reactions")
@@ -1642,6 +1764,81 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               channel: "feishu",
               action: "member-info",
               ...members,
+            });
+          }
+
+          if (ctx.action === "channel-create") {
+            const name = readFirstString(ctx.params, ["name", "title", "chatName"]);
+            if (!name) {
+              throw new Error("Feishu channel-create requires name.");
+            }
+            const description = readFirstString(ctx.params, ["description"]);
+            const userIds = resolveFeishuChatMemberIds(ctx.params);
+            const client = await createFeishuActionClient(account);
+            const runtime = await loadFeishuChannelRuntime();
+            // Revalidate delegated runtime authority at the final-effect boundary:
+            // entry-level authorization ran before these awaits, so a turn that
+            // closes or is revoked during client/runtime preparation must not
+            // reach the Lark chat-creation mutation.
+            ctx.revalidateRuntimeAuthority?.();
+            const result = await runtime.createFeishuChat(client, {
+              name,
+              ...(description ? { description } : {}),
+              ...(userIds && userIds.length > 0
+                ? { userIds, userIdType: resolveFeishuMemberIdType(ctx.params) }
+                : {}),
+            });
+            return jsonActionResult({
+              ok: true,
+              provider: "feishu",
+              action: "channel-create",
+              chatId: result.chat_id,
+            });
+          }
+
+          if (ctx.action === "renameGroup") {
+            const name = readFirstString(ctx.params, ["name", "title", "chatName"]);
+            if (!name) {
+              throw new Error("Feishu renameGroup requires name.");
+            }
+            const chatId = resolveFeishuChatId(ctx);
+            if (!chatId) {
+              throw new Error("Feishu renameGroup requires chatId or channelId.");
+            }
+            const client = await createFeishuActionClient(account);
+            const runtime = await loadFeishuChannelRuntime();
+            ctx.revalidateRuntimeAuthority?.();
+            const result = await runtime.renameFeishuChat(client, chatId, name);
+            return jsonActionResult({
+              ok: true,
+              provider: "feishu",
+              action: "renameGroup",
+              ...result,
+            });
+          }
+
+          if (ctx.action === "addParticipant" || ctx.action === "removeParticipant") {
+            const memberId = resolveFeishuMemberId(ctx.params);
+            if (!memberId) {
+              throw new Error(`Feishu ${ctx.action} requires memberId or userId.`);
+            }
+            const chatId = resolveFeishuChatId(ctx);
+            if (!chatId) {
+              throw new Error(`Feishu ${ctx.action} requires chatId or channelId.`);
+            }
+            const memberIdType = resolveFeishuMemberIdType(ctx.params);
+            const client = await createFeishuActionClient(account);
+            const runtime = await loadFeishuChannelRuntime();
+            ctx.revalidateRuntimeAuthority?.();
+            const result =
+              ctx.action === "addParticipant"
+                ? await runtime.addFeishuChatMember(client, chatId, memberId, memberIdType)
+                : await runtime.removeFeishuChatMember(client, chatId, memberId, memberIdType);
+            return jsonActionResult({
+              ok: true,
+              provider: "feishu",
+              action: ctx.action,
+              ...result,
             });
           }
 
