@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -36,9 +37,13 @@ function deniedUpdate() {
 
 function deferredUpdate() {
   const update = deniedUpdate();
+  const codexWarning = expectDefined(
+    update.postUpdate.plugins.warnings[0],
+    "Codex consent warning",
+  );
   const reason = 'Plugin "codex" requires capability consent; rerun with --accept-capabilities.';
   const message = `Plugin "codex" could not be processed after the core update: ${reason} Run openclaw update repair to retry post-update plugin repair. Run openclaw plugins inspect codex --runtime --json for details.`;
-  const retained = `Kept installed plugin "codex"; replacement deferred. ${update.postUpdate.plugins.warnings[0].reason}`;
+  const retained = `Kept installed plugin "codex"; replacement deferred. ${codexWarning.reason}`;
   return {
     ...update,
     status: "ok",
@@ -61,7 +66,7 @@ function deferredUpdate() {
         },
         warnings: [
           { reason, message },
-          update.postUpdate.plugins.warnings[2],
+          expectDefined(update.postUpdate.plugins.warnings[2], "WhatsApp consent warning"),
           { reason: retained, message: retained },
         ],
       },
@@ -90,7 +95,7 @@ describe("published upgrade survivor consent recovery", () => {
 
   it.each(["INSTALL_FAILED", undefined])("rejects unrelated plugin outcome %s", (code) => {
     const update = deferredUpdate();
-    update.postUpdate.plugins.npm.outcomes[0].code = code;
+    expectDefined(update.postUpdate.plugins.npm.outcomes[0], "Codex update outcome").code = code;
     expect(check(update).status).not.toBe(0);
   });
 
@@ -107,7 +112,8 @@ describe("published upgrade survivor consent recovery", () => {
   it.each([
     [
       "core update failure",
-      (result: ReturnType<typeof deniedUpdate>) => (result.steps[0].exitCode = 1),
+      (result: ReturnType<typeof deniedUpdate>) =>
+        (expectDefined(result.steps[0], "global update step").exitCode = 1),
     ],
     [
       "wrong installed version",
@@ -140,10 +146,12 @@ describe("published upgrade survivor consent recovery", () => {
     [
       "unreviewed plugin",
       (result: ReturnType<typeof deniedUpdate>) => {
-        result.postUpdate.plugins.warnings[0].reason =
-          result.postUpdate.plugins.warnings[0].reason.replace("codex", "unreviewed");
-        result.postUpdate.plugins.warnings[0].message =
-          result.postUpdate.plugins.warnings[0].reason;
+        const warning = expectDefined(
+          result.postUpdate.plugins.warnings[0],
+          "Codex consent warning",
+        );
+        warning.reason = warning.reason.replace("codex", "unreviewed");
+        warning.message = warning.reason;
       },
     ],
     [
