@@ -568,7 +568,8 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     return;
   }
   // Unguarded recovery start is only for a future-config restart refusal.
-  // Ownership/revalidation failures never reach that exception.
+  // First-path ownership failures never set restartAttempted. The fallback
+  // revalidates the fresh definition again immediately before platform start.
   let restartAttempted = false;
   try {
     const verdict = before.serviceUpdateVerdict;
@@ -654,6 +655,14 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       return;
     }
     try {
+      // Fresh state can diverge after the pre-restart revalidate (drop-in,
+      // profile, unit, or install root). Re-check immediately before the
+      // unguarded start; a stale identity must not ride the version-guard exception.
+      await revalidateManagedGatewayServiceAfterUpdate({
+        state,
+        root: params.root ?? before.serviceUpdateVerdict.root,
+        preManagedServiceStop: before,
+      });
       await startGatewayServiceAfterFailedUpdate({
         env: before.serviceEnv,
         stdout: serviceControlStdoutForMode(params.jsonMode),

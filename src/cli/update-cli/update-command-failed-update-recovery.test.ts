@@ -28,10 +28,19 @@ vi.mock("../../daemon/future-config-guard.js", async (importOriginal) => ({
 
 vi.mock("../../daemon/service-layout.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service-layout.js")>()),
-  summarizeGatewayServiceLayout: async () => ({
-    packageRoot: mocks.ownedRoot,
-    entrypoint: `${mocks.ownedRoot}/dist/index.js`,
-  }),
+  summarizeGatewayServiceLayout: async (command?: { programArguments?: string[] }) => {
+    const entrypoint = command?.programArguments?.find((arg) => arg.endsWith("/dist/index.js"));
+    if (entrypoint) {
+      return {
+        packageRoot: entrypoint.slice(0, -"/dist/index.js".length),
+        entrypoint,
+      };
+    }
+    return {
+      packageRoot: mocks.ownedRoot,
+      entrypoint: `${mocks.ownedRoot}/dist/index.js`,
+    };
+  },
 }));
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
@@ -188,6 +197,47 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     expect(mocks.readState).toHaveBeenCalledTimes(2);
     expect(mocks.recoveryStart).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    {
+      change: "unit",
+      state: {
+        ...OWNED_STATE,
+        env: { ...serviceEnv, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-other.service" },
+      },
+    },
+    {
+      change: "profile",
+      state: {
+        ...OWNED_STATE,
+        env: { ...serviceEnv, OPENCLAW_PROFILE: "second" },
+      },
+    },
+    {
+      change: "installation root",
+      state: {
+        ...OWNED_STATE,
+        command: {
+          programArguments: ["/usr/bin/node", "/other/dist/index.js", "gateway"],
+        },
+      },
+    },
+  ])(
+    "does not start recovery when the effective $change changes after the version-guard refusal",
+    async ({ state }) => {
+      mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
+      mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
+      mocks.readState.mockResolvedValueOnce({ ...OWNED_STATE }).mockResolvedValueOnce(state);
+
+      await recover();
+
+      expect(mocks.recoveryStart).not.toHaveBeenCalled();
+      expect(messages()).toContain("Failed to restart managed gateway service after failed update");
+      expect(messages()).toMatch(
+        /ownership or manager identity changed|service management skipped|recovery start also failed/i,
+      );
+    },
+  );
 
   it("does not reach the exempt start when the unit is not installed", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
