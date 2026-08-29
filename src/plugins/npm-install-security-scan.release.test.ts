@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, it, test } from "vitest";
-import { resolveNpmJsonEntries } from "../infra/npm-registry-spec.js";
+import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 import { isScannable, scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";

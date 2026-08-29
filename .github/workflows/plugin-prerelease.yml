@@ -503,7 +503,9 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          sparse-checkout: src/plugins/npm-install-security-scan.release.test.ts
+          sparse-checkout: |
+            src/plugins/npm-install-security-scan.release.test.ts
+            scripts/lib/npm-json-output.mts
           sparse-checkout-cone-mode: false
           submodules: false
 
@@ -517,6 +519,9 @@ jobs:
           install -m 0644 \
             "$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts" \
             src/plugins/npm-install-security-scan.release.test.ts
+          install -m 0644 \
+            "$trusted_checkout/scripts/lib/npm-json-output.mts" \
+            scripts/lib/npm-json-output.mts
           rm -rf -- "$trusted_checkout"
           trap - EXIT
 
