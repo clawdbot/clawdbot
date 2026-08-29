@@ -35,6 +35,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
+  profileId: string;
   leaseId: string | null;
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;

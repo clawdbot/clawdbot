@@ -14,6 +14,12 @@ function projectSessionPlacementFields(params: {
 }) {
   const placement = params.sessionId ? params.placements?.get(params.sessionId) : undefined;
   const move = params.sessionId ? params.moves?.get(params.sessionId) : undefined;
+  const environment = placement?.environmentId
+    ? params.context.workerEnvironmentService?.get(placement.environmentId)
+    : undefined;
+  const identity = environment
+    ? { providerId: environment.providerId, profileId: environment.profileId }
+    : undefined;
   return {
     ...(placement
       ? {
@@ -21,6 +27,7 @@ function projectSessionPlacementFields(params: {
             placement,
             params.context.workerPlacementDiskSpaceReader?.read(placement),
             params.context.workerPlacementRunnerAvailabilityReader?.read(placement),
+            identity,
           ),
         }
       : {}),

@@ -185,6 +185,12 @@ function respondWorkerPlacement(params: {
   context: GatewayRequestContext;
   placement: Parameters<typeof projectWorkerSessionPlacement>[0];
 }): void {
+  const environment = params.placement.environmentId
+    ? params.context.workerEnvironmentService?.get(params.placement.environmentId)
+    : undefined;
+  const identity = environment
+    ? { providerId: environment.providerId, profileId: environment.profileId }
+    : undefined;
   params.respond(
     true,
     {
@@ -197,6 +203,7 @@ function respondWorkerPlacement(params: {
         // Canonical fenced runner reader; a node lost after durable provision
         // must project offline here exactly as sessions.list would.
         params.context.workerPlacementRunnerAvailabilityReader?.read(params.placement),
+        identity,
       ),
     },
     undefined,

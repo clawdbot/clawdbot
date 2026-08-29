@@ -56,56 +56,65 @@ test("sessions.list omits placement when the worker placement service is disable
   expect(result.payload?.sessions.every((session) => session.placement === undefined)).toBe(true);
 });
 
-test("sessions.list batch-projects durable worker placement", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
-    return new Map([[placement.sessionId, placement]]);
-  });
-  const diskSpace = {
-    status: "warning" as const,
-    availableBytes: 400,
-    totalBytes: 1_000,
-    observedAtMs: 350,
-  };
-  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
-    "sessions.list",
-    {},
-    {
-      context: {
-        workerSessionPlacementService: { getMany },
-        workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-        workerPlacementRunnerAvailabilityReader: {
-          read: () => ({ kind: "device", status: "offline" }),
-          version: () => 1,
+test.each([true, false])(
+  "sessions.list batch-projects durable worker placement (environment exists: %s)",
+  async (environmentExists) => {
+    await seedSessionRows();
+    const placement = activePlacementRecord();
+    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
+      expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
+      return new Map([[placement.sessionId, placement]]);
+    });
+    const diskSpace = {
+      status: "warning" as const,
+      availableBytes: 400,
+      totalBytes: 1_000,
+      observedAtMs: 350,
+    };
+    const identity = { providerId: "machine0", profileId: "team" };
+    const getEnvironment = vi.fn((environmentId: string) =>
+      environmentExists && environmentId === placement.environmentId ? identity : undefined,
+    );
+    const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
+      "sessions.list",
+      {},
+      {
+        context: {
+          workerSessionPlacementService: { getMany },
+          workerEnvironmentService: { get: getEnvironment },
+          workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+          workerPlacementRunnerAvailabilityReader: {
+            read: () => ({ kind: "device", status: "offline" }),
+            version: () => 1,
+          },
         },
       },
-    },
-  );
+    );
 
-  expect(result.ok).toBe(true);
-  expect(getMany).toHaveBeenCalledTimes(1);
-  const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
-  const other = result.payload?.sessions.find((session) => session.sessionId === "sess-other");
-  expect(main?.placement).toEqual({
-    state: "active",
-    environmentId: "env-placement",
-    generation: 7,
-    activeOwnerEpoch: 12,
-    workspaceBaseManifestRef: "manifest-base",
-    remoteWorkspaceDir: "/workspace/main",
-    workerBundleHash: ["a", "b"].join("").repeat(32),
-    lastTranscriptAckCursor: 23,
-    lastLiveEventAckCursor: 9,
-    createdAtMs: 100,
-    updatedAtMs: 300,
-    stateChangedAtMs: 200,
-    diskSpace,
-    runner: { kind: "device", status: "offline" },
-  });
-  expect(other?.placement).toBeUndefined();
-});
+    expect(result.ok).toBe(true);
+    expect(getMany).toHaveBeenCalledTimes(1);
+    const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
+    const other = result.payload?.sessions.find((session) => session.sessionId === "sess-other");
+    expect(main?.placement).toStrictEqual({
+      state: "active",
+      environmentId: "env-placement",
+      generation: 7,
+      activeOwnerEpoch: 12,
+      workspaceBaseManifestRef: "manifest-base",
+      remoteWorkspaceDir: "/workspace/main",
+      workerBundleHash: ["a", "b"].join("").repeat(32),
+      lastTranscriptAckCursor: 23,
+      lastLiveEventAckCursor: 9,
+      createdAtMs: 100,
+      updatedAtMs: 300,
+      stateChangedAtMs: 200,
+      diskSpace,
+      runner: { kind: "device", status: "offline" },
+      ...(environmentExists ? identity : {}),
+    });
+    expect(other?.placement).toBeUndefined();
+  },
+);
 
 test("sessions.list projects durable placement move progress", async () => {
   await seedSessionRows();

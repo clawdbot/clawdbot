@@ -41,6 +41,25 @@ function expectTooltipText(badge: Element | null | undefined, text: string) {
 }
 
 describe("session row placement badges", () => {
+  it("names the service and profile without losing conflict or disk attention", () => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: false,
+        placementState: "active",
+        placementProviderId: "machine0",
+        placementProfileId: "team",
+        workspaceConflictCount: 2,
+        diskSpaceStatus: "warning",
+      }),
+      container,
+    );
+    const label =
+      "machine0 · team · active · 2 workspace conflicts · Cloud session disk space is low";
+    const badge = container.querySelector(".session-row-badge--cloud");
+    expect(badge?.getAttribute("aria-label")).toBe(label);
+    expectTooltipText(badge, label);
+  });
+
   it("renders the incognito indicator", () => {
     render(
       renderSessionRowBadges({

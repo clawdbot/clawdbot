@@ -6,7 +6,10 @@ import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protoc
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { icons } from "./icons.ts";
+
+registerSessionPlacementEnglish();
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
@@ -64,6 +67,8 @@ export function renderSessionRowBadges(params: {
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   placementState?: SessionPlacementState;
+  placementProviderId?: string;
+  placementProfileId?: string;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
@@ -110,14 +115,19 @@ export function renderSessionRowBadges(params: {
   ) {
     return nothing;
   }
+  const placementLabel = displayedPlacementState
+    ? params.placementProviderId && params.placementProfileId
+      ? `${params.placementProviderId} · ${params.placementProfileId} · ${displayedPlacementState}`
+      : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
+    : "";
   const cloudPlacementLabel = hasWorkspaceConflict
     ? displayedPlacementState
       ? t(
           workspaceConflictCount === 1
-            ? "sessionsView.cloudWorkerPlacementConflict"
-            : "sessionsView.cloudWorkerPlacementConflicts",
+            ? "sessionsView.placementWorkspaceConflict"
+            : "sessionsView.placementWorkspaceConflicts",
           {
-            state: displayedPlacementState,
+            placement: placementLabel,
             count: String(workspaceConflictCount),
           },
         )
@@ -127,9 +137,7 @@ export function renderSessionRowBadges(params: {
             : "sessionsView.cloudWorkerDescendantConflicts",
           { count: String(workspaceConflictCount) },
         )
-    : displayedPlacementState
-      ? t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
-      : "";
+    : placementLabel;
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
     ${params.incognito
