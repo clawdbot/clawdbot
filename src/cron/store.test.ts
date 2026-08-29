@@ -13,6 +13,8 @@ import {
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  assertCronJobsStoreUnchanged,
+  CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
   loadCronJobsStoreSync,
@@ -1750,4 +1752,98 @@ describe("saveCronStore", () => {
     await expectPathMissing(`${storePath}.bak`);
   });
 });
+describe("cron jobs fingerprint guard", () => {
+  it("refuses a replace from a stale snapshot and accepts it from a fresh one", async () => {
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, makeStore("job-a", true));
+    const staleFingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint after first save",
+    );
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [...makeStore("job-a", true).jobs, ...makeStore("job-c", true).jobs],
+    });
+
+    await expect(
+      saveCronJobsStoreWithTransactionHooks(storePath, makeStore("job-a", true), undefined, {
+        beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, staleFingerprint),
+      }),
+    ).rejects.toBeInstanceOf(CronJobsStoreChangedError);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a", "job-c"]);
+
+    const freshFingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint after concurrent save",
+    );
+    expect(freshFingerprint).not.toBe(staleFingerprint);
+    await saveCronJobsStoreWithTransactionHooks(storePath, makeStore("job-a", true), undefined, {
+      beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, freshFingerprint),
+    });
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a"]);
+  });
+
+  it("preserves a concurrent scheduler run commit through a definition repair", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("job-a", true);
+    await saveCronStore(storePath, store);
+    const fingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint before runtime commit",
+    );
+    const seeded = expectDefined(store.jobs[0], "seeded job");
+    const runAtMs = seeded.updatedAtMs + 5_000;
+    seeded.updatedAtMs = runAtMs;
+    seeded.state = {
+      queuedAtMs: runAtMs,
+      runningAtMs: runAtMs,
+      lastRunAtMs: runAtMs,
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
+    };
+    await saveCronStore(storePath, store, { stateOnly: true });
+
+    expect((await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint).toBe(fingerprint);
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      makeStore("job-a", false),
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
+    expect(repaired.enabled).toBe(false);
+    expect(repaired.state).toMatchObject({
+      queuedAtMs: runAtMs,
+      runningAtMs: runAtMs,
+      lastRunAtMs: runAtMs,
+      lastRunStatus: "ok",
+    });
+    expect(repaired.updatedAtMs).toBe(runAtMs);
+  });
+
+  it("still writes runtime state for a full replace that does not opt into preservation", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("job-a", true);
+    await saveCronStore(storePath, store);
+    const seeded = expectDefined(store.jobs[0], "seeded job");
+    seeded.state = { runningAtMs: seeded.updatedAtMs };
+    await saveCronStore(storePath, store, { stateOnly: true });
+
+    await saveCronStore(storePath, makeStore("job-a", false));
+
+    const replaced = expectDefined((await loadCronStore(storePath)).jobs[0], "replaced job");
+    expect(replaced.state.runningAtMs).toBeUndefined();
+  });
+
+  it("reports the same fingerprint from the read-only loader", async () => {
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, makeStore("job-a", true));
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    expect((await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).jobsFingerprint).toBe(
+      loaded.jobsFingerprint,
+    );
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

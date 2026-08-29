@@ -1,4 +1,5 @@
 /** Converts cron jobs between public store shape and normalized SQLite rows. */
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -199,6 +200,22 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
+export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): string {
+  const rows = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .select(["job_id", "job_json"])
+      .where("store_key", "=", storeKey)
+      .orderBy("job_id", "asc"),
+  ).rows;
+  const hash = createHash("sha256");
+  for (const row of rows) {
+    hash.update(row.job_id).update("\u0000").update(row.job_json).update("\u0000");
+  }
+  return hash.digest("hex");
+}
+
 /** Materializes retired ownership within the caller's write transaction. */
 export function materializeCronRowAgentOwners(
   db: DatabaseSync,
@@ -281,10 +298,15 @@ export function deleteStaleCronJobFamilyRows(
 }
 
 /** Replaces all persisted cron rows and returns the canonical jobs that were written. */
+export type CronRowReplaceOptions = {
+  preserveRuntimeState?: boolean;
+};
+
 export function replaceCronRows(
   db: DatabaseSync,
   storeKey: string,
   store: CronStoreFile,
+  opts?: CronRowReplaceOptions,
 ): CronStoredJob[] {
   const existingRows = executeSqliteQuerySync(
     db,
@@ -295,7 +317,7 @@ export function replaceCronRows(
   ).rows;
   const normalizedJobs: CronStoredJob[] = [];
   for (const [index, job] of store.jobs.entries()) {
-    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index));
+    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index, opts));
   }
   const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
   for (const row of existingRows) {
@@ -321,18 +343,28 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
+  opts?: CronRowReplaceOptions,
 ): CronStoredJob {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }
   const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  const {
+    state_json: _stateJson,
+    runtime_updated_at_ms: _runtimeUpdatedAtMs,
+    ...definitionValues
+  } = values;
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .insertInto("cron_jobs")
       .values(values)
-      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+      .onConflict((conflict) =>
+        conflict
+          .columns(["store_key", "job_id"])
+          .doUpdateSet(opts?.preserveRuntimeState ? definitionValues : values),
+      ),
   );
   return normalized;
 }

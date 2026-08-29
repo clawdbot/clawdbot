@@ -19,6 +19,7 @@ import {
   deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
   loadCronRows,
+  readCronJobsFingerprint,
   replaceCronRows,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
@@ -95,6 +96,7 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   const database = openOpenClawStateDatabase().db;
+  const jobsFingerprint = readCronJobsFingerprint(database, storeKey);
   const rows = loadCronRows(database, storeKey);
   if (rows.length > 0) {
     const loaded = loadedCronStoreFromRows(rows);
@@ -107,7 +109,7 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
       storeKey,
       jobIds: authority.repairJobIds,
     });
-    return loaded;
+    return { ...loaded, jobsFingerprint };
   }
   return {
     store: { version: 1, jobs: [] },
@@ -115,7 +117,26 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
     configJobIndexes: [],
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
+    jobsFingerprint,
   };
+}
+
+export class CronJobsStoreChangedError extends Error {
+  constructor(storePath: string) {
+    super(`Cron store at ${storePath} changed after it was read; reload it before writing`);
+    this.name = "CronJobsStoreChangedError";
+  }
+}
+
+export function assertCronJobsStoreUnchanged(
+  db: DatabaseSync,
+  storePath: string,
+  expectedJobsFingerprint: string,
+): void {
+  const resolvedStorePath = path.resolve(storePath);
+  if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
+    throw new CronJobsStoreChangedError(resolvedStorePath);
+  }
 }
 
 function repairLoadedCronRuntimeAuthority(params: {
@@ -194,13 +215,14 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
     if (!tableExists(db, "cron_jobs")) {
       return emptyLoadedCronStore();
     }
+    const jobsFingerprint = readCronJobsFingerprint(db, storeKey);
     const rows = loadCronRows(db, storeKey);
     if (rows.length > 0) {
       const loaded = loadedCronStoreFromRows(rows);
       loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
-      return loaded;
+      return { ...loaded, jobsFingerprint };
     }
-    return emptyLoadedCronStore();
+    return { ...emptyLoadedCronStore(), jobsFingerprint };
   } finally {
     db.close();
   }
@@ -242,6 +264,7 @@ type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
     entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
     nowMs: number;
   };
+  preserveRuntimeState?: boolean;
 };
 
 type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
@@ -282,7 +305,9 @@ export async function saveCronJobsStore(
       opts?.transactionHooks?.afterWrite?.(database.db);
       return;
     }
-    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store, {
+      preserveRuntimeState: opts?.preserveRuntimeState,
+    });
     replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
     opts?.transactionHooks?.afterWrite?.(database.db);
   });
@@ -298,6 +323,7 @@ export async function saveCronJobsStoreWithMetadata(
   store: CronStoreFile,
   acquireMetadata: (db: DatabaseSync) => boolean,
   quarantine?: SaveCronJobsStoreOptions["quarantine"],
+  opts?: Pick<SaveCronJobsStoreOptions, "preserveRuntimeState">,
 ): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
@@ -314,7 +340,9 @@ export async function saveCronJobsStoreWithMetadata(
         database,
       });
     }
-    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store, {
+      preserveRuntimeState: opts?.preserveRuntimeState,
+    });
     replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
     return true;
   });
