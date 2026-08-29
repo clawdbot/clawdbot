@@ -693,6 +693,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       name: "abort-wait-deadline",
       timeoutMs: 1_500,
     });
+    const lifecycle = vi.spyOn(owner.subscription, "runToolLifecycle");
     const started = createDeferred();
     const stalled = pluginToolWithExecute("stalled", "Await cancellation", async () => {
       started.resolve();
@@ -715,8 +716,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       expect(resultDetails(await waiting)).toMatchObject({ status: "failed", code: "aborted" });
       expect(testing.activeRuns.size).toBe(0);
       expect(testing.resumingRunIds.size).toBe(0);
+      // Abort returns before nested transcript and terminal finalization; join its owner.
+      expect(lifecycle).toHaveBeenCalledOnce();
+      await expect(lifecycle.mock.results[0]?.value).rejects.toThrow("Aborted");
       expect(countActiveToolExecutions(owner.runId)).toBe(0);
     } finally {
+      lifecycle.mockRestore();
       clearToolSearchCatalog(owner);
       owner.dispose();
       vi.useRealTimers();
