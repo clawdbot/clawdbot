@@ -367,13 +367,17 @@ export class BoardWidgetFrameLifecycle {
   private notifyBoardHost(event: Event): void {
     const frame = event.currentTarget;
     if (frame instanceof HTMLIFrameElement) {
-      this.boardHostNonce = generateUUID();
-      postWidgetTheme(frame, this.sandboxOrigin || "*");
-      frame.contentWindow?.postMessage(
-        { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: this.boardHostNonce },
-        this.sandboxOrigin || "*",
-      );
+      this.postBoardHostState(frame);
     }
+  }
+
+  private postBoardHostState(frame: HTMLIFrameElement): void {
+    this.boardHostNonce = generateUUID();
+    postWidgetTheme(frame, this.sandboxOrigin || "*");
+    frame.contentWindow?.postMessage(
+      { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: this.boardHostNonce },
+      this.sandboxOrigin || "*",
+    );
   }
 
   private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
@@ -530,7 +534,10 @@ export class BoardWidgetFrameLifecycle {
     }
     this.sandboxHost.handleMessage(event);
     if (event.data?.type === "openclaw:widget-bridge-ready") {
-      postWidgetTheme(frame, this.sandboxOrigin);
+      // The sandbox proxy replaces its inner iframe after the outer frame's
+      // load event. Reissue per-document host state only after that replacement
+      // announces readiness so scroll authority reaches the live document.
+      this.postBoardHostState(frame);
     }
   };
 }
