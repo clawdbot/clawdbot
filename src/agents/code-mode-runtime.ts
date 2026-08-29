@@ -2,8 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { boundCodeModeResult } from "./code-mode-json.js";
@@ -41,7 +43,7 @@ export type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
-  /** Master switch tier: true/false, or "auto" (engage per model catalog flag). */
+  /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
   runtime: "quickjs-wasi";
   mode: "only";
@@ -111,14 +113,29 @@ function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | u
   return isRecord(codeMode) ? codeMode : undefined;
 }
 
-function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Record<string, unknown> {
+function readCodeModeRawConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+  model?: { provider: string; modelId: string },
+): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? {};
-  const agentRaw =
-    config && agentId
-      ? normalizeCodeModeRawConfig(resolveAgentConfig(config, agentId)?.tools?.codeMode)
-      : undefined;
-  return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
+  const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
+  const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
+  const key = model
+    ? normalizeAgentModelRefForConfig(modelKey(model.provider, model.modelId))
+    : undefined;
+  // An options-only agent object inherits activation; it must not hide a model
+  // override. Explicit false at either scope remains an authored choice.
+  return {
+    ...globalRaw,
+    ...agentRaw,
+    enabled:
+      (key ? agent?.models?.[key]?.codeMode : undefined) ??
+      agentRaw?.enabled ??
+      (key ? config?.agents?.defaults?.models?.[key]?.codeMode : undefined) ??
+      globalRaw.enabled,
+  };
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
@@ -142,8 +159,12 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
 }
 
 /** Resolves Code Mode runtime limits and language support from config. */
-export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
-  const raw = readCodeModeRawConfig(config, agentId);
+export function resolveCodeModeConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+  model?: { provider: string; modelId: string },
+): CodeModeConfig {
+  const raw = readCodeModeRawConfig(config, agentId, model);
   const maxSearchLimit = clampNumber(
     readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
     1,
@@ -190,7 +211,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
 }
 
 /**
- * Resolves the master switch against one model's catalog capability flag.
+ * Resolves the effective activation policy against one model's catalog flag.
  * `true`/`false` are absolute; `"auto"` engages only for models whose catalog
  * compat declares `codeMode: "preferred"`. This gates the model-facing tool
  * surface only; runs that route to a provider-native harness (for example the

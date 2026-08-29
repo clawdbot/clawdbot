@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -489,28 +491,67 @@ describe("agent exec command composition", () => {
     await expect(fs.stat(retainedRunStateDir)).resolves.toBeDefined();
   });
 
-  it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
-    const { runtime } = createRuntime();
-    let observedConfig: unknown;
-
-    const result = await agentExecCommand(
-      "inspect",
-      { codeMode: "code", localModelLean: true },
-      runtime,
-      {
-        runAgent: vi.fn(async () => {
-          observedConfig = getRuntimeConfigSnapshot();
-          return successResult();
-        }),
-      },
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(observedConfig).toMatchObject({
-      agents: { defaults: { experimental: { localModelLean: true } } },
-      tools: { codeMode: true },
-    });
-  });
+  it.each([
+    { mode: "direct", configured: true, capability: "preferred", enabled: false },
+    { mode: "code", configured: false, capability: "capable", enabled: true },
+    { mode: "auto", configured: false, capability: "preferred", enabled: true },
+    { mode: "auto", configured: true, capability: "capable", enabled: false },
+  ] as const)(
+    "honors --code-mode $mode over model settings ($capability)",
+    async ({ mode, configured, capability, enabled }) => {
+      const { runtime } = createRuntime();
+      const codeMode = { enabled: configured, maxOutputBytes: 4096 };
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: {
+            systemAgent: { agentId: "main" },
+            models: { "test/model-a": { codeMode: configured } },
+          },
+          entries: {
+            main: { models: { "test/model-a": { codeMode: configured } } },
+          },
+        },
+        tools: { codeMode, toolSearch: false },
+      });
+      let visibleTools: string[] | undefined;
+      try {
+        const result = await agentExecCommand(
+          "inspect",
+          { codeMode: mode, model: "test/model-a", localModelLean: true },
+          runtime,
+          {
+            runAgent: vi.fn(async (invocation) => {
+              const config = getRuntimeConfigSnapshot();
+              expect(config?.tools?.codeMode).toEqual(codeMode);
+              expect(config?.agents?.defaults?.experimental?.localModelLean).toBe(true);
+              const surface = createAgentHarnessToolSurfaceRuntimeCore({
+                config,
+                agentId: "main",
+                modelProvider: "test",
+                modelId: "model-a",
+                model: { compat: { codeMode: capability } },
+                codeModeOverride: invocation.codeModeOverride as boolean | "auto" | undefined,
+                modelToolsEnabled: true,
+                executeTool: async () => ({ content: [], details: {} }),
+              });
+              try {
+                visibleTools = surface
+                  .compactTools([createStubTool("read")])
+                  .tools.map((tool) => tool.name);
+              } finally {
+                surface.cleanup();
+              }
+              return successResult();
+            }),
+          },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(visibleTools).toEqual(enabled ? ["exec", "wait"] : ["read"]);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("rejects invalid programmatic Code Mode values", async () => {
     const { runtime } = createRuntime();
@@ -839,14 +880,14 @@ describe("agent exec run config layering", () => {
     expect(runtime?.type === "acp" ? runtime.acp?.agent : undefined).toBe("codex");
   });
 
-  it("lets explicit flags outrank the resolved config", () => {
+  it("keeps Code Mode limits while enabling the lean local-model flag", () => {
     const config = buildExecRunConfig({
-      base: { tools: { codeMode: { enabled: true } } },
+      base: { tools: { codeMode: { enabled: true, maxOutputBytes: 4096 } } },
       cwd: "/run/here",
-      opts: { codeMode: "direct", localModelLean: true },
+      opts: { localModelLean: true },
     });
 
-    expect(config.tools?.codeMode).toBe(false);
+    expect(config.tools?.codeMode).toEqual({ enabled: true, maxOutputBytes: 4096 });
     expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
   });
 });

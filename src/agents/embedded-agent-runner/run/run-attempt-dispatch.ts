@@ -503,6 +503,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceCodeModeReconciliationTools: params.forceCodeModeReconciliationTools,
     forceCodeModeTools: params.forceCodeModeTools,
+    codeModeOverride: params.codeModeOverride,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,

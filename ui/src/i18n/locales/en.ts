@@ -3500,7 +3500,7 @@ export const en: TranslationMap = {
     codeMode: {
       title: "Code Mode",
       description:
-        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
+        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
     swarm: {
       title: "Swarm",

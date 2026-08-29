@@ -188,6 +188,8 @@ export type RunEmbeddedAgentParams = {
   forceCodeModeReconciliationTools?: boolean;
   /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
   forceCodeModeTools?: boolean;
+  /** Invocation-owned Code Mode activation; limits still come from config. */
+  codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */

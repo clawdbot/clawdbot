@@ -23,7 +23,6 @@ import {
   boundOutputToLimit,
   enforceSnapshotPayloadLimits,
   prepareSource,
-  resolveCodeModeConfig,
   toToolSearchConfig,
   type CodeModeConfig,
   type CodeModeLanguage,
@@ -65,6 +64,7 @@ import { ToolInputError } from "./tools/common.js";
 export async function runCodeModeExec(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
+  config: CodeModeConfig;
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
@@ -74,15 +74,7 @@ export async function runCodeModeExec(params: {
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
-  const config = resolveCodeModeConfig(
-    params.ctx.runtimeConfig ?? params.ctx.config,
-    params.ctx.agentId,
-  );
-  // The exec/wait tools only exist when the run gate engaged code mode, so
-  // "auto" counts as enabled here; only a hard `false` rejects execution.
-  if (config.enabled === false) {
-    throw new ToolInputError("code mode is disabled.");
-  }
+  const { config } = params;
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
     prepareInput: true,
     validateInput: true,

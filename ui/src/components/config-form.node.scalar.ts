@@ -689,7 +689,7 @@ export function renderSelect(
       >
         ${schema.default !== undefined
           ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : t("configForm.select")}
+          : (hintForPath(path, hints)?.placeholder ?? t("configForm.select"))}
       </option>
       ${canSelectNull
         ? html`
