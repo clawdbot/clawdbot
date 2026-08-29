@@ -378,7 +378,7 @@ The agent can send Twitch messages through the message tool `send` action:
 }
 ```
 
-`to` is optional and defaults to the account's configured `channel`.
+When replying in a Twitch conversation, omit `to` to use the current conversation. Message-tool calls without a current conversation and CLI sends require an explicit target. Direct Gateway `message.action` sends can omit `to` to use the selected account's configured `channel`.
 
 ## Safety and ops
 
