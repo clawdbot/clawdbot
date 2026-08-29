@@ -943,6 +943,29 @@ describe("OpenAI-compatible completions params", () => {
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
+  it("keeps Z.AI thinking disabled when off maps to none", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+        thinkingLevelMap: { off: "none" },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        maxTokens: 1_024,
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "disabled" },
+    });
+  });
+
   it("enables Z.AI thinking with the documented payload when requested", async () => {
     const stream = streamSimpleOpenAICompletions(
       {

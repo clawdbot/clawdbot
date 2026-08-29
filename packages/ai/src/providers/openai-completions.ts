@@ -492,7 +492,10 @@ function buildParams(
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     // Models that cannot disable thinking map "off" to a concrete level
     // (e.g. GLM-5.x off -> low); honor that instead of emitting a payload the provider rejects.
-    const zaiReasoningEnabled = reasoningEnabled || typeof offReasoningEffort === "string";
+    const zaiReasoningEnabled =
+      reasoningEnabled ||
+      (typeof offReasoningEffort === "string" &&
+        isOpenAICompletionsThinkingEnabled(offReasoningEffort));
     params.thinking = zaiReasoningEnabled
       ? { type: "enabled", clear_thinking: false }
       : { type: "disabled" };
