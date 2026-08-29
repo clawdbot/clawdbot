@@ -333,14 +333,14 @@ export async function loadCliSessionReseedMessages(
   },
 ): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
-  // Persistence timestamps, rather than provider timestamps, describe recovered history.
-  const reseedEntries = entries.map(
-    (entry): SessionEntry =>
-      entry.type === "message"
-        ? { ...entry, message: { ...entry.message, timestamp: Date.parse(entry.timestamp) } }
-        : entry,
-  );
-  const historyMessages = buildSessionContext(reseedEntries).messages.map((message) => ({
+  // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
+  for (const entry of entries) {
+    if (entry.type === "message") {
+      entry.message.timestamp = Date.parse(entry.timestamp);
+    }
+  }
+  // oxlint-disable-next-line oxc/no-map-spread -- ISO display timestamps require separate records from numeric replay messages.
+  const historyMessages = buildSessionContext(entries).messages.map((message) => ({
     ...message,
     timestamp: timestampMsToIsoString(message.timestamp),
   }));
