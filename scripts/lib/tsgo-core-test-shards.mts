@@ -51,7 +51,6 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-e2e.json",
   },
-  { name: "ui-e2e", group: "ui", config: "test/tsconfig/tsconfig.core.test.ui-e2e.json" },
   { name: "ui-other", group: "ui", config: "test/tsconfig/tsconfig.core.test.ui-other.json" },
   {
     name: "packages",

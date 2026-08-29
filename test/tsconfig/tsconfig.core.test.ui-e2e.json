@@ -5,12 +5,7 @@
   },
   "include": [
     "../../ui/src/main.ts",
-<<<<<<<< HEAD:test/tsconfig/tsconfig.core.test.ui-e2e.json
     "../../ui/src/e2e/**/*.test.ts",
     "../../ui/src/e2e/**/*.test.tsx"
-========
-    "../../ui/src/pages/**/*.test.ts",
-    "../../ui/src/pages/**/*.test.tsx"
->>>>>>>> 19c14aa3dcc (refactor: split capacity-limit test files, duplicate collapse, and ui shards):test/tsconfig/tsconfig.core.test.ui-pages-e2e.json
   ]
 }
