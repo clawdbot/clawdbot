@@ -102,7 +102,18 @@ export class ModelProviderSupplementalLoader {
     void this.costTask.run([null, epoch]);
   }
 
-  async load(explicitClient?: GatewayBrowserClient): Promise<void> {
+  load(explicitClient?: GatewayBrowserClient): Promise<void> {
+    return this.loadRequests(explicitClient, true);
+  }
+
+  loadUsage(): Promise<void> {
+    return this.loadRequests(undefined, false);
+  }
+
+  private async loadRequests(
+    explicitClient: GatewayBrowserClient | undefined,
+    includeCost: boolean,
+  ): Promise<void> {
     const gateway = this.options.getGateway();
     const client = explicitClient ?? gateway.client;
     if (!gateway.connected || !client) {
@@ -111,11 +122,13 @@ export class ModelProviderSupplementalLoader {
     }
     this.options.refreshPolicy.beginLoad();
     this.pending.add("usage");
+    const usage = this.usageTask.run([client, gateway.epoch]);
+    if (!includeCost) {
+      await usage;
+      return;
+    }
     this.pending.add("cost");
-    await Promise.all([
-      this.usageTask.run([client, gateway.epoch]),
-      this.costTask.run([client, gateway.epoch]),
-    ]);
+    await Promise.all([usage, this.costTask.run([client, gateway.epoch])]);
   }
 
   private createTask<T>(

@@ -99,6 +99,36 @@ describe("ModelProvidersPage usage convergence", () => {
     expect(page.textContent ?? "").toContain("did not finish loading");
   });
 
+  it("retries incomplete usage without restarting pending cost", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const pendingCost = deferred<unknown>();
+    const originalRequest = harness.request.getMockImplementation()!;
+    let costSignal: AbortSignal | undefined;
+    harness.request.mockImplementation(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "sessions.usage") {
+          costSignal = options?.signal;
+          return pendingCost.promise;
+        }
+        return originalRequest(method);
+      },
+    );
+
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(requestCount(harness.request, "usage.status")).toBeGreaterThan(1);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
+    expect(costSignal?.aborted).toBe(false);
+
+    pendingCost.resolve({ aggregates: { byProvider: [] } });
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
+  });
+
   it("does not warn about a stall while disconnected", async () => {
     vi.useFakeTimers();
     const harness = createHarness("main");

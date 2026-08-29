@@ -104,7 +104,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.loadClient !== null || this.supplemental.usageLoading,
-    reload: () => this.supplemental.load(),
+    // Usage convergence must not restart the independent local-cost request.
+    reload: () => this.supplemental.loadUsage(),
     onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
   private readonly supplemental = new ModelProviderSupplementalLoader(this, {
