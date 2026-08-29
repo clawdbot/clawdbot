@@ -192,7 +192,13 @@ function installedRuntimePackageVersionIsStale(params: {
   if (!params.installedVersion) {
     return false;
   }
-  if (versionBoundRuntimePackageVersionMatchesReleaseCohort(params)) {
+  if (
+    versionBoundRuntimePackageVersionMatchesReleaseCohort({
+      version: params.installedVersion,
+      currentVersion: params.currentVersion,
+      updateChannel: params.updateChannel,
+    })
+  ) {
     return false;
   }
   const currentCohortVersion = resolveOpenClawReleaseCohortVersion(params.currentVersion);
