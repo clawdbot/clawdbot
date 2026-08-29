@@ -28,6 +28,10 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
     { timeout: 60_000 },
     async (mode, ctx) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-orphan-"));
+      const fakeBin = path.join(root, "bin");
+      await fs.mkdir(fakeBin);
+      await fs.writeFile(path.join(fakeBin, "ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const unavailablePs = `${fakeBin}${path.delimiter}${process.env.PATH}`;
       const parents: ChildProcess[] = [];
       const trees: ProcessTree[] = [];
       ctx.onTestFinished(async () => {
@@ -67,7 +71,10 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
         }
         await fs.rm(root, { recursive: true, force: true });
       });
-      const start = async (stateDir: string, searchPath = process.env.PATH) => {
+      const start = async (
+        stateDir: string,
+        searchPath = process.platform === "linux" ? unavailablePs : process.env.PATH,
+      ) => {
         const native =
           mode === "native"
             ? await createCodexNativeTestState(path.join(root, `native-${parents.length}`))
@@ -126,13 +133,12 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
       expect(isAlive(old.tree.child)).toBe(true);
       expect(isAlive(old.tree.descendant)).toBe(true);
 
-      const fakeBin = path.join(root, "bin");
-      await fs.mkdir(fakeBin);
-      await fs.writeFile(path.join(fakeBin, "ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-      await expect(
-        start(stateDir, `${fakeBin}${path.delimiter}${process.env.PATH}`),
-      ).rejects.toThrow("Cannot inspect registered Codex processes");
-      expect(isAlive(old.tree.child)).toBe(true);
+      if (process.platform !== "linux") {
+        await expect(start(stateDir, unavailablePs)).rejects.toThrow(
+          "Cannot inspect registered Codex processes",
+        );
+        expect(isAlive(old.tree.child)).toBe(true);
+      }
 
       const fresh = await start(stateDir);
       expect(isAlive(old.tree.child)).toBe(false);

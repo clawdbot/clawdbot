@@ -2,10 +2,8 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { z } from "zod";
-import {
-  readCodexAppServerProcessSnapshot,
-  terminateCodexAppServerOrphan,
-} from "./transport-process-containment.js";
+import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
+import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
 
 const processIdentity = z.object({
   pid: z.number().int().positive().safe(),
@@ -41,7 +39,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
     const snapshot = await readCodexAppServerProcessSnapshot();
     if (!snapshot?.some((row) => row.pid === process.pid)) {
       throw new Error(
-        "Cannot inspect registered Codex processes. Check that ps works, then retry.",
+        "Cannot inspect registered Codex processes. Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
       );
     }
     const parent = snapshot.find((row) => row.pid === registration.parent.pid);
@@ -69,7 +67,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
         child.signalCode !== null
       ) {
         throw new Error(
-          "Cannot register the Codex child process. Check that ps works, then retry.",
+          "Cannot register the Codex child process. Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
         );
       }
       const key = randomUUID();

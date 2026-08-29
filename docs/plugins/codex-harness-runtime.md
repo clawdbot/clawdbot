@@ -86,9 +86,14 @@ managed WebSocket or Unix-socket app-servers are left alone. These portable
 process checks do not provide an atomic operating-system ownership guarantee
 or discover descendants that independently reparented before inspection.
 
+Linux reads process identities directly from `/proc`, including the boot ID
+and process start ticks, so Alpine/BusyBox installations do not need `procps`.
+macOS uses its native `ps` with a fixed locale and timezone.
+
 If process inspection or bounded cleanup cannot confirm that the registered
 orphan is gone, the new stdio connection fails instead of spawning another
-child. Follow the reported action: check that `ps` works, or verify and stop
+child. Follow the reported action: check `/proc` access on Linux or `ps` on
+macOS, or verify and stop
 the reported orphan process, then retry. If the cleanup budget expires, retry
 to finish the remaining registrations.
 
