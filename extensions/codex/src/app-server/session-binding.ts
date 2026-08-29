@@ -11,9 +11,9 @@ import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
   resolveProviderIdForAuth,
-  resolveSessionAgentIds,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -64,7 +64,7 @@ export function sessionBindingIdentity(params: {
   agentId?: string;
   config?: OpenClawConfig;
 }): Extract<CodexAppServerBindingIdentity, { kind: "session" }> {
-  const { sessionAgentId } = resolveSessionAgentIds(params);
+  const { sessionAgentId } = resolveSessionAgentIdsStrict(params);
   const sessionKey = params.sessionKey?.trim();
   return {
     kind: "session",
@@ -1433,7 +1433,7 @@ export function bindingStoreKey(identity: CodexAppServerBindingIdentity): string
     if (!sessionId) {
       throw new Error("Codex app-server binding requires a session id");
     }
-    const agentId = resolveSessionAgentIds({ agentId: rawAgentId }).sessionAgentId;
+    const agentId = resolveSessionAgentIdsStrict({ agentId: rawAgentId }).sessionAgentId;
     const sessionKey = identity.sessionKey?.trim();
     if (sessionKey) {
       const digest = createHash("sha256").update(sessionKey).digest("base64url");

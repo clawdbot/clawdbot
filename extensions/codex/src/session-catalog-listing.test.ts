@@ -23,7 +23,7 @@ import {
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveDefaultAgentDir,
@@ -168,7 +168,7 @@ describe("Codex supervision catalog", () => {
       ) => {
         if (!options.agentDir) {
           try {
-            resolveSessionAgentIds({ config: options.config });
+            resolveSessionAgentIdsStrict({ config: options.config });
           } catch (error) {
             throw new Error((error as { code?: string }).code ?? String(error), { cause: error });
           }
