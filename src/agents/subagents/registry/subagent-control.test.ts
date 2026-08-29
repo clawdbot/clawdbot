@@ -19,6 +19,10 @@ import type { GatewayRequestContext } from "../../../gateway/server-methods/shar
 import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
@@ -2784,9 +2788,19 @@ describe("steerControlledSubagentRun", () => {
       () => ({ recoveryRuntime: ownerRuntime }) as unknown as GatewayRequestContext,
     );
     addSubagentRunForTests(entry);
+    // Normal registration binds the run to the Gateway that owns the registry;
+    // the binding, not the process-global slot, is the dispatch owner.
+    const ownerResolver = () =>
+      ({ recoveryRuntime: ownerRuntime }) as unknown as GatewayRequestContext;
+    bindGatewayContextResolver(entry, ownerResolver);
     // Gateway replacement window: a new instance registers as the process-global
-    // recovery runtime while the registry still belongs to the owner.
+    // recovery runtime and activates the registry in post-attach startup. The
+    // live row must keep its original owner binding.
     const releaseReplacement = registerGatewayRecoveryRuntime(replacementRuntime);
+    activateSubagentRegistry(
+      () => ({ recoveryRuntime: replacementRuntime }) as unknown as GatewayRequestContext,
+    );
+    expect(getGatewayContextResolver(entry)).toBe(ownerResolver);
 
     try {
       const result = await steerControlledSubagentRun({
@@ -2859,9 +2873,16 @@ describe("steerControlledSubagentRun", () => {
       ownerAvailable ? (ownerContext as unknown as GatewayRequestContext) : undefined,
     );
     addSubagentRunForTests(entry);
+    // Normal registration binds the run to the owning Gateway's fenced resolver.
+    bindGatewayContextResolver(entry, () =>
+      ownerAvailable ? (ownerContext as unknown as GatewayRequestContext) : undefined,
+    );
     // Gateway replacement window: a new instance registers as the process-global
-    // recovery runtime, then the owner instance closes.
+    // recovery runtime and activates the registry, then the owner closes.
     const releaseReplacement = registerGatewayRecoveryRuntime(replacementRuntime);
+    activateSubagentRegistry(
+      () => ({ recoveryRuntime: replacementRuntime }) as unknown as GatewayRequestContext,
+    );
     ownerAvailable = false;
 
     const { callGateway: genericGatewayTransport } = await import("../../../gateway/call.js");

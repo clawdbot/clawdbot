@@ -3,7 +3,6 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import { fenceScheduledGatewayContextResolver } from "../../../gateway/scheduled-run-gateway-context.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -630,25 +629,6 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
   subagentRestorer.activate();
   // Post-ready only: collector cleanup retains the canonical sessions.delete RPC owner.
   scheduleSubagentRegistrySweep();
-}
-
-/**
- * Owner binding of the Gateway instance that activated the registry.
- *
- * "stale" means an owner exists but its instance no longer resolves a context
- * (closed or unavailable). Callers must fail closed on a stale owner instead
- * of falling through to a replacement Gateway. "none" is the standalone path:
- * no Gateway ever activated the registry.
- */
-export function getSubagentRegistryGatewayRecoveryRuntime():
-  | { owner: "active"; runtime: GatewayRecoveryRuntime }
-  | { owner: "stale" }
-  | { owner: "none" } {
-  if (!activeGatewayContextResolver) {
-    return { owner: "none" };
-  }
-  const runtime = activeGatewayContextResolver()?.recoveryRuntime;
-  return runtime ? { owner: "active", runtime } : { owner: "stale" };
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
