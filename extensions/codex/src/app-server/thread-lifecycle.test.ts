@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT,
+  type ModelCompatConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
@@ -1716,7 +1719,12 @@ describe("Codex app-server native code mode config", () => {
 
   it("does not overwrite native supervised turn settings", () => {
     const params = createAttemptParams({ provider: "anthropic" });
-    params.thinkLevel = "high";
+    params.thinkLevel = "off";
+    const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
+    params.model = {
+      ...createCodexTestModel("anthropic"),
+      compat,
+    };
     const request = buildTurnStartParams(params, {
       threadId: "thread-supervised",
       cwd: "/repo",
@@ -5309,6 +5317,8 @@ describe("resolveReasoningEffort (#71946)", () => {
     { requested: "max", supported: maxEfforts, expected: "max" },
     { requested: "ultra", supported: maxEfforts, expected: "max" },
     { requested: "ultra", supported: ultraEfforts, expected: "ultra" },
+    { requested: "high", supported: ["none", "max"], expected: "max" },
+    { requested: "high", supported: ["none"], expected: null },
   ] as const)(
     "maps $requested to $expected using provider-supported efforts",
     ({ requested, supported, expected }) => {
@@ -5328,6 +5338,9 @@ describe("resolveReasoningEffort (#71946)", () => {
   it("omits non-effort think levels", () => {
     expect(resolveReasoningEffort("off", "catalog-model", ultraEfforts)).toBeNull();
     expect(resolveReasoningEffort("adaptive", "catalog-model", ultraEfforts)).toBeNull();
+    expect(
+      resolveReasoningEffort("adaptive", "catalog-model", ["none", ...ultraEfforts]),
+    ).toBeNull();
   });
 });
 
