@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { readPostCoreSnapshot } from "./diagnostics.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -62,22 +63,58 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function readUpdateJson(file) {
+function readUpdateJson(file, observationRoot) {
   const raw = fs.readFileSync(file, "utf8");
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    // Published baselines may emit legacy service-control logs before the JSON payload.
-    const jsonStart = raw.indexOf("{");
-    if (jsonStart === -1) {
-      throw error;
-    }
-    return JSON.parse(raw.slice(jsonStart));
+  // April baselines print a pretty-printed core result before their fresh child
+  // inherits stdout and prints finalization. Never discard a failed/truncated child.
+  const jsonStart = raw.indexOf("{");
+  assert(jsonStart !== -1, "update reported no JSON result");
+  const reports = raw
+    .slice(jsonStart)
+    .trim()
+    .split(/\n(?=\{)/u)
+    .map((text) => JSON.parse(text));
+  assert(reports.length <= 2, "update reported unexpected extra results");
+  const [core, continuation] = reports;
+  let result = core;
+  if (continuation) {
+    assert(core.status === "ok", "historical core update did not succeed");
+    assert(continuation.mode === "unknown", "unexpected historical continuation mode");
+    assert(
+      Array.isArray(continuation.steps) && continuation.steps.length === 0,
+      "unexpected historical continuation steps",
+    );
+    assert(continuation.after === undefined, "historical continuation replaced the core result");
+    result = {
+      ...core,
+      status: continuation.status,
+      reason: continuation.reason,
+      postUpdate: continuation.postUpdate,
+    };
   }
+  if (result.postUpdate !== undefined || !observationRoot) {
+    return result;
+  }
+  // April 23 omits the child result from stdout. Consume only this invocation's
+  // complete exit snapshot; explicit CLI results and nonzero child exits win.
+  const snapshot = readPostCoreSnapshot(observationRoot);
+  if (snapshot === null) {
+    return result;
+  }
+  assert(snapshot.childExitCode === 0, "historical post-core child did not exit successfully");
+  return { ...result, postUpdate: { plugins: snapshot.result } };
 }
 
 function isCapabilityConsentReason(value) {
   return typeof value === "string" && value.includes("requires capability consent");
+}
+
+function isPostPluginValidationWarning(warning) {
+  return (
+    warning?.reason === "Config remained invalid after updated plugin migrations." &&
+    warning?.message ===
+      "Post-update plugin migration did not produce a valid config; refusing to restart."
+  );
 }
 
 function resolveHomePath(value) {
@@ -1103,23 +1140,70 @@ function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSuppor
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
     assert(record.source === source, `${pluginId} plugin source changed: ${record.source}`);
-    const installedVersion = source === "clawhub" ? record.version : record.resolvedVersion;
-    assert(
-      installedVersion === expectedVersion,
-      `${pluginId} plugin version changed: ${String(installedVersion)}`,
+    assertPluginArtifactConsent(
+      record,
+      pluginId,
+      packageJson,
+      expectedVersion,
+      capabilityConsentSupported,
     );
+  }
+}
+
+function assertPluginArtifactConsent(
+  record,
+  pluginId,
+  packageJson,
+  expectedVersion,
+  capabilityConsentSupported,
+) {
+  const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
+  assert(
+    installedVersion === expectedVersion,
+    `${pluginId} plugin version changed: ${String(installedVersion)}`,
+  );
+  assert(
+    packageJson.version === expectedVersion,
+    `${pluginId} installed package version changed: ${String(packageJson.version)}`,
+  );
+  const integrity = pluginInstallIntegrity(record);
+  assert(
+    typeof integrity === "string" && integrity.length > 0,
+    `${pluginId} plugin integrity missing`,
+  );
+  if (capabilityConsentSupported === "1") {
+    assertCompanionPluginConsent(record, pluginId, integrity);
+  }
+}
+
+function assertRecoveredPluginInstalls([file, expectedVersion, observationRoot]) {
+  assertRecoverableUpdateJson([file, expectedVersion, observationRoot]);
+  const plugins = readUpdateJson(file, observationRoot).postUpdate.plugins;
+  const ids = new Set(
+    plugins.npm.outcomes
+      .filter((outcome) => outcome.status === "error")
+      .map((outcome) => outcome.pluginId),
+  );
+  for (const reason of [
+    ...plugins.warnings.map((warning) => warning.reason).filter(isCapabilityConsentReason),
+    ...plugins.sync.errors,
+  ]) {
+    const match = /^Plugin "([^"\n]+)" requires capability consent\./u.exec(reason);
+    assert(match, "capability consent report omitted its plugin identity");
+    ids.add(match[1]);
+  }
+  assert(ids.size > 0, "recovered update reported no plugin identities");
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  for (const pluginId of ids) {
+    const record = records[pluginId];
+    assert(record, `${pluginId} recovered plugin install record missing`);
+    const packageName = record.source === "npm" ? record.resolvedName : record.clawhubPackage;
     assert(
-      packageJson.version === expectedVersion,
-      `${pluginId} installed package version changed: ${String(packageJson.version)}`,
+      typeof packageName === "string" && packageName.length > 0,
+      `${pluginId} recovered package name missing`,
     );
-    const integrity = pluginInstallIntegrity(record);
-    assert(
-      typeof integrity === "string" && integrity.length > 0,
-      `${pluginId} plugin integrity missing`,
-    );
-    if (capabilityConsentSupported === "1") {
-      assertCompanionPluginConsent(record, pluginId, integrity);
-    }
+    const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+    assertPluginArtifactConsent(record, pluginId, packageJson, expectedVersion, "1");
   }
 }
 
@@ -1171,15 +1255,19 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-function assertRecoverableUpdateJson([file, expectedVersion]) {
+function assertRecoverableUpdateJson([file, expectedVersion, observationRoot]) {
   assert(file && expectedVersion, "assert-recoverable-update-json requires a path and version");
-  const result = readUpdateJson(file);
+  const result = readUpdateJson(file, observationRoot);
   const steps = result?.steps;
   const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "error", "recoverable update did not report error status");
+  const warningOnly = result?.status === "ok" && plugins?.status === "warning";
+  assert(
+    warningOnly || result?.status === "error",
+    "recoverable update did not report consent failure",
+  );
   assert(result?.mode === "npm", `recoverable update mode changed: ${String(result?.mode)}`);
   assert(
-    result?.reason === "post-update-plugins",
+    warningOnly ? result?.reason === undefined : result?.reason === "post-update-plugins",
     `update failed before plugin convergence: ${String(result?.reason)}`,
   );
   assert(
@@ -1187,7 +1275,9 @@ function assertRecoverableUpdateJson([file, expectedVersion]) {
     `candidate version was not installed: ${String(result?.after?.version)}`,
   );
   assert(Array.isArray(steps) && steps.length > 0, "recoverable update reported no steps");
-  for (const stepName of ["global update", "global install swap"]) {
+  for (const stepName of warningOnly
+    ? ["global update"]
+    : ["global update", "global install swap"]) {
     const step = steps.find((entry) => entry?.name === stepName);
     assert(step?.exitCode === 0, `${stepName} did not complete successfully`);
   }
@@ -1195,14 +1285,30 @@ function assertRecoverableUpdateJson([file, expectedVersion]) {
     steps.every((step) => step?.exitCode === 0),
     "recoverable update contained a failed core step",
   );
-  assert(plugins?.status === "error", "recoverable update did not fail plugin convergence");
   assert(
-    plugins?.reason === "post-plugin-doctor-invalid-config",
+    warningOnly || plugins?.status === "error",
+    "recoverable update did not fail plugin convergence",
+  );
+  assert(
+    warningOnly
+      ? plugins?.reason === undefined
+      : plugins?.reason === "post-plugin-doctor-invalid-config",
     `unexpected plugin convergence failure: ${String(plugins?.reason)}`,
   );
   const syncErrors = plugins?.sync?.errors;
   const npmOutcomes = plugins?.npm?.outcomes;
   const integrityDrifts = plugins?.integrityDrifts;
+  assert(
+    Array.isArray(plugins?.warnings) &&
+      // The validation owner adds this warning to a stranded consent update.
+      // This admits doctor only; run.sh proves migrated config/state before consent.
+      plugins.warnings.every(
+        (warning) =>
+          isCapabilityConsentReason(warning?.reason) ||
+          (!warningOnly && isPostPluginValidationWarning(warning)),
+      ),
+    "recoverable update contained a non-consent plugin warning",
+  );
   assert(
     Array.isArray(syncErrors) && syncErrors.every(isCapabilityConsentReason),
     "recoverable update contained a non-consent plugin synchronization error",
@@ -1231,10 +1337,22 @@ function assertRecoverableUpdateJson([file, expectedVersion]) {
   );
 }
 
-function assertSuccessfulUpdateJson([file, expectedVersion]) {
+function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-  const result = readUpdateJson(file);
+  const result = readUpdateJson(file, observationRoot);
+  const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  assert(
+    plugins?.status !== "error" &&
+      !plugins?.sync?.errors?.length &&
+      !plugins?.npm?.outcomes?.some((outcome) => outcome?.status === "error") &&
+      !plugins?.integrityDrifts?.length,
+    "successful update failed plugin convergence",
+  );
+  assert(
+    !plugins?.warnings?.some((warning) => isCapabilityConsentReason(warning?.reason)),
+    "successful update still requires capability consent",
+  );
   assert(
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
@@ -1425,6 +1543,8 @@ if (command === "list-scenarios") {
   assertConfiguredPluginInstalls();
 } else if (command === "assert-companion-installs") {
   assertCompanionPluginInstalls(process.argv.slice(3));
+} else if (command === "assert-recovered-plugin-installs") {
+  assertRecoveredPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
 } else if (command === "assert-recoverable-update-json") {

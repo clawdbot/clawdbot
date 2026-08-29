@@ -91,7 +91,10 @@ status_seconds=""
 healthz_seconds=""
 readyz_seconds=""
 update_restart_seconds=""
+update_restart_source=""
 update_repair_required="0"
+initial_update_observation_root=""
+last_update_observation_root=""
 migration_seconds=""
 idempotence_seconds=""
 run_completed="0"
@@ -206,6 +209,8 @@ write_summary() {
     SUMMARY_INSTALLED_VERSION="$installed_version" \
     SUMMARY_SCENARIO="$SCENARIO" \
     SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
+    SUMMARY_UPDATE_REPAIR_REQUIRED="$update_repair_required" \
+    SUMMARY_UPDATE_RESTART_SOURCE="$update_restart_source" \
     SUMMARY_START_SECONDS="$start_seconds" \
     SUMMARY_UPDATE_RESTART_SECONDS="$update_restart_seconds" \
     SUMMARY_MIGRATION_SECONDS="$migration_seconds" \
@@ -244,6 +249,8 @@ const summary = {
   },
   installedVersion: process.env.SUMMARY_INSTALLED_VERSION || null,
   updateRestartMode: process.env.SUMMARY_UPDATE_RESTART_MODE || "manual",
+  updateRecovery: process.env.SUMMARY_UPDATE_REPAIR_REQUIRED === "1" ? "capability-consent" : null,
+  updateRestartSource: process.env.SUMMARY_UPDATE_RESTART_SOURCE || null,
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
@@ -317,7 +324,7 @@ on_exit() {
   # Capture before stop/cleanup can replace the first failing service evidence.
   if [ "$status" -ne 0 ]; then
     node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
-      "$ARTIFACT_ROOT" "${FAILURE_PHASE:-${CURRENT_PHASE:-unknown}}" "$status" "$FAILURE_SIGNAL" ||
+      "$ARTIFACT_ROOT" "${FAILURE_PHASE:-${CURRENT_PHASE:-unknown}}" "$status" "$FAILURE_SIGNAL" "$last_update_observation_root" ||
       echo "Upgrade survivor diagnostics missing; preserving original phase failure." >&3
   fi
   cleanup
@@ -1386,6 +1393,20 @@ candidate_update_spec() {
 }
 
 update_candidate() {
+  local after_repair="${1:-0}"
+  local update_json="$UPDATE_JSON" update_err="$UPDATE_ERR"
+  local observation_root
+  # The old parent need not join its child. A fresh directory keeps a late exit
+  # or the recovery update from substituting another invocation's observation.
+  observation_root="$(mktemp -d "$ARTIFACT_ROOT/update-observation.XXXXXX")"
+  last_update_observation_root="$observation_root"
+  if [ "$after_repair" != "1" ]; then
+    initial_update_observation_root="$observation_root"
+  fi
+  if [ "$after_repair" = "1" ]; then
+    update_json="$ARTIFACT_ROOT/recovery-update.json"
+    update_err="$ARTIFACT_ROOT/recovery-update.err"
+  fi
   local update_spec
   update_spec="$(candidate_update_spec)"
   echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
@@ -1406,24 +1427,26 @@ update_candidate() {
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
-  update_env+=("NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs")
+  update_env+=(
+    "OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=$observation_root"
+    "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  )
   local update_status=0
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?
-  if [ "$update_status" -eq 0 ]; then
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-      assert-successful-update-json "$UPDATE_JSON" "$candidate_version"
-    # This tagged baseline predates capability consent, even when its updater exits cleanly.
-    # Run candidate-owned repair before post-update validation; newer baselines need no repair.
-    if [ "$baseline_version" = "2026.7.1-2" ]; then
-      update_repair_required="1"
-    fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
+  if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
+    update_repair_required="1"
+  elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-successful-update-json "$update_json" "$candidate_version" "$observation_root"; then
     if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
       update_end="$(node -e "process.stdout.write(String(Date.now()))")"
       update_restart_seconds=$(((update_end - update_start + 999) / 1000))
+      if [ "$after_repair" = "1" ]; then
+        update_restart_source="candidate-after-repair"
+      else
+        update_restart_source="baseline-update"
+      fi
     fi
-  elif node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-recoverable-update-json "$UPDATE_JSON" "$candidate_version"; then
-    update_repair_required="1"
   else
     echo "openclaw update failed before the recoverable post-core boundary" >&2
     local validate_status=0
@@ -1431,8 +1454,9 @@ update_candidate() {
     echo "post-update config validation probe status=$validate_status" >&2
     openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_ERR" >&2 || true
     openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_JSON" >&2 || true
-    openclaw_e2e_print_log "$UPDATE_ERR" >&2 || true
-    openclaw_e2e_print_log "$UPDATE_JSON" >&2 || true
+    openclaw_e2e_print_log "$update_err" >&2 || true
+    openclaw_e2e_print_log "$update_json" >&2 || true
+    [ "$update_status" -ne 0 ] || update_status=1
     return "$update_status"
   fi
   installed_version="$(read_installed_version)"
@@ -1456,26 +1480,10 @@ assert_root_managed_vps_cli_usable() {
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw plugins >"$ARTIFACT_ROOT/root-vps-plugins.out" 2>"$ARTIFACT_ROOT/root-vps-plugins.err"
 }
 
-run_post_update_repair() {
-  local started_at budget restart_start restart_end
+run_doctor() {
+  local started_at budget
   started_at="$(date +%s)"
-  if [ "$update_repair_required" = "1" ]; then
-    if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
-      --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$DOCTOR_LOG"; then
-      echo "openclaw update repair failed" >&2
-      openclaw_e2e_print_log "$DOCTOR_LOG" >&2
-      openclaw_e2e_print_log "$REPAIR_JSON" >&2
-      return 1
-    fi
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
-    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-      restart_start="$(node -e "process.stdout.write(String(Date.now()))")"
-      openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
-        systemctl --user restart openclaw-gateway.service
-      restart_end="$(node -e "process.stdout.write(String(Date.now()))")"
-      update_restart_seconds=$(((restart_end - restart_start + 999) / 1000))
-    fi
-  elif ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
     echo "openclaw doctor failed" >&2
     openclaw_e2e_print_log "$DOCTOR_LOG" >&2
     return 1
@@ -1488,6 +1496,31 @@ run_post_update_repair() {
       echo "SQLite volume migration exceeded budget: ${migration_seconds}s > ${budget}s" >&2
       return 1
     fi
+  fi
+}
+
+repair_fixture_plugin_consent() {
+  [ "$update_repair_required" = "1" ] || return 0
+  # Migration assertions run first: explicit fixture consent must not conceal a
+  # broken doctor migration. The candidate owns staged-artifact acceptance.
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
+    --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
+    echo "openclaw update repair failed" >&2
+    openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
+    openclaw_e2e_print_log "$REPAIR_JSON" >&2
+    return 1
+  fi
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root"
+  assert_survival
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    # Repair never restarts. Prove the candidate's automatic update handoff
+    # separately; a manual service restart cannot substitute for that proof.
+    phase recovery-update-restart update_candidate 1
+    assert_survival
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root"
   fi
 }
 
@@ -1546,7 +1579,8 @@ probe_gateway_endpoint() {
   fi
   args+=(--out "$out_file")
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${args[@]}"
+  # Command substitution does not inherit errexit; preserve the probe failure.
+  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${args[@]}" || return "$?"
   end_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   printf '%s\n' "$(((end_epoch - start_epoch + 999) / 1000))"
 }
@@ -1678,7 +1712,7 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-phase post-update-repair run_post_update_repair
+phase doctor run_doctor
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
@@ -1686,6 +1720,7 @@ phase assert-survival assert_survival
 if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase assert-volume-idempotence assert_volume_idempotence
 fi
+phase fixture-plugin-consent repair_fixture_plugin_consent
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
