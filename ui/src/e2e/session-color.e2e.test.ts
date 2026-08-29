@@ -145,12 +145,12 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();
-      await page.getByRole("menuitem", { name: "Color", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
       await page.getByRole("menuitemradio", { name: "Blue", exact: true }).click();
       await waitForPatch(gateway, (params) => params.key === key && params.color === "blue");
       await expect.poll(() => dot.getAttribute("aria-label")).toBe("Session color: Blue");
       await page.locator(".chat-header-session-menu__trigger").click();
-      await page.getByRole("menuitem", { name: "Color", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
       await shot("after-compact-menu.png");
       await page.getByRole("menuitemradio", { name: "Default", exact: true }).click();
       await waitForPatch(gateway, (params) => params.key === key && params.color === null);
