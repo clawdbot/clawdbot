@@ -93,6 +93,12 @@ if [ -f "$CODESIGN_COUNT_FILE" ]; then
 fi
 count=$((count + 1))
 printf '%s' "$count" >"$CODESIGN_COUNT_FILE"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--entitlements" ]; then
+    printf '%s' "$2" >"$CODESIGN_COUNT_FILE.entitlements"
+  fi
+  shift
+done
 if [ "\${CODESIGN_PERMANENT_FAILURE:-0}" = "1" ]; then
   echo "signing identity is not available" >&2
   exit 7
@@ -184,25 +190,6 @@ describe("codesign-mac-app temp file hygiene", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("ERROR: Unexpected codesign argument: extra");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
-  });
-
-  it("cleans entitlement temp files when signing fails", () => {
-    const tempRoot = tempDirs.make("openclaw-codesign-fail-");
-    const app = path.join(tempRoot, "Fake.app");
-    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
-
-    const result = spawnSync("bash", [scriptPath, app], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        ALLOW_ADHOC_SIGNING: "1",
-        TMPDIR: tempRoot,
-      },
-    });
-
-    expect(result.status).not.toBe(0);
     expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
@@ -447,38 +434,56 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
-  it("does not retry non-timestamp signing failures", () => {
-    const tempRoot = tempDirs.make("openclaw-codesign-permanent-");
-    const app = path.join(tempRoot, "Fake.app");
-    const binDir = path.join(tempRoot, "bin");
-    const countFile = path.join(tempRoot, "codesign-count");
-    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
-    mkdirSync(binDir);
-    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-    installTransientFakeCodesign(binDir);
+  it.each(["main binary", "app bundle"])(
+    "does not retry non-timestamp %s signing failures",
+    (target) => {
+      const tempRoot = tempDirs.make("openclaw-codesign-permanent-");
+      const app = path.join(tempRoot, "Fake.app");
+      const binDir = path.join(tempRoot, "bin");
+      const countFile = path.join(tempRoot, "codesign-count");
+      mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+      mkdirSync(binDir);
+      if (target === "main binary") {
+        writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+      }
+      installTransientFakeCodesign(binDir);
+      // Keep identity lookup and attribute cleanup inert even if signing setup changes.
+      for (const command of ["security", "xattr"]) {
+        writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      }
+      writeFileSync(
+        path.join(binDir, "mktemp"),
+        '#!/bin/sh\nset -eu\nmkdir "$TMPDIR/openclaw-entitlements.fixture"\nprintf "%s\\n" "$TMPDIR/openclaw-entitlements.fixture"\n',
+        { mode: 0o755 },
+      );
 
-    const result = spawnSync("bash", [scriptPath, app], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CODESIGN_COUNT_FILE: countFile,
-        CODESIGN_PERMANENT_FAILURE: "1",
-        CODESIGN_TIMESTAMP_RETRY_ATTEMPTS: "3",
-        CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS: "0",
-        CODESIGN_TRANSIENT_FAILURES: "0",
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-        SKIP_TEAM_ID_CHECK: "1",
-        TMPDIR: tempRoot,
-      },
-    });
+      const result = spawnSync("bash", [scriptPath, app], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODESIGN_COUNT_FILE: countFile,
+          CODESIGN_PERMANENT_FAILURE: "1",
+          CODESIGN_TIMESTAMP_RETRY_ATTEMPTS: "3",
+          CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS: "0",
+          CODESIGN_TRANSIENT_FAILURES: "0",
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+          SKIP_TEAM_ID_CHECK: "1",
+          TMPDIR: tempRoot,
+        },
+      });
 
-    expect(result.status).toBe(7);
-    expect(result.stderr).not.toContain("Transient Apple timestamp failure");
-    expect(readFileSync(countFile, "utf8")).toBe("1");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
-  });
+      expect(result.status).toBe(7);
+      expect(result.stdout).not.toContain("Codesign complete");
+      expect(result.stderr).not.toContain("Transient Apple timestamp failure");
+      expect(readFileSync(countFile, "utf8")).toBe("1");
+      // Assert cleanup of the allocated resource, not only the requested TMPDIR.
+      const entitlementPath = readFileSync(`${countFile}.entitlements`, "utf8");
+      expect(existsSync(path.dirname(entitlementPath))).toBe(false);
+      expect(entitlementTemps(tempRoot)).toEqual([]);
+    },
+  );
 
   it.each([
     {
