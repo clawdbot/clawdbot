@@ -1,6 +1,7 @@
 // Print Cli Backend Live Metadata script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../src/agents/cli-backends.js";
+import { resolvePluginSetupRegistry } from "../src/plugins/setup-registry.js";
 
 export async function resolveCliBackendLiveMetadata(provider: string) {
   if (provider === "codex-cli") {
@@ -66,7 +67,39 @@ async function loadFallbackBackend(id: string) {
   }
 }
 
+export async function resolveCliBackendDockerPackages(requested: readonly string[] = []) {
+  const backends = resolvePluginSetupRegistry().cliBackends;
+  const providers = requested.length
+    ? [
+        ...requested,
+        ...backends
+          .filter(
+            ({ backend }) => backend.modelProvider && requested.includes(backend.modelProvider),
+          )
+          .map(({ backend }) => backend.id),
+      ]
+    : backends.map(({ backend }) => backend.id);
+  const packages = new Set<string>();
+  for (const provider of providers) {
+    const metadata = await resolveCliBackendLiveMetadata(provider);
+    if ("dockerNpmPackage" in metadata && metadata.dockerNpmPackage) {
+      packages.add(metadata.dockerNpmPackage);
+    }
+  }
+  return [...packages].toSorted();
+}
+
 async function main() {
+  if (process.argv[2] === "--docker-packages") {
+    const requested = process.argv[3]
+      ?.split(",")
+      .map((id) => id.trim())
+      .filter((id) => id && id !== "all");
+    for (const npmPackage of await resolveCliBackendDockerPackages(requested)) {
+      process.stdout.write(`${npmPackage}\n`);
+    }
+    return;
+  }
   const provider = process.argv[2]?.trim().toLowerCase();
   if (!provider) {
     console.error("usage: node scripts/print-cli-backend-live-metadata.ts <provider>");

@@ -16,8 +16,11 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { installTestEnv } from "../../test/test-env.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { buildPortableAuthProfileStoreForAgentCopy } from "../agents/auth-profiles/portability.js";
+import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -122,6 +125,7 @@ import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -2830,6 +2834,7 @@ type PreparedGatewayLiveModelCandidate = {
 function buildLiveGatewayAuthProfileStore(params: {
   store: AuthProfileStore;
   candidates: readonly PreparedGatewayLiveModelCandidate[];
+  requireProfileKeys?: boolean;
 }): AuthProfileStore {
   const directCredentialProviders = new Set<string>();
   const selectedProfileIds = new Map<string, string[]>();
@@ -2858,7 +2863,9 @@ function buildLiveGatewayAuthProfileStore(params: {
           `Prepared live auth profile "${selectedProfileId}" does not belong to ${modelRef}.`,
         );
       }
-    } else if (!requiresLiveProfileCredential(provider, REQUIRE_PROFILE_KEYS)) {
+    } else if (
+      !requiresLiveProfileCredential(provider, params.requireProfileKeys ?? REQUIRE_PROFILE_KEYS)
+    ) {
       if (auth.mode !== "aws-sdk") {
         if (!auth.apiKey) {
           throw new Error(`Prepared live auth for ${modelRef} is missing its direct credential.`);
@@ -2981,11 +2988,38 @@ function resolveGatewayLivePreparedProfileId(
     : undefined;
 }
 
-async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<void>> {
+async function enterIsolatedGatewayLiveDiscoveryState(params: {
+  config: OpenClawConfig;
+  providers?: Iterable<string>;
+}): Promise<() => Promise<void>> {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const source = ensureAuthProfileStoreWithoutExternalProfiles(
+    resolveDefaultAgentDir(params.config),
+    {
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+    },
+  );
+  const selected = params.providers
+    ? new Set(
+        [...params.providers].flatMap((provider) => listProfilesForProvider(source, provider)),
+      )
+    : undefined;
+  const portable = buildPortableAuthProfileStoreForAgentCopy({
+    ...source,
+    profiles: Object.fromEntries(
+      Object.entries(source.profiles).filter(([id]) => !selected || selected.has(id)),
+    ),
+  });
+  if (portable.skippedProfileIds.length > 0) {
+    logProgress(
+      `[all-models] isolated discovery omitted ${portable.skippedProfileIds.length} non-portable auth profile(s)`,
+    );
+  }
   const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-  return async () => {
+  const cleanup = async () => {
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -2993,6 +3027,15 @@ async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<v
     }
     await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   };
+  try {
+    // Discovery may materialize env credentials; copy selected portable profiles
+    // first so it never writes the ambient store or duplicates native OAuth owners.
+    saveAuthProfileStore(portable.store, resolveDefaultAgentDir({}), { syncExternalCli: false });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+  return cleanup;
 }
 
 function createGatewayLiveModelSession(params: {
@@ -3199,7 +3242,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     expect(resolveGatewayLivePreparedProfileId(store, "anthropic")).toBeUndefined();
   });
 
-  it("keeps prepared discovery credentials out of the ambient auth store", async () => {
+  it("copies selected portable discovery credentials without mutating the ambient auth store", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const ambientStateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-live-ambient-state-"),
@@ -3210,25 +3253,58 @@ describe("buildLiveGatewayAuthProfileStore", () => {
       version: 1,
       profiles: {
         "openai:ambient": { type: "api_key", provider: "openai", key: "ambient-test-key" },
+        "openai:token": { type: "token", provider: "openai", token: "ambient-test-token" },
+        "openai:refresh": {
+          type: "oauth",
+          provider: "openai",
+          access: "fixture-access",
+          refresh: "fixture-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "unselected:ambient": {
+          type: "token",
+          provider: "unselected",
+          token: "unselected-test-token",
+        },
       },
+      order: { openai: ["openai:ambient", "openai:token", "openai:refresh"] },
     };
-    saveAuthProfileStore(ambientStore, ambientAgentDir);
+    saveAuthProfileStore(ambientStore, undefined, { syncExternalCli: false });
 
     try {
-      const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
-      try {
-        const discoveryAgentDir = resolveDefaultAgentDir({});
-        expect(discoveryAgentDir).not.toBe(ambientAgentDir);
-        const prepared = materializeGatewayLiveDiscoveryAuth({
-          env: { OPENAI_API_KEY: "prepared-openai-test-key" },
-          providerList: ["openai"],
-          store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
-        });
-        saveAuthProfileStore(prepared, discoveryAgentDir);
-      } finally {
-        await leaveDiscoveryState();
-      }
-
+      expect(existsSync(path.join(ambientStateDir, "agents"))).toBe(false);
+      await withEnvAsync(
+        { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_USE_REAL_HOME: undefined },
+        async () => {
+          const testEnv = installTestEnv({ loadProfileEnv: false });
+          try {
+            const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
+              config: {},
+              providers: ["openai"],
+            });
+            try {
+              const discoveryAgentDir = resolveDefaultAgentDir({});
+              expect(discoveryAgentDir).not.toBe(ambientAgentDir);
+              const copied = ensureAuthProfileStoreWithoutExternalProfiles(discoveryAgentDir);
+              expect(copied.profiles).toEqual({
+                "openai:ambient": ambientStore.profiles["openai:ambient"],
+                "openai:token": ambientStore.profiles["openai:token"],
+              });
+              expect(copied.order).toEqual({ openai: ["openai:ambient", "openai:token"] });
+              const prepared = materializeGatewayLiveDiscoveryAuth({
+                env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+                providerList: ["openai"],
+                store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
+              });
+              saveAuthProfileStore(prepared, discoveryAgentDir);
+            } finally {
+              await leaveDiscoveryState();
+            }
+          } finally {
+            testEnv.cleanup();
+          }
+        },
+      );
       expect(
         ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
       ).toEqual(ambientStore.profiles);
@@ -3265,6 +3341,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
 
     const isolated = buildLiveGatewayAuthProfileStore({
       store,
+      requireProfileKeys: false,
       candidates: [
         {
           model: createGatewayLiveTestModel("anthropic", "claude-sonnet-4-6"),
@@ -6284,7 +6361,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
   let leaveDiscoveryState: (() => Promise<void>) | undefined;
 
   beforeEach(async () => {
-    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
+      config: await readLiveTestConfig(),
+      providers: PROVIDERS ?? undefined,
+    });
   });
 
   afterEach(async () => {
@@ -6334,7 +6414,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           env: process.env,
         });
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
-        const discoveryAgentDir = resolveDefaultAgentDir(cfg);
+        const discoveryAgentDir = resolveDefaultAgentDir({});
         const discoveryAuthProfileStore = ensureAuthProfileStore(discoveryAgentDir, {
           allowKeychainPrompt: false,
         });
@@ -6348,7 +6428,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         }
         logProgress("[all-models] preparing models.json");
         const modelsJsonResult = await withGatewayLiveSetupTimeout(
-          ensureOpenClawModelsJson(cfg, undefined, {
+          ensureOpenClawModelsJson(cfg, discoveryAgentDir, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
           }),
