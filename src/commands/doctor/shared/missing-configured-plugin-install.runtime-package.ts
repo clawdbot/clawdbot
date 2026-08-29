@@ -130,12 +130,14 @@ async function readInstalledRuntimePayloadVersion(params: {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(
+    const parsed: unknown = JSON.parse(
       await readFile(path.join(resolveUserPath(installPath, params.env), "package.json"), "utf8"),
-    ) as { version?: unknown };
-    return typeof parsed.version === "string" && parsed.version.trim()
-      ? parsed.version.trim()
-      : undefined;
+    );
+    if (typeof parsed !== "object" || parsed === null || !("version" in parsed)) {
+      return undefined;
+    }
+    const version = parsed.version;
+    return typeof version === "string" && version.trim() ? version.trim() : undefined;
   } catch {
     return undefined;
   }
