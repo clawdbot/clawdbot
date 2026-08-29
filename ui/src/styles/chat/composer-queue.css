@@ -157,35 +157,6 @@
   grid-template-columns: var(--chat-stack-icon-size) minmax(0, 1fr) auto;
 }
 
-.chat-queue__item--in-thread {
-  --chat-stack-icon-size: 14px;
-  --chat-queue-row-height: 28px;
-  --chat-stack-leading-inset: 0px;
-  --chat-stack-trailing-inset: 0px;
-
-  width: fit-content;
-  max-width: 100%;
-  padding-block: 0;
-  border: 0;
-  background: none;
-}
-
-.chat-queue__item--in-thread::after {
-  display: none;
-}
-
-.chat-queue__item--in-thread .chat-queue__copy {
-  display: flex;
-}
-
-.chat-queue__item--in-thread.chat-queue__item--editing {
-  width: 100%;
-}
-
-.chat-group-messages:has(> .chat-queue__item--editing) > .chat-bubble {
-  display: none;
-}
-
 .chat-queue__item--no-avatar .chat-queue__copy,
 .chat-queue__item--no-avatar .chat-queue__edit-input {
   grid-column: 2;

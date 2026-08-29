@@ -761,11 +761,11 @@ describe("chat typing status", () => {
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("anchors the run error and local command queue without moving transcript presence", () => {
+  it("anchors the run error and queue to the composer without moving transcript presence", () => {
     const container = renderChatView({
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
       runError: { summary: "Gateway unavailable" },
-      queue: [{ id: "queued", text: "/compact", localCommandName: "compact", createdAt: 1 }],
+      queue: [{ id: "queued", text: "Try again", createdAt: 1 }],
     });
     const indicator = requireElement(
       container,
@@ -2237,8 +2237,8 @@ describe("chat scroll-to-bottom affordance", () => {
     const container = renderChatView({
       showNewMessages: true,
       queue: [
-        { id: "queued-1", text: "/compact", localCommandName: "compact", createdAt: 1 },
-        { id: "queued-2", text: "/reset", localCommandName: "reset", createdAt: 2 },
+        { id: "queued-1", text: "first queued message", createdAt: 1 },
+        { id: "queued-2", text: "second queued message", createdAt: 2 },
       ],
     });
 

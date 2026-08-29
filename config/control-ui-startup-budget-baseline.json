@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345371,
-  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 344714,
+  "reason": "Revert queued-send transcript bubbles (#131909) per operator live review; fresh pnpm ui:build measures 344714 B. Retain the 512 B growth allowance, 64 B build variance, and 350 KiB baseline ceiling.",
+  "updatedAt": "2026-08-29"
 }

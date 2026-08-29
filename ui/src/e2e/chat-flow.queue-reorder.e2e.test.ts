@@ -9,8 +9,6 @@ import {
 
 const suite = createChatFlowE2eSuite();
 
-const queuedBubbleSelector = ".chat-group.user:has(.chat-queue__item)";
-
 const QUEUED = ["review the migration", "then update the docs", "finally run the smoke"] as const;
 const failureReloadProofDir = path.join(
   process.cwd(),
@@ -41,13 +39,10 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
-      const queueText = () =>
-        page
-          .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
-          .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? ""));
+      const queueText = () => page.locator(".chat-queue__item .chat-queue__text").allTextContents();
       expect(await queueText()).toEqual([...QUEUED]);
 
       // One handle per movable row, and it is the whole reorder surface.
@@ -90,13 +85,10 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
-      const queueText = () =>
-        page
-          .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
-          .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? ""));
+      const queueText = () => page.locator(".chat-queue__item .chat-queue__text").allTextContents();
       expect(await queueText()).toEqual([...QUEUED]);
       if (captureUiProofEnabled) {
         await page.screenshot({ path: `${failureReloadProofDir}/01-queued-before-failure.png` });
@@ -164,7 +156,7 @@ suite.define(() => {
       // order can be confirmed rendered, not just stored.
       await gateway.setOnline(true);
       await page.locator("openclaw-chat-pane").waitFor({ state: "attached", timeout: 15_000 });
-      await page.locator(queuedBubbleSelector, { hasText: QUEUED[0] }).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-queue__item", { hasText: QUEUED[0] }).waitFor({ timeout: 10_000 });
       expect(await queueText()).toEqual([...QUEUED]);
       if (captureUiProofEnabled) {
         await page.screenshot({

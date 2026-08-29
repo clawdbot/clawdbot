@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
-import { shouldRenderQueuedSendInThread } from "./chat-progress.ts";
-import { renderChatQueue, renderQueuedSendControls } from "./components/chat-composer-queue.ts";
+import { renderChatQueue } from "./components/chat-composer-queue.ts";
 
 afterEach(async () => {
   document.body.replaceChildren();
@@ -14,72 +13,6 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it("leaves only local command content at the composer", () => {
-    const container = document.createElement("div");
-    render(
-      renderChatQueue({
-        queue: [
-          { ...waiting("future prompt", 1), sendRunId: "future-send" },
-          { ...waiting("/compact", 2), localCommandName: "compact" },
-        ],
-        onQueueRemove: vi.fn(),
-      }),
-      container,
-    );
-    expect(container.textContent).not.toContain("future prompt");
-    expect(container.querySelectorAll(".chat-queue__item")).toHaveLength(1);
-    expect(container.querySelector(".chat-queue__text")?.textContent).toBe("/compact");
-  });
-
-  it("offers Steer only for eligible queued messages during an active run", () => {
-    const onQueueSteer = vi.fn();
-    const container = renderQueue({
-      canAbort: true,
-      onQueueSteer,
-      onQueueRemove: vi.fn(),
-      queue: [
-        { id: "queued-1", text: "tighten the plan", createdAt: 1 },
-        { id: "pending-1", text: "already sent", createdAt: 2, pendingRunId: "run-1" },
-        { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
-        {
-          id: "waiting-idle-1",
-          text: "queued during the run",
-          createdAt: 4,
-          sendState: "waiting-idle",
-        },
-      ],
-    });
-    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
-    expect(steer).toHaveLength(2);
-    steer[0]?.click();
-    steer[1]?.click();
-    expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
-  });
-
-  it("renders reconnect waits as compact badges without the raw transport error", () => {
-    const container = renderQueue({
-      onQueueRemove: vi.fn(),
-      queue: [
-        {
-          id: "reconnect-1",
-          text: "send me once the gateway is back",
-          createdAt: 1,
-          sendError: "chat.send unavailable during gateway restart",
-          sendState: "waiting-reconnect",
-        },
-      ],
-    });
-    const item = container.querySelector(".chat-queue__item");
-    expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(
-      item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
-    ).not.toBeNull();
-    expect(item?.querySelector(".chat-queue__error")).toBeNull();
-    const state = item?.querySelector(".chat-queue__badge--reconnect");
-    expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
-    expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
-  });
-
   it("keeps attempted unconfirmed messages inline while local commands retain retry and discard", () => {
     const onQueueRetry = vi.fn();
     const onQueueRemove = vi.fn();
@@ -122,7 +55,7 @@ describe("chat composer steering queue", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderQueueSurfaces({
+      renderChatQueue({
         queue: [
           {
             id: "steer-1",
@@ -152,7 +85,7 @@ describe("chat composer steering queue", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderQueueSurfaces({
+      renderChatQueue({
         queue: [
           {
             id: "failed-steer",
@@ -190,16 +123,10 @@ describe("chat composer steering queue", () => {
   });
 });
 
-function renderQueueSurfaces(props: Parameters<typeof renderChatQueue>[0]) {
-  return html`${renderChatQueue(props)}${props.queue
-    .filter(shouldRenderQueuedSendInThread)
-    .map((item) => renderQueuedSendControls(item, props))}`;
-}
-
 function renderQueue(props: Parameters<typeof renderChatQueue>[0]) {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderQueueSurfaces(props), container);
+  render(renderChatQueue(props), container);
   return container;
 }
 
@@ -234,9 +161,7 @@ describe("chat composer queue reordering", () => {
 
   it("caps long queues and records both scroll boundaries", () => {
     const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)].map((item) =>
-        Object.assign(item, { localCommandName: "compact" }),
-      ),
+      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)],
       onQueueRemove: vi.fn(),
     });
     const scroll = container.querySelector<HTMLElement>(".chat-queue__scroll")!;
@@ -267,9 +192,7 @@ describe("chat composer queue reordering", () => {
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
     const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)].map((item) =>
-        Object.assign(item, { localCommandName: "compact" }),
-      ),
+      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)],
       onQueueMove: vi.fn(),
       onQueueRemove: vi.fn(),
     });
@@ -550,9 +473,7 @@ describe("chat composer queue reordering", () => {
     expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
       t("chat.queue.states.applyingSettings"),
     );
-    expect(
-      [...container.querySelectorAll(".chat-queue__state")].map((node) => node.textContent),
-    ).toEqual([t("chat.queue.states.queued"), t("chat.queue.states.queued")]);
+    expect(container.querySelectorAll(".chat-queue__state")).toHaveLength(0);
     const steerButtons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
     expect(steerButtons).toHaveLength(2);
     expect(steerButtons.every((button) => button.disabled)).toBe(true);
