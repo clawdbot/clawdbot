@@ -86,13 +86,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       if (current !== expectedEntry || current.generation !== expectedGeneration) {
         return;
       }
-      void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
-        warn("failed to retry subagent completion after gateway restart", {
-          source,
-          runId: params.runId,
-          error,
-        });
-      });
+      completeSubagentRunInBackground(params, source, "restart-retry");
     }, GATEWAY_ADMISSION_RETRY_DELAY_MS);
     timer.unref?.();
     retryTimers.add(timer);
@@ -123,8 +117,29 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
   }
 
-  function completeSubagentRunInBackground(params: SubagentCompletionRequest, source: string) {
-    void completeSubagentRunWithRecovery(params, source);
+  // The recovery wrapper rethrows non-draining errors by design, so this detached
+  // boundary must land them in the log; an uncaught rejection here hits the
+  // process-level unhandled-rejection fatal path and exits the gateway.
+  function completeSubagentRunInBackground(
+    params: SubagentCompletionRequest,
+    source: string,
+    origin: "background" | "restart-retry" = "background",
+  ) {
+    void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
+      // A delayed post-restart retry that still fails is a distinct recovery
+      // failure: operators must be able to tell it apart from an initial
+      // background completion loss in the shared detached boundary.
+      warn(
+        origin === "restart-retry"
+          ? "failed to retry subagent completion after gateway restart"
+          : "failed to complete subagent run in background",
+        {
+          source,
+          runId: params.runId,
+          error,
+        },
+      );
+    });
   }
 
   const pendingLifecycle = createPendingLifecycleScheduler({
