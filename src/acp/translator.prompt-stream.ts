@@ -518,7 +518,8 @@ export class AcpTranslatorPromptStream {
       return;
     }
     if (state === "aborted") {
-      const errorMessage = payload.errorMessage as string | undefined;
+      const errorMessage =
+        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
       if (errorMessage?.trim()) {
         // The Gateway attaches the abort cause (e.g. tool validation failure)
         // to the event; surface it or the IDE shows a bare "cancelled" for a
