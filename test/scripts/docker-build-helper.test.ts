@@ -5169,6 +5169,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "assert-agent-error",
       "assert-followthrough",
       "followthrough-turn.mjs",
+      "if openclaw_e2e_run_command node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs",
       "docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420",
       'docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS"',
       '-e "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS"',
@@ -5239,6 +5240,18 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("unexpected subsystem output");
+    const phases = result.stdout
+      .split("\n")
+      .filter((line) => line.startsWith('{"phase":"followthrough:'))
+      .map((line) => JSON.parse(line).phase);
+    expect(phases).toEqual([
+      "followthrough:import-start",
+      "followthrough:import-complete",
+      "followthrough:turn-start",
+      "followthrough:turn-and-cleanup-complete",
+      "followthrough:result-written",
+      "followthrough:before-exit",
+    ]);
     expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
       captured: expect.objectContaining({
         sessionId: "followthrough-session",
