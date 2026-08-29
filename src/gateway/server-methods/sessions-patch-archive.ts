@@ -29,7 +29,10 @@ import {
   prepareSessionLifecycleDrain,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
-import { sessionChangedError as archiveChangedError } from "./sessions-patch-errors.js";
+import {
+  sessionChangedError as archiveChangedError,
+  unexpectedPatchError,
+} from "./sessions-patch-errors.js";
 import {
   isAgentMainSessionKey,
   resolveSessionWorkerPlacementPatchError,
@@ -270,15 +273,18 @@ export function validateSessionPatchArchiveProjection(params: {
   );
 }
 
-/** Prepare filesystem effects before the SQLite commit while session admission remains fenced. */
-export async function prepareSessionPatchWorktreeArchive(params: {
+/** Restore before opening admission; remove only after archive metadata is durable. */
+export async function prepareSessionPatchWorktreeTransition(params: {
   archived: boolean;
   entry: SessionEntry;
   context: GatewayRequestContext;
   scope: SessionAccessScope;
   authorize: () => ErrorShape | undefined;
   preparation?: SessionPatchArchivePreparation;
-}): Promise<() => void> {
+}): Promise<{
+  assertCommitAllowed: () => void;
+  afterCommit?: (entry: SessionEntry) => Promise<ErrorShape | undefined>;
+}> {
   const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
     context: params.context,
     sessionId: params.entry.sessionId,
@@ -296,11 +302,35 @@ export async function prepareSessionPatchWorktreeArchive(params: {
       );
     }
   };
-  await synchronizeSessionWorktreeArchive({
-    archived: params.archived,
-    entry: params.entry,
-    scope: params.scope,
-    commitGuard,
-  });
-  return commitGuard;
+  const synchronize = (entry: SessionEntry) =>
+    synchronizeSessionWorktreeArchive({
+      archived: params.archived,
+      entry,
+      scope: params.scope,
+      commitGuard,
+    });
+  if (!params.archived) {
+    await synchronize(params.entry);
+  }
+  return {
+    assertCommitAllowed: commitGuard,
+    afterCommit: params.archived
+      ? async (entry) => {
+          try {
+            // The durable archive row hands failed cleanup to GC. Keep the lifecycle
+            // fence and compare the exact committed projection, never a fresh successor.
+            await synchronize(entry);
+            return undefined;
+          } catch (error) {
+            const cleanupError = unexpectedPatchError(params.scope.sessionKey, error);
+            return errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session archived, but worktree cleanup did not finish. ${cleanupError.message} Retry archive after resolving the cleanup condition; garbage collection will also retry.`,
+              // Deferred self-archive must stop retrying an already committed archive.
+              { retryable: false },
+            );
+          }
+        }
+      : undefined,
+  };
 }
