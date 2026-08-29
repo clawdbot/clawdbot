@@ -1206,7 +1206,7 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId,
               status: "timeout",
-              error: result.error,
+              error: result.error ?? "agent run timed out",
               sentBeforeError: true,
               sessionKey: displayKey,
               ...watchField,

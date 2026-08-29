@@ -54,9 +54,16 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search-catalog.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -288,7 +295,10 @@ describe("sessions tools", () => {
       }),
     });
   });
-  afterEach(resetGatewayWorkAdmission);
+  afterEach(() => {
+    resetGatewayWorkAdmission();
+    resetAdjustedParamsByToolCallIdForTests();
+  });
 
   it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
@@ -2204,51 +2214,87 @@ describe("sessions tools", () => {
     ).toBe(false);
   });
 
-  it("sessions_send preserves terminal timeouts without starting A2A", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const requesterKey = "agent:main:main";
-    const targetKey = "agent:director1:main";
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        return {
-          runId: "run-terminal",
-          status: "timeout",
-          endedAt: 3000,
-          stopReason: "timeout",
-          error: "agent run timed out",
-        };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
-      return {};
-    });
+  it.each([
+    {
+      name: "terminal timeout with an explicit diagnostic",
+      waitResult: {
+        status: "timeout",
+        endedAt: 3000,
+        stopReason: "timeout",
+        error: "agent run timed out",
+      },
+    },
+    {
+      name: "terminal timeout with a provider-specific diagnostic",
+      waitResult: {
+        status: "timeout",
+        endedAt: 3000,
+        stopReason: "timeout",
+        error: "provider request exceeded its deadline",
+      },
+    },
+    {
+      name: "provider-attributed terminal timeout without a diagnostic",
+      waitResult: {
+        status: "ok",
+        endedAt: 3000,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    },
+  ] as const)(
+    "sessions_send preserves a $name through Tool Search without starting A2A",
+    async ({ waitResult }) => {
+      const calls: Array<{ method?: string; params?: unknown }> = [];
+      const requesterKey = "agent:main:main";
+      const targetKey = "agent:director1:main";
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
+        }
+        if (request.method === "agent.wait") {
+          return { runId: "run-terminal", ...waitResult };
+        }
+        if (request.method === "chat.history") {
+          return { messages: [] };
+        }
+        return {};
+      });
 
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: requesterKey,
-      agentChannel: "discord",
-    });
+      const tool = getSessionTool("sessions_send", {
+        agentSessionKey: requesterKey,
+        agentChannel: "discord",
+      });
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
+      const runtime = new ToolSearchRuntime(
+        { catalogRef },
+        resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
+        { validateInput: true },
+      );
 
-    const result = await tool.execute("call-terminal", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
-    const details = sessionsSendDetails(result.details);
-    expect(details.status).toBe("timeout");
-    expect(details.error).toBe("agent run timed out");
-    expect(details.sentBeforeError).toBe(true);
-    expect(details.sessionKey).toBe(targetKey);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
-  });
+      const details = sessionsSendDetails(
+        await runtime.callValue("sessions_send", {
+          sessionKey: targetKey,
+          message: "ping",
+          timeoutSeconds: 1,
+        }),
+      );
+      expect(details.status).toBe("timeout");
+      expect(details.error).toBe("error" in waitResult ? waitResult.error : "agent run timed out");
+      expect(details.sentBeforeError).toBe(true);
+      expect(details.sessionKey).toBe(targetKey);
+      expect(details.delivery).toBeUndefined();
+      expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+      expect(countMatching(calls, (call) => call.method === "agent.wait")).toBe(1);
+    },
+  );
 
   it("sessions_send preserves delivery evidence for post-start agent errors", async () => {
     const targetKey = "agent:director1:main";
