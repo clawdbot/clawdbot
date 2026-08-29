@@ -169,7 +169,10 @@ export function sessionNavigationTarget<TRouteId extends string>(
 
   const catalogKey = parseCatalogSessionKey(row?.key ?? sessionKey);
   const targetKey = catalogKey
-    ? buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey: mainKey ?? "main" })
+    ? buildAgentMainSessionKey({
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
+        mainKey: mainKey ?? "main",
+      })
     : (row?.key ?? sessionKey);
   const pathname = pathForNonCatalogSessionKey({
     face: params.face,

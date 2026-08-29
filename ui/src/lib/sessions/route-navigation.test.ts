@@ -52,8 +52,8 @@ describe("sessionNavigationTarget", () => {
     };
     const target = sessionNavigationTarget({
       face: "dashboard",
-      sessionKey: buildCatalogSessionKey(catalogKey),
-      fallbackAgentId: "research",
+      sessionKey: buildCatalogSessionKey(catalogKey, "research"),
+      fallbackAgentId: "main",
       basePath: "/admin/openclaw/",
       mainKey: "workspace",
     });
