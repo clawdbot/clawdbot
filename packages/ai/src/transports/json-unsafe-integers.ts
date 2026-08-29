@@ -76,8 +76,19 @@ function isUnsafeIntegerLiteral(token: string): boolean {
   return digits > MAX_SAFE_INTEGER_ABS_STR;
 }
 
-/** Quotes integer literals above Number.MAX_SAFE_INTEGER before JSON.parse. */
-export function quoteUnsafeIntegerLiterals(input: string): string {
+/**
+ * Quotes integer literals above Number.MAX_SAFE_INTEGER before JSON.parse.
+ *
+ * The optional `tag` is prefixed inside the quotes around each converted
+ * literal. Every real caller of this function wants the plain digit string
+ * back and leaves `tag` at its default `""`. A caller that instead compares
+ * two independently-serialized payloads needs `tag` non-empty: without it, a
+ * quoted unsafe integer is byte-identical to a genuine JSON string holding
+ * the same digits, so a real number-to-string argument change would compare
+ * equal to the unchanged number. A control character a caller can't type
+ * makes that collision impossible.
+ */
+export function quoteUnsafeIntegerLiterals(input: string, tag = ""): string {
   let out = "";
   let inString = false;
   let escaped = false;
@@ -109,7 +120,7 @@ export function quoteUnsafeIntegerLiterals(input: string): string {
       const parsed = parseJsonNumberToken(input, idx);
       if (parsed) {
         if (parsed.isInteger && isUnsafeIntegerLiteral(parsed.token)) {
-          out += `"${parsed.token}"`;
+          out += `"${tag}${parsed.token}"`;
         } else {
           out += parsed.token;
         }

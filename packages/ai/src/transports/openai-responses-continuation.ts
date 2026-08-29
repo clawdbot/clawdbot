@@ -75,12 +75,20 @@ function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesCo
 // integer literal past Number.MAX_SAFE_INTEGER, so two genuinely DIFFERENT
 // unsafe integers could otherwise parse to the same JS number and wrongly
 // compare equal, sending a stale delta instead of the real changed argument.
+// The tag distinguishes a stringified unsafe integer from a genuine JSON
+// string holding the same digits -- without it `{"n":9007199254740993}` and
+// `{"n":"9007199254740993"}` both parse to the identical JS string and wrongly
+// compare equal, hiding a real number-to-string argument change.
+const UNSAFE_INTEGER_COMPARISON_TAG = "\u0000openclaw-unsafe-integer\u0000";
+
 function normalizeFunctionCallArguments(value: unknown): unknown {
   if (typeof value !== "string") {
     return value;
   }
   try {
-    return JSON.stringify(JSON.parse(quoteUnsafeIntegerLiterals(value)));
+    return JSON.stringify(
+      JSON.parse(quoteUnsafeIntegerLiterals(value, UNSAFE_INTEGER_COMPARISON_TAG)),
+    );
   } catch {
     return value;
   }

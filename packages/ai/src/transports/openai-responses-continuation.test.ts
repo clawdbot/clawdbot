@@ -284,6 +284,42 @@ describe("OpenAI Responses continuation", () => {
     );
   });
 
+  it("does not treat an unsafe-integer argument as equal to a same-digits string (type collision)", () => {
+    // quoteUnsafeIntegerLiterals converts an unsafe integer literal into a
+    // quoted string before JSON.parse; without a distinguishing tag that
+    // output is byte-identical to a genuine JSON string holding the same
+    // digits, so a real number-to-string argument change would otherwise
+    // compare equal and wrongly reuse the stale continuation state.
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"n":9007199254740993}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, arguments: '{"n":"9007199254740993"}' };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_original_abc",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "history_changed",
+    );
+  });
+
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
     first?.commit(continuationState().lastRequest, {
