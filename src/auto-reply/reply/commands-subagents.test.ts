@@ -232,6 +232,53 @@ describe("subagents info", () => {
     expect(text).toContain("Task summary: Completed the requested task");
   });
 
+  it("uses displayed indices for info and log when stale unended runs exist", async () => {
+    const now = Date.now();
+    const runs: SubagentRunRecord[] = [
+      {
+        runId: "numbering-stale",
+        childSessionKey: "agent:main:subagent:numbering-stale",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "stale worker",
+        cleanup: "keep",
+        createdAt: now - 3 * 60 * 60_000,
+        execution: { status: "running", startedAt: now - 3 * 60 * 60_000 },
+      },
+      {
+        runId: "numbering-recent",
+        childSessionKey: "agent:main:subagent:numbering-recent",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "recent worker",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 120_000,
+          endedAt: now - 60_000,
+          outcome: { status: "ok" },
+        },
+      },
+    ];
+    for (const run of runs) {
+      addSubagentRunForTests(run);
+    }
+    const context = buildInfoContext({ cfg: buildCommandTestConfig(), runs, restTokens: ["1"] });
+    const listing = requireReplyText(handleSubagentsListAction(context).reply);
+    expect(listing).toContain("1. recent worker");
+    expect(listing).not.toContain("stale worker");
+    expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
+      "Run: numbering-recent",
+    );
+    callGatewayMock.mockResolvedValue({ messages: [] });
+    await handleSubagentsLogAction(context);
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:subagent:numbering-recent", limit: 20 },
+    });
+  });
+
   it.each([
     {
       name: "a killed run despite its provider error",

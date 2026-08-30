@@ -49,7 +49,7 @@ function sanitizeArgs(args: string | undefined): string | undefined {
 
 function resolveBindingConversation(params: {
   registry: PluginRegistry;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   channel: string;
   senderId?: string;
   from?: string;
@@ -66,7 +66,8 @@ function resolveBindingConversation(params: {
     return null;
   }
   return resolveCommandConversationResolution({
-    cfg: params.config ?? ({} as OpenClawConfig),
+    cfg: params.config,
+    plugin: channelPlugin,
     channel: params.channel,
     accountId: params.accountId,
     threadId: params.messageThreadId,
