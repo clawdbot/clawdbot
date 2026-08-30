@@ -432,20 +432,23 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const configState = this.context.runtimeConfig.state;
     const configObject = currentConfigObject(configState);
     const configuredDreaming = resolveConfiguredDreaming(configObject);
-    // The status RPC can complete after config disables Dreaming globally or switches
-    // the engine Off. Keep the cached payload for a future refresh, but never present
-    // it as current runtime state: a cached enabled value must not override the
-    // current global master setting or the current agent participation gate.
-    const dreamingStatus = configuredDreaming.enabled ? dreaming.dreamingStatus : null;
     const selectedAgentId = dreaming.selectedAgentId ?? "";
     const agentParticipation = resolveAgentDreamingParticipation(configObject, selectedAgentId);
+    // The status RPC can complete after config disables Dreaming globally, excludes
+    // the selected agent, or switches the engine Off. Keep the cached payload for a
+    // future refresh, but never present it as current runtime state: a cached
+    // enabled value must not override the current global master setting, the
+    // current agent participation gate, or the engine slot.
+    const agentExcludedByConfig = !configuredDreaming.engineOff && !agentParticipation.enabled;
+    const dreamingStatus =
+      configuredDreaming.enabled && agentParticipation.enabled ? dreaming.dreamingStatus : null;
     const agentIncluded = !configuredDreaming.engineOff && agentParticipation.enabled;
     const effectiveDreamingOn =
       dreamingStatus?.enabled ?? (configuredDreaming.enabled && agentIncluded);
     const exclusionNotice =
       dreamingStatus?.exclusionReason === "shared-workspace-ambiguity"
         ? t("dreaming.header.sharedWorkspaceAmbiguity")
-        : dreamingStatus?.exclusionReason === "agent-config-disabled"
+        : dreamingStatus?.exclusionReason === "agent-config-disabled" || agentExcludedByConfig
           ? t("dreaming.header.agentExcluded")
           : null;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
