@@ -603,6 +603,44 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).extraContent).toBeUndefined();
   });
 
+  it("keeps supported metadata beside authored fallback data blocks", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "Authored table fallback",
+          presentationTextMode: "fallback",
+          presentation: {
+            title: "Status",
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["Model", "example/model"]],
+              },
+              { type: "context", text: "Updated 1m ago" },
+            ],
+          },
+        },
+      ],
+      roomId: "room:9",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(sendCall(0)[1]).toBe("Authored table fallback");
+    expect(sendOptions(0).extraContent).toMatchObject({
+      "com.openclaw.presentation": {
+        version: 1,
+        type: "message.presentation",
+        blocks: expect.arrayContaining([{ type: "context", text: "Updated 1m ago" }]),
+      },
+    });
+  });
+
   it("attaches presentation metadata only to the first Matrix media event", async () => {
     const presentation = {
       title: "Environment",

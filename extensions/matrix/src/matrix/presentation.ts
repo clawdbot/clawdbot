@@ -103,19 +103,24 @@ export function prepareMatrixReplyPayload(payload: ReplyPayload): ReplyPayload {
     presentationTextMode: _presentationTextMode,
     ...withoutPresentation
   } = payload;
-  if (
+  const unsupportedDataBlockCount = countMatrixUnsupportedDataBlocks(presentation.blocks);
+  const preservesAuthoredDataFallback = Boolean(
     textIsFallback &&
     payload.text?.trim() &&
     !hasInteractiveBlocks &&
-    countMatrixUnsupportedDataBlocks(presentation.blocks) > 0 &&
-    countMatrixUnsupportedDataBlocks(adaptedPresentation.blocks) === 0
-  ) {
+    unsupportedDataBlockCount > 0 &&
+    countMatrixUnsupportedDataBlocks(adaptedPresentation.blocks) === 0,
+  );
+  if (preservesAuthoredDataFallback && unsupportedDataBlockCount === presentation.blocks.length) {
     return withoutPresentation;
   }
-  return renderMatrixPresentationPayload({
+  const renderedPayload = renderMatrixPresentationPayload({
     payload: textIsFallback ? { ...withoutPresentation, text: undefined } : withoutPresentation,
     presentation: adaptedPresentation,
   });
+  return preservesAuthoredDataFallback
+    ? { ...renderedPayload, text: payload.text }
+    : renderedPayload;
 }
 
 export function resolveMatrixPayloadText(payload: ReplyPayload): string {
