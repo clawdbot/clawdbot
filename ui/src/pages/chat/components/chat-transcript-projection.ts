@@ -5,7 +5,6 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
   isUiGlobalScopeConfigured,
   parseAgentSessionKey,
@@ -37,18 +36,18 @@ import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import { resolveMessageDisplayMarkdown, resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import {
   getChatMediaRenderVersion,
   renderActivityGroup,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
-  type MessageReplyTarget,
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
+import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import {
   closeTranscriptSearch,
   getTranscriptState,
@@ -75,41 +74,6 @@ type ChatTranscriptProjection = {
 };
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-
-type LoadedReplySource = {
-  message: unknown;
-  messageId: string;
-  senderLabel: string;
-};
-
-function projectResolvedReplyPreview(
-  message: unknown,
-  replyToId: string,
-  props: Pick<ChatThreadProps, "assistantName" | "userAvatar" | "userId" | "userName">,
-): (MessageReplyTarget & { sourceMessageId: string }) | undefined {
-  const normalized = normalizeMessage(message);
-  const text = resolveMessageDisplayMarkdown(message, normalized);
-  if (!text) {
-    return undefined;
-  }
-  const group: MessageGroup = {
-    kind: "group",
-    key: replyToId,
-    role: normalized.role,
-    senderLabel: normalized.senderLabel,
-    ...(normalized.sender ? { sender: normalized.sender } : {}),
-    messages: [{ key: replyToId, message }],
-    timestamp: normalized.timestamp,
-    isStreaming: false,
-  };
-  const sourceMessageId = persistedMessageEntryId(message) ?? replyToId;
-  return {
-    messageId: sourceMessageId,
-    sourceMessageId,
-    senderLabel: resolveMessageGroupSenderLabel(group, props),
-    text,
-  };
-}
 
 export function projectChatTranscript(
   props: ChatThreadProps,
@@ -283,31 +247,7 @@ export function projectChatTranscript(
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
   const messageRowKeysById = new Map<string, string>();
-  const resolvedReplyPreviews = new Map<
-    string,
-    (MessageReplyTarget & { sourceMessageId: string }) | undefined
-  >();
-  const resolveReplyPreview = (replyToId: string) => {
-    if (resolvedReplyPreviews.has(replyToId)) {
-      return resolvedReplyPreviews.get(replyToId);
-    }
-    const loaded = loadedReplySources.get(replyToId);
-    const loadedText = loaded ? resolveMessageReplyText(loaded.message) : undefined;
-    if (loaded && loadedText) {
-      const preview = {
-        messageId: loaded.messageId,
-        sourceMessageId: replyToId,
-        senderLabel: loaded.senderLabel,
-        text: loadedText,
-      };
-      resolvedReplyPreviews.set(replyToId, preview);
-      return preview;
-    }
-    const message = props.replyMessageAccess?.read(replyToId);
-    const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
-    resolvedReplyPreviews.set(replyToId, preview);
-    return preview;
-  };
+  const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
