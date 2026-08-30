@@ -67,7 +67,7 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
           }
           if (image.retirement) {
             lines.push(
-              `  Checkpoint deletion pending: ${image.retirement.checkpointId}; retried during allocation or capture.`,
+              `  Checkpoint deletion pending: ${image.retirement.checkpointId}; retried during the next warm-image-enabled worker teardown.`,
             );
           }
         }

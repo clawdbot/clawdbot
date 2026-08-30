@@ -191,7 +191,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       // Only provider failures are absorbed; SQLite failures must remain visible.
       if (matches(openStore().lookup(key))) {
         warnOnce(
-          `checkpoint retirement (${operation.checkpointId} deletion obligation retained; retry on allocation/teardown; inspect with openclaw crabbox warm-images)`,
+          `checkpoint retirement (${operation.checkpointId} deletion obligation retained; retry on next warm-image-enabled worker teardown; inspect with openclaw crabbox warm-images)`,
           error,
         );
       }
@@ -232,7 +232,10 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
   };
 
-  const collectExpiredImages = async (context: LeaseContext): Promise<void> => {
+  const collectImages = async (
+    context: LeaseContext,
+    phase: "allocation" | "teardown",
+  ): Promise<void> => {
     const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     for (const { key, value } of openStore().entries()) {
       const capture = crabboxWarmImageCaptureStatus(key, value);
@@ -242,7 +245,12 @@ export function createCrabboxWarmImageManager(dependencies: {
         }
         continue;
       }
-      if (!value.operation && Date.now() - value.lastUsedAtMs < WARM_IMAGE_RETENTION_MS) {
+      // Retained deletions belong to teardown; they must not delay warm or cold allocation.
+      if (
+        value.operation
+          ? phase === "allocation"
+          : Date.now() - value.lastUsedAtMs < WARM_IMAGE_RETENTION_MS
+      ) {
         continue;
       }
       const remaining = () => deadline - Date.now();
@@ -309,7 +317,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     profile: CrabboxProfile & { class: string },
   ): Promise<boolean> => {
     try {
-      await collectExpiredImages(context);
+      await collectImages(context, "allocation");
       const key = crabboxWarmImageKey(profile);
       const record = openStore().lookup(key);
       if (!record?.checkpointId || isRetiringCurrentImage(record)) {
@@ -380,7 +388,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       let claimed = false;
       let creating = false;
       try {
-        await collectExpiredImages(context);
+        await collectImages(context, "teardown");
         let existing = openStore().lookup(key);
         if (existing) {
           if (existing.operation || !existing.checkpointId) {

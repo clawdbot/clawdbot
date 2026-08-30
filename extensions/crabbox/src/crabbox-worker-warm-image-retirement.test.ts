@@ -17,6 +17,92 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 describe("Crabbox checkpoint retirement", () => {
+  it.each([
+    { debt: "predecessor", profile: PROFILE, allocation: "fork" },
+    { debt: "unrelated profile", profile: { ...PROFILE, class: "fast" }, allocation: "warmup" },
+    { debt: "current image", profile: PROFILE, allocation: "warmup" },
+  ])(
+    "allocates via $allocation without awaiting retained $debt deletion after restart",
+    async ({ debt, profile, allocation }) => {
+      const release = createDeferred<void>();
+      let captures = 0;
+      let failDeletion = true;
+      const resources = new Set<string>();
+      const command = async ({ argv }: CommandCall) => {
+        if (argv[2] === "create") {
+          const id = `chk_capture_${++captures}`;
+          resources.add(id);
+          return checkpointResult(id, argv[argv.indexOf("--id") + 1]!, "available");
+        }
+        if (argv[2] === "delete") {
+          if (failDeletion) {
+            return commandResult({ code: 7, stderr: "provider delete unavailable" });
+          }
+          await release.promise;
+          resources.delete(argv[3]!);
+        }
+        return undefined;
+      };
+      const initial = createWarmProvider(command);
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      await captureWarmImage(initial.provider);
+      clock.mockReturnValue(now + (debt === "current image" ? 15 : 1) * DAY_MS);
+      if (debt === "current image") {
+        await initial.provider.destroy({
+          leaseId: operationLeaseId("retire-current"),
+          profile: PROFILE,
+        });
+      } else {
+        await captureWarmImage(initial.provider, PROFILE, "refresh");
+      }
+      const retained = listCrabboxWarmImages()[0]!;
+      expect(retained.retirement?.checkpointId).toBe("chk_capture_1");
+      const retainedResources = new Set(resources);
+      initial.provider.dispose();
+      resetPluginStateStoreForTests();
+      const restarted = createWarmProvider(command, initial.stateDir);
+      failDeletion = false;
+      const provisioning = provisionWarmProfile(restarted.provider, profile, "during-debt");
+      let stopping: Promise<void> | undefined;
+      try {
+        await vi.waitFor(
+          () =>
+            expect(
+              restarted.calls.some(({ argv }) => argv[1] === allocation || argv[2] === allocation),
+            ).toBe(true),
+          { timeout: 500 },
+        );
+        const lease = await provisioning;
+        expect(restarted.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+        expect(restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(
+          allocation === "fork" ? retained.checkpointId : undefined,
+        );
+        expect(listCrabboxWarmImages()[0]?.retirement).toEqual(retained.retirement);
+        expect(resources).toEqual(retainedResources);
+
+        stopping = restarted.provider.destroy({ leaseId: lease.leaseId, profile });
+        await vi.waitFor(
+          () =>
+            expect(restarted.calls.find(({ argv }) => argv[2] === "delete")?.argv[3]).toBe(
+              "chk_capture_1",
+            ),
+          { timeout: 500 },
+        );
+        // Teardown retains ownership until the provider acknowledges deletion.
+        expect(listCrabboxWarmImages()[0]?.retirement).toEqual(retained.retirement);
+        expect(resources).toEqual(retainedResources);
+      } finally {
+        release.resolve();
+        await provisioning;
+        await stopping;
+      }
+      expect(resources.has("chk_capture_1")).toBe(false);
+      expect(listCrabboxWarmImages().every((image) => !image.retirement)).toBe(true);
+      expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
+    },
+  );
+
   it.each(["expiry", "capacity", "missing"])(
     "retains failed retirement through reuse, restart, deferred refresh, and %s cleanup",
     async (cleanup) => {
@@ -103,6 +189,12 @@ describe("Crabbox checkpoint retirement", () => {
       expect(resources).toEqual(new Set(["chk_capture_1", "chk_capture_2"]));
 
       failDeletion = false;
+      // An inspection-only teardown retries debt and expiry without capturing a new image.
+      await restarted.provider.destroy({
+        leaseId: operationLeaseId("cleanup-recovered"),
+        profile: PROFILE,
+      });
+      expect(resources).toEqual(new Set(cleanup === "expiry" ? [] : ["chk_capture_2"]));
       const recovered = await provisionWarmProfile(
         restarted.provider,
         PROFILE,

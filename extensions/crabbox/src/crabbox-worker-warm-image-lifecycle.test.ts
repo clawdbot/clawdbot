@@ -102,9 +102,20 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       );
       expect(restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(retainedId);
       expect(providerCheckpoints.has(retainedId)).toBe(true);
-      expect(providerCheckpoints).toEqual(new Set([retainedId]));
+      expect(providerCheckpoints).toEqual(
+        new Set(deleteFails ? [CHECKPOINT_ID, retainedId] : [retainedId]),
+      );
+      expect(listCrabboxWarmImages()[0]?.retirement?.checkpointId).toBe(
+        deleteFails ? CHECKPOINT_ID : undefined,
+      );
+      expect(restarted.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
       expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
       await restarted.provider.destroy({ leaseId: restartedLease.leaseId, profile: PROFILE });
+      expect(providerCheckpoints).toEqual(new Set([retainedId]));
+      expect(listCrabboxWarmImages()[0]?.retirement).toBeUndefined();
+      expect(
+        restarted.calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3]),
+      ).toEqual(deleteFails ? [CHECKPOINT_ID] : []);
       expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
 
       clock.mockReturnValue(now + ageMs + 14 * 24 * 60 * 60 * 1_000 + 1);
