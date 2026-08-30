@@ -124,13 +124,13 @@ child.on("exit", (code, signal) => {
         inspected = resolve;
       });
       vi.spyOn(processSnapshot, "readCodexAppServerProcessCommand").mockImplementation(
-        async (pid, deadline) => {
-          if (pid !== wrapper?.pid) {
-            return readCommand(pid, deadline);
+        async (observed, deadline) => {
+          if (observed.pid !== wrapper?.pid) {
+            return readCommand(observed, deadline);
           }
           await expect.poll(() => fs.readFile(readyPath, "utf8").catch(() => "")).not.toBe("");
           nativePid = Number(await fs.readFile(readyPath, "utf8"));
-          const command = await readCommand(pid, deadline);
+          const command = await readCommand(observed, deadline);
           expect(command).toBeDefined();
           if (failure === "commit") {
             for (let index = 0; index < 512; index++) {
