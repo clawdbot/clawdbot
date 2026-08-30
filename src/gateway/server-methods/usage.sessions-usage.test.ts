@@ -1,12 +1,12 @@
 // Session usage tests cover aggregate cost/token usage across configured and
 // discovered agent session logs.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -225,22 +225,15 @@ function mockStoredSession(
 async function withUsageState(
   run: (writeSessionFile: (fileName: string) => string) => Promise<void>,
 ) {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-  const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-  const writeSessionFile = (fileName: string) => {
-    const sessionFile = path.join(agentSessionsDir, fileName);
-    fs.writeFileSync(sessionFile, "", "utf-8");
-    return sessionFile;
-  };
-
-  try {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      fs.mkdirSync(agentSessionsDir, { recursive: true });
-      await run(writeSessionFile);
+  await withOpenClawTestState({ label: "usage" }, async (state) => {
+    const agentSessionsDir = state.sessionsDir("opus");
+    fs.mkdirSync(agentSessionsDir, { recursive: true });
+    await run((fileName) => {
+      const sessionFile = path.join(agentSessionsDir, fileName);
+      fs.writeFileSync(sessionFile, "", "utf-8");
+      return sessionFile;
     });
-  } finally {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
+  });
 }
 
 describe("sessions.usage", () => {
@@ -941,35 +934,38 @@ describe("sessions.usage", () => {
   });
 
   it("loads bare-key usage details through the persisted fixed-store owner", async () => {
-    const config: OpenClawConfig = {
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    };
-    const entry = { sessionId: "s-ops", updatedAt: 1_000 };
-    vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
-      cfg: config,
-      agentId: "ops",
-      canonicalKey: "global",
-      entry,
-      legacyKey: undefined,
-      store: { global: entry },
-      storeKeys: ["global"],
-      storePath: "/tmp/shared-sessions.sqlite",
-    });
+    await withOpenClawTestState({ label: "usage-fixed-store-owner" }, async (state) => {
+      const storePath = state.statePath("shared-sessions.sqlite");
+      const config: OpenClawConfig = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      };
+      const entry = { sessionId: "s-ops", updatedAt: 1_000 };
+      vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
+        cfg: config,
+        agentId: "ops",
+        canonicalKey: "global",
+        entry,
+        legacyKey: undefined,
+        store: { global: entry },
+        storeKeys: ["global"],
+        storePath,
+      });
 
-    const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
+      const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
 
-    expect(mockArg(respond, 0, 0)).toBe(true);
-    expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
-      agentId: "ops",
+      expect(mockArg(respond, 0, 0)).toBe(true);
+      expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
+        agentId: "ops",
+      });
+      expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "ops" }),
+      );
     });
-    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "ops" }),
-    );
   });
 
   it("preserves JSONL detail lookup for storeless sessions", async () => {

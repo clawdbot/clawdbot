@@ -98,6 +98,9 @@ function fixtureFiles(): Record<string, string> {
     path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
   );
   const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
+  const activeSessionsPath = JSON.stringify(
+    path.join(repoRoot, "src", "gateway", "active-sessions-shutdown-tracker.ts"),
+  );
   const loggingConsolePath = JSON.stringify(path.join(repoRoot, "src", "logging", "console.ts"));
   const loggingStatePath = JSON.stringify(path.join(repoRoot, "src", "logging", "state.ts"));
   const testEnvPath = JSON.stringify(path.join(repoRoot, "src", "test-utils", "env.ts"));
@@ -210,8 +213,11 @@ function fixtureFiles(): Record<string, string> {
     "05-a-agent-run.test.ts": [
       `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
       `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
+      `import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${activeSessionsPath};`,
       'import { expect, it } from "vitest";',
       'it("seeds process-global run contexts", () => {',
+      '  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });',
+      "  expect(listActiveSessionsForShutdown()).toHaveLength(1);",
       '  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });',
       '  registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });',
       '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
@@ -228,8 +234,10 @@ function fixtureFiles(): Record<string, string> {
     "05-b-agent-run.test.ts": [
       `import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
       `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
+      `import { listActiveSessionsForShutdown } from ${activeSessionsPath};`,
       'import { expect, it } from "vitest";',
       'it("clears agent run registry state", () => {',
+      "  expect(listActiveSessionsForShutdown()).toEqual([]);",
       '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
       "  let sequence;",
       "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
