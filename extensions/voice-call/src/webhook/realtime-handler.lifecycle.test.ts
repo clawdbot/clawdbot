@@ -158,7 +158,11 @@ describe("RealtimeCallHandler lifecycle", () => {
     "ends the carrier call when the provider closes with %s",
     async (reason) => {
       let onProviderClose: ((reason: "completed" | "error") => void) | undefined;
-      const closeBridge = vi.fn(() => onProviderClose?.("completed"));
+      const bridgeClosed = createDeferred<void>();
+      const closeBridge = vi.fn(() => {
+        onProviderClose?.("completed");
+        bridgeClosed.resolve();
+      });
       const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>((request) => {
         onProviderClose = request.onClose;
         return createBridge(closeBridge);
@@ -187,6 +191,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           }),
         );
         expect((await closed).code).toBe(reason === "completed" ? 1000 : 1011);
+        await bridgeClosed.promise;
         expect(closeBridge).toHaveBeenCalledOnce();
         expect(
           processEvent.mock.calls.filter(([event]) => event.type === "call.ended"),
