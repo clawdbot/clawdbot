@@ -3729,68 +3729,75 @@ NODE
     ).toBe(96);
   });
 
-  it("honors trusted dispatch runner selection for check shards", () => {
-    const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
-    const lintMatrix = {
-      runner: "blacksmith-32vcpu-ubuntu-2404",
-      task: "lint",
-    };
-    const evaluateDispatch = (
-      runnerBackend: "blacksmith" | "github" | "hybrid",
-      overrides: {
-        dispatchId?: string;
-        frozenTarget?: boolean;
-        matrix?: Record<string, unknown>;
-        releaseGate?: boolean;
-        repository?: string;
-        targetContextRef?: string;
-      } = {},
-    ) =>
-      evaluateWorkflowExpression(runsOn, {
-        eventName: "workflow_dispatch",
-        matrix: lintMatrix,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend,
-        ...overrides,
-      });
+  it.each(["", "release/2026.9.1"])(
+    "honors trusted dispatch runner selection for check shards with context %j",
+    (targetContextRef) => {
+      const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
+      const lintMatrix = {
+        runner: "blacksmith-32vcpu-ubuntu-2404",
+        task: "lint",
+      };
+      const evaluateDispatch = (
+        runnerBackend: "blacksmith" | "github" | "hybrid",
+        overrides: {
+          dispatchId?: string;
+          frozenTarget?: boolean;
+          matrix?: Record<string, unknown>;
+          releaseGate?: boolean;
+          repository?: string;
+          targetContextRef?: string;
+        } = {},
+      ) =>
+        evaluateWorkflowExpression(runsOn, {
+          eventName: "workflow_dispatch",
+          matrix: lintMatrix,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend,
+          ...overrides,
+        });
 
-    expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
 
-    const frozenFrv = {
-      dispatchId: "full-release-validation-33128772779-ci",
-      frozenTarget: true,
-      targetContextRef: "release/2026.9.1",
-    };
-    expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
-    expect(
-      evaluateDispatch("hybrid", {
-        ...frozenFrv,
-        matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
-      }),
-    ).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(
-      evaluateWorkflowExpression(runsOn, {
-        authorAssociation: "NONE",
-        eventName: "pull_request",
-        headRepository: "openclaw/openclaw",
-        matrix: lintMatrix,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend: "blacksmith",
-      }),
-    ).toBe("ubuntu-24.04");
-  });
+      const frozenFrv = {
+        dispatchId: "full-release-validation-33128772779-ci",
+        frozenTarget: true,
+        targetContextRef,
+      };
+      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("github", frozenFrv)).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, frozenTarget: false })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
+      expect(
+        evaluateDispatch("hybrid", {
+          ...frozenFrv,
+          matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
+        }),
+      ).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(
+        evaluateWorkflowExpression(runsOn, {
+          authorAssociation: "NONE",
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          matrix: lintMatrix,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: "blacksmith",
+        }),
+      ).toBe("ubuntu-24.04");
+    },
+  );
 
   it("encodes GitHub, Blacksmith, and hybrid runner-backend shapes", () => {
     const workflow = readCiWorkflow();
