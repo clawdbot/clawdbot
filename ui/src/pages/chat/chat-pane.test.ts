@@ -705,6 +705,7 @@ describe("chat pane initialization", () => {
     state.initialUserMessage = createInitialUserMessageHandoff();
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
     pane.sessionKey = canonicalSessionKey;
 
     (

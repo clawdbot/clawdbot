@@ -470,6 +470,24 @@ suite.define(() => {
       await setOwnershipProofCue(page, "Selected agent: Main | Main auth request delayed");
       await pauseForOwnershipProof(page);
 
+      await page.evaluate(() => {
+        const pane = document.querySelector("openclaw-chat-pane.chat-pane-cache__pane--visible") as
+          | (HTMLElement & {
+              state?: {
+                assistantName: string;
+                assistantAvatar: string | null;
+                chatAvatarUrl: string | null;
+                requestUpdate?: () => void;
+              };
+            })
+          | null;
+        if (pane?.state) {
+          pane.state.assistantName = "Main Agent";
+          pane.state.assistantAvatar = "M";
+          pane.state.chatAvatarUrl = "https://example.test/main-avatar.png";
+          pane.state.requestUpdate?.();
+        }
+      });
       await gateway.deferNext("models.authStatus", { agentId: "work" });
       await gateway.deferNext("models.authStatus", { agentId: "work" });
       await gateway.deferNext("agent.identity.get", { agentId: "work" });
@@ -488,6 +506,28 @@ suite.define(() => {
           plan: null,
           ts: null,
         });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const pane = document.querySelector(
+              "openclaw-chat-pane.chat-pane-cache__pane--visible",
+            ) as
+              | (HTMLElement & {
+                  state?: {
+                    assistantName?: string;
+                    assistantAvatar?: string | null;
+                    chatAvatarUrl?: string | null;
+                  };
+                })
+              | null;
+            return {
+              name: pane?.state?.assistantName ?? null,
+              avatar: pane?.state?.assistantAvatar ?? null,
+              renderedAvatar: pane?.state?.chatAvatarUrl ?? null,
+            };
+          }),
+        )
+        .toEqual({ name: "", avatar: null, renderedAvatar: null });
       await gateway.deferNext("models.authStatus", { agentId: "work" });
       await gateway.emitGatewayEvent("presence", {
         presence: [

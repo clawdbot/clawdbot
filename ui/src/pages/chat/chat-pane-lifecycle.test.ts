@@ -995,12 +995,12 @@ describe("chat pane connection lifecycle", () => {
     { sessionKey: "agent:work:main", mainKey: "main" },
     { sessionKey: "agent:work:home", mainKey: "home" },
   ])(
-    "retires pending global model selection state when the selected agent changes for $sessionKey",
+    "preserves owner-qualified model and identity state when global selection changes for $sessionKey",
     ({ sessionKey, mainKey }) => {
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
       const retireModelOverride = vi.fn();
       const sessions = { retireModelOverride } as unknown as SessionCapability;
-      const { pane, state } = createTestChatPane({ client, sessions });
+      const { state } = createTestChatPane({ client, sessions });
       state.sessionKey = sessionKey;
       state.agentsList = { defaultId: "main", mainKey, scope: "global", agents: [] };
       state.assistantAgentId = "work";
@@ -1008,15 +1008,12 @@ describe("chat pane connection lifecycle", () => {
       state.chatModelSwitchPromises = {
         global: new Promise<boolean>(() => {}),
       };
+      const pending = state.chatModelSwitchPromises;
       applySelectedChatAgent(state, "main");
-      expect(state.chatModelSwitchPromises).toEqual({});
-      expect(state.assistantAgentId).toBe("main");
-      expect(retireModelOverride).toHaveBeenCalledWith(sessionKey);
-      expect(retireModelOverride).toHaveBeenCalledWith("global");
-      pane.context.agentSelection.set("work");
-      applySelectedChatAgent(state, "work");
-      pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, assistantAgentId: "main" });
+      expect(state.chatModelSwitchPromises).toBe(pending);
       expect(state.assistantAgentId).toBe("work");
+      expect(retireModelOverride).not.toHaveBeenCalled();
+      expect(state.loadAssistantIdentity).not.toHaveBeenCalled();
     },
   );
 

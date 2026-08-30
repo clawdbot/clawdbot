@@ -28,7 +28,10 @@ import {
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
@@ -59,6 +62,7 @@ import {
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
+  applyChatAgentOwnerTransition,
   applySelectedChatAgent,
   refreshPageChat,
   retireChatMetadataRequests,
@@ -628,6 +632,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         // A retained pane owns one conversation for its lifetime. Only its
         // canonical spelling can change after Gateway defaults resolve.
         this.state.sessionKey = nextSessionKey;
+        const nextAgentId = parseAgentSessionKey(nextSessionKey)?.agentId;
+        if (nextAgentId) {
+          applyChatAgentOwnerTransition(this.state, nextAgentId);
+        }
         // A pane routed straight onto the created session never runs the switch
         // path, so its one-shot handoffs would expire unclaimed: the rejected turn
         // would vanish instead of offering a retry, and the accepted prompt would
