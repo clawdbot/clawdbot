@@ -14,9 +14,12 @@ const SESSION_ESTABLISHING_METHODS = new Set(["session/load", "session/resume"])
  * loses session content permanently, while emitting one early only restores the
  * ordering that existed before this boundary.
  */
-const MAX_QUEUED_SESSIONS = 64;
+// Sized to sit above what the agent itself admits — its default window allows well
+// over a hundred creations — so ordinary accepted traffic can never overflow this
+// and silently fall back to unordered delivery. A peer reaching it has paid for that
+// many real session creations, and the per-session bound below still applies.
+const MAX_QUEUED_SESSIONS = 512;
 const MAX_QUEUED_UPDATES_PER_SESSION = 256;
-const MAX_PENDING_NEW_SESSION_REQUESTS = 64;
 const MAX_ESTABLISHED_SESSIONS = 1024;
 
 type QueuedUpdate = { sessionId: string; message: AnyMessage };
@@ -40,21 +43,18 @@ export class AcpSessionNewOrdering {
   private readonly queue: QueuedUpdate[] = [];
   /** Per-session queue depth, used only to enforce the bounds — never for ordering. */
   private readonly queuedPerSession = new Map<string, number>();
-  /** JSON-RPC IDs of in-flight `session/new` requests, used to correlate the establishing response. */
-  private readonly pendingNewSessionRequestIds = new Set<string>();
   /**
-   * Set when a `session/new` arrived that could not be correlated, meaning a response
-   * this boundary will never recognize is in flight.
+   * JSON-RPC IDs of in-flight `session/new` requests, used to correlate the
+   * establishing response.
    *
-   * It is never cleared. An uncorrelated creation is by definition invisible here, so
-   * there is no point at which its absence is provable: the tracked set emptying says
-   * only that the tracked requests finished. Clearing on that would let a later
-   * tracked creation drain an overflowed session's update ahead of its own result,
-   * which is the failure this boundary exists to prevent. Once correlation has
-   * overflowed the boundary stays failed open, trading ordering for a guarantee it
-   * can still honour.
+   * Deliberately uncapped. An entry is one short string, it is removed by the
+   * response to its own request, and every entry costs the peer a real session
+   * creation — the agent's own admission limit bounds this long before memory
+   * does. A cap here would be lower than the work the bridge already accepts, so
+   * a legal burst would silently disable the ordering guarantee for the rest of
+   * the process, which is worse than the growth it would prevent.
    */
-  private correlationSaturated = false;
+  private readonly pendingNewSessionRequestIds = new Set<string>();
 
   observeInbound(message: AnyMessage): void {
     const messageObject = asOptionalRecord(message);
@@ -66,15 +66,6 @@ export class AcpSessionNewOrdering {
     if (method === "session/new") {
       const requestId = readRequestId(messageObject?.id);
       if (requestId === undefined) {
-        return;
-      }
-      if (this.pendingNewSessionRequestIds.size >= MAX_PENDING_NEW_SESSION_REQUESTS) {
-        // A correlation is never evicted: its response is the only thing that can
-        // release the updates already queued for that session. Past the cap the
-        // request is left uncorrelated and the boundary fails open instead. Matching
-        // such a response by anything but its own request ID lets unrelated traffic
-        // claim it, which is the same ordering failure from the other side.
-        this.correlationSaturated = true;
         return;
       }
       this.pendingNewSessionRequestIds.add(requestId);
@@ -143,9 +134,6 @@ export class AcpSessionNewOrdering {
 
   private shouldQueue(sessionId: string): boolean {
     if (this.establishedSessionIds.has(sessionId) || this.isTrackingSaturated()) {
-      return false;
-    }
-    if (this.correlationSaturated) {
       return false;
     }
     return this.pendingNewSessionRequestIds.size > 0;

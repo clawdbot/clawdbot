@@ -236,43 +236,6 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([created, other, afterClose]);
   });
 
-  it("fails open instead of buffering once correlation saturates", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    for (let id = 1; id <= 65; id += 1) {
-      steps.push({ inbound: newSessionRequest(id) });
-    }
-    const update = sessionUpdate("overflow-session");
-    steps.push({ outbound: update });
-
-    const output = await runSteps(ordering, steps);
-
-    // Request 65 could not be correlated, so a response this boundary will not
-    // recognize is in flight. Holding an update it cannot prove is releasable is
-    // what strands it, so ordering degrades to pre-fix behaviour instead.
-    expect(output).toEqual([update]);
-  });
-
-  it("does not let an unrelated response stand in for an uncorrelated creation", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    for (let id = 1; id <= 65; id += 1) {
-      steps.push({ inbound: newSessionRequest(id) });
-    }
-    // An ordinary RPC response arrives while request 65 is still outstanding. Any
-    // fallback that matches a response by count rather than by its own request ID
-    // consumes the overflow here, and request 65's own result then no longer
-    // establishes its session — the ordering failure, from the other side.
-    const unrelated = { jsonrpc: "2.0", id: 900, result: { ok: true } } as AnyMessage;
-    const created = newSessionResponse(65, "overflow-session");
-    const update = sessionUpdate("overflow-session");
-    steps.push({ outbound: unrelated }, { outbound: update }, { outbound: created });
-
-    const output = await runSteps(ordering, steps);
-
-    expect(output).toEqual([unrelated, update, created]);
-  });
-
   it("releases interleaved updates in global arrival order when both creations fail", async () => {
     const ordering = new AcpSessionNewOrdering();
     const a1 = sessionUpdate("session-a", "a1");
@@ -298,30 +261,36 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([failA, failB, a1, b1, a2]);
   });
 
-  it("stays failed open while an overflowed creation overlaps a later tracked one", async () => {
+  it("keeps ordering through a burst larger than any internal cap", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
-    for (let id = 1; id <= 65; id += 1) {
+    const BURST = 130;
+    for (let id = 1; id <= BURST; id += 1) {
       steps.push({ inbound: newSessionRequest(id) });
     }
-    // Requests 1-64 settle, but request 65 was never recorded and is still out.
-    const settled: AnyMessage[] = [];
-    for (let id = 1; id <= 64; id += 1) {
-      const response = newSessionResponse(id, `s${id}`);
-      settled.push(response);
-      steps.push({ outbound: response });
+    // Every session emits its update before any result comes back, which is the
+    // shape the real bridge produced under a burst.
+    const updates: AnyMessage[] = [];
+    for (let id = 1; id <= BURST; id += 1) {
+      const update = sessionUpdate(`s${id}`);
+      updates.push(update);
+      steps.push({ outbound: update });
     }
-    const overflowed = sessionUpdate("overflowed-session");
-    const tracked = newSessionResponse(66, "tracked-session");
-    steps.push({ inbound: newSessionRequest(66) }, { outbound: overflowed }, { outbound: tracked });
+    const results: AnyMessage[] = [];
+    for (let id = 1; id <= BURST; id += 1) {
+      const result = newSessionResponse(id, `s${id}`);
+      results.push(result);
+      steps.push({ outbound: result });
+    }
 
     const output = await runSteps(ordering, steps);
 
-    // The tracked set emptying proves only that requests 1-64 finished. Treating that
-    // as quiescence re-enables queuing, and request 66's result then drains request
-    // 65's update ahead of its own result. Saturation therefore never clears, so the
-    // update is written straight through instead.
-    expect(output).toEqual([...settled, overflowed, tracked]);
+    // The agent admits well over a hundred creations in its default rate window, so
+    // a cap below that would let ordinary accepted traffic disable ordering. Every
+    // result must still precede its own session's update.
+    for (let i = 0; i < BURST; i += 1) {
+      expect(output.indexOf(results[i])).toBeLessThan(output.indexOf(updates[i]));
+    }
   });
 
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
