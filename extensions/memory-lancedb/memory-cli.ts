@@ -213,9 +213,10 @@ export function registerMemoryCli(
             });
             rows = rows.slice(0, limit);
             if (!outputColumns.includes(order.column)) {
-              for (const row of rows) {
-                delete row[order.column];
-              }
+              rows = rows.map(row => {
+                const { [order.column]: _, ...rest } = row as Record<string, unknown>;
+                return rest as typeof row;
+              });
             }
           }
           defaultRuntime.writeJson(rows);
