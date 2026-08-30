@@ -5,6 +5,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -59,14 +60,17 @@ describe("OpenClaw database schema preflight", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     try {
-      database.exec(`${schemaSql}; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
-      database
-        .prepare(
-          `INSERT INTO schema_meta (
-             meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-           ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
-        )
-        .run(OPENCLAW_STATE_SCHEMA_VERSION);
+      // Match production bootstrap: one durable commit, not one per schema object.
+      runSqliteImmediateTransactionSync(database, () => {
+        database.exec(`${schemaSql}; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+        database
+          .prepare(
+            `INSERT INTO schema_meta (
+               meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
+             ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
+          )
+          .run(OPENCLAW_STATE_SCHEMA_VERSION);
+      });
     } finally {
       database.close();
     }
@@ -533,6 +537,68 @@ describe("OpenClaw database schema preflight", () => {
       indeterminate: [],
     });
   });
+
+  it.each(["absent", "installed", "drifted"])(
+    "preflights the %s transcript eligibility index without repairing it",
+    (shape) => {
+      const stateDir = tempDirs.make("openclaw-transcript-eligibility-preflight-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      const { DatabaseSync } = requireNodeSqlite();
+      const agent = new DatabaseSync(agentPath);
+      try {
+        if (shape !== "installed") {
+          agent.exec("DROP INDEX idx_agent_transcript_context_pending");
+          if (shape === "absent") {
+            agent.exec("ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible");
+          } else {
+            agent.exec(
+              "CREATE INDEX idx_agent_transcript_context_pending ON session_transcript_active_events(event_seq)",
+            );
+          }
+        }
+      } finally {
+        agent.close();
+      }
+      const result = preflightOpenClawDatabaseSchemas({
+        env,
+        verifyCurrentSchemaShape: true,
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+      });
+      expect(result.incompatible).toEqual([]);
+      expect(result.indeterminate).toEqual(
+        shape === "drifted"
+          ? [
+              {
+                kind: "agent",
+                path: agentPath,
+                reason: expect.stringContaining("idx_agent_transcript_context_pending"),
+              },
+            ]
+          : [],
+      );
+      const inspected = new DatabaseSync(agentPath, { readOnly: true });
+      try {
+        expect(
+          inspected
+            .prepare(
+              "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
+            )
+            .get(),
+        ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
+        expect(inspected.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      } finally {
+        inspected.close();
+      }
+    },
+  );
 
   it("reports a current but noncanonical registered agent schema as indeterminate", () => {
     const stateDir = tempDirs.make("openclaw-database-preflight-noncanonical-agent-");

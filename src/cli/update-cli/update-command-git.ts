@@ -305,6 +305,9 @@ export async function updateGitInstall(params: {
       timeoutMs: effectiveTimeout,
       env: installEnv,
       installCwd: updateRoot,
+      // ensureGitCheckout already resolved the root; only the successful Git
+      // build/doctor flow can authorize exposing that exact checkout globally.
+      expectedGitCheckout: { root: updateRoot, sha: updateResult.after?.sha ?? null },
     });
     steps.push(...packageUpdate.steps);
 

@@ -199,13 +199,8 @@ export function migrateToCurrentVersion(
   if (version >= CURRENT_SESSION_VERSION) {
     return false;
   }
-  const ids = new Set<string>();
   const state: SessionFileEntryMigrationState = {
-    createEntryId: () => {
-      const id = generateSessionEntryId(ids);
-      ids.add(id);
-      return id;
-    },
+    createEntryId: generateSessionEntryId,
     previousId: null,
     resolveOriginalEntryId: (originalIndex) => {
       const targetEntry = entriesByOriginalIndex

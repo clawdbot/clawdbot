@@ -530,6 +530,103 @@ describe("sessions_history redaction", () => {
     });
   });
 
+  it("reads an old child from its exact durable lineage row", async () => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child";
+    const expectedSessionId = "old-child-session";
+    const storePath = await writeSessionStore("old-child.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        session: { store: storePath },
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          const params = request.params as { spawnedBy?: unknown };
+          return ("spawnedBy" in params ? {} : { key: targetSessionKey, agentId: "main" }) as T;
+        }
+        if (request.method === "sessions.describe") {
+          return {
+            session: {
+              key: targetSessionKey,
+              sessionId: expectedSessionId,
+              parentSessionKey: requesterSessionKey,
+            },
+          } as T;
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [{ role: "assistant", content: "durable child history" }],
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await tool.execute("old-child-history", {
+      sessionKey: targetSessionKey,
+      limit: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      sessionKey: targetSessionKey,
+      messages: [{ role: "assistant", content: "durable child history" }],
+    });
+    expect(requests.map((request) => request.method)).toEqual([
+      "sessions.resolve",
+      "sessions.describe",
+      "chat.history",
+    ]);
+  });
+
+  it("rejects a durable history grant when the target incarnation changes", async () => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child-race";
+    const expectedSessionId = "old-child-session";
+    const storePath = await writeSessionStore("old-child-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        session: { store: storePath },
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          const params = request.params as { spawnedBy?: unknown };
+          return ("spawnedBy" in params ? {} : { key: targetSessionKey, agentId: "main" }) as T;
+        }
+        if (request.method === "sessions.describe") {
+          replaceSessionEntrySync(
+            { storePath, sessionKey: targetSessionKey },
+            { sessionId: "replacement-session", updatedAt: 2 },
+          );
+          return {
+            session: {
+              key: targetSessionKey,
+              sessionId: expectedSessionId,
+              parentSessionKey: requesterSessionKey,
+            },
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    await expect(
+      tool.execute("old-child-history-race", { sessionKey: targetSessionKey }),
+    ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+    expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+  });
+
   it("honors a scoped incarnation grant through the sandbox visibility clamp", async () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";

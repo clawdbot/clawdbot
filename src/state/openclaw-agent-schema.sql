@@ -684,6 +684,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_active_events (
   active_position INTEGER NOT NULL CHECK (active_position >= 0),
   event_seq INTEGER NOT NULL,
   message_position INTEGER CHECK (message_position IS NULL OR message_position >= 0),
+  context_eligible INTEGER,
   PRIMARY KEY (session_id, active_position),
   FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
 ) STRICT;
@@ -694,6 +695,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_event_seq
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_messages
   ON session_transcript_active_events(session_id, message_position)
   WHERE message_position IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
+  ON session_transcript_active_events(session_id)
+  WHERE context_eligible IS NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,

@@ -1341,7 +1341,7 @@ describe("sqlite session normalization", () => {
       delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       createdVia: "channel",
-      createdActor: { type: "human", id: "telegram-sender" },
+      createdActor: { type: "human", source: "channel", id: "telegram-sender" },
       createdAt: 1_782_973_390_000,
       displayName: "telegram:g-bucephalus-+-topics",
       forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
@@ -1385,7 +1385,7 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         sessionId: newSessionId,
         createdVia: "channel",
-        createdActor: { type: "human", id: "telegram-sender" },
+        createdActor: { type: "human", source: "channel", id: "telegram-sender" },
         createdAt: 1_782_973_390_000,
         forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
         previousSessionId: oldSessionId,

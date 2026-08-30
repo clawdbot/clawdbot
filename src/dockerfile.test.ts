@@ -1,7 +1,8 @@
 // Tests Dockerfile metadata and expected install commands.
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -88,7 +89,8 @@ describe("Dockerfile", () => {
       'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6"',
     );
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS dependency-inputs");
+    expect(dockerfile).toContain("FROM dependency-inputs AS build");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
     expect(dockerfile).toContain("FROM base-runtime");
     expect(dockerfile).toContain("current multi-arch manifest list entries");
@@ -177,36 +179,34 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
-  it("uses the Docker target platform for pnpm install and prune", async () => {
-    const dockerfile = await readFile(dockerfilePath, "utf8");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile \\");
-    const storeSeedIndex = dockerfile.indexOf(
-      "node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add",
-    );
-    const pruneIndex = dockerfile.indexOf("CI=true pnpm prune --prod \\");
+  it("uses the Docker target platform for both frozen installs", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const installs = dockerfile.match(/^RUN .*pnpm install[^\n]+/gm) ?? [];
 
-    expect(installIndex).toBeGreaterThan(-1);
-    expect(storeSeedIndex).toBeGreaterThan(installIndex);
-    expect(storeSeedIndex).toBeLessThan(pruneIndex);
-    expect(pruneIndex).toBeGreaterThan(-1);
-    expect(dockerfile).toContain("--config.offline=true");
-    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
-    expect(
-      dockerfile.split("--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"").length -
-        1,
-    ).toBe(2);
-    expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(2);
+    expect(installs).toHaveLength(2);
+    for (const install of installs) {
+      expect(install).toContain("pnpm install --frozen-lockfile");
+      expect(install).toContain("--config.supportedArchitectures.os=linux");
+      expect(install).toContain(
+        "--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"",
+      );
+      expect(install).toContain("--config.supportedArchitectures.libc=glibc");
+    }
   });
 
   it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
-    const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("Verifying critical native addons");
-    expect(dockerfile).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
-    expect(dockerfile).toContain(
+    const [dockerfile, nativeCheck] = await Promise.all([
+      readFile(dockerfilePath, "utf8"),
+      readFile(join(repoRoot, "scripts/docker/verify-native-addons.sh"), "utf8"),
+    ]);
+    expect(dockerfile.match(/^RUN sh scripts\/docker\/verify-native-addons.sh$/gm)).toHaveLength(2);
+    expect(nativeCheck).toContain("grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs");
+    expect(nativeCheck).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
+    expect(nativeCheck).toContain(
       "node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
     );
-    expect(dockerfile).toContain("matrix-sdk-crypto native addon missing after retries");
-    expect(dockerfile).not.toMatch(
+    expect(nativeCheck).toContain("matrix-sdk-crypto native addon missing after retries");
+    expect(nativeCheck).not.toMatch(
       /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
     );
   });
@@ -292,7 +292,6 @@ describe("Dockerfile", () => {
     expect(buildContextCopyIndex).toBeGreaterThan(selectionCopyIndex);
     expect(dockerfile).not.toContain("/app/.openclaw-selected-plugin-dirs");
     expect(dockerfile).not.toContain("./.openclaw-selected-plugin-dirs");
-    expect(dockerfile).toContain("grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs");
     expect(dockerfile).toContain(
       'selected_plugin_dirs="$(cat /tmp/openclaw-selected-plugin-dirs)"',
     );
@@ -406,66 +405,91 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
-    const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"',
-    );
-    expect(dockerfile).toContain('ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""');
-    expect(dockerfile).toContain("ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1");
-    expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
-    expect(dockerfile).toContain(
-      "Opt-in plugin dependencies and supported runtime builds (space- or comma-separated ids).",
-    );
-    expect(dockerfile).toContain(
-      'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',
-    );
-    expect(dockerfile).toContain(
-      "RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \\",
-    );
-    expect(dockerfile).toContain("COPY --from=workspace-deps /out/packages/ ./packages/");
-    expect(dockerfile).toContain(
-      "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
-    );
-    expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
-    );
-    expect(dockerfile).toContain("readlink -f /app/node_modules/@openclaw/ai");
-    expect(dockerfile).toContain('mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai');
-    expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
-    expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
-      dockerfile.indexOf(
-        'OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
-      ),
-    );
-    expect(dockerfile).toContain("--config.offline=true");
-    expect(dockerfile).toContain("--config.supportedArchitectures.os=linux");
-    expect(dockerfile).toContain(
-      "--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"",
-    );
-    expect(dockerfile).toContain("--config.supportedArchitectures.libc=glibc");
-    expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
-    expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
-    expect(dockerfile).not.toContain(
-      `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
-    );
-    const pluginPruneIndex = dockerfile.indexOf("node scripts/prune-docker-plugin-dist.mjs");
-    const grammyImportIndex = dockerfile.indexOf(
-      `node --input-type=module -e 'await import("grammy")'`,
-    );
-    expect(grammyImportIndex).toBeGreaterThan(pluginPruneIndex);
-    expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
-    );
-    expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
-    );
-    expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
-    );
-  });
+  it.runIf(process.platform !== "win32")(
+    "replaces build dependencies with a fresh production tree without losing built assets",
+    async () => {
+      const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+      const stages = new Map(
+        [...dockerfile.matchAll(/^FROM (\S+) AS (\S+)\n([\s\S]*?)(?=^FROM |(?![\s\S]))/gm)].map(
+          ([, parent, name, body]) => [name, { parent, body }],
+        ),
+      );
+      const production = stages.get("production-deps");
+      expect(production?.parent).toBe("dependency-inputs");
+      expect(stages.get("build")?.parent).toBe(production?.parent);
+      const inputs = stages.get("dependency-inputs");
+      expect(inputs?.parent).toBe("${OPENCLAW_NODE_BOOKWORM_IMAGE}");
+      expect(inputs?.body).not.toMatch(/pnpm install|COPY \. \./);
+      expect(production?.body).toContain("pnpm install --frozen-lockfile --prod");
+      expect(production?.body).not.toMatch(/--ignore-scripts|COPY .*node_modules/);
+      expect(dockerfile).not.toContain("pnpm prune");
+
+      const runtime = stages.get("runtime-assets")?.body ?? "";
+      const cleanCommand = runtime.match(/^RUN (rm -rf node_modules[^\n]+)/m)?.[1];
+      if (!cleanCommand) {
+        throw new Error(
+          "Runtime assembly must remove build dependency trees before copying production dependencies",
+        );
+      }
+      const productionCopy = "COPY --from=production-deps /app/ ./";
+      expect(runtime.indexOf(productionCopy)).toBeGreaterThan(runtime.indexOf(cleanCommand));
+      expect(runtime.indexOf("node scripts/prune-docker-plugin-dist.mjs")).toBeGreaterThan(
+        runtime.indexOf(productionCopy),
+      );
+
+      const fixture = await mkdtemp(join(tmpdir(), "openclaw-docker-deps-"));
+      try {
+        const app = join(fixture, "app");
+        const prod = join(fixture, "production");
+        const oldFiles = [
+          "node_modules/dev-only/index.js",
+          "ui/node_modules/dev-only/index.js",
+          "packages/ai/node_modules/dev-only/index.js",
+          "extensions/selected/node_modules/dev-only/index.js",
+        ];
+        const builtFiles = [
+          "packages/ai/dist/index.mjs",
+          "dist/index.js",
+          "dist/extensions/node_modules/openclaw/package.json",
+          "extensions/selected/index.js",
+        ];
+        const prodFiles = [
+          "node_modules/native-addon/addon.node",
+          "node_modules/.modules.yaml",
+          "packages/ai/node_modules/runtime-dep/index.js",
+          "extensions/selected/node_modules/runtime-dep/index.js",
+          "pnpm-lock.yaml",
+        ];
+        for (const [root, files] of [
+          [app, [...oldFiles, ...builtFiles]],
+          [prod, prodFiles],
+        ] as const) {
+          for (const file of files) {
+            await mkdir(dirname(join(root, file)), { recursive: true });
+            await writeFile(join(root, file), file);
+          }
+        }
+        execFileSync("/bin/sh", ["-eu", "-c", cleanCommand], {
+          cwd: app,
+          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_DIR: "extensions" },
+        });
+        await mkdir(join(prod, "node_modules/@openclaw"), { recursive: true });
+        await symlink("../../packages/ai", join(prod, "node_modules/@openclaw/ai"));
+        await cp(prod, app, { recursive: true, verbatimSymlinks: true });
+        for (const file of oldFiles) {
+          await expect(access(join(app, file))).rejects.toThrow();
+        }
+        for (const file of [...builtFiles, ...prodFiles]) {
+          expect(await readFile(join(app, file), "utf8")).toBe(file);
+        }
+        expect(await readFile(join(app, "node_modules/@openclaw/ai/dist/index.mjs"), "utf8")).toBe(
+          "packages/ai/dist/index.mjs",
+        );
+      } finally {
+        await rm(fixture, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps build-stage workspace packages readable by non-root live tests", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
@@ -496,7 +520,7 @@ describe("Dockerfile", () => {
 
   it("keeps package manager metadata in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
-    const pruneProd = "CI=true pnpm prune --prod";
+    const installProd = "pnpm install --frozen-lockfile --prod";
     const finalWorkspaceCopy =
       "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
@@ -504,7 +528,8 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
     expect(dockerfile).not.toContain("pnpm_config_frozen_lockfile=false");
     expect(dockerfile).toContain(finalWorkspaceCopy);
-    expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
+    expect(dockerfile.indexOf(installProd)).toBeGreaterThan(-1);
+    expect(dockerfile.indexOf(installProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
     );
@@ -674,9 +699,10 @@ describe("Dockerfile", () => {
   it("keeps runtime pnpm available", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("ENV COREPACK_HOME=/usr/local/share/corepack");
-    expect(dockerfile).toContain(
-      'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
-    );
+    expect(dockerfile).toContain('corepack prepare "$pnpm_spec" --activate');
+    expect(dockerfile).toContain('corepack "$pnpm_spec" --version &&');
+    expect(dockerfile).toContain("chmod a+r /app/pnpm-lock.yaml");
+    expect(dockerfile).not.toContain("(cd /tmp && corepack");
   });
 
   it("pre-creates named-volume mount points before switching to the node user", async () => {

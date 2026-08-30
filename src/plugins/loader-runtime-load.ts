@@ -173,7 +173,6 @@ function loadOpenClawPluginsInternal(
         onlyPluginIdSet,
         emitWarning: context.shouldActivate,
         warningCacheKey: context.cacheKey,
-        suppliedManifestRegistry: options.manifestRegistry,
       });
     const selectedMiddlewareOwnerManifests = new Map<
       string,

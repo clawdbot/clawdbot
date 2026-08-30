@@ -216,8 +216,13 @@ describe("runWorkspaceInventoryCommandToFile", () => {
 
   it("omits derived artifacts from outbound Git file lists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-files-"));
-    const files = [
+    const retainedFiles = [
       "src/keep.ts",
+      "openclaw-inbound-project/report.txt",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
+    ];
+    const files = [
+      ...retainedFiles,
       "__pycache__/fizzbuzz.cpython-314.pyc",
       "generated.pyc",
       "generated.pyo",
@@ -228,6 +233,8 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       ".ruff_cache/state",
       "node_modules/pkg/index.js",
       ".DS_Store",
+      "openclaw-inbound-12345678-1234-4234-8234-123456789abc/report.pdf",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789abc/photo.png",
     ];
     const temporaryDirectory = path.join(root, "..", `${path.basename(root)}-transfer`);
     const initOutputPath = path.join(root, "..", `${path.basename(root)}-git-init-output`);
@@ -252,9 +259,9 @@ describe("runWorkspaceInventoryCommandToFile", () => {
         timeoutMs: 10_000,
       });
 
-      expect((await fs.readFile(outputPath, "utf8")).split("\0").filter(Boolean)).toEqual([
-        "src/keep.ts",
-      ]);
+      expect((await fs.readFile(outputPath, "utf8")).split("\0").filter(Boolean)).toEqual(
+        retainedFiles.toSorted(),
+      );
     } finally {
       await Promise.all([
         fs.rm(root, { recursive: true, force: true }),

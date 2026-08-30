@@ -1,7 +1,9 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { readToolValidationErrorSummary } from "../../agents/tool-error-summary.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
+import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatAborted, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -21,6 +23,8 @@ export function finalizeChatSendAgentOutcome(params: {
   markTerminalBroadcasted: () => void;
   terminalAlreadyBroadcasted?: boolean;
   returnedAgentErrorMessage?: string;
+  runtimeClassification?: "cancellation" | "failure" | "success" | "timeout";
+  runtimeOutcome?: Pick<AgentRunTerminalOutcome, "endedAt" | "stopReason">;
   toolErrorSummary?: string;
 }): void {
   const alreadyAborted = params.context.chatRunState.hasAbortMarker(params.runId);
@@ -94,10 +98,29 @@ export function finalizeChatSendAgentOutcome(params: {
       payload: hasReturnedAgentError
         ? {
             runId: params.runId,
-            status: "error" as const,
+            status:
+              params.runtimeClassification === "timeout"
+                ? ("timeout" as const)
+                : ("error" as const),
             summary: terminalErrorMessage ?? "agent returned an error payload",
+            ...(params.runtimeOutcome ? { endedAt: params.runtimeOutcome.endedAt } : {}),
+            ...(params.runtimeOutcome?.stopReason
+              ? { stopReason: params.runtimeOutcome.stopReason }
+              : {}),
           }
-        : { runId: params.runId, status: "ok" as const },
+        : params.runtimeClassification === "cancellation"
+          ? buildAbortedChatSendPayload({
+              runId: params.runId,
+              endedAt: params.runtimeOutcome?.endedAt ?? Date.now(),
+              stopReason: params.runtimeOutcome?.stopReason,
+            })
+          : {
+              runId: params.runId,
+              status: "ok" as const,
+              ...(params.runtimeOutcome?.stopReason
+                ? { stopReason: params.runtimeOutcome.stopReason }
+                : {}),
+            },
       ...(returnedAgentError ? { error: returnedAgentError } : {}),
     },
   });

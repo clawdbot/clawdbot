@@ -450,6 +450,7 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   return (
     !operation.result &&
     operation.phase !== "waiting_for_global_lane" &&
-    Date.now() - operation.lastActivityAtMs > resolveRunStaleThresholdMs(activity)
+    Date.now() - operation.lastActivityAtMs >
+      resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs)
   );
 }

@@ -98,7 +98,10 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await Promise.resolve();
 
     expect(unsubscribeMessages).toHaveBeenCalledOnce();
-    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:next", { agentId: undefined });
+    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:next", {
+      agentId: undefined,
+      includeApprovals: true,
+    });
     expect(state.chatSessionMessageSubscription).toEqual({
       key: "agent:main:previous",
       agentId: null,

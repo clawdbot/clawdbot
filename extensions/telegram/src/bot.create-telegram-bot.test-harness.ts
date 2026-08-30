@@ -254,12 +254,9 @@ function resolveDefaultModelForAgentForTest(params: { cfg: OpenClawConfig }): {
   };
 }
 
-function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
-  byProvider: Map<string, Set<string>>;
-  providers: string[];
-  resolvedDefault: { provider: string; model: string };
-  modelNames: Map<string, string>;
-} {
+function createModelsProviderDataFromConfig(
+  cfg: OpenClawConfig,
+): Awaited<ReturnType<TelegramBotDeps["buildModelsProviderData"]>> {
   const byProvider = new Map<string, Set<string>>();
   const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
     const provider = normalizeLowercaseStringOrEmptyForTest(providerRaw);
@@ -281,7 +278,15 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
   }
 
   const providers = [...byProvider.keys()].toSorted();
-  return { byProvider, providers, resolvedDefault, modelNames: new Map<string, string>() };
+  return {
+    byProvider,
+    providers,
+    resolvedDefault,
+    modelNames: new Map<string, string>(),
+    modelCatalog: [...byProvider].flatMap(([provider, models]) =>
+      [...models].map((id) => ({ provider, id, name: id, reasoning: false })),
+    ),
+  };
 }
 
 const systemEventsHoisted = vi.hoisted(() => ({
@@ -334,7 +339,7 @@ const grammySpies = vi.hoisted(() => ({
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
   botCtorSpy: vi.fn(
-    (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
+    (_token: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
   ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),

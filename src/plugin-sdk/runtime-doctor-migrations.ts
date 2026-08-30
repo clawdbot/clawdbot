@@ -53,6 +53,7 @@ export type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
+  PluginDoctorChannelIngressQueueAccess,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";

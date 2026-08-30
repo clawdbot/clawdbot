@@ -414,6 +414,8 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       row: sidebarRow
         ? {
             label: sidebarRow.label,
+            boardFace: sidebarRow.boardFace,
+            hasAutomation: sidebarRow.hasAutomation,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,

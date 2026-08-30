@@ -15,18 +15,17 @@ import {
   resolveChromeExtensionLoadPath,
 } from "./extension-install.js";
 import {
-  createExtensionInstallFixtures,
   FOUNDATION_STORE_ID,
   predictedId,
+  useExtensionInstallFixture,
   writeSecurePreferences,
 } from "./extension-install.test-support.js";
 
 const ID_A = "abcdefghijklmnopabcdefghijklmnop";
-const { fixture, cleanup } = createExtensionInstallFixtures();
+const fixture = useExtensionInstallFixture();
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  await cleanup();
 });
 
 function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, uid: number): T {

@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
+  beginPromptCacheObservation,
+  completePromptCacheObservation,
+} from "../prompt-cache-observability.js";
+import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
@@ -199,5 +203,82 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(
       originalHugeResult?.role === "toolResult" ? originalHugeResult.content : undefined,
     ).toEqual([{ type: "text", text: oversized }]);
+  });
+
+  it("records aggregate truncation on a provider-bound cache break", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const promptCacheKey = `${sessionId}:aggregate-truncation`;
+    const observation = {
+      sessionId,
+      promptCacheKey,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: input.systemPrompt,
+      tools: [],
+    } as const;
+    beginPromptCacheObservation(observation);
+    completePromptCacheObservation({
+      sessionId,
+      promptCacheKey,
+      usage: { cacheRead: 8_000 },
+    });
+    beginPromptCacheObservation(observation);
+    activeSession.agent.state.messages = [
+      { role: "user", content: "call tools", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "aggregate-a",
+        toolName: "read",
+        content: [{ type: "text", text: "a".repeat(6_000) }],
+        isError: false,
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "aggregate-b",
+        toolName: "read",
+        content: [{ type: "text", text: "b".repeat(6_000) }],
+        isError: false,
+        timestamp: 3,
+      },
+      // Real dispatch pins a non-tool carrier after tool results, so the fresh
+      // batch is not trailing-protected and aggregate recovery can engage.
+      { role: "user", content: "continue", timestamp: 4 },
+    ] as AgentMessage[];
+    activeSession.agent.streamFn = (() => undefined as never) as StreamFn;
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      attempt: { sessionId, promptCacheKey },
+      activeSession,
+      toolResultAggregateMaxChars: 6_000,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+      },
+    });
+
+    expect(
+      completePromptCacheObservation({
+        sessionId,
+        promptCacheKey,
+        usage: { cacheRead: 2_000 },
+      }),
+    ).toEqual({
+      previousCacheRead: 8_000,
+      cacheRead: 2_000,
+      changes: [
+        {
+          code: "aggregateToolResultTruncation",
+          detail: "aggregate tool-result truncation changed provider prompt",
+        },
+      ],
+    });
   });
 });

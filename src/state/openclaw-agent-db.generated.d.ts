@@ -336,6 +336,7 @@ export interface SessionSuggestions {
 
 export interface SessionTranscriptActiveEvents {
   active_position: number;
+  context_eligible: number | null;
   event_seq: number;
   message_position: number | null;
   session_id: string;

@@ -38,7 +38,6 @@ import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
-  resolveChatModelCatalogState,
 } from "./chat-pane-session-controls.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
@@ -143,10 +142,9 @@ export class ChatPane extends ChatPaneLayoutRender {
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
-    const inlineApproval = findInlineApproval(
-      overlays?.snapshot?.approvalQueue ?? [],
-      state.sessionKey,
-    );
+    const inlineApproval =
+      findInlineApproval(state.chatSessionApprovalQueue ?? [], state.sessionKey) ??
+      findInlineApproval(overlays?.snapshot?.approvalQueue ?? [], state.sessionKey);
     // Tool rows consult the global title store while rendering. Requests capture
     // session + agent at schedule time, so another pane cannot re-route them.
     configureToolTitleFetcher({
@@ -159,11 +157,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const modelCatalogState = resolveChatModelCatalogState(state);
     const modelUnavailableReason = resolveChatModelUnavailableReason(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
-      modelCatalogState.status === "ready" ? state.chatModelCatalog : [],
+      state.chatModelCatalog,
     );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,
@@ -220,7 +217,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
         this.presencePayload,
-        gatewaySnapshot.selfUser?.identity?.id,
+        gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
@@ -244,7 +241,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
-      presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
+      presenceEntries: readPresenceEntries(this.presencePayload),
       presenceInstanceId: gatewaySnapshot.client?.instanceId,
     });
     const runOutputTokens = resolveActiveRunOutputTokens({
@@ -330,6 +327,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       progressCardHasActiveRun: Boolean(
         state.chatRunId || (selectedSession && isSessionRunActive(selectedSession)),
       ),
+      collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -422,7 +420,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       approvalErrors: overlays?.snapshot?.approvalErrors,
       onApprovalDecision:
         overlays && !sessionParticipationBlocked
-          ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
+          ? (approvalId, decision) =>
+              overlays.decideApproval(decision, approvalId, inlineApproval ?? undefined)
           : undefined,
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:

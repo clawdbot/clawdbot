@@ -89,6 +89,8 @@
 }
 
 .chat-tool-msg-summary {
+  display: inline-flex;
+  align-items: center;
   gap: 7px;
   width: fit-content;
   max-width: 100%;

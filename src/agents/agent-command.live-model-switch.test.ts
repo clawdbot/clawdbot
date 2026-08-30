@@ -211,7 +211,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
       .filter(Boolean)
       .join("\n\n") ?? "",
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
-  sessionFileHasContent: vi.fn(async () => false),
+  sessionTranscriptHasContent: vi.fn(async () => false),
 }));
 
 vi.mock("./command/attempt-execution.shared.js", async () => {
@@ -3229,12 +3229,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 
-  it("retains and clears a preclaimed transcript-only recovery run", async () => {
+  it("clears the recovery cycle when a preclaimed transcript-only recovery run completes", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     setupBareStoredSession({
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoveryRuns: [
+        { runId: "older-recovery", lifecycleGeneration: "pre-restart" },
+        { runId: "recovery-run", lifecycleGeneration: "test-generation" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 5,
+        chargedAttempts: 2,
+      },
     });
 
     await agentCommand({
@@ -3242,6 +3251,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionKey: "agent:main:main",
       deliver: false,
       runId: "recovery-run",
+      preserveUserFacingSessionModelState: true,
     });
 
     const persistedClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
@@ -3272,6 +3282,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run", "recovery-run"]);
+    expect(stored?.restartRecoveryRuns).toBeUndefined();
+    expect(
+      (stored as SessionEntry & { mainRestartRecovery?: unknown }).mainRestartRecovery,
+    ).toBeUndefined();
   });
 
   it("refreshes delivery session entries through the session accessor", async () => {
@@ -3460,6 +3474,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         accountId: "main",
       },
       restartRecoveryDeliveryRunId: "later-run",
+      restartRecoveryRuns: [{ runId: "later-run", lifecycleGeneration: "later-generation" }],
+      mainRestartRecovery: {
+        cycleId: "later-cycle",
+        revision: 1,
+        chargedAttempts: 0,
+      },
     });
     const sessionStore = { "agent:main:main": laterRunEntry };
     state.sessionEntryMock = staleEntry;
@@ -3472,16 +3492,32 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       laterRunEntry.restartRecoveryDeliveryContext,
     );
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("later-run");
+    expect(sessionStore["agent:main:main"]?.restartRecoveryRuns).toEqual(
+      laterRunEntry.restartRecoveryRuns,
+    );
+    expect(sessionStore["agent:main:main"]?.mainRestartRecovery).toEqual(
+      laterRunEntry.mainRestartRecovery,
+    );
   });
 
-  it("keeps current run delivery context when restart marker wins the cleanup race", async () => {
+  it("preserves a newly marked recovery cycle when restart wins the cleanup race", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     const { store: sessionStore } = setupBareStoredSession();
+    const nextRecoveryRuns = [{ runId: "session-1", lifecycleGeneration: "next-generation" }];
+    const nextRecoveryCycle = {
+      cycleId: "next-cycle",
+      revision: 1,
+      chargedAttempts: 0,
+    };
     state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      const current = sessionStore["agent:main:main"];
+      const current = sessionStore["agent:main:main"] as
+        | (SessionEntry & { mainRestartRecovery?: typeof nextRecoveryCycle })
+        | undefined;
       if (current) {
         current.abortedLastRun = true;
+        current.restartRecoveryRuns = nextRecoveryRuns;
+        current.mainRestartRecovery = nextRecoveryCycle;
       }
       return { deliverySucceeded: false };
     });
@@ -3489,6 +3525,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runDiscordDelivery();
 
     expect(sessionStore["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(sessionStore["agent:main:main"]?.restartRecoveryRuns).toEqual(nextRecoveryRuns);
+    expect(
+      (
+        sessionStore["agent:main:main"] as SessionEntry & {
+          mainRestartRecovery?: typeof nextRecoveryCycle;
+        }
+      ).mainRestartRecovery,
+    ).toEqual(nextRecoveryCycle);
     expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         entry: expect.objectContaining({

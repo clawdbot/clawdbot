@@ -13,6 +13,7 @@ import {
   buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isHeartbeatDeliveryAwarenessEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import {
@@ -98,7 +99,7 @@ export async function resolveHeartbeatPreflight(params: {
   const pendingEventEntries = selectAgentSystemEvents(
     peekSystemEventEntries(session.sessionKey),
     params.agentId,
-  );
+  ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),

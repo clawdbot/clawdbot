@@ -12,7 +12,6 @@ import type {
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -21,26 +20,20 @@ import type {
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
-import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
-import type {
-  AgentRuntimeIdentity,
-  AgentRuntimeApprovalAuthorityValidator,
-} from "../agent-runtime-identity-token.js";
+import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
-import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
@@ -54,7 +47,10 @@ import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
-import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogSnapshot,
+  PreparedGatewayModelCatalog,
+} from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
@@ -75,92 +71,22 @@ import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { GatewayClient } from "./client-types.js";
 
 /**
  * Shared gateway request types used by every server-method module.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-/** Trusted in-process spawn control plane that already owns this run's task row.
-    Gateway CLI tracking only covers runs nobody else records, so a marked run
-    must never get a second row. */
-export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
+export type {
+  GatewayAgentRunTaskOwner,
+  GatewayClient,
+  GatewayNodeInvokeStream,
+  TrustedAgentToolCaller,
+} from "./client-types.js";
 
 /** Host-minted role authority; leaf contract re-exported for method handlers. */
 export type { GatewayOperatorRoleActor };
-
-/** Caller identity captured by a built-in agent tool before trusted in-process dispatch. */
-export type TrustedAgentToolCaller = Readonly<{
-  agentId: string;
-  sessionKey: string;
-}>;
-
-/** Closure-bound streaming hooks attached only to trusted plugin-owned synthetic clients. */
-export type GatewayNodeInvokeStream = {
-  onProgress: (chunk: string) => void;
-  onDispatchReady: (invokeId: string) => void;
-  idleTimeoutMs?: number;
-  isRuntimeCurrent: () => boolean;
-};
-
-/** Per-connection client metadata captured after the gateway handshake. */
-export type GatewayClient = {
-  connect: ConnectParams;
-  connId?: string;
-  presenceKey?: string;
-  clientIp?: string;
-  /** Client id verified against the server-approved device pairing record. */
-  pairedClientId?: string;
-  authenticatedUserId?: string;
-  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
-  authenticatedUserIsTailscaleProvider?: boolean;
-  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
-  authenticatedUserProfile?: {
-    profileId: string;
-    displayName: string | null;
-    avatarRevision?: string;
-    hasAvatar: boolean;
-    updatedAt: number;
-  };
-  pluginSurfaceUrls?: Record<string, string>;
-  pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
-  pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
-  isDeviceTokenAuth?: boolean;
-  internal?: {
-    /** Handshake-attested direct-local transport; never accepted from wire params. */
-    isLocalClient?: true;
-    /** Marks the server-constructed client used by trusted in-process dispatch. */
-    syntheticClient?: true;
-    /** Host-owned role authority retained separately from an autonomous run principal. */
-    operatorRoleActor?: GatewayOperatorRoleActor;
-    /** Overrides persisted sender attribution without changing the authorizing client identity. */
-    senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
-    /** Trusted session creation provenance; never accepted from Gateway wire params. */
-    sessionCreation?: TrustedSessionCreation;
-    /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
-    agentToolCaller?: TrustedAgentToolCaller;
-    allowModelOverride?: boolean;
-    approvalRuntime?: boolean;
-    cronRunContinuation?: boolean;
-    agentRuntimeIdentity?: AgentRuntimeIdentity;
-    pluginRuntimeOwnerId?: string;
-    /** Plugin-owned in-process invoke hooks; never accepted from Gateway wire params. */
-    nodeInvokeStream?: GatewayNodeInvokeStream;
-    agentRunTracking?: GatewayAgentRunTaskOwner;
-    /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
-    pluginSubagentRequester?: PluginSubagentRequesterContext;
-    /** Host-owned exact media set for a scoped automatic recovery delivery. */
-    internalDeliveryMediaUrls?: string[];
-    internalDeliverySuppressText?: boolean;
-    /** Plugin-owned tools authorized for this internal subagent run. */
-    runtimePluginToolGrant?: RuntimePluginToolGrant;
-    /** Host-owned exact tool cap for a tracked plugin subagent run. */
-    pluginSubagentToolsAllow?: string[];
-    /** Opaque in-process subagent-completion capability; never accepted from wire params. */
-    delegatedToolPolicyHandoffId?: string;
-  };
-};
 
 /** Callback used by method handlers to emit one protocol response frame. */
 export type RespondFn = (
@@ -286,7 +212,7 @@ type GatewayKernelContext = {
     agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
-  }) => Promise<ModelCatalogEntry[] | undefined>;
+  }) => Promise<PreparedGatewayModelCatalog | undefined>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
@@ -299,6 +225,8 @@ type GatewayKernelContext = {
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
+  /** Uses the lifecycle owner's module graph for plugin and detached agent turns. */
+  createAgentTurnFacade?: InternalAgentTurnFacadeFactory;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;

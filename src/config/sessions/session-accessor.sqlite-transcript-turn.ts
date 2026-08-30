@@ -26,6 +26,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import {
+  findTranscriptEventInDatabase,
+  readTranscriptEventMessage,
+} from "./session-accessor.sqlite-read.js";
+import {
   cloneSessionEntry,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
@@ -177,7 +181,20 @@ export async function appendExpectedSessionTranscriptTurn(
         : undefined;
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
       for (const append of messages) {
-        const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+        const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
+        if (shouldAppendInTransaction) {
+          const latestAssistant = findTranscriptEventInDatabase(
+            transactionDb,
+            resolved.sessionId,
+            (event) => readTranscriptEventMessage(event)?.role === "assistant",
+          );
+          const latestAssistantMessage = latestAssistant
+            ? readTranscriptEventMessage(latestAssistant.event)
+            : undefined;
+          if (!shouldAppendInTransaction(latestAssistantMessage)) {
+            continue;
+          }
+        }
         let message = appendOptions.message;
         if (mutation && goal && isRecord(message) && message.role === "user") {
           message = {

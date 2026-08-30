@@ -26,7 +26,10 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  isExecCompletionEvent,
+  isHeartbeatDeliveryAwarenessEvent,
+} from "../../infra/heartbeat-events-filter.js";
 import {
   ackSessionDelivery,
   loadPendingSessionDelivery,
@@ -61,14 +64,15 @@ function selectGenericSystemEvents(
   events: readonly SystemEvent[],
   options?: { suppressHeartbeatOwnedEvents?: boolean },
 ): SystemEvent[] {
-  // Exec completions and tagged cron events own dedicated heartbeat prompts
-  // (buildExecEventPrompt / buildCronEventPrompt). During heartbeat runs, leave
-  // cron entries queued for that owner; ordinary turns still drain them as the
-  // fallback when a heartbeat was skipped before it could consume the event.
+  // Exec/cron events own dedicated heartbeat prompts. Heartbeat delivery
+  // awareness stays queued for the next ordinary target turn.
   return events.filter(
     (event) =>
       !isExecCompletionEvent(event.text) &&
-      !(options?.suppressHeartbeatOwnedEvents === true && isCronContextSystemEvent(event)),
+      !(
+        options?.suppressHeartbeatOwnedEvents === true &&
+        (isCronContextSystemEvent(event) || isHeartbeatDeliveryAwarenessEvent(event))
+      ),
   );
 }
 

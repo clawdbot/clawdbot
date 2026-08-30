@@ -761,11 +761,11 @@ describe("chat typing status", () => {
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("anchors the run error and local command queue without moving transcript presence", () => {
+  it("anchors the run error and queue to the composer without moving transcript presence", () => {
     const container = renderChatView({
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
       runError: { summary: "Gateway unavailable" },
-      queue: [{ id: "queued", text: "/compact", localCommandName: "compact", createdAt: 1 }],
+      queue: [{ id: "queued", text: "Try again", createdAt: 1 }],
     });
     const indicator = requireElement(
       container,
@@ -1331,13 +1331,11 @@ describe("chat history pagination", () => {
 
     const button = requireElement(
       container,
-      ".chat-history-available",
+      ".chat-history-boundary__action",
       "earlier history action",
     ) as HTMLButtonElement;
-    expect(button.textContent).toContain("Earlier history available");
     expect(button.textContent).toContain("Show earlier");
-    expect(button.closest(".chat-main__conversation")).not.toBeNull();
-    expect(button.closest(".chat-thread")).toBeNull();
+    expect(button.closest(".chat-thread")).not.toBeNull();
     button.click();
     expect(onShowEarlier).toHaveBeenCalledOnce();
 
@@ -1346,32 +1344,43 @@ describe("chat history pagination", () => {
     });
     const loadingButton = requireElement(
       container,
-      ".chat-history-available",
+      ".chat-history-boundary__action",
       "loading earlier history action",
     ) as HTMLButtonElement;
     expect(loadingButton.textContent).toContain("Loading earlier history");
-    expect(loadingButton.querySelector(".session-run-spinner")).not.toBeNull();
-    expect(loadingButton.disabled).toBe(false);
-    loadingButton.click();
-    expect(onShowEarlier).toHaveBeenCalledTimes(2);
+    expect(loadingButton.getAttribute("aria-busy")).toBe("true");
+    expect(loadingButton.disabled).toBe(true);
+    expect(loadingButton.closest(".chat-history-boundary--loading")).not.toBeNull();
 
     renderChatInto(container, {
       historyPagination: { hasMore: true, loading: false, onShowEarlier },
     });
     const retryButton = requireElement(
       container,
-      ".chat-history-available",
+      ".chat-history-boundary__action",
       "retry earlier history action",
     ) as HTMLButtonElement;
+    expect(retryButton.disabled).toBe(false);
     retryButton.click();
-    expect(onShowEarlier).toHaveBeenCalledTimes(3);
+    expect(onShowEarlier).toHaveBeenCalledTimes(2);
 
     renderChatInto(container);
-    expect(container.querySelector(".chat-history-available")).toBeNull();
+    expect(container.querySelector(".chat-history-boundary")).toBeNull();
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("renders the auto-load sentinel and a structural skeleton while older history loads", () => {
+  it("renders the boundary in flow above the virtualized transcript", () => {
+    const container = renderChatView({
+      historyPagination: { hasMore: true, loading: false, onShowEarlier: vi.fn() },
+      messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
+    });
+
+    const boundary = requireElement(container, ".chat-history-boundary", "history boundary");
+    expect(boundary.closest(".chat-thread-inner--virtual")).not.toBeNull();
+    expect(boundary.nextElementSibling?.classList.contains("chat-virtual-sizer")).toBe(true);
+  });
+
+  it("keeps the auto-load sentinel visually empty while older history loads", () => {
     const container = renderChatView({
       historyPagination: {
         hasMore: true,
@@ -1383,12 +1392,9 @@ describe("chat history pagination", () => {
     const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
     expect(threadInner.firstElementChild).toBe(sentinel);
-    const skeleton = sentinel.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).not.toBeNull();
-    expect(skeleton?.getAttribute("aria-label")).toBe(t("common.loading"));
-    expect(skeleton?.getAttribute("aria-busy")).toBe("true");
-    expect(skeleton?.compact).toBe(true);
-    expect(sentinel.querySelector("button")).toBeNull();
+    // The sentinel overlays virtualized rows; content here would paint over
+    // real messages. The in-flow boundary row owns the loading affordance.
+    expect(sentinel.childElementCount).toBe(0);
   });
 
   it("loads older history from upward wheel and keyboard intent without a button", () => {
@@ -2240,8 +2246,8 @@ describe("chat scroll-to-bottom affordance", () => {
     const container = renderChatView({
       showNewMessages: true,
       queue: [
-        { id: "queued-1", text: "/compact", localCommandName: "compact", createdAt: 1 },
-        { id: "queued-2", text: "/reset", localCommandName: "reset", createdAt: 2 },
+        { id: "queued-1", text: "first queued message", createdAt: 1 },
+        { id: "queued-2", text: "second queued message", createdAt: 2 },
       ],
     });
 

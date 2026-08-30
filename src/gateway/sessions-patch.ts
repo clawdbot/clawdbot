@@ -8,13 +8,8 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  normalizeSessionIconValue,
-  SESSION_ICON_GLYPH_IDS,
-} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -76,12 +71,12 @@ import {
   sessionAgentStatusExpiresAt,
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
-import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
+import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
@@ -90,6 +85,7 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
 
 export function resolveSessionPatchModelSelection(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   catalog: ModelCatalogEntry[];
   raw: string;
   defaultProvider: string;
@@ -101,6 +97,7 @@ export function resolveSessionPatchModelSelection(params: {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
   const resolved = resolveAllowedModelRef({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog: params.catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
@@ -169,7 +166,7 @@ function normalizeSessionToolOverrides(
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  creation?: { via: SessionCreatedVia; actor?: SessionEntry["createdActor"] };
   existingEntry?: SessionEntry;
   isLabelInUse: (label: string) => boolean;
   storeKey: string;
@@ -177,7 +174,7 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   /** Canonical root prepared by the trusted create path; never accepted from public patches. */
   preparedSessionRoot?: string;
-  archivedBy?: SessionCreatedActor;
+  archivedBy?: SessionEntry["archivedBy"];
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
@@ -273,56 +270,13 @@ export async function projectSessionsPatchEntry(params: {
     return invalid(subagentPolicyError);
   }
 
-  if ("label" in patch) {
-    const raw = patch.label;
-    if (raw === null) {
-      delete next.label;
-    } else if (raw !== undefined) {
-      const parsed = parseSessionLabel(raw);
-      if (!parsed.ok) {
-        return invalid(parsed.error);
-      }
-      if (params.isLabelInUse(parsed.label)) {
-        return invalid(`label already in use: ${parsed.label}`);
-      }
-      next.label = parsed.label;
-    }
-  }
-
-  if ("icon" in patch) {
-    const raw = patch.icon;
-    if (raw === null || raw === "") {
-      delete next.icon;
-    } else if (raw !== undefined) {
-      const icon = normalizeSessionIconValue(raw);
-      if (!icon) {
-        return invalid(
-          `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`,
-        );
-      }
-      next.icon = icon;
-    }
-  }
-
-  if ("category" in patch) {
-    const raw = patch.category;
-    if (raw === null) {
-      delete next.category;
-    } else if (raw !== undefined) {
-      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid category: empty");
-      }
-      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
-        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
-      }
-      next.category = trimmed;
-    }
-  }
-
-  if ("boardFace" in patch && patch.boardFace !== undefined) {
-    next.boardFace = patch.boardFace;
+  const displayMetadataError = applySessionsPatchDisplayMetadata({
+    patch,
+    next,
+    isLabelInUse: params.isLabelInUse,
+  });
+  if (displayMetadataError) {
+    return invalid(displayMetadataError);
   }
 
   if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
@@ -619,6 +573,7 @@ export async function projectSessionsPatchEntry(params: {
       }
       const resolved = resolveSessionPatchModelSelection({
         cfg,
+        agentId: sessionAgentId,
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,

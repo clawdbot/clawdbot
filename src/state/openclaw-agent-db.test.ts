@@ -17,6 +17,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import {
   assertAgentDeletionPathFence,
@@ -94,16 +95,20 @@ function ensureSharedStateDatabaseTemplate(): string {
   return sharedStateDatabaseTemplatePath;
 }
 
-function openOpenClawAgentDatabase(
-  options: Parameters<typeof openOpenClawAgentDatabaseRuntime>[0],
-) {
-  const stateDatabasePath = resolveOpenClawStateSqlitePath(options.env);
+function materializeSharedStateDatabase(env: NodeJS.ProcessEnv | undefined): void {
+  const stateDatabasePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(stateDatabasePath)) {
     // Agent schema tests own the per-agent database. Seed the shared registry
     // from one real closed database instead of rebuilding its full schema per case.
     fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
     fs.copyFileSync(ensureSharedStateDatabaseTemplate(), stateDatabasePath);
   }
+}
+
+function openOpenClawAgentDatabase(
+  options: Parameters<typeof openOpenClawAgentDatabaseRuntime>[0],
+) {
+  materializeSharedStateDatabase(options.env);
   return openOpenClawAgentDatabaseRuntime(options);
 }
 
@@ -249,6 +254,8 @@ function materializeV13WorkerAgentDatabase(stateDir: string): string {
 async function migrateAndOpenLegacyAgentDatabaseForTest(
   options: Parameters<typeof openOpenClawAgentDatabase>[0],
 ) {
+  // Prepare the unrelated registry before the real maintenance lease's acquisition budget.
+  materializeSharedStateDatabase(options.env);
   const pathname = resolveOpenClawAgentSqlitePath(options);
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(pathname);
@@ -841,11 +848,16 @@ describe("openclaw agent database", () => {
     const stateDatabasePath = resolveOpenClawStateSqlitePath(env);
     fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
-    const stateDatabase = new DatabaseSync(stateDatabasePath);
-    stateDatabase.exec(
-      fs.readFileSync(new URL("./openclaw-state-schema.sql", import.meta.url), "utf8"),
+    const schemaSql = fs.readFileSync(
+      new URL("./openclaw-state-schema.sql", import.meta.url),
+      "utf8",
     );
-    stateDatabase.close();
+    const stateDatabase = new DatabaseSync(stateDatabasePath);
+    try {
+      runSqliteImmediateTransactionSync(stateDatabase, () => stateDatabase.exec(schemaSql));
+    } finally {
+      stateDatabase.close();
+    }
 
     const entry = {
       agentId: "deleted",
@@ -3772,6 +3784,85 @@ describe("openclaw agent database", () => {
       repaired.close();
     }
   });
+
+  it("installs transcript eligibility without parsing or rewriting older same-version rows", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const older = new DatabaseSync(databasePath);
+    try {
+      older.exec(`
+        DROP INDEX idx_agent_transcript_context_pending;
+        ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:worker-1:eligibility', 'eligibility', '{"sessionId":"eligibility"}', 1);
+        INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+          VALUES ('eligibility', 'agent:worker-1:eligibility', 1, 1);
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+          VALUES ('eligibility', 0, '{', 1);
+        INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position)
+          VALUES ('eligibility', 0, 0, 0);
+        INSERT INTO session_transcript_index_state (session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count, updated_at)
+          VALUES ('eligibility', 0, 0, 1, 1, 1);
+      `);
+    } finally {
+      older.close();
+    }
+    const repaired = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(readSqliteNumberPragma(repaired.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      repaired.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    expect(
+      repaired.db
+        .prepare("SELECT event_json FROM transcript_events WHERE session_id = 'eligibility'")
+        .get(),
+    ).toEqual({ event_json: "{" });
+    expect(
+      repaired.db
+        .prepare(
+          "SELECT context_eligible, active_position, event_seq, message_position FROM session_transcript_active_events WHERE session_id = 'eligibility'",
+        )
+        .get(),
+    ).toEqual({ context_eligible: null, active_position: 0, event_seq: 0, message_position: 0 });
+    expect(
+      repaired.db
+        .prepare(
+          "SELECT type, [notnull], dflt_value FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
+        )
+        .get(),
+    ).toEqual({ type: "INTEGER", notnull: 0, dflt_value: null });
+    expect(
+      repaired.db
+        .prepare(
+          "SELECT [unique], partial FROM pragma_index_list('session_transcript_active_events') WHERE name = 'idx_agent_transcript_context_pending'",
+        )
+        .get(),
+    ).toEqual({ unique: 0, partial: 1 });
+  });
+
+  it.each(["TEXT", "INTEGER NOT NULL DEFAULT 1", "INTEGER CHECK (context_eligible IN (0, 1))"])(
+    "refuses a noncanonical transcript eligibility declaration: %s",
+    (declaration) => {
+      const stateDir = createTempStateDir();
+      const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const drifted = new DatabaseSync(databasePath);
+      try {
+        drifted.exec(`DROP INDEX idx_agent_transcript_context_pending;
+        ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;
+        ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible ${declaration};`);
+      } finally {
+        drifted.close();
+      }
+      expect(() =>
+        openOpenClawAgentDatabase({ agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } }),
+      ).toThrow("column definitions differ for session_transcript_active_events");
+    },
+  );
 
   it("keeps memory provenance tables independently lazy and accepts their same-version installation", () => {
     const stateDir = createTempStateDir();

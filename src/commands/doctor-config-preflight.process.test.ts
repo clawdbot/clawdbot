@@ -197,7 +197,8 @@ describe("doctor invalid config process exit", () => {
   }, 75_000);
 });
 
-describe.concurrent("gateway startup-migration refusal", () => {
+// Synchronous CLI probes must not consume neighboring cases' timeout budgets.
+describe("gateway startup-migration refusal", () => {
   it("repairs the stable upgrade config and additive state schema before readiness", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-stable-upgrade-ready-"));
     const stateDir = path.join(root, "state");
@@ -426,10 +427,11 @@ describe.concurrent("gateway startup-migration refusal", () => {
 
     try {
       fs.mkdirSync(stateDir, { recursive: true });
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
-      );
+      const originalConfig = JSON.stringify({
+        meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z" },
+        gateway: { mode: "local", auth: { mode: "none" } },
+      });
+      fs.writeFileSync(configPath, originalConfig);
       seedPluginStateConflict(stateDir);
 
       const result = spawnSync(
@@ -451,6 +453,8 @@ describe.concurrent("gateway startup-migration refusal", () => {
       expect(result.stderr).toContain(STARTUP_RECOVERY);
       expect(result.stderr.split(STARTUP_REFUSAL)).toHaveLength(2);
       expect(result.stderr).not.toContain("[openclaw] Could not start the CLI.");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(originalConfig);
+      expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });

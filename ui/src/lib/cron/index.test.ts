@@ -2400,7 +2400,8 @@ describe("cron controller", () => {
     expect(state.cronJobs).toEqual([existingJob]);
     expect(state.cronJobsSnapshotRevision).toBe("accepted-revision");
     expect(state.cronJobsTotal).toBe(1);
-    expect(state.cronError).toContain("cron.list returned an invalid inventory page");
+    expect(state.cronJobsError).toContain("cron.list returned an invalid inventory page");
+    expect(state.cronError).toBeNull();
   });
 
   it("keeps table-only filters out of shared cron jobs loads", async () => {
@@ -2549,6 +2550,26 @@ describe("cron controller", () => {
     expect(state.cronJobs.map((job) => job.id)).toEqual(["job-ok"]);
     expect(state.cronJobsTotal).toBe(2);
     expect(state.cronJobsHasMore).toBe(false);
+  });
+
+  it("keeps list failures separate from other Cron errors", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return emptyCronListResponse({ snapshotRevision: "loaded-empty" });
+      }
+      if (method === "cron.runs") {
+        throw new Error("run history unavailable");
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request);
+
+    await loadCronJobsPage(state);
+    await expect(loadCronRuns(state, null)).resolves.toBe("error");
+
+    expect(state.cronJobsSnapshotRevision).toBe("loaded-empty");
+    expect(state.cronJobsError).toBeNull();
+    expect(state.cronError).toBe("run history unavailable");
   });
 
   it("loads and appends paged run history", async () => {

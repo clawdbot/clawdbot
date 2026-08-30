@@ -15,6 +15,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
@@ -201,6 +202,7 @@ function extractToolDetailsPreview(
   details: unknown,
   text: string | undefined,
   name: string,
+  browserToolName = name,
 ): ToolCard["preview"] | undefined {
   const preview = extractCanvasFromDetails(details);
   const canvas =
@@ -211,12 +213,13 @@ function extractToolDetailsPreview(
     return { ...canvas, surface: "assistant_message" };
   }
   const tab = asNullableRecord(asNullableRecord(details)?.browserTab);
-  if (typeof tab?.targetId !== "string" || !tab.targetId.trim()) {
+  const target = readBrowserTabTarget(tab);
+  if (browserToolName !== "browser" || !tab || !target) {
     return undefined;
   }
   return {
     kind: "browser-tab",
-    targetId: truncateUtf16Safe(tab.targetId, 128),
+    ...target,
     ...(typeof tab.url === "string" ? { url: truncateUtf16Safe(tab.url, 2_048) } : {}),
     ...(typeof tab.title === "string" ? { title: truncateUtf16Safe(tab.title, 512) } : {}),
   };
@@ -352,6 +355,13 @@ let nextPreviewRevision = 0;
 
 function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  const isStandaloneToolMessage =
+    isToolResultMessage(message) ||
+    role === "tool" ||
+    role === "function" ||
+    typeof m.toolName === "string" ||
+    typeof m.tool_name === "string";
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
@@ -416,7 +426,14 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
         );
       const text = extractToolText(item);
       const details = item.details ?? m.details;
-      const preview = extractToolDetailsPreview(details, text, name);
+      // Browser previews trigger I/O. Nested content cannot override its tool
+      // envelope, and a paired result cannot override the authoritative call.
+      const envelopeName = isStandaloneToolMessage ? resolveToolName({}, m) : undefined;
+      const browserToolName =
+        envelopeName && envelopeName !== "browser"
+          ? envelopeName
+          : (existing?.name ?? envelopeName ?? name);
+      const preview = extractToolDetailsPreview(details, text, name, browserToolName);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       const exitCode = readToolExitCode(item, details, text ? parseJsonRecord(text) : undefined, m);
       if (existing) {
@@ -456,14 +473,6 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       });
     }
   }
-
-  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
-  const isStandaloneToolMessage =
-    isToolResultMessage(message) ||
-    role === "tool" ||
-    role === "function" ||
-    typeof m.toolName === "string" ||
-    typeof m.tool_name === "string";
 
   if (isStandaloneToolMessage && cards.length === 0) {
     const name =

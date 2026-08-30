@@ -200,7 +200,7 @@ beforeEach(async () => {
   });
   mocks.handoff.mockReturnValue({ ok: true, value: Promise.resolve(true) });
   mocks.events = [];
-  mocks.capability.mockResolvedValue({ kind: "sealed", detail: "operator-owned definition" });
+  mocks.capability.mockResolvedValue({ kind: "sealed", reason: "foreign-owner" });
   mocks.command.mockResolvedValue({
     programArguments: [
       process.execPath,
@@ -288,7 +288,9 @@ describe("preserved update activation with real version guards", () => {
         environment: { HOME: root, MANAGED_VALUE: "revalidated" },
       });
       mocks.capability.mockResolvedValue(
-        late ? { kind: "writable" } : { kind: denial, detail: "owner denial" },
+        late
+          ? { kind: "writable" }
+          : { kind: denial, reason: denial === "sealed" ? "foreign-owner" : "inspection-failed" },
       );
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind: mode === "git" ? "git" : "package",
@@ -300,7 +302,10 @@ describe("preserved update activation with real version guards", () => {
       const repair = vi.spyOn(startRepair, "repairLoadedGatewayServiceForStart");
       mocks.child.mockImplementation(async (args) => {
         if (args.includes("install")) {
-          mocks.capability.mockResolvedValue({ kind: denial, detail: "late owner denial" });
+          mocks.capability.mockResolvedValue({
+            kind: denial,
+            reason: denial === "sealed" ? "foreign-owner" : "inspection-failed",
+          });
           if (outcome === "uninspectable") {
             mocks.command.mockRejectedValue(new Error("manager inspection failed"));
           } else if (outcome === "foreign") {
@@ -762,7 +767,7 @@ describe("preserved update activation with real version guards", () => {
     "fresh restart keeps the preserved launcher even when authority is %s",
     async (kind) => {
       mocks.capability.mockResolvedValue(
-        kind === "sealed" ? { kind, detail: "operator-owned definition" } : { kind },
+        kind === "sealed" ? { kind, reason: "foreign-owner" } : { kind },
       );
       await expect(runDaemonRestart({ json: true, preserveDefinition: true })).resolves.toBe(true);
       expect(mocks.restart).toHaveBeenCalledOnce();

@@ -242,6 +242,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
           icon: batchRows ? null : (session.icon ?? null),
+          color: batchRows ? null : (session.color ?? null),
           categoryClearReturnsToGroups:
             sharedCategory !== null &&
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
@@ -294,6 +295,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "rename":
               void host.sessionOrganizer.renameSession(session);
+              break;
+            case "set-color":
+              void host.sessionOrganizer.patchSession(session, { color: action.color });
               break;
             case "set-icon":
               void host.sessionOrganizer.patchSession(session, { icon: action.icon });

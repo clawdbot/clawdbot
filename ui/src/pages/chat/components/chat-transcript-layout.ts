@@ -13,6 +13,7 @@ export function renderChatTranscriptLayout<T>({
   renderRow,
   virtualizer,
   overlay,
+  header,
   scrollElementRef,
   captureInteractionResize,
   measureRowRefFor,
@@ -21,6 +22,7 @@ export function renderChatTranscriptLayout<T>({
   renderRow: (row: TranscriptRow<T>) => unknown;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   overlay: unknown;
+  header: unknown;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
@@ -32,6 +34,7 @@ export function renderChatTranscriptLayout<T>({
       ${ref(scrollElementRef)}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >
+      ${header}
       <div
         class="chat-virtual-sizer"
         style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}

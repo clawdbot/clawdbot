@@ -54,7 +54,9 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
   hasPendingSessionConversationRouteContextColumn,
+  hasPendingSessionTranscriptContextEligibilityColumn,
   migrateConversationDeliveryTargetColumn,
+  migrateSessionCreatorNamespaces,
   migrateSessionRecipientAuthority,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
@@ -535,6 +537,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       hasPendingSessionKeyContractSchemaMigration(database) ||
       hasRetiredAgentStateLeaseSchema(database) ||
       hasPendingSessionConversationRouteContextColumn(database) ||
+      hasPendingSessionTranscriptContextEligibilityColumn(database) ||
       hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
@@ -633,8 +636,14 @@ function ensureAgentSchema(
       migrateSessionNodesAndWindows(db, previousVersion);
       ensureSessionAdditiveColumns(db);
       ensureSessionEntryValidityProjection(db);
-      if (targetVersion >= AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION) {
+      if (
+        targetVersion >= AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION &&
+        previousVersion < AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION
+      ) {
         migrateSessionParticipantsSchema(db, pathname);
+      }
+      if (targetVersion >= 19) {
+        migrateSessionCreatorNamespaces(db, previousVersion);
       }
       db.exec(schemaSql);
       if (targetVersion >= AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION) {

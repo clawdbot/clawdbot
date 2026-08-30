@@ -32,21 +32,23 @@ struct HealthStoreStateTests {
         let state = AppState(preview: true)
         state.connectionMode = .local
         state.isPaused = true
-        for (name, fields, expected) in [
-            ("ready", ["running": true, "connected": true, "lifecycle": "ready"] as [String: Any],
+        for (name, channelId, fields, expected) in [
+            ("ready", "telegram", ["running": true, "connected": true, "lifecycle": "ready"] as [String: Any],
              "Telegram ready"),
-            ("startup-grace", [
+            ("startup-grace", "telegram", [
                 "running": true, "connected": false, "lifecycle": "starting", "lastStartAt": 1772798370000,
             ],
              "Telegram running"),
-            ("stale-socket", [
+            ("stale-socket", "telegram", [
                 "running": true, "connected": true, "lifecycle": "ready", "healthState": "stale-socket",
                 "lastStartAt": 1772794800000, "lastTransportActivityAt": 1772796540000,
             ],
              "Telegram degraded · stale-socket"),
-            ("disabled", ["enabled": false, "running": false], "Telegram disabled"),
+            ("disabled", "telegram", ["enabled": false, "running": false], "Telegram disabled"),
+            ("probe-permission", "imessage", Self.permissionProbeChannel,
+             "iMessage degraded · \(Self.permissionProbeError) (status unknown)"),
         ] {
-            try Self.withSnapshot(["telegram": fields]) { store in
+            try Self.withSnapshot([channelId: fields], order: [channelId]) { store in
                 let hosting = NSHostingView(rootView: GeneralSettings(state: state, page: .connection, isActive: false)
                     // Capture the view's light canvas, not transparent text over the window's excluded background.
                     .background(.white)
@@ -132,22 +134,25 @@ struct HealthStoreStateTests {
     }
 
     @Test @MainActor func `current channel probe failure degrades state`() throws {
-        try Self.withSnapshot([
-            "telegram": [
+        for (channelId, fields, label, expected) in [
+            ("imessage", Self.permissionProbeChannel, "iMessage", "\(Self.permissionProbeError) (status unknown)"),
+            // Generic imsg timeouts exercise formatting, not the FDA-only public probe redactor.
+            ("imessage", [
+                "probe": ["ok": false, "error": "imsg rpc timeout (chats.list)"],
+                "running": true, "lifecycle": "starting", "lastStartAt": 1772798395000,
+            ], "iMessage", "Health check timed out"),
+            ("telegram", [
                 "probe": ["ok": false, "status": 503, "error": "gateway connect failed", "elapsedMs": 12],
                 "lastProbeAt": 1772798400000,
                 "running": true,
                 "connected": true,
                 "lifecycle": "ready",
-            ],
-        ]) { store in
-            switch store.state {
-            case let .degraded(message):
-                #expect(message.contains("gateway connect failed"))
-            default:
-                Issue.record("Expected degraded state when a current channel probe fails")
+            ], "Telegram", "gateway connect failed (status 503, 12ms)"),
+        ] {
+            try Self.withSnapshot([channelId: fields], order: [channelId]) { store in
+                #expect(store.state == .degraded(expected))
+                #expect(store.summaryLine == "\(label) degraded · \(expected)")
             }
-            #expect(store.summaryLine.contains("gateway connect failed"))
         }
     }
 
@@ -338,6 +343,17 @@ struct HealthStoreStateTests {
         }
     }
 
+    private static let permissionProbeError =
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway."
+
+    private static var permissionProbeChannel: [String: Any] {
+        // Public health preserves this sanitized FDA error without an HTTP status; startup has no lastError yet.
+        [
+            "probe": ["ok": false, "error": self.permissionProbeError],
+            "running": true, "lifecycle": "starting", "lastStartAt": 1772798395000,
+        ]
+    }
+
     private static var unlinkedWhatsApp: [String: Any] {
         [
             "configured": true, "linked": false, "running": false, "connected": false,
@@ -370,7 +386,7 @@ struct HealthStoreStateTests {
             account.merge(fields) { _, value in value }
             return account
         }
-        // Fixed Gateway response time: fresh starts are 30s old; expired starts are 5m old.
+        // Fixed Gateway response time keeps grace and expired lifecycle fixtures deterministic.
         let fixture: [String: Any] = [
             "ok": true,
             "ts": 1772798400000,
@@ -379,7 +395,7 @@ struct HealthStoreStateTests {
             "channelOrder": order,
             "channelLabels": [
                 "telegram": "Telegram", "matrix": "Matrix", "whatsapp": "WhatsApp", "zalouser": "Zalo Personal",
-                "disabled": "Disabled",
+                "disabled": "Disabled", "imessage": "iMessage",
             ],
             "heartbeatSeconds": 60,
             "sessions": ["path": "/tmp/sessions.json", "count": 0, "recent": []],

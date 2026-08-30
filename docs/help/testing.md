@@ -457,56 +457,6 @@ gh workflow run package-acceptance.yml --ref main \
     `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send
     request to observed SUT reply.
 
-`Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs
-the candidate ref with Convex-leased Telegram credentials, renders the
-redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
-evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
-posts inline PR evidence through the Mantis GitHub App when `pr_number` is
-set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`).
-
-`Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
-before/after wrapper for PR visual proof. Start it from the Actions UI with
-freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a maintainer PR comment:
-
-```text
-@openclaw-mantis
-@openclaw-mantis verify the streamed reply stays visible while it arrives
-```
-
-ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
-automatically for branches in `openclaw/openclaw`. Fork PRs require the
-maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
-posts the active workflow link in its evidence comment and replaces that same
-comment with the result. Any text after the mention is optional proof guidance.
-Manual requests stop before desktop setup and comment
-`There was nothing visible to test in this PR at all.` when the diff has no
-Telegram-visible behavior.
-
-The Mantis agent reads the PR, decides what Telegram-visible behavior proves
-the change, runs the real-user Crabbox Telegram Desktop proof lane on
-baseline and candidate refs, iterates until the native GIFs are useful,
-writes a paired `motionPreview` manifest, and posts the same 2-column GIF
-table through the Mantis GitHub App when `pr_number` is set.
-
-- `pnpm openclaw qa mantis telegram-desktop-builder`
-  - Leases or reuses a Crabbox Linux desktop, installs native Telegram
-    Desktop, configures OpenClaw with a leased Telegram SUT bot token,
-    starts the gateway, and records screenshot/MP4 evidence from the
-    visible VNC desktop.
-  - Defaults to `--credential-source convex` so workflows only need the
-    Convex broker secret. Use `--credential-source env` with the same
-    `OPENCLAW_QA_TELEGRAM_*` variables as `pnpm openclaw qa telegram`.
-  - Telegram Desktop still needs a user login/profile. The bot token
-    configures OpenClaw only. Use `--telegram-profile-archive-env <name>`
-    for a base64 `.tgz` profile archive, or use `--keep-lease` and log in
-    manually through VNC once.
-  - Writes `mantis-telegram-desktop-builder-report.md`,
-    `mantis-telegram-desktop-builder-summary.json`,
-    `telegram-desktop-builder.png`, and `telegram-desktop-builder.mp4`
-    under the output directory.
-
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
 [QA overview - Live transport coverage](/concepts/qa-e2e-automation#buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference).
@@ -595,13 +545,6 @@ Payload shape for Telegram kind:
 - `groupId` must be a numeric Telegram chat id string.
 - `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
 
-Payload shape for Telegram real-user kind:
-
-- `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }`
-- `groupId`, `testerUserId`, and `telegramApiId` must be numeric strings.
-- `tdlibArchiveSha256` and `desktopTdataArchiveSha256` must be SHA-256 hex strings.
-- `kind: "telegram-user"` is reserved for the Mantis Telegram Desktop proof workflow. Generic QA Lab lanes must not acquire it.
-
 Broker-validated multi-channel payloads:
 
 - Buzz: `{ relayUrl: string, roomId: string, driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string, sutAuthTag?: string }`
@@ -666,7 +609,7 @@ Native dependency policy:
     - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
     - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
-    - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. It does not run Vitest tests; call `pnpm test:changed` or explicit `pnpm test <target>` for test proof. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
+    - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
     - Live Docker ACP harness edits run focused checks: shell syntax for the live Docker auth scripts and a live Docker scheduler dry-run. `package.json` changes are included only when the diff is limited to `scripts["test:docker:live-*"]`; dependency, export, version, and other package-surface edits still use the broader guards.
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
@@ -725,8 +668,10 @@ Native dependency policy:
   <Accordion title="Fast local iteration">
 
     - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
-    - The pre-commit hook is formatting-only. It restages formatted files
-      and does not run lint, typecheck, or tests.
+    - The pre-commit hook formats and restages files. When private rules are
+      configured, it also scans staged content before and after formatting.
+      See [Local commit hook setup](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md#local-commit-hook).
+      It does not run lint, typecheck, or tests.
     - Run `pnpm check:changed` explicitly before handoff or push when you
       need the smart local check gate.
     - `pnpm test:changed` routes through cheap scoped lanes by default. Use
@@ -770,7 +715,10 @@ Native dependency policy:
     - `pnpm test:perf:profile:main` writes a main-thread CPU profile for
       Vitest/Vite startup and transform overhead.
     - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for
-      the unit suite with file parallelism disabled.
+      the unit suite with file parallelism disabled. Profiles span each worker's
+      files and finish before teardown acknowledgement, including failed runs.
+      Both commands print their output directory; see [Test performance tooling](/reference/test#test-performance-tooling)
+      for output selection, capture boundaries, and supported runners.
 
   </Accordion>
 </AccordionGroup>
@@ -848,12 +796,13 @@ Native dependency policy:
   - Opt-in only; not part of the default `pnpm test:e2e` run
   - Requires a local `openshell` CLI plus a working Docker daemon
   - Requires an active local OpenShell gateway and its config source
-  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test sandbox
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then waits for durable sandbox absence before deleting the test workspace
+  - Reports cleanup failures, including failed inventory queries; it does not retry database errors
 - Useful overrides:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
   - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
-  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the sandbox-visible `host.openshell.internal` address used by the network policy fixture; Docker Desktop may resolve this differently from the bridge gateway
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to replace the host policy fixture's default ranges with one explicit Docker gateway address and its existing `/32` suffix
 
 ### Live (real providers + real models)
 
@@ -1050,14 +999,14 @@ Run full Mintlify anchor validation when you need in-page heading checks too: `p
 
 These are "real pipeline" regressions without real providers:
 
-- Gateway tool calling (mock OpenAI, real gateway + agent loop): `src/gateway/gateway.test.ts` (case: "runs a mock OpenAI tool call end-to-end via gateway agent loop")
+- Gateway agent admission (real Gateway with a mock OpenAI provider): `src/gateway/gateway.test.ts` (case: "accepts a gateway agent request over ws and returns a run id"; checks acceptance, a run ID, and an abort response).
 - Gateway wizard (WS `wizard.start`/`wizard.next`, writes config + auth enforced): `src/gateway/gateway.test.ts` (case: "runs wizard over ws and writes auth token config")
 
 ## Agent reliability evals (skills)
 
 We already have a few CI-safe tests that behave like "agent reliability evals":
 
-- Mock tool-calling through the real gateway + agent loop (`src/gateway/gateway.test.ts`).
+- Agent admission, run-ID responses, and abort requests through the real Gateway with a mock OpenAI provider (`src/gateway/gateway.test.ts`).
 - End-to-end wizard flows that validate session wiring and config effects (`src/gateway/gateway.test.ts`).
 
 What's still missing for skills (see [Skills](/tools/skills)):

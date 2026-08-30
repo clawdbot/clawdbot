@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs a prepared OpenClaw npm tarball in Docker, runs OpenAI onboarding,
-# and verifies the Codex plugin plus @openai/codex dependency are downloaded on demand.
+# Installs OpenClaw and Codex from npm artifacts with explicit capability consent,
+# then verifies OpenAI onboarding, managed dependencies, and doctor in Docker.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -98,6 +98,7 @@ dump_debug_logs() {
   echo "Codex on-demand scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-codex-registry/server.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-plugins-list.json \
@@ -128,7 +129,17 @@ openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PR
 
 configure_plugin_registry
 
-echo "Running non-interactive OpenAI onboarding; Codex should install on demand..."
+# Non-interactive onboarding cannot grant capabilities. Use the shared fixture
+# consent flow and the exact companion when testing an unpublished candidate.
+codex_install_args=("@openclaw/codex")
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  codex_install_args=("npm:@openclaw/codex@${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" --pin)
+fi
+echo "Installing Codex on demand with explicit capability consent..."
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${codex_install_args[@]}" \
+  >/tmp/openclaw-codex-plugin-install.log 2>&1
+
+echo "Running non-interactive OpenAI onboarding with the accepted Codex plugin..."
 openclaw onboard --non-interactive --accept-risk \
   --mode local \
   --auth-choice openai-api-key \
@@ -143,6 +154,7 @@ openclaw onboard --non-interactive --accept-risk \
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect codex --runtime --json >/tmp/openclaw-codex-inspect.json
 node scripts/e2e/lib/codex-on-demand/assertions.mjs
+node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
 
 echo "Codex on-demand Docker E2E passed"
 EOF
@@ -150,4 +162,5 @@ EOF
   exit 1
 fi
 
+docker_e2e_print_log "$run_log"
 echo "Codex on-demand Docker E2E passed"

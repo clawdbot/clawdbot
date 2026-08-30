@@ -657,7 +657,7 @@ describe("checkUpdateStatus registry behavior", () => {
     await withTestDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@12.0.0" }),
         "utf8",
       );
       await runCommandWithTimeout(["git", "init"], { cwd: root, timeoutMs: 1000 });

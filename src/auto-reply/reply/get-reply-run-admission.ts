@@ -113,7 +113,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const maybeLevel = normalizeThinkLevel(parts[0]);
     const thinkingCatalog = maybeLevel
       ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
-          modelState.resolveThinkingCatalog(),
+          modelState.resolveThinkingCatalog({ provider, model }),
         )
       : undefined;
     if (
@@ -257,7 +257,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
-      modelState.resolveDefaultThinkingLevel(),
+      modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime: thinkingRuntime }),
     );
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
@@ -279,7 +279,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     // catalog load was a 14s+ reply-blocking cost for known Codex models that
     // already publish authoritative thinking metadata.
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
-      modelState.resolveThinkingCatalog(),
+      modelState.resolveThinkingCatalog({ provider, model }),
     );
     thinkingLevelSupported = isThinkingLevelSupported({
       provider,

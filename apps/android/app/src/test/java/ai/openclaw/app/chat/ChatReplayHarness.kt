@@ -14,7 +14,7 @@ internal val chatControllerTestJson = Json { ignoreUnknownKeys = true }
 
 internal fun CoroutineScope.createChatController(
   requestGatewayForGateway: (suspend (gatewayId: String, method: String, paramsJson: String?) -> String)? = null,
-  captureSettingsRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
+  captureRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
   transcriptCache: ChatTranscriptCache? = null,
   cacheScope: () -> ChatCacheScope? = { null },
   currentDefaultAgentId: () -> String? = { "main" },
@@ -30,8 +30,9 @@ internal fun CoroutineScope.createChatController(
   val scopedRequest =
     requestGatewayForGateway ?: { _, method, paramsJson -> requestGateway(method, paramsJson) }
   val settingsLease =
-    captureSettingsRequestLease ?: { gatewayScope ->
-      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
+    captureRequestLease ?: { gatewayScope ->
+      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
+        withEnqueue {}
         if (gatewayScope == null) {
           requestGateway(method, paramsJson)
         } else {
@@ -44,7 +45,7 @@ internal fun CoroutineScope.createChatController(
     json = chatControllerTestJson,
     requestGateway = requestGateway,
     requestGatewayForGateway = scopedRequest,
-    captureSettingsRequestLease = settingsLease,
+    captureRequestLease = settingsLease,
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,

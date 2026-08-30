@@ -370,7 +370,7 @@ describe("sessions-list-tool", () => {
           model: "openai/gpt-5.4-mini",
           contextTokens: 20_000,
           totalTokens: 1_200,
-          status: "done",
+          status: "queued",
           abortedLastRun: false,
           childSessions: ["agent:main:subagent:grandchild"],
         },
@@ -396,7 +396,7 @@ describe("sessions-list-tool", () => {
       linkedDetails.sessionLinkRule,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; category?: string; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; category?: string; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "queued" | "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
     );
     expect(result.details).toEqual({
       count: 1,
@@ -420,7 +420,7 @@ describe("sessions-list-tool", () => {
           model: "openai/gpt-5.4-mini",
           contextTokens: 20_000,
           totalTokens: 1_200,
-          status: "done",
+          status: "queued",
           abortedLastRun: false,
           childSessions: ["agent:main:subagent:grandchild"],
         },

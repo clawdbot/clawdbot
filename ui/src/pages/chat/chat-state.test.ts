@@ -5,12 +5,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
 import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
@@ -94,6 +96,110 @@ describe("canonical session message recovery", () => {
       return item.kind === "stream" ? [{ role: "assistant", text: item.text }] : [];
     });
   }
+
+  it("reconciles live approval events for the selected session", () => {
+    const { state } = createSessionEventState();
+    const approval = {
+      id: "plugin:approval-live",
+      status: "pending" as const,
+      presentation: {
+        kind: "plugin" as const,
+        title: "Run Codex execution on node",
+        description: "Allows node account access",
+        severity: "critical" as const,
+        pluginId: "codex",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"] as const,
+      },
+      urlPath: "/approve/plugin%3Aapproval-live",
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    };
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:main:main",
+        sourceSessionKey: "agent:main:cloud-child",
+        phase: "pending",
+        updatedAtMs: 1_000,
+        approval,
+      },
+      seq: 1,
+    });
+
+    expect(state.chatSessionApprovalQueue).toEqual([
+      expect.objectContaining({
+        id: approval.id,
+        sourceSessionKey: "agent:main:cloud-child",
+      }),
+    ]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:main:main",
+        sourceSessionKey: "agent:main:cloud-child",
+        phase: "terminal",
+        updatedAtMs: 2_000,
+        approval: {
+          ...approval,
+          status: "denied",
+          decision: "deny",
+          reason: "user",
+          resolvedAtMs: 2_000,
+        },
+      },
+      seq: 2,
+    });
+
+    expect(state.chatSessionApprovalQueue).toEqual([]);
+
+    state.sessionKey = "global";
+    state.assistantAgentId = "research";
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.approval",
+      payload: {
+        sessionKey: "agent:research:global",
+        phase: "pending",
+        updatedAtMs: 3_000,
+        approval,
+      },
+      seq: 3,
+    });
+    expect(state.chatSessionApprovalQueue).toEqual([
+      expect.objectContaining({
+        id: approval.id,
+        request: expect.objectContaining({ sessionKey: "global" }),
+      }),
+    ]);
+
+    for (const [sessionKey, expectedCount] of [
+      ["agent:main:global", 1],
+      ["agent:research:global", 0],
+    ] as const) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.approval",
+        payload: {
+          sessionKey,
+          phase: "terminal",
+          updatedAtMs: 4_000,
+          approval: {
+            ...approval,
+            status: "denied",
+            decision: "deny",
+            reason: "user",
+            resolvedAtMs: 4_000,
+          },
+        },
+      });
+      expect(state.chatSessionApprovalQueue).toHaveLength(expectedCount);
+    }
+  });
 
   it("rejects envelope-only sequence for an incomplete imported user identity", () => {
     const { state } = createSessionEventState({ connected: false });
@@ -844,6 +950,54 @@ describe("canonical session message recovery", () => {
     },
   );
 
+  it("recovers once when history completed the run before its message-less terminal arrives", async () => {
+    const runId = "run-completed-by-history-before-terminal";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish after the tool call" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "The durable final arrived after the snapshot." }],
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [prompt, persistedReply],
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done",
+      },
+    });
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
+
+    const terminalEvent = {
+      type: "event",
+      event: "chat",
+      payload: { sessionKey: state.sessionKey, runId, state: "final" },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+    handlePageGatewayEvent(state, terminalEvent);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(state.chatMessages).toContainEqual(persistedReply));
+
+    request.mockClear();
+    handlePageGatewayEvent(state, terminalEvent);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("stops terminal recovery after a media-only reply becomes durable", async () => {
     vi.useFakeTimers();
     try {
@@ -889,6 +1043,60 @@ describe("canonical session message recovery", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(1);
       expect(state.chatMessages).toContainEqual(persistedReply);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds terminal recovery when no durable reply appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-without-durable-reply";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish without persisting a reply" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(5);
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Finish without persisting a reply" },
+      ]);
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(5);
     } finally {
       vi.useRealTimers();
     }
@@ -1104,69 +1312,118 @@ describe("canonical session message recovery", () => {
     }
   });
 
-  it("continues terminal recovery when history backfills another run", async () => {
-    vi.useFakeTimers();
-    try {
-      const runId = "run-after-history-backfill";
-      const historicalRunId = "older-run-from-history";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish after loading older history" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
-      };
-      const historicalReply = {
-        role: "assistant",
-        content: [{ type: "text", text: "An older durable reply." }],
-        __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
-      };
-      const persistedReply = {
-        role: "assistant",
-        content: [{ type: "text", text: "The current reply is now durable." }],
-        __openclaw: { id: "current-reply", runId, seq: 3 },
-      };
-      const sessionInfo = {
-        key: "agent:main:main",
-        kind: "direct" as const,
-        updatedAt: 3,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done" as const,
-      };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({
-          messages: [historicalReply, prompt],
-          sessionId: "selected-session",
-          sessionInfo,
-        })
-        .mockResolvedValueOnce({
-          messages: [historicalReply, prompt, persistedReply],
-          sessionId: "selected-session",
-          sessionInfo,
+  it.each(["another-run", "nested-tool-only"] as const)(
+    "continues terminal recovery when history backfills %s",
+    async (historyKind) => {
+      vi.useFakeTimers();
+      try {
+        const runId = "run-after-history-backfill";
+        const historicalRunId = "older-run-from-history";
+        const prompt = {
+          role: "user",
+          content: [{ type: "text", text: "Finish after loading older history" }],
+          __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
+        };
+        const historicalReply = {
+          role: "assistant",
+          content: [{ type: "text", text: "An older durable reply." }],
+          __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
+        };
+        // Public history projects tool blocks, not the stored empty-content activity fact.
+        const nestedActivity = {
+          role: "custom",
+          customType: "openclaw.nested-tool.v1",
+          display: true,
+          excludeFromContext: true,
+          runId,
+          timestamp: 2,
+          content: [
+            {
+              type: "toolCall",
+              id: "nested-read",
+              runId,
+              name: "read",
+              arguments: { path: "note.txt" },
+              parentToolCallId: "outer-exec",
+              timestamp: 2,
+            },
+            {
+              type: "toolResult",
+              role: "toolResult",
+              runId,
+              scopeId: "attempt-1",
+              afterEntryId: "prompt-1",
+              startOrder: 0,
+              parentToolCallId: "outer-exec",
+              toolCallId: "nested-read",
+              toolName: "read",
+              isError: false,
+              startedAt: 2,
+              timestamp: 3,
+              content: [{ type: "text", text: "Nested read completed." }],
+            },
+          ],
+          __openclaw: { id: "nested-activity-1", seq: 3 },
+        };
+        const precedingRow = historyKind === "another-run" ? historicalReply : nestedActivity;
+        const beforeFinal =
+          historyKind === "another-run" ? [historicalReply, prompt] : [prompt, nestedActivity];
+        const replyText = "The current reply is now durable.";
+        const persistedReply = {
+          role: "assistant",
+          content: [{ type: "text", text: replyText }],
+          stopReason: "stop",
+          __openclaw: { id: "current-reply", runId, seq: historyKind === "another-run" ? 3 : 4 },
+        };
+        const sessionInfo = {
+          key: "agent:main:main",
+          kind: "direct" as const,
+          updatedAt: 3,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done" as const,
+        };
+        const request = vi
+          .fn()
+          .mockResolvedValueOnce({
+            messages: beforeFinal,
+            sessionId: "selected-session",
+            sessionInfo,
+          })
+          .mockResolvedValueOnce({
+            messages: [...beforeFinal, persistedReply],
+            sessionId: "selected-session",
+            sessionInfo,
+          });
+        const { state } = createSessionEventState({
+          chatMessages: [prompt],
+          chatHistoryPagination: { hasMore: false },
+          chatRunId: runId,
+          client: { request } as unknown as GatewayBrowserClient,
         });
-      const { state } = createSessionEventState({
-        chatMessages: [prompt],
-        chatHistoryPagination: { hasMore: false },
-        chatRunId: runId,
-        client: { request } as unknown as GatewayBrowserClient,
-      });
 
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: { sessionKey: state.sessionKey, runId, state: "final" },
-      });
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: { sessionKey: state.sessionKey, runId, state: "final" },
+        });
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(state.chatMessages).toContainEqual(historicalReply);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(state.chatMessages).toContainEqual(persistedReply);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(state.chatMessages).toContainEqual(precedingRow);
+        expect(state.chatMessages).not.toContainEqual(persistedReply);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
+          persistedReply,
+        ]);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },
@@ -3291,6 +3548,66 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
+  it.each(["metadata", "picker"] as const)(
+    "fences a late %s result across same-client reconnect",
+    async (kind) => {
+      const old = createDeferred<{ commands: never[]; models: typeof state.chatModelCatalog }>();
+      const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(old.promise)
+        .mockResolvedValue({ commands: [], models: [ready] });
+      const state = createMetadataState(request);
+      const pending =
+        kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
+      state.connected = false;
+      retireChatMetadataRequests(state);
+      invalidateModelCatalogCache(state.client!);
+      invalidateChatMetadataStore(state.client!);
+      expect(state.chatModelCatalog).toEqual([]);
+      state.connectionEpoch += 1;
+      state.connected = true;
+      await refreshChatMetadata(state);
+      old.resolve({
+        commands: [],
+        models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+      });
+      await pending;
+      expect(state.chatModelCatalog).toEqual([ready]);
+      expect(state.chatModelCatalogError).toBeNull();
+      retireChatMetadataRequests(state);
+    },
+  );
+
+  it.each(["command-metadata", "patch"])(
+    "refreshes only the matching session for %s, not streaming updates",
+    async (reason) => {
+      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+      const state = createMetadataState(request);
+      await refreshChatMetadata(state);
+      for (const [key, eventReason] of [
+        ["agent:work:other", reason],
+        [state.sessionKey, "message"],
+      ]) {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "sessions.changed",
+          payload: { key, agentId: "work", reason: eventReason },
+        });
+      }
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "sessions.changed",
+        payload: { key: state.sessionKey, agentId: "work", reason },
+      });
+      await vi.waitFor(() =>
+        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2),
+      );
+      retireChatMetadataRequests(state);
+    },
+  );
+
   it.each([
     {
       label: "warm",
@@ -3305,8 +3622,11 @@ describe("refreshChatMetadata", () => {
         models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
       }>();
       const request = vi.fn((method: string, params?: unknown) => {
-        expect(method).toBe("models.list");
-        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        expect(params).toEqual(
+          method === "models.list"
+            ? { view: "configured", agentId: "work", refresh: true }
+            : { agentId: "work", sessionKey: "agent:work:main" },
+        );
         return discovery.promise;
       });
       const state = createMetadataState(request, {
@@ -3337,7 +3657,7 @@ describe("refreshChatMetadata", () => {
     },
   );
 
-  it("applies agent-scoped metadata after a same-agent session switch", async () => {
+  it("does not apply session metadata after a same-agent session switch", async () => {
     let resolveMetadata:
       | ((value: {
           commands: never[];
@@ -3357,7 +3677,7 @@ describe("refreshChatMetadata", () => {
     });
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("chat.metadata");
-      expect(params).toEqual({ agentId: "work" });
+      expect(params).toEqual({ agentId: "work", sessionKey: "agent:work:main" });
       return await metadata;
     });
     const state = createMetadataState(request);
@@ -3370,13 +3690,11 @@ describe("refreshChatMetadata", () => {
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      { id: "work-model", name: "Work Model", provider: "openai", available: true },
-    ]);
+    expect(state.chatModelCatalog).toEqual([]);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
+  it("isolates metadata across sessions and agents", async () => {
     const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
       commands: [],
       models: [
@@ -3392,12 +3710,15 @@ describe("refreshChatMetadata", () => {
     await refreshChatMetadata(state);
     state.sessionKey = "agent:work:second";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     state.sessionKey = "agent:other:main";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("chat.metadata", {
+      agentId: "other",
+      sessionKey: "agent:other:main",
+    });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -3503,7 +3824,7 @@ describe("refreshChatMetadata", () => {
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toBe(existingCatalog);
+    expect(state.chatModelCatalog).toEqual([]);
   });
 
   it("keeps the seeded catalog and reports chat metadata failures without model fallback", async () => {

@@ -179,6 +179,7 @@ export type FollowupRun = {
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
+    conversationRoutePeerId?: string;
     conversationToolPolicy?: GroupToolPolicyConfig;
     groupId?: string;
     groupChannel?: string;

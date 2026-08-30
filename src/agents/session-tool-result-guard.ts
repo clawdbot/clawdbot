@@ -35,6 +35,7 @@ import {
   truncateToolResultMessage,
 } from "./embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   getRawSessionAppendMessage,
   setRawSessionAppendMessage,
@@ -700,6 +701,7 @@ export function installSessionToolResultGuard(
     message: AgentMessage,
     options?: AppendMessageOptions,
     sourceAppend?: CodeModeSourceAppend,
+    acknowledgementSource: AgentMessage = message,
   ): {
     anchor?: TranscriptEntryAnchor;
     entryId: string;
@@ -722,6 +724,8 @@ export function installSessionToolResultGuard(
       throw new Error(`Appended transcript message is unavailable: ${entryId}`);
     }
     const persistedMessage = entry.message;
+    // Destructive tool-side state commits only after this exact result is durable.
+    acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =
       persistedMessage.role === "toolResult" ? extractToolResultId(persistedMessage) : null;
     // Update only committed state, before callbacks can re-enter or throw.
@@ -887,6 +891,8 @@ export function installSessionToolResultGuard(
             toolResultTransformerMayMutate ||
             persisted.changed,
         },
+        undefined,
+        message,
       ).entryId;
     }
 
@@ -904,12 +910,15 @@ export function installSessionToolResultGuard(
     // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
     // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
     // that cause API 400 errors on subsequent requests.
-    const transcriptOnlyAssistant =
-      nextRole === "assistant" &&
-      toolCalls.length === 0 &&
-      isTranscriptOnlyOpenClawAssistantMessage(nextMessage);
+    const transcriptOnly =
+      (nextRole === "custom" &&
+        "excludeFromContext" in nextMessage &&
+        nextMessage.excludeFromContext === true) ||
+      (nextRole === "assistant" &&
+        toolCalls.length === 0 &&
+        isTranscriptOnlyOpenClawAssistantMessage(nextMessage));
     if (
-      !transcriptOnlyAssistant &&
+      !transcriptOnly &&
       pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)
     ) {
       flushPendingToolResults();

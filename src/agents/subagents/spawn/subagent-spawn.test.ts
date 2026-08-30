@@ -50,7 +50,8 @@ const hoisted = vi.hoisted(() => ({
     (params: { sessionKey?: string }) => {
       sandboxed: boolean;
       sandboxRequired: boolean;
-      sandboxPrincipalId?: string;
+      isolationSubject?: import("../../sandbox/types.js").SandboxIsolationSubject;
+      createdActor?: import("../../../config/sessions/session-entry-provenance.js").SessionCreatedActor;
     }
   >(),
   configOverride: {} as Record<string, unknown>,
@@ -1978,11 +1979,16 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it.each([false, true])(
-    "inherits native child isolation only from a required parent (%s)",
-    async (required) => {
+  it.each([
+    { required: false, source: "profile" },
+    { required: true, source: "profile" },
+    { required: true, source: "channel" },
+    { required: true, source: "unknown" },
+  ] as const)(
+    "inherits native child $source provenance only from a required parent ($required)",
+    async ({ required, source }) => {
       const parentSessionKey = "agent:main:main";
-      const actor = { type: "human", id: "profile-native-creator" } as const;
+      const actor = { type: "human", source, id: "profile-native-creator" } as const;
       hoisted.loadSessionStoreMock.mockReturnValue({
         [parentSessionKey]: {
           sessionId: "parent-session",
@@ -1994,7 +2000,15 @@ describe("spawnSubagentDirect seam flow", () => {
       hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
         sandboxed: true,
         sandboxRequired: required && sessionKey === parentSessionKey,
-        ...(required && sessionKey === parentSessionKey ? { sandboxPrincipalId: actor.id } : {}),
+        ...(required && sessionKey === parentSessionKey
+          ? {
+              isolationSubject:
+                source === "profile"
+                  ? { kind: "profile" as const, profileId: actor.id }
+                  : { kind: "session" as const, sessionKey: parentSessionKey },
+              createdActor: actor,
+            }
+          : {}),
       }));
       let persistedStore: Record<string, Record<string, unknown>> | undefined;
       installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
@@ -2023,7 +2037,9 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
       sandboxed: sessionKey === "agent:main:main",
       sandboxRequired: sessionKey === "agent:main:main",
-      ...(sessionKey === "agent:main:main" ? { sandboxPrincipalId: "profile-native-creator" } : {}),
+      ...(sessionKey === "agent:main:main"
+        ? { isolationSubject: { kind: "profile" as const, profileId: "profile-native-creator" } }
+        : {}),
     }));
     const result = await spawnSubagentDirect(
       { task: "try an unsandboxed child" },

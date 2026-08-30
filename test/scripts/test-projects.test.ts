@@ -397,6 +397,22 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/pr-lib/worktree.sh"], ["test/vitest/vitest.tooling.config.ts"]);
   });
 
+  it.each(["scripts/pr", "scripts/pr-lib/merge.sh", "scripts/pr-lib/merge-outcome.sh"])(
+    "routes native merge changes through the outcome owner for %s",
+    (scriptPath) => {
+      expectChangedTargets(
+        [scriptPath],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-merge-outcome.test.ts",
+          ...(scriptPath === "scripts/pr"
+            ? ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]
+            : []),
+        ],
+      );
+    },
+  );
+
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
     const targets = ["scripts/check-no-raw-http2-imports.mts"];
 
@@ -489,6 +505,25 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps check runner edits on check runner tests", () => {
     expectChangedTargets(["scripts/check.mts"], ["test/scripts/check.test.ts"]);
+  });
+
+  it("routes the Vitest fork patch and its fixture to lifecycle proof", () => {
+    expectChangedTargets(
+      ["patches/vitest@4.1.11.patch"],
+      [
+        "test/scripts/run-vitest-profile.test.ts",
+        "test/scripts/run-vitest-state-cleanup.test.ts",
+        "test/scripts/vitest-fork-shutdown.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      ["test/fixtures/vitest-fork-shutdown.mjs"],
+      ["test/scripts/vitest-fork-shutdown.test.ts"],
+    );
+    expectSingleVitestRunPlan(buildVitestRunPlans(["test/scripts/vitest-fork-shutdown.test.ts"]), {
+      config: "test/vitest/vitest.tooling-isolated.config.ts",
+      includePatterns: ["test/scripts/vitest-fork-shutdown.test.ts"],
+    });
   });
 
   it("keeps build runner edits on build runner tests", () => {
@@ -607,7 +642,11 @@ describe("scripts/test-projects changed-target routing", () => {
     );
     expectChangedTargets(
       ["scripts/pr-lib/crabbox-merge-bypass.sh"],
-      ["test/scripts/pr-crabbox-merge-bypass.test.ts", "test/scripts/pr-merge.test.ts"],
+      [
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+        "test/scripts/pr-merge.test.ts",
+        "test/scripts/pr-merge-outcome.test.ts",
+      ],
     );
   });
 
@@ -622,11 +661,26 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each([
+    ".github/actions/git-owner/owner.py",
+    ".github/actions/git-owner/action.yml",
+    ".github/actions/ensure-base-commit/policy.py",
+    ".github/actions/ensure-base-commit/action.yml",
+    "scripts/generate-ci-git-owner.mts",
+  ])("selects executable Git boundary proof for %s", (source) => {
+    expect(resolveChangedTestTargetPlan([source])).toEqual({
+      mode: "targets",
+      targets: expect.arrayContaining(["test/scripts/ci-git-owner.test.ts"]),
+    });
+  });
+
   it("keeps CI workflow edits on workflow guard tests", () => {
     expectChangedTargets(
       [".github/workflows/ci.yml"],
       [
         "test/scripts/ci-platform-checkout.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
@@ -639,10 +693,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/changed-path-facts.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
+        "test/scripts/macos-native-test-launch.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
-        "test/scripts/pr-merge.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
       ],
     );
@@ -958,14 +1012,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
-      [
-        ".github/workflows/mantis-telegram-desktop-proof.yml",
-        [
-          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
-          "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
-        ],
-      ],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
         [
@@ -1708,6 +1754,19 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("routes the shared MCP scenario through its Docker and client owners", () => {
+    expectChangedTargets(
+      ["scripts/e2e/lib/mcp-code-mode/scenario.sh"],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "test/scripts/session-log-mentions.test.ts",
+      ],
+    );
+  });
+
   it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
@@ -1842,6 +1901,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
           "test/scripts/test-projects-build-admission.test.ts",
+          "test/scripts/vitest-fork-shutdown.test.ts",
         ],
         watchMode: false,
       },
@@ -2031,6 +2091,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
           "test/scripts/test-projects-build-admission.test.ts",
+          "test/scripts/vitest-fork-shutdown.test.ts",
         ],
         watchMode: false,
       },

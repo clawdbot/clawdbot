@@ -14,7 +14,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import {
+  buildWorkerProcessTurn,
+  parseWorkerProcessResult,
+  serializeWorkerProcessInput,
+  type WorkerProcessResult,
+} from "./worker-process-protocol.js";
 import { runWorkerProcess } from "./worker-process.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -468,5 +473,80 @@ describe("worker command lifetime gate", () => {
     await rejected;
     expect(runWorkerDescriptor).not.toHaveBeenCalled();
     expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
+  });
+
+  it.each(["standalone", "managed"] as const)(
+    "preserves ordinary two-image input through the %s parser",
+    async (mode) => {
+      const harness = managedHarness();
+      harness.launch.assignment.suppressPromptTranscript = true;
+      harness.launch.assignment.prompt = [
+        { type: "text", text: "Compare images" },
+        { type: "image", mimeType: "image/png", data: "A".repeat(1_200_000) },
+        { type: "image", mimeType: "image/png", data: "B".repeat(1_200_000) },
+      ];
+      const running = runWorkerCommand({ ...harness, managed: mode === "managed" });
+      if (mode === "managed") {
+        harness.input.write(serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch)));
+      } else {
+        harness.input.end(JSON.stringify(harness.launch));
+      }
+      await running;
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      const prompt = vi.mocked(runWorkerDescriptor).mock.calls[0]?.[0].assignment.prompt;
+      expect(prompt).toEqual(harness.launch.assignment.prompt);
+    },
+  );
+
+  it.each([
+    { mode: "standalone", delta: -1 },
+    { mode: "standalone", delta: 0 },
+    { mode: "standalone", delta: 1 },
+    { mode: "managed", delta: -1 },
+    { mode: "managed", delta: 0 },
+    { mode: "managed", delta: 1 },
+  ])("enforces $mode input at cap + $delta bytes", async ({ mode, delta }) => {
+    const harness = managedHarness();
+    const prefix = "wss://worker.invalid/";
+    const suffix = "/__openclaw__/worker";
+    harness.launch.connectionEndpoint = {
+      kind: "websocket",
+      url: prefix + "\0".repeat(4_096 - prefix.length - suffix.length) + suffix,
+      tlsFingerprint: "a".repeat(64),
+      cloudflareAccess: { clientId: "\0".repeat(4_096), clientSecret: "\0".repeat(4_096) },
+    };
+    harness.launch.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(100);
+    const encode = () =>
+      `${JSON.stringify(mode === "managed" ? buildWorkerProcessTurn(harness.launch) : harness.launch)}\n`;
+    const targetBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + delta;
+    const delimiterBytes = mode === "managed" ? 1 : 0;
+    harness.launch.assignment.systemPrompt += "x".repeat(
+      targetBytes + delimiterBytes - Buffer.byteLength(encode()),
+    );
+    const encoded = encode();
+    expect(Buffer.byteLength(encoded) - delimiterBytes).toBe(targetBytes);
+    if (mode === "managed") {
+      const serialize = () => serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch));
+      if (delta > 0) {
+        expect(serialize).toThrow("exceeds the protocol payload limit");
+      } else {
+        expect(Buffer.byteLength(serialize())).toBe(targetBytes + 1);
+      }
+    }
+    const running = runWorkerCommand({ ...harness, managed: mode === "managed" });
+    const outcome =
+      delta > 0 ? expect(running).rejects.toThrow("exceeds the protocol payload limit") : running;
+    if (mode === "managed") {
+      // Raw input independently verifies the receiver, including serializer-rejected bytes.
+      harness.input.write(encoded);
+    } else {
+      harness.input.end(encoded);
+    }
+    await outcome;
+    expect(runWorkerDescriptor).toHaveBeenCalledTimes(delta > 0 ? 0 : 1);
+    console.info(
+      "worker-input-boundary",
+      JSON.stringify({ mode, bytes: targetBytes, accepted: delta <= 0 }),
+    );
   });
 });

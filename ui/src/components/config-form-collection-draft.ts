@@ -13,6 +13,7 @@ export type ConfigFormCollectionDraftProps = {
   identity: string;
   sourceIdentity: unknown;
   existingKeys?: readonly string[];
+  validateKey?: (key: string) => boolean;
   existingValues?: readonly unknown[];
   validateValue?: (value: unknown) => boolean;
 };
@@ -152,7 +153,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       return;
     }
     const key = this.draftKey.trim();
-    if (props.existingKeys && (!key || props.existingKeys.includes(key))) {
+    if (
+      props.existingKeys &&
+      (!key || props.existingKeys.includes(key) || props.validateKey?.(key) === false)
+    ) {
       this.fail("key", t("configForm.invalidString"));
       return;
     }

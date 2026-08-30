@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
+import { resolveThinkingProfile } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
+import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
+import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-thinking.types.js";
 import {
   findModelCatalogRouteDonor,
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
   resolveConfiguredModelCatalogOverrides,
 } from "./model-catalog-route.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const matchesRoute = (entry: ModelCatalogEntry, route: ProviderModelRouteCandidate) =>
   entry.api === route.api && entry.baseUrl === route.baseUrl;
@@ -144,6 +150,83 @@ describe("projectModelCatalogEntryForRoute", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
+
+  it.each([
+    {
+      name: "platform",
+      route: platformRoute,
+      donor: true,
+      expected: "high",
+      owner: "fixture-platform",
+    },
+    {
+      name: "subscription",
+      route: chatGPTRoute,
+      donor: true,
+      expected: "ultra",
+      owner: "fixture-subscription",
+    },
+    { name: "missing donor", route: chatGPTRoute, donor: false, expected: "off", owner: undefined },
+    { name: "unresolved", route: undefined, donor: true, expected: "off", owner: undefined },
+  ])(
+    "retains only the $name route's prepared thinking owner",
+    ({ route, donor, expected, owner }) => {
+      const resolvePolicy = vi.fn((context: ProviderDefaultThinkingPolicyContext) =>
+        context.provider === "fixture-platform"
+          ? ({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "high" } as const)
+          : ({
+              levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+              defaultLevel: "ultra",
+            } as const),
+      );
+      const entry = { ...platformEntry, thinkingPolicyProvider: "fixture-platform" };
+      const catalog: ModelCatalogSnapshot = {
+        entries: [entry],
+        routeVariants: [
+          entry,
+          ...(donor ? [{ ...chatGPTEntry, thinkingPolicyProvider: "fixture-subscription" }] : []),
+        ],
+      };
+      prepareModelCatalogThinkingPolicies({
+        catalog,
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        providers: ["fixture-platform", "fixture-subscription"].map((id) => ({
+          provider: { id, resolveThinkingProfile: resolvePolicy },
+        })),
+      });
+      const ambient = vi
+        .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
+        .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
+      try {
+        const projected = projectModelCatalogEntryForRoute({
+          entry: expectDefined(catalog.entries[0], "prepared route test entry"),
+          projection: route
+            ? { kind: "selected", route, policy: routePolicy }
+            : { kind: "unresolved", policy: routePolicy },
+          catalog: catalog.routeVariants,
+        });
+        expect(
+          resolveThinkingProfile({
+            provider: projected.provider,
+            model: projected.id,
+            catalog: [projected],
+            agentRuntime: "codex",
+            providerPolicySource: "active",
+          }).defaultLevel,
+        ).toBe(expected);
+        if (owner) {
+          expect(resolvePolicy).toHaveBeenCalledWith(expect.objectContaining({ provider: owner }));
+          expect(ambient).not.toHaveBeenCalled();
+        } else {
+          expect(resolvePolicy).not.toHaveBeenCalled();
+          expect(projected).not.toHaveProperty("thinkingPolicyProvider");
+          expect(ambient).toHaveBeenCalledOnce();
+        }
+      } finally {
+        ambient.mockRestore();
+      }
+    },
+  );
 
   it("returns the physical row unchanged for unmanaged models", () => {
     expect(

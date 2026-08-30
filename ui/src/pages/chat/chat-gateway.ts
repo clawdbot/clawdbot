@@ -22,6 +22,7 @@ import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
+  setChatRunOwner,
   setChatSessionProjection,
 } from "./history-merge.ts";
 import { reconcileChatRunLifecycle, setChatRunError } from "./run-lifecycle.ts";
@@ -321,7 +322,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
-        setChatRunError(state, resolveGatewayErrorText(payload, null));
+        setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
       }
       if (payload.state === "error") {
         reconcileOwnedTerminalRun();
@@ -342,11 +343,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (
     !state.chatRunId &&
+    (!previousTerminalRun || previousTerminalRun.status === "streaming") &&
     sessionMatches &&
     typeof payload.runId === "string" &&
     (payload.state !== "status" || isPendingLocalChatRun(state, payload.runId))
   ) {
     state.chatRunId = payload.runId;
+    setChatRunOwner(state, payload.runId);
     state.chatRunError = null;
     state.chatStreamStartedAt ??= Date.now();
   }
@@ -467,7 +470,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = materializeVisibleStream();
     }
     if (payload.errorMessage?.trim()) {
-      setChatRunError(state, resolveGatewayErrorText(payload, null));
+      setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
     }
     reconcileOwnedTerminalRun();
   } else if (payload.state === "error") {
@@ -522,6 +525,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatRunError(
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
+      payload.runId,
     );
   }
   if (payload.state !== "delta") {

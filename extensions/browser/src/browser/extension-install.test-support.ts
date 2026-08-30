@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach } from "vitest";
 import { generateChromeExtensionIdForPath } from "./extension-install-layout.js";
 
 export const FOUNDATION_STORE_ID = "kcdjddhmeafeomebliikmbpblkmkfoig";
@@ -9,14 +10,48 @@ export async function predictedId(candidate: string, platform: NodeJS.Platform =
   return generateChromeExtensionIdForPath(await fs.realpath(candidate), platform);
 }
 
-export function createExtensionInstallFixtures() {
-  const tempRoots: string[] = [];
+export async function writeSecurePreferences(params: {
+  userDataDir: string;
+  profile: string;
+  entries: Record<string, unknown>;
+}) {
+  const profileDir = path.join(params.userDataDir, params.profile);
+  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  const file = path.join(profileDir, "Secure Preferences");
+  await fs.writeFile(file, JSON.stringify({ extensions: { settings: params.entries } }), {
+    mode: 0o600,
+  });
+  return file;
+}
 
+export function useNativeHostLaunchFixture() {
+  const modesToRestore: Array<{ target: string; mode: number }> = [];
+  afterEach(async () => {
+    for (const { target, mode } of modesToRestore.splice(0).toReversed()) {
+      await fs.chmod(target, mode);
+    }
+  });
+  return async (root: string, nativeHostEntry: string) => {
+    const nativeHostPath = await fs.realpath(nativeHostEntry);
+    const mode = (await fs.stat(nativeHostPath)).mode & 0o777;
+    modesToRestore.push({ target: nativeHostPath, mode });
+    await fs.chmod(nativeHostPath, mode & ~0o022);
+
+    // Built entries can inherit group-write permissions, and hosted Node can
+    // be shared-library linked. Keep the real interpreter in place behind a
+    // private launcher; never loosen the installer's target-permission guard.
+    const nodePath = path.join(root, "native-host-node");
+    const nodeExecutable = `'${process.execPath.replaceAll("'", `'"'"'`)}'`;
+    await fs.writeFile(nodePath, `#!/bin/sh\nexec ${nodeExecutable} "$@"\n`, { mode: 0o700 });
+    return { nativeHostPath, nodePath };
+  };
+}
+
+export function useExtensionInstallFixture() {
+  // Register before caller cleanup hooks so Vitest restores mocks before deleting fixtures.
+  const tempRoots = useAutoCleanupTempDirTracker(afterEach);
   async function fixture(platform: NodeJS.Platform = "linux") {
-    const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extension-install-")),
-    );
-    tempRoots.push(root);
+    const root = tempRoots.make("openclaw-extension-install-");
     const homeDir = path.join(root, "home");
     const stateDir = path.join(homeDir, ".openclaw");
     const bundledDir = path.join(root, "package", "extensions", "browser", "chrome-extension");
@@ -50,25 +85,5 @@ export function createExtensionInstallFixtures() {
     return { root, homeDir, stateDir, bundledDir, pluginRoot, nativeHostPath, deps };
   }
 
-  async function cleanup() {
-    await Promise.all(
-      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-    );
-  }
-
-  return { fixture, cleanup };
-}
-
-export async function writeSecurePreferences(params: {
-  userDataDir: string;
-  profile: string;
-  entries: Record<string, unknown>;
-}) {
-  const profileDir = path.join(params.userDataDir, params.profile);
-  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-  const file = path.join(profileDir, "Secure Preferences");
-  await fs.writeFile(file, JSON.stringify({ extensions: { settings: params.entries } }), {
-    mode: 0o600,
-  });
-  return file;
+  return fixture;
 }

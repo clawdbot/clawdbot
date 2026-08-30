@@ -60,16 +60,17 @@ export type AgentTurnInternalResult =
       directlySentBlockPayloads?: ReplyPayload[];
       /** Prepared terminal failure, appended only after delivery evidence settles. */
       terminalFailurePayload?: ReplyPayload;
+      postCompactionModelFailure?: true;
     }
   | {
       kind: "final";
       payload: ReplyPayload;
       resolved?: { provider: string; model: string };
+      postCompactionModelFailure?: true;
     };
 
-export type SettledAgentTurn = {
+type SettledAgentTurnBase = {
   kind: "settled";
-  status: "ok" | "failed";
   abortReason?: "user" | "restart";
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   continueWorkRequests?: ContinueWorkRequest[];
@@ -81,8 +82,21 @@ export type SettledAgentTurn = {
   didLogHeartbeatStrip: boolean;
   directlySentBlockKeys?: Set<string>;
   directlySentBlockPayloads?: ReplyPayload[];
-  terminalFailurePayload?: ReplyPayload;
 };
+
+export type SettledAgentTurn = SettledAgentTurnBase &
+  (
+    | {
+        status: "ok";
+        terminalFailurePayload?: never;
+        postCompactionModelFailure?: never;
+      }
+    | {
+        status: "failed";
+        terminalFailurePayload: ReplyPayload;
+        postCompactionModelFailure?: true;
+      }
+  );
 
 /** Closed result shared by foreground and queued agent-turn callers. */
 export type AgentTurnExecutionResult = {
@@ -94,6 +108,7 @@ export type AgentTurnExecutionResult = {
         kind: "rejected";
         payload: ReplyPayload;
         resolved?: { provider: string; model: string };
+        postCompactionModelFailure?: true;
       };
 };
 
@@ -106,6 +121,7 @@ export type AgentTurnParams = {
   replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: InternalGetReplyOptions;
+  resolveVisibleReplyDelivery?: () => Promise<boolean>;
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;

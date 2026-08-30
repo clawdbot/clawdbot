@@ -160,10 +160,12 @@ test("sessions.recover settles its active placement before archiving a real sess
     async (
       request: { agentId: string; sessionId: string; sessionKey: string },
       authorize?: () => void,
+      beforeDrain?: () => void,
     ) =>
       await barriers.runReclaimBarrier({
         ...request,
-        ...(authorize ? { authorize } : {}),
+        authorize,
+        beforeDrain,
         begin: () => {
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
@@ -199,20 +201,24 @@ test("sessions.recover settles its active placement before archiving a real sess
     { agentId: "main", key: sourceKey },
     { context },
   );
-  const committedBeforeReclaim = await Promise.race([
-    reclaimStarted.promise.then(() => false),
-    recovering.then(() => true),
-  ]);
-  expect(committedBeforeReclaim).toBe(false);
-  expect(reclaim).toHaveBeenCalledWith({
-    agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-  });
-  const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
-  expect(unsettledSource?.archivedAt).toBeUndefined();
-  expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
-  reclaimGate.resolve();
+  try {
+    const committedBeforeReclaim = await Promise.race([
+      reclaimStarted.promise.then(() => false),
+      recovering.then(() => true),
+    ]);
+    expect(committedBeforeReclaim).toBe(false);
+    expect(reclaim).toHaveBeenCalledWith(
+      { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey },
+      undefined,
+      expect.any(Function),
+    );
+    const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(unsettledSource?.archivedAt).toBeUndefined();
+    expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
+  } finally {
+    reclaimGate.resolve();
+    await Promise.allSettled([recovering]);
+  }
 
   const recovered = await recovering;
   expect(recovered).toMatchObject({ ok: true, payload: { key: expect.any(String) } });
@@ -654,7 +660,7 @@ test.each([false, true])(
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
       createdVia: "operator" as const,
-      createdActor: { type: "human" as const, id: owner.id },
+      createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       createdAt: 123,
       ...(!required ? { sandbox: "required" as const } : {}),
     };
@@ -713,7 +719,7 @@ test.each([false, true])(
     const successor = loadSessionEntry(scope);
     expect(successor).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: recovering.id },
+      createdActor: { type: "human", source: "profile", id: recovering.id },
       createdAt: expect.any(Number),
     });
     expect(successor?.sandbox).toBe(required ? "required" : undefined);
@@ -745,7 +751,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
       [key]: sessionStoreEntry("role-denied-recovery-session", {
         status: "failed",
         abortedLastRun: true,
-        createdActor: { type: "human", id: profile.id },
+        createdActor: { type: "human", source: "profile", id: profile.id },
         mainRestartRecovery: {
           cycleId: "cycle-role-denied-recovery",
           revision: 1,
@@ -809,7 +815,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
         status: "failed",
         abortedLastRun: true,
         visibility: "read-only",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
         mainRestartRecovery: {
           cycleId: "cycle-recovery-participation-race",
           revision: 1,

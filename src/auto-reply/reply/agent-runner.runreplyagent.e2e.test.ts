@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import {
@@ -13,6 +14,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import {
@@ -80,6 +82,7 @@ type AgentRunParams = {
     isReasoning?: boolean;
     isCommentary?: boolean;
   }) => Promise<void> | void;
+  onBlockReplyFlush?: () => Promise<void>;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -267,6 +270,7 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>()),
+  // Queue admission is controlled here; logical-turn registration and retirement stay real.
   formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
   queueEmbeddedAgentMessageWithOutcomeAsync: async (
     sessionId: string,
@@ -1197,7 +1201,7 @@ describe("runReplyAgent active steering", () => {
     expect(parkedSteer.consume).not.toHaveBeenCalled();
   });
 
-  it("adopts and consumes unconfirmed steering without replay", async () => {
+  it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};
     const active = createReplyOperation({
       sessionKey: "main",
@@ -1751,6 +1755,104 @@ describe("runReplyAgent heartbeat followup guard", () => {
       } finally {
         persistSpy.mockRestore();
       }
+    },
+  );
+
+  it.each([true, undefined, false])(
+    "reports provider failure after a group partial with visibility %s",
+    async (callbackResult) => {
+      const onPartialReply = vi.fn(async () => callbackResult);
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        throw new Error("model stream failed");
+      });
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { onPartialReply, preserveProgressCallbackStartOrder: true },
+        sessionCtx: {
+          ChatType: "group",
+          SessionKey: "agent:test:telegram:group:-100123",
+        },
+      });
+
+      const result = await run();
+      const payload = Array.isArray(result) ? result[0] : result;
+
+      expect(payload).toMatchObject({
+        text: callbackResult === false ? "NO_REPLY" : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        ...(callbackResult === false ? {} : { isError: true }),
+      });
+      expect(onPartialReply).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { label: "accepted answer", payload: { text: "answer block" }, delivered: true },
+    { label: "in-flight answer", payload: { text: "answer block" }, delivered: true },
+    { label: "queued answer", payload: { text: "answer block" }, delivered: true },
+    { label: "aborted answer", payload: { text: "answer block" }, delivered: false },
+    {
+      label: "reasoning",
+      payload: { text: "internal reasoning", isReasoning: true },
+      delivered: false,
+    },
+    {
+      label: "commentary",
+      payload: { text: "working on it", isCommentary: true },
+      delivered: false,
+    },
+    { label: "rejected answer", payload: { text: "answer block" }, delivered: false },
+  ])(
+    "reports provider failure after $label block delivery",
+    async ({ label, payload, delivered }) => {
+      const replyOperation =
+        label === "aborted answer"
+          ? createReplyOperation({
+              sessionKey: "main",
+              sessionId: "session",
+              resetTriggered: false,
+            })
+          : undefined;
+      const deliveryStarted = createDeferred();
+      let blockFlush: Promise<void> | undefined;
+      const onBlockReply = vi.fn(async () => {
+        deliveryStarted.resolve();
+        if (label === "in-flight answer" || replyOperation) {
+          await setImmediate();
+          replyOperation?.abortByUser();
+        }
+        if (label === "rejected answer") {
+          throw new Error("transport rejected the block");
+        }
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.(payload);
+        blockFlush = label === "queued answer" ? undefined : params.onBlockReplyFlush?.();
+        if (label !== "queued answer") {
+          await deliveryStarted.promise;
+        }
+        if (label !== "in-flight answer" && label !== "queued answer" && !replyOperation) {
+          await blockFlush;
+        }
+        throw new Error("model stream failed after block delivery");
+      });
+      const { run } = createMinimalRun({
+        replyOperation,
+        blockStreamingEnabled: true,
+        opts: { onBlockReply, reasoningPayloadsEnabled: true, commentaryPayloadsEnabled: true },
+        sessionCtx: { ChatType: "group" },
+      });
+
+      const result = await run();
+      await blockFlush;
+      const reply = Array.isArray(result) ? result[0] : result;
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(reply).toMatchObject({
+        text: delivered ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "NO_REPLY",
+        ...(delivered ? { isError: true } : {}),
+      });
     },
   );
 
@@ -4419,6 +4521,29 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
+  });
+
+  it("does not duplicate an empty terminal failure after an accepted answer block", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "complete answer" });
+      return {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "terminal error after delivery" } },
+      };
+    });
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+      sessionCtx: { ChatType: "group" },
+    });
+
+    expect(await run()).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "complete answer" }),
+      expect.any(Object),
+    );
   });
 
   it("does not persist active fallback state for internal subagent announce fallback", async () => {

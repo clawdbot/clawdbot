@@ -215,7 +215,11 @@ async function runEmbeddedAgentInternal(
       // Subscription-scoped claude-cli auth executes via the CLI backend;
       // resolved post-admission so dispatched runs obey the same lifecycle,
       // placement, and concurrency gates as native embedded runs.
-      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
+      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible({
+        ...params,
+        // Preserve the admitted writer claim alongside the already resolved storage identity.
+        sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+      });
       if (cliDispatched) {
         return cliDispatched;
       }

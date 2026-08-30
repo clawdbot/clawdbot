@@ -1,5 +1,5 @@
 // Tests for gateway runtime subscription wiring.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -11,9 +11,15 @@ import { consumeChannelAdmissionEvidence } from "../channels/message-access/admi
 import {
   emitAgentAuditEvent,
   emitAgentEvent,
+  emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContextOwnerStatus as ownerStatus,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -38,7 +44,6 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { registerTaskTerminalSubscriptionTests } from "./server-runtime-subscriptions.task-terminals.test-harness.js";
 
@@ -75,10 +80,12 @@ const auditTestState = vi.hoisted(() => ({
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
+  persistLifecycle: vi.fn(async () => {}),
+  resolveSessionKey: vi.fn(() => "agent:main:main"),
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
-  readMessageCount: vi.fn(),
+  readMessageById: vi.fn(),
 }));
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
@@ -120,15 +127,19 @@ vi.mock("./server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
 
+vi.mock("./session-lifecycle-state.js", () => ({
+  persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+}));
+
 vi.mock("./server-session-key.js", () => ({
-  resolveSessionKeyForRun: () => "agent:main:main",
+  resolveSessionKeyForRun: agentEventHandlerMocks.resolveSessionKey,
 }));
 
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
   return {
     ...actual,
-    readSessionMessageCountAsync: transcriptBroadcastMocks.readMessageCount,
+    readSessionMessageByIdAsync: transcriptBroadcastMocks.readMessageById,
   };
 });
 
@@ -155,12 +166,15 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
 type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
 
-type LifecycleOwnerCallbacks = Required<
-  Pick<
-    AgentEventHandlerOptions,
-    "clearTrackedActiveRun" | "settleTrackedTerminal" | "trackTrackedRunTerminalPersistence"
-  >
->;
+function readTaskUpserts(broadcast: Mock<SubscriptionParams["broadcast"]>) {
+  return broadcast.mock.calls.flatMap(([event, payload]) => {
+    if (event !== "task") {
+      return [];
+    }
+    const taskEvent = payload as TaskEventPayload;
+    return taskEvent.action === "upserted" ? [taskEvent] : [];
+  });
+}
 type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
 
 function readLifecycleState(entry: ChatAbortControllerEntry) {
@@ -189,24 +203,6 @@ function lifecycleState(
     projectSessionTerminalPersistence,
     projectSessionTerminalPersisted,
     registrationCleanupRequested,
-  };
-}
-
-function requireLifecycleOwnerCallbacks(): LifecycleOwnerCallbacks {
-  const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as
-    | AgentEventHandlerOptions
-    | undefined;
-  if (
-    !options?.clearTrackedActiveRun ||
-    !options.settleTrackedTerminal ||
-    !options.trackTrackedRunTerminalPersistence
-  ) {
-    throw new Error("expected lifecycle owner callbacks");
-  }
-  return {
-    clearTrackedActiveRun: options.clearTrackedActiveRun,
-    settleTrackedTerminal: options.settleTrackedTerminal,
-    trackTrackedRunTerminalPersistence: options.trackTrackedRunTerminalPersistence,
   };
 }
 
@@ -243,8 +239,10 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.executionIdentityEnabled = false;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
-    transcriptBroadcastMocks.readMessageCount.mockReset();
+    transcriptBroadcastMocks.readMessageById.mockReset();
     runtimeConfigState.value = {};
+    agentEventHandlerMocks.persistLifecycle.mockReset().mockResolvedValue(undefined);
+    agentEventHandlerMocks.resolveSessionKey.mockClear();
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
@@ -335,19 +333,47 @@ describe("startGatewayEventSubscriptions", () => {
   });
 
   it("logs lazy agent event handler failures", async () => {
+    const runId = "run-claimed-terminal";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const claimId = claimAgentRunContext(
+      runId,
+      {
+        lifecycleGeneration,
+        sessionId: "session-1",
+      },
+      { exclusive: true, ownsContext: true, trackOwner: true },
+    );
+    if (!claimId) {
+      throw new Error("expected terminal event claim");
+    }
+    agentEventHandlerMocks.persistLifecycle.mockRejectedValue(new Error("terminal write rejected"));
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({
-      runId: "run-1",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitAgentEventForOwner(
+      {
+        runId,
+        sessionId: "session-1",
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+      },
+      claimId,
+    );
 
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
+    expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ assertCommitAllowed: expect.any(Function) }),
+    );
+    expect(agentEventHandlerMocks.resolveSessionKey).toHaveBeenCalledWith(runId, undefined);
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
-      expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
+      expect.objectContaining({ runId, stream: "lifecycle" }),
     );
+    expect(warn).toHaveBeenCalledWith(
+      "Terminal session persistence failed",
+      expect.objectContaining({ runId }),
+    );
+    expect(ownerStatus(runId, claimId, lifecycleGeneration)).toBe("clear-requested");
+    releaseAgentRunContext(runId, claimId);
   });
 
   it("disposes a loaded agent event handler on unsubscribe", async () => {
@@ -554,7 +580,23 @@ describe("startGatewayEventSubscriptions", () => {
     });
     transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
-    const callbacks = requireLifecycleOwnerCallbacks();
+
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "error", error: "retryable provider failure", endedAt: 2_000 },
+    });
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 2_500 },
+    });
+    expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
+
+    const terminalPersistence = createDeferred();
+    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
 
     emitAgentEvent({
       runId,
@@ -562,25 +604,10 @@ describe("startGatewayEventSubscriptions", () => {
       stream: "lifecycle",
       data: { phase: "end", endedAt: 3_000 },
     });
-    transitions.push({ state: "Terminal-observed", lifecycle: readLifecycleState(entry) });
-
-    callbacks.clearTrackedActiveRun({ runId, clientRunId: runId, sessionKey });
-    transitions.push({ state: "Projection-cleared", lifecycle: readLifecycleState(entry) });
-
-    const terminalPersistence = createDeferred();
-    callbacks.trackTrackedRunTerminalPersistence({
-      runId,
-      clientRunId: runId,
-      sessionKey,
-      sessionId: entry.sessionId,
-      observedAt: 3_001,
-      persistence: terminalPersistence.promise,
-    });
     transitions.push({ state: "Persisting", lifecycle: readLifecycleState(entry) });
 
     terminalPersistence.resolve();
-    await terminalPersistence.promise;
-    callbacks.settleTrackedTerminal({ runId, clientRunId: runId, sessionKey });
+    await waitForFast(() => expect(entry.projectSessionTerminalPersisted).toBe(true));
     transitions.push({ state: "Persisted", lifecycle: readLifecycleState(entry) });
 
     registration.cleanup();
@@ -589,11 +616,6 @@ describe("startGatewayEventSubscriptions", () => {
     expect(transitions).toEqual([
       { state: "Registered", lifecycle: lifecycleState(true) },
       { state: "Start-normalized", lifecycle: lifecycleState(true, false) },
-      { state: "Terminal-observed", lifecycle: lifecycleState(true, true, 3_000) },
-      {
-        state: "Projection-cleared",
-        lifecycle: lifecycleState(false, true, 3_000, undefined, false),
-      },
       {
         state: "Persisting",
         lifecycle: lifecycleState(false, true, 3_000, terminalPersistence.promise, false),
@@ -662,7 +684,8 @@ describe("startGatewayEventSubscriptions", () => {
       data: { phase: "start", startedAt: 1_000 },
     });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
-    const callbacks = requireLifecycleOwnerCallbacks();
+    const terminalPersistence = createDeferred();
+    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
 
     expect(
       abortChatRunById(
@@ -683,20 +706,6 @@ describe("startGatewayEventSubscriptions", () => {
       projectSessionTerminalPending: true,
       projectSessionTerminalObservedAt: expect.any(Number),
       registrationCleanupRequested: true,
-    });
-
-    callbacks.clearTrackedActiveRun({ runId, clientRunId: runId, sessionKey });
-    const terminalPersistence = createDeferred();
-    callbacks.trackTrackedRunTerminalPersistence({
-      runId,
-      clientRunId: runId,
-      sessionKey,
-      sessionId: entry.sessionId,
-      observedAt: entry.projectSessionTerminalObservedAt ?? 0,
-      persistence: terminalPersistence.promise,
-    });
-    void terminalPersistence.promise.then(() => {
-      callbacks.settleTrackedTerminal({ runId, clientRunId: runId, sessionKey });
     });
 
     await Promise.resolve();
@@ -731,9 +740,15 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
     transcriptBroadcastMocks.useActualHandler = true;
     const persistenceFailure = new Error("session transcript read failed");
-    transcriptBroadcastMocks.readMessageCount
+    const transcriptPosition = { source: "recovered-generation", rawSeq: 7 };
+    const storedMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+      __openclaw: { transcriptPosition },
+    };
+    transcriptBroadcastMocks.readMessageById
       .mockRejectedValueOnce(persistenceFailure)
-      .mockResolvedValueOnce(2);
+      .mockResolvedValueOnce({ found: true, oversized: false, seq: 2, message: storedMessage });
 
     const params = createParams();
     params.sessionEventSubscribers.subscribe("conn-transcript");
@@ -743,7 +758,7 @@ describe("startGatewayEventSubscriptions", () => {
       emitSessionTranscriptUpdate({
         sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
         sessionKey: "agent:main:main",
-        message: { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
         messageId,
         target: {
           agentId: "main",
@@ -755,7 +770,7 @@ describe("startGatewayEventSubscriptions", () => {
 
     emitMessage("failed-message");
     await waitForFast(() =>
-      expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledOnce(),
+      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce(),
     );
     await waitForFast(() =>
       expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
@@ -773,10 +788,14 @@ describe("startGatewayEventSubscriptions", () => {
         sessionKey: "agent:main:main",
         messageId: "recovered-message",
         messageSeq: 2,
+        message: expect.objectContaining({
+          content: storedMessage.content,
+          __openclaw: expect.objectContaining({ transcriptPosition }),
+        }),
       }),
       new Set(["conn-transcript"]),
     );
-    expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledTimes(2);
+    expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledOnce();
   });
 
@@ -822,16 +841,7 @@ describe("startGatewayEventSubscriptions", () => {
     if (!completed || !lost) {
       throw new Error("expected task records to be created");
     }
-    const taskUpsertsById = new Map(
-      broadcast.mock.calls
-        .filter(([event]) => event === "task")
-        .map(([, payload]) => payload as TaskEventPayload)
-        .filter(
-          (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-            payload.action === "upserted",
-        )
-        .map((payload) => [payload.task.id, payload.task]),
-    );
+    const taskUpsertsById = new Map(readTaskUpserts(broadcast).map(({ task }) => [task.id, task]));
     expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), {
       dropIfSlow: true,
       sessionKeys: ["agent:main:main"],
@@ -913,13 +923,7 @@ describe("startGatewayEventSubscriptions", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(broadcast).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    const firstFlush = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted",
-      );
+    const firstFlush = readTaskUpserts(broadcast);
     expect(firstFlush).toHaveLength(2);
     expect(firstFlush.find((event) => event.task.id === primary.taskId)?.task.lastActivity).toBe(
       "third",
@@ -935,12 +939,9 @@ describe("startGatewayEventSubscriptions", () => {
       data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
     });
     await vi.advanceTimersByTimeAsync(1_000);
-    const sanitizedActivity = broadcast.mock.calls.find(
-      ([event, payload]) =>
-        event === "task" &&
-        (payload as TaskEventPayload).action === "upserted" &&
-        (payload as Extract<TaskEventPayload, { action: "upserted" }>).task.id === secondary.taskId,
-    )?.[1] as Extract<TaskEventPayload, { action: "upserted" }> | undefined;
+    const sanitizedActivity = readTaskUpserts(broadcast).find(
+      ({ task }) => task.id === secondary.taskId,
+    );
     expect(sanitizedActivity?.task).not.toHaveProperty("lastActivity");
     expect(JSON.stringify(sanitizedActivity)).not.toContain("OpenClaw runtime context");
 
@@ -959,13 +960,9 @@ describe("startGatewayEventSubscriptions", () => {
       data: { text: "final activity" },
     });
     markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
-    const terminalFlush = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted" && payload.task.id === primary.taskId,
-      );
+    const terminalFlush = readTaskUpserts(broadcast).filter(
+      ({ task }) => task.id === primary.taskId,
+    );
     expect(terminalFlush.map((event) => event.task.status)).toEqual(["running", "completed"]);
     expect(terminalFlush[0]?.task.lastActivity).toBe("final activity");
     expect(terminalFlush[1]?.task).not.toHaveProperty("lastActivity");
@@ -1009,13 +1006,7 @@ describe("startGatewayEventSubscriptions", () => {
     }
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
 
-    const taskEvents = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted",
-      );
+    const taskEvents = readTaskUpserts(broadcast);
     expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
   });
 

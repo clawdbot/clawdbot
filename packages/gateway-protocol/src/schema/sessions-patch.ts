@@ -18,6 +18,8 @@ const ExpectedMarkedUnreadAt = Type.Optional(
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  /** Named sidebar tint from SESSION_COLOR_IDS; null clears it. */
+  color: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),

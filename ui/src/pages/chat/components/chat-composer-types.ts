@@ -80,6 +80,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
   progressCardHasActiveRun?: boolean;
+  collapseTaskProgress?: boolean;
   onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];

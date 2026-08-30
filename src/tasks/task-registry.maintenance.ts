@@ -183,6 +183,7 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
     | "active_background_exec"
     | "backing_session_missing"
     | "backing_session_present"
+    | "cli_runtime_not_authoritative"
     | "cron_runtime_not_authoritative"
     | "lost_grace_pending"
     | "subagent_recovery_wedged";
@@ -400,10 +401,14 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
 }
 
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
+  const hasProcessLocalLiveness =
+    task.runtime === "cron" || task.runtime === "cli" || task.runtime === "acp";
+  // Only the Gateway owns these process-local liveness registries. A standalone
+  // maintenance process must stay conservative when its local registries are empty.
+  if (hasProcessLocalLiveness && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return true;
+  }
   if (task.runtime === "cron") {
-    if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
-      return true;
-    }
     const jobId = task.sourceId?.trim();
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
@@ -433,11 +438,6 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return !isHarnessOwnedSubagentTask(task);
   }
   if (task.runtime === "acp") {
-    // The live-turn map is process-local; only the gateway owns it. A standalone CLI
-    // maintenance run has an empty map, so stay conservative there and never reclaim.
-    if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
-      return true;
-    }
     // The persisted entry survives a crash, so only a live in-process turn proves the ACP run is alive.
     return taskRegistryMaintenanceRuntime.hasActiveAcpTurn(childSessionKey);
   }
@@ -964,6 +964,9 @@ function explainActiveTaskRetention(params: {
   }
   if (params.task.runtime === "acp" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
     return { decision: "retained", reason: "acp_runtime_not_authoritative" };
+  }
+  if (params.task.runtime === "cli" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return { decision: "retained", reason: "cli_runtime_not_authoritative" };
   }
   if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
     return { decision: "retained", reason: "active_cli_run" };

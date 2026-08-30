@@ -5,121 +5,13 @@ packages:
   - extensions/*
   - examples/*
 
-minimumReleaseAge: 2880
+minimumReleaseAge: 10080
+minimumReleaseAgeStrict: true
 
+# Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  - "@openclaw/crabline@0.1.19"
-  - "@openclaw/fs-safe@0.5.5"
-  - "@openclaw/libterminal@0.3.2"
-  - "@openclaw/proxyline@0.3.4"
-  - "@openclaw/uirouter@0.1.1"
-  - "acpx"
-  - "tokenjuice"
-  - "@agentclientprotocol/sdk"
-  - "@agentclientprotocol/codex-acp@1.1.7"
-  - "axios"
-  - "basic-ftp"
-  - "baileys@7.0.0-rc13"
-  - "brace-expansion@5.0.9"
-  - "hono"
-  - "libopus-wasm@0.2.0"
-  - "libsignal@6.0.0"
-  - "nanoid@3.3.18"
-  - "openclaw"
-  - "protobufjs"
-  - "vite"
-  - "@cloudflare/workers-types"
-  - "@hono/node-server"
-  - "@mariozechner/*"
-  - "@aws-sdk/checksums@3.1000.19"
-  - "@aws-sdk/client-bedrock-runtime@3.1053.0"
-  - "@aws-sdk/client-bedrock@3.1053.0"
-  - "@aws-sdk/client-cognito-identity@3.1053.0"
-  - "@aws-sdk/client-s3@3.1053.0"
-  - "@aws-sdk/core"
-  - "@aws-sdk/credential-provider-env@3.972.60"
-  - "@aws-sdk/credential-provider-http@3.972.62"
-  - "@aws-sdk/credential-provider-ini@3.973.5"
-  - "@aws-sdk/credential-provider-login@3.972.67"
-  - "@aws-sdk/credential-provider-process@3.972.60"
-  - "@aws-sdk/credential-provider-sso@3.973.4"
-  - "@aws-sdk/credential-provider-web-identity@3.972.66"
-  - "@aws-sdk/credential-providers@3.1053.0"
-  - "@aws-sdk/middleware-sdk-s3@3.972.65"
-  - "@aws-sdk/middleware-websocket@3.972.42"
-  - "@aws-sdk/nested-clients@3.997.34"
-  - "@aws-sdk/s3-request-presigner@3.1053.0"
-  - "@aws-sdk/token-providers@3.1052.0"
-  - "@aws-sdk/token-providers@3.1053.0"
-  - "@aws-sdk/token-providers@3.1092.0"
-  - "@copilotkit/aimock@1.27.1"
-  - "@microsoft/mxc-sdk@0.7.0"
-  - "@earendil-works/pi-tui"
-  - "@google/genai@2.6.0"
-  - "@larksuiteoapi/node-sdk@1.66.0"
-  - "@microsoft/teams.api@2.0.12"
-  - "@microsoft/teams.apps@2.0.12"
-  - "@microsoft/teams.cards@2.0.12"
-  - "@microsoft/teams.common@2.0.12"
-  - "@microsoft/teams.graph@2.0.12"
-  - "@modelcontextprotocol/sdk@1.30.0"
-  - "@trycua/cua-driver@0.20.0"
-  - "@trycua/cua-driver-darwin-arm64@0.20.0"
-  - "@trycua/cua-driver-darwin-x64@0.20.0"
-  - "@trycua/cua-driver-linux-arm64-gnu@0.20.0"
-  - "@trycua/cua-driver-linux-x64-gnu@0.20.0"
-  - "@trycua/cua-driver-win32-arm64-msvc@0.20.0"
-  - "@trycua/cua-driver-win32-x64-msvc@0.20.0"
   - "@openai/codex"
   - "@openai/codex-*"
-  - "@pierre/diffs@1.2.3"
-  - "@smithy/core@3.29.7"
-  - "@smithy/credential-provider-imds@4.4.12"
-  - "@smithy/fetch-http-handler@5.6.9"
-  - "@smithy/shared-ini-file-loader@4.5.4"
-  - "@smithy/signature-v4@5.6.8"
-  - "postcss@8.5.22"
-  - "@typescript/native-preview*"
-  - "@types/node"
-  - "@rolldown/*"
-  - "@oxlint/*"
-  - "@oxfmt/*"
-  - "@oxc-project/types"
-  - "oxfmt"
-  - "axios@1.15.0"
-  - "discord-api-types"
-  - "esbuild@0.28.1"
-  - "@esbuild/aix-ppc64@0.28.1"
-  - "@esbuild/android-arm@0.28.1"
-  - "@esbuild/android-arm64@0.28.1"
-  - "@esbuild/android-x64@0.28.1"
-  - "@esbuild/darwin-arm64@0.28.1"
-  - "@esbuild/darwin-x64@0.28.1"
-  - "@esbuild/freebsd-arm64@0.28.1"
-  - "@esbuild/freebsd-x64@0.28.1"
-  - "@esbuild/linux-arm@0.28.1"
-  - "@esbuild/linux-arm64@0.28.1"
-  - "@esbuild/linux-ia32@0.28.1"
-  - "@esbuild/linux-loong64@0.28.1"
-  - "@esbuild/linux-mips64el@0.28.1"
-  - "@esbuild/linux-ppc64@0.28.1"
-  - "@esbuild/linux-riscv64@0.28.1"
-  - "@esbuild/linux-s390x@0.28.1"
-  - "@esbuild/linux-x64@0.28.1"
-  - "@esbuild/netbsd-arm64@0.28.1"
-  - "@esbuild/netbsd-x64@0.28.1"
-  - "@esbuild/openbsd-arm64@0.28.1"
-  - "@esbuild/openbsd-x64@0.28.1"
-  - "@esbuild/openharmony-arm64@0.28.1"
-  - "@esbuild/sunos-x64@0.28.1"
-  - "@esbuild/win32-arm64@0.28.1"
-  - "@esbuild/win32-ia32@0.28.1"
-  - "@esbuild/win32-x64@0.28.1"
-  - "rolldown"
-  - "sqlite-vec"
-  - "sqlite-vec-*"
-  - "rastermill"
-  - "clawpdf"
 
 nodeLinker: hoisted
 # GWTs share node_modules; script commands must not reconcile that shared install.
@@ -127,14 +19,14 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.6.0>@openai/codex": 0.150.1
+  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.150.1
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
   "@anthropic-ai/sdk": 0.120.0
   "@opentelemetry/core": 2.10.0
   "@opentelemetry/propagator-jaeger": 2.10.0
-  "@aws-sdk/core": 3.977.8
-  "@aws-sdk/credential-provider-node": 3.972.80
-  "@aws-sdk/xml-builder": 3.972.39
+  "@aws-sdk/core": 3.977.9
+  "@aws-sdk/credential-provider-node": 3.972.81
+  "@aws-sdk/xml-builder": 3.972.40
   "@hono/node-server": 2.1.1
   axios: 1.19.0
   fast-uri: 4.1.2
@@ -149,6 +41,8 @@ overrides:
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
   ip-address: 10.5.0
+  # Keep the cooled HTML converter security fix while Mailparser is rolled back.
+  "mailparser@3.9.15>html-to-text": 10.0.1
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   qs: 6.15.3
@@ -157,6 +51,7 @@ overrides:
   typebox: 1.3.16
   tar: 7.5.22
   tough-cookie: 6.0.2
+  "tsdown>rolldown-plugin-dts": 0.28.2
   "zca-js@2.1.2>tough-cookie": 5.1.2
   yauzl: 3.4.0
   protobufjs: 8.7.2
@@ -193,3 +88,4 @@ packageExtensions:
 
 patchedDependencies:
   "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch
+  "vitest@4.1.11": patches/vitest@4.1.11.patch

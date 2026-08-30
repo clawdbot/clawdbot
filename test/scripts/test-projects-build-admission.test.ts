@@ -13,7 +13,7 @@ vi.mock("../../scripts/lib/managed-child-process.mts", () => ({
 }));
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
-  runE2eGlobalSetup: commands.prepareE2e,
+  prepareE2eVitestRuntime: commands.prepareE2e,
 }));
 vi.mock("../../scripts/run-vitest.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/run-vitest.mts")>()),
@@ -32,15 +32,17 @@ const ordinaryQa = "extensions/qa-lab/src/gateway-child.test.ts";
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
+const nativeHostTarget = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 let originalArgv: string[];
 let originalExitCode: typeof process.exitCode;
 let terminal: ReturnType<typeof createDeferred<unknown>>;
+const testProjectsUrl = new URL("../../scripts/test-projects.mts", import.meta.url).href;
+let startCount = 0;
 
 beforeEach(() => {
-  vi.resetModules();
   commands.prepare.mockReset();
-  commands.prepareE2e.mockReset();
+  commands.prepareE2e.mockReset().mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
   commands.reader.mockReset().mockImplementation(() => ({
     completion: Promise.resolve({ code: 0, signal: null }),
     getForwardedSignal: () => undefined,
@@ -286,7 +288,8 @@ syncBuiltinESMExports();\n`,
 
 async function start(args: string[]) {
   process.argv = [process.execPath, "scripts/test-projects.mts", ...args];
-  await import("../../scripts/test-projects.mts");
+  // Replay the command entry while retaining its immutable planner dependencies.
+  await import(`${testProjectsUrl}?case=${startCount++}`);
 }
 
 describe("test-projects build admission", () => {
@@ -336,12 +339,47 @@ describe("test-projects build admission", () => {
     expect(process.exitCode).toBe(failure === "throw" ? 1 : 7);
   });
 
-  it("starts unrelated tests without runtime preparation", async () => {
-    await start([modelTarget]);
-    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
-    expect(commands.prepare).not.toHaveBeenCalled();
-    expect(commands.reader).toHaveBeenCalledOnce();
-  });
+  it.each([modelTarget, "extensions/browser/src/browser/extension-install.test.ts"])(
+    "starts %s without runtime preparation",
+    async (target) => {
+      await start([target]);
+      expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
+      expect(commands.prepare).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(commands.reader).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["build", "failed build", "prebuilt"])(
+    "admits the built native-host integration after %s",
+    async (mode) => {
+      if (mode === "prebuilt") vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
+      const preparation = createDeferred<NodeJS.ProcessEnv>();
+      commands.prepareE2e.mockReturnValue(preparation.promise);
+      if (mode === "prebuilt") preparation.resolve({});
+      await start([nativeHostTarget]);
+      if (mode !== "prebuilt") {
+        expect(commands.reader).not.toHaveBeenCalled();
+        expect(commands.prepareE2e).toHaveBeenCalledOnce();
+        if (mode === "failed build") preparation.reject(new Error("build failed"));
+        else preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      }
+      await terminal.promise;
+      expect(commands.prepare).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).toHaveBeenCalledOnce();
+      expect(commands.reader).toHaveBeenCalledTimes(mode === "failed build" ? 0 : 1);
+      if (mode === "failed build") {
+        expect(process.exitCode).toBe(1);
+      } else {
+        expect(commands.reader).toHaveBeenCalledWith(
+          expect.objectContaining({
+            pnpmArgs: expect.arrayContaining(["--config", e2eConfig]),
+            env: expect.objectContaining({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" }),
+          }),
+        );
+      }
+    },
+  );
 
   it.each(["", "OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"])(
     "prepares an ordinary runtime reader independently of E2E flag %s",
@@ -362,7 +400,7 @@ describe("test-projects build admission", () => {
 
   it("coalesces mixed E2E and private QA preparation before marking only E2E prebuilt", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
-    const preparation = createDeferred();
+    const preparation = createDeferred<NodeJS.ProcessEnv>();
     commands.prepareE2e.mockReturnValue(preparation.promise);
     await start([...targets, e2eTarget]);
     try {
@@ -370,7 +408,7 @@ describe("test-projects build admission", () => {
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
     } finally {
-      preparation.resolve();
+      preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
       await terminal.promise;
     }
     expect(await terminal.promise).toMatch(/^\[test\] passed 3 Vitest shards/u);
@@ -396,9 +434,12 @@ describe("test-projects build admission", () => {
     "preserves the explicit %s contract",
     async (key) => {
       vi.stubEnv(key, "1");
+      commands.prepareE2e.mockResolvedValue({});
       await start([...targets, e2eTarget]);
       await terminal.promise;
-      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ [key]: "1" }),
+      );
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.reader).toHaveBeenCalledTimes(3);
       for (const [options] of commands.reader.mock.calls) {

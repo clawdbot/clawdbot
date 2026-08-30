@@ -462,7 +462,6 @@ export function createWorkerSessionToolExecutor(params: {
         const target = exactAuthorizedTarget({
           source: operation.source,
           requestedSessionKey: operation.request.sessionKey,
-          placements: params.placements,
         });
         if (
           target.sessionId !== operation.target.sessionId ||
@@ -619,7 +618,6 @@ export function createWorkerSessionToolExecutor(params: {
             ? exactAuthorizedTarget({
                 source,
                 requestedSessionKey: request.request.sessionKey,
-                placements: params.placements,
               })
             : undefined;
         let childKey = started.childSessionKey;

@@ -84,32 +84,6 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   return `${base}\n\n${suffix}`.trim();
 }
 
-function buildSyntheticSkippedAudioOutputs(
-  decisions: MediaUnderstandingDecision[],
-): MediaUnderstandingOutput[] {
-  const audioDecision = decisions.find((decision) => decision.capability === "audio");
-  if (!audioDecision) {
-    return [];
-  }
-  return audioDecision.attachments.flatMap((attachment) => {
-    const hasTooSmallAttempt = attachment.attempts.some((attempt) =>
-      attempt.reason?.trim().startsWith("tooSmall"),
-    );
-    if (!hasTooSmallAttempt) {
-      return [];
-    }
-    return [
-      {
-        kind: "audio.transcription" as const,
-        attachmentIndex: attachment.attachmentIndex,
-        text: EMPTY_VOICE_NOTE_PLACEHOLDER,
-        provider: "openclaw",
-        model: "synthetic-empty-audio",
-      },
-    ];
-  });
-}
-
 type ClassifiedFileAttachment = {
   outcome: FileAttachmentOutcome;
   filename?: string;
@@ -499,58 +473,38 @@ export async function applyMediaUnderstanding(params: {
     );
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
+    const audioAttachmentIndexes = new Set<number>();
     for (const entry of results) {
-      for (const output of entry.outputs) {
-        outputs.push(output);
-      }
       decisions.push(entry.decision);
-    }
-
-    const audioOutputAttachmentIndexes = new Set(
-      outputs
-        .filter((output) => output.kind === "audio.transcription")
-        .map((output) => output.attachmentIndex),
-    );
-    const syntheticSkippedAudioOutputs = buildSyntheticSkippedAudioOutputs(decisions).filter(
-      (output) => !audioOutputAttachmentIndexes.has(output.attachmentIndex),
-    );
-
-    // Merge synthetic placeholders into the audio slice while preserving the
-    // selected audio attachment order from `runCapability()` / `attachments.prefer`.
-    // When audio produced no real outputs, insert the synthetic slice at the
-    // audio capability slot (before video) instead of appending at the end.
-    if (syntheticSkippedAudioOutputs.length > 0) {
-      const audioDecision = decisions.find((decision) => decision.capability === "audio");
-      const audioAttachmentOrder =
-        audioDecision?.attachments.map((attachment) => attachment.attachmentIndex) ?? [];
-      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
-      for (const output of outputs) {
-        if (output.kind === "audio.transcription") {
-          audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+      if (entry.decision.capability !== "audio") {
+        for (const output of entry.outputs) {
+          outputs.push(output);
         }
+        continue;
       }
-      for (const output of syntheticSkippedAudioOutputs) {
+      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
+      for (const output of entry.outputs) {
         audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+        audioAttachmentIndexes.add(output.attachmentIndex);
       }
-      const mergedAudio = audioAttachmentOrder
-        .map((attachmentIndex) => audioOutputsByAttachmentIndex.get(attachmentIndex))
-        .filter((output): output is MediaUnderstandingOutput => Boolean(output));
-
-      const firstAudioIdx = outputs.findIndex((o) => o.kind === "audio.transcription");
-      if (firstAudioIdx >= 0) {
-        const before = outputs.slice(0, firstAudioIdx);
-        const afterLastAudio = outputs.slice(
-          outputs.reduce(
-            (last, o, i) => (o.kind === "audio.transcription" ? i : last),
-            firstAudioIdx,
-          ) + 1,
-        );
-        outputs.length = 0;
-        outputs.push(...before, ...mergedAudio, ...afterLastAudio);
-      } else {
-        const firstVideoIdx = outputs.findIndex((o) => o.kind === "video.description");
-        const audioInsertIdx = firstVideoIdx >= 0 ? firstVideoIdx : outputs.length;
-        outputs.splice(audioInsertIdx, 0, ...mergedAudio);
+      // Capability results retain image/audio/video order. Project audio in the
+      // runner's selected order so placeholders honor attachments.prefer and
+      // stay before video even when every audio attachment was too small.
+      for (const attachment of entry.decision.attachments) {
+        const output = audioOutputsByAttachmentIndex.get(attachment.attachmentIndex);
+        if (output) {
+          outputs.push(output);
+        } else if (
+          attachment.attempts.some((attempt) => attempt.reason?.trim().startsWith("tooSmall"))
+        ) {
+          outputs.push({
+            kind: "audio.transcription",
+            attachmentIndex: attachment.attachmentIndex,
+            text: EMPTY_VOICE_NOTE_PLACEHOLDER,
+            provider: "openclaw",
+            model: "synthetic-empty-audio",
+          });
+        }
       }
     }
 
@@ -590,18 +544,6 @@ export async function applyMediaUnderstanding(params: {
     // Only skip file extraction for attachments that have a real (non-synthetic)
     // audio transcription. Synthetic placeholders should not prevent file extraction
     // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
-    const syntheticAudioIndexes = new Set(
-      syntheticSkippedAudioOutputs.map((o) => o.attachmentIndex),
-    );
-    const audioAttachmentIndexes = new Set(
-      outputs
-        .filter(
-          (output) =>
-            output.kind === "audio.transcription" &&
-            !syntheticAudioIndexes.has(output.attachmentIndex),
-        )
-        .map((output) => output.attachmentIndex),
-    );
     const fileContext =
       params.processingMode === "audio-only"
         ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }

@@ -19,6 +19,7 @@ import { logVerbose } from "../../globals.js";
 import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -125,6 +126,8 @@ export function createReplyMediaPathNormalizer(params: {
   requesterSenderE164?: string;
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
+  mediaAccess?: OutboundMediaAccess;
+  workspaceMediaAccess?: OutboundMediaAccess;
 }): (payload: ReplyPayload) => Promise<ReplyPayload> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
@@ -171,6 +174,8 @@ export function createReplyMediaPathNormalizer(params: {
       agentId,
       workspaceDir: params.workspaceDir,
       mediaSources: [media],
+      mediaAccess: params.mediaAccess,
+      workspaceMediaAccess: params.workspaceMediaAccess,
       sessionKey: params.sessionKey,
       messageProvider: params.sessionKey ? undefined : params.messageProvider,
       accountId: params.accountId,

@@ -642,7 +642,7 @@ suite.define(() => {
       await composer.fill(queuedText);
       await composer.press("Control+Enter");
 
-      const queuedRow = page.locator(".chat-group.user", { hasText: queuedText });
+      const queuedRow = page.locator(".chat-queue__item", { hasText: queuedText });
       await queuedRow.waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
     } finally {
@@ -688,16 +688,9 @@ suite.define(() => {
     }
   });
 
-  it("keeps two distinct queued bubbles below streaming and admits the first in place", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+  it("sends a queued follow-up after an exact terminal session publication", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
@@ -721,78 +714,12 @@ suite.define(() => {
       const activeSessionKey = requireString(initialSendParams.sessionKey, "active session key");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      const transcript = page.locator(".chat-thread-inner");
-      const streamText = "The current response is still streaming.";
-      const emitStream = (text: string) =>
-        gateway.emitGatewayEvent("chat", {
-          message: { role: "assistant", content: [{ type: "text", text }] },
-          runId: activeRunId,
-          sessionKey: activeSessionKey,
-          state: "delta",
-        });
-      const capture = async (name: string) => {
-        if (artifactDir) {
-          await page.screenshot({ fullPage: true, path: path.join(artifactDir, name) });
-        }
-      };
-      await emitStream(streamText);
-      await transcript.getByText(streamText, { exact: true }).waitFor();
       const followUp = "send after the missed terminal event";
-      const secondFollowUp = "then review the next result";
-      const rowKey = (bubble: Element) =>
-        bubble.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key");
-      const sameBubble = (bubble: Element, original: Element | null) => bubble === original;
-      const firstBubble = transcript
-        .locator(".chat-group.user", { hasText: followUp })
-        .locator(".chat-bubble");
       await composer.fill(followUp);
       await page.getByRole("button", { name: "Queue message" }).click();
-      await page.getByText(followUp, { exact: true }).waitFor();
-      await capture("queued-00-submitted.png");
-      await firstBubble.waitFor({ timeout: 10_000 });
-      expect(await firstBubble.count()).toBe(1);
-      const firstElement = await firstBubble.elementHandle();
-      expect(firstElement).not.toBeNull();
-      const firstRowKey = await firstBubble.evaluate(rowKey);
-      expect(firstRowKey).toBeTruthy();
-      await capture("queued-01-first-follow-up.png");
-
-      await composer.fill(secondFollowUp);
-      await page.getByRole("button", { name: "Queue message" }).click();
-      const secondGroup = transcript.locator(".chat-group.user", { hasText: secondFollowUp });
-      const secondBubble = secondGroup.locator(".chat-bubble");
-      await secondBubble.waitFor({ timeout: 10_000 });
-      expect(await secondBubble.count()).toBe(1);
-      const secondElement = await secondBubble.elementHandle();
-      expect(secondElement).not.toBeNull();
-      const secondRowKey = await secondBubble.evaluate(rowKey);
-      expect(secondRowKey).toBeTruthy();
-      expect(secondRowKey).not.toBe(firstRowKey);
-      const expectSecondQueuedAtTail = async () => {
-        await secondGroup.getByText("Queued", { exact: true }).waitFor();
-        expect(await transcript.locator(".chat-group.user .chat-queue__item").count()).toBe(1);
-        const tail = transcript.locator(".chat-bubble").last();
-        expect(await tail.evaluate(sameBubble, secondElement)).toBe(true);
-        expect(await secondBubble.evaluate(rowKey)).toBe(secondRowKey);
-      };
-      await emitStream(`${streamText} More text arrives after both follow-ups.`);
-      await expect
-        .poll(() =>
-          transcript
-            .locator(".chat-bubble .chat-text")
-            .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
-        )
-        .toEqual([
-          initialText,
-          `${streamText} More text arrives after both follow-ups.`,
-          followUp,
-          secondFollowUp,
-        ]);
-      expect(await firstBubble.evaluate(sameBubble, firstElement)).toBe(true);
-      expect(await page.locator(".chat-queue").count()).toBe(0);
-      expect(await transcript.locator(".chat-group.user .chat-queue__item").count()).toBe(2);
+      const queuedRow = page.locator(".chat-queue__item", { hasText: followUp });
+      await queuedRow.waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
-      await capture("queued-02-stream-above-follow-ups.png");
 
       await gateway.setHistoryMessages([
         {
@@ -818,7 +745,6 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(sessionListsBeforeTerminal);
-      await gateway.deferNext("chat.send");
       await gateway.resolveDeferred(
         "sessions.list",
         chatSessionListResponse([
@@ -836,50 +762,8 @@ suite.define(() => {
       );
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
-      const admitted = requireRecord(sends[1]?.params);
-      expect(admitted).toMatchObject({ message: followUp });
-      const admittedRunId = requireString(admitted.idempotencyKey, "admitted queued run id");
-      expect(await firstBubble.evaluate(sameBubble, firstElement)).toBe(true);
-      expect(await firstBubble.evaluate(rowKey)).toBe(firstRowKey);
-      await gateway.resolveDeferred("chat.send", { runId: admittedRunId, status: "started" });
-      await transcript
-        .locator(".chat-group.user", { hasText: followUp })
-        .locator(".chat-queue__item")
-        .waitFor({ state: "detached" });
-      expect(await firstBubble.evaluate(sameBubble, firstElement)).toBe(true);
-      await expectSecondQueuedAtTail();
-      await capture("queued-03-admitted-in-place.png");
-
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [admittedRunId],
-        clientRunId: admittedRunId,
-        hasActiveRun: true,
-        message: {
-          __openclaw: {
-            id: "queued-follow-up-user",
-            idempotencyKey: `${admittedRunId}:user`,
-            seq: 2,
-          },
-          role: "user",
-          content: [{ type: "text", text: followUp }],
-          timestamp: Date.now(),
-        },
-        messageId: "queued-follow-up-user",
-        messageSeq: 2,
-        runId: admittedRunId,
-        sessionKey: activeSessionKey,
-      });
-      await expect
-        .poll(() => firstBubble.getAttribute("data-entry-id"))
-        .toBe("queued-follow-up-user");
-      expect(await firstBubble.count()).toBe(1);
-      expect(await firstBubble.evaluate(sameBubble, firstElement)).toBe(true);
-      expect(await firstBubble.evaluate(rowKey)).toBe(firstRowKey);
-      await expectSecondQueuedAtTail();
-      await expectRequestCountStable(gateway, "chat.send", 2);
-      await capture("queued-04-history-handoff.png");
-      await firstElement?.dispose();
-      await secondElement?.dispose();
+      expect(requireRecord(sends[1]?.params)).toMatchObject({ message: followUp });
+      await queuedRow.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -1003,9 +887,7 @@ suite.define(() => {
       const queuedPrompt = "steer this after restoring the queue";
       await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
       await page.getByRole("button", { name: "Queue message" }).click();
-      await page
-        .locator(".chat-group.user", { hasText: queuedPrompt })
-        .waitFor({ timeout: 10_000 });
+      await page.locator(".chat-queue").getByText(queuedPrompt).waitFor({ timeout: 10_000 });
 
       await gateway.setMethodResponse(
         "sessions.list",
@@ -1033,7 +915,7 @@ suite.define(() => {
       await page.reload();
       await gateway.waitForRequest("sessions.list");
 
-      const queue = page.locator(".chat-group.user", { hasText: queuedPrompt });
+      const queue = page.locator(".chat-queue");
       await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
       await queue.getByRole("button", { name: "Steer" }).click();
 

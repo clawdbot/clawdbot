@@ -316,6 +316,7 @@ async function executeAgentTurnInternalWithRetryState(
     deferredLifecycle,
     lifecycleGeneration,
     autoCompactionCount,
+    postCompactionModelAttempted: false,
     attemptedRuntimeProvider: fallbackProvider,
     attemptedRuntimeModel: fallbackModel,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
@@ -446,6 +447,7 @@ async function executeAgentTurnInternalWithRetryState(
         payload: markAgentRunFailureReplyPayload({
           text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
         }),
+        postCompactionModelFailure: fallbackCycleState.postCompactionModelAttempted || undefined,
       };
     }
   }
@@ -502,7 +504,7 @@ async function executeAgentTurnInternalWithRetryState(
   const terminalFailurePayload = terminalRunFailed
     ? buildTerminalAgentRunFailureReplyPayload({
         isHeartbeat: params.isHeartbeat,
-        visibleReplyDelivered: false,
+        visibleReplyDelivered: (await params.resolveVisibleReplyDelivery?.()) === true,
         sessionCtx: params.sessionCtx,
         cfg: params.followupRun.run.config,
       })
@@ -525,6 +527,9 @@ async function executeAgentTurnInternalWithRetryState(
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
     ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
+    ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
+      ? { postCompactionModelFailure: true as const }
+      : {}),
   };
 }
 
@@ -645,6 +650,9 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
           kind: "rejected",
           payload: internal.payload,
           resolved: internal.resolved,
+          ...(internal.postCompactionModelFailure
+            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+            : {}),
         },
       };
     }
@@ -661,11 +669,20 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
       internal.fallbackModel ??
       internal.result.meta?.agentMeta?.model ??
       executionParams.followupRun.run.model;
+    const terminalStatus = internal.terminalFailurePayload
+      ? {
+          status: "failed" as const,
+          terminalFailurePayload: internal.terminalFailurePayload,
+          ...(internal.postCompactionModelFailure
+            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+            : {}),
+        }
+      : { status: "ok" as const };
     return {
       runId,
       outcome: {
         kind: "settled",
-        status: internal.terminalFailurePayload ? "failed" : "ok",
+        ...terminalStatus,
         ...(abortReason ? { abortReason } : {}),
         result: internal.result,
         continueWorkRequests: internal.continueWorkRequests,
@@ -680,7 +697,6 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         didLogHeartbeatStrip: internal.didLogHeartbeatStrip,
         directlySentBlockKeys: internal.directlySentBlockKeys,
         directlySentBlockPayloads: internal.directlySentBlockPayloads,
-        terminalFailurePayload: internal.terminalFailurePayload,
       },
     };
   } catch (error) {

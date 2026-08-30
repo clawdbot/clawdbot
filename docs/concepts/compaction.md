@@ -20,6 +20,8 @@ The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) charact
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
+
 <Note>
 New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter guardrails, summary quality audits). Set `mode: "default"` explicitly to opt out.
 </Note>
@@ -74,7 +76,15 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 /compact Focus on the API design decisions
 ```
 
-Manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
+Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
+
+Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
+
+### Provider checkpoints
+
+When an embedded Responses provider returns a compacted window, OpenClaw preserves the complete returned context alongside the checkpoint. Recent-turn history limits do not discard an eligible checkpoint, and the retained context still counts toward the model's prompt budget. The saved checkpoint is limited to 16 MiB; oversized or incompatible endpoint output uses the normal client-side compaction path instead of being truncated.
+
+If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
 
 ## Configuration
 
@@ -82,7 +92,7 @@ Configure compaction under `agents.defaults.compaction` in your `openclaw.json`.
 
 ### Using a different model
 
-By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
+The built-in OpenClaw runtime starts compaction with the active session model. Set `agents.defaults.compaction.model` to select a different summarization model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
 
 ```json
 {
@@ -113,6 +123,8 @@ This works with local models too, for example a second Ollama model dedicated to
 ```
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+
+In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain. Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
 ### Identifier preservation
 
@@ -206,7 +218,7 @@ summarization. Configured provider output keeps the provider's existing
 validation semantics.
 
 <Note>
-If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
+If the provider fails or returns an empty result, OpenClaw falls back through the built-in safeguard summarizer and its configured quality checks. Provider-local timeouts do not bypass those checks; cancellation of the compaction request is still respected.
 </Note>
 
 ## Compaction vs pruning

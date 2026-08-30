@@ -696,12 +696,13 @@ export class ShellChromeOwner {
 
   retryPendingLazyAction(canReload: () => boolean): Promise<boolean> {
     const event = this.pendingLazyAction;
-    return event
-      ? retryStaleChunkReloadWhenReachable({
-          canReload: () =>
-            canReload() && this.pendingLazyAction === event && persistLazyShellAction(event),
-        })
-      : Promise.resolve(false);
+    // Render-owned surfaces need recovery too, but have no user action to persist for replay.
+    return retryStaleChunkReloadWhenReachable({
+      canReload: () =>
+        canReload() &&
+        this.pendingLazyAction === event &&
+        (!event || persistLazyShellAction(event)),
+    });
   }
 
   private dispatchLazyShellEvent({ eventType, detail }: LazyShellEvent): boolean {

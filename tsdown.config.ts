@@ -5,6 +5,7 @@ import path from "node:path";
 import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
+  collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import {
@@ -171,15 +172,15 @@ function nodeBuildConfig(
   };
 }
 
-function fsSafeNativeCopy(entryDirectory: string): UserConfig["copy"] {
+function fsSafeNativeCopy(): UserConfig["copy"] {
   const packageRoot = path.dirname(
     createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json"),
   );
   return ({ outDir }) => ({
     from: path.join(packageRoot, "dist/native"),
-    // fs-safe resolves ../dist/native from its emitted loader. Preserve that
-    // layout, including the inline worker's extra directory, and every target.
-    to: path.resolve(outDir, entryDirectory, "..", "dist"),
+    // Both package graphs resolve this canonical directory, so npm ships one
+    // native tree even though their emitted loaders have different depths.
+    to: path.resolve(outDir, "..", "dist"),
   });
 }
 
@@ -188,7 +189,6 @@ function workerDeployBuildConfig(): UserConfig {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry: { "worker/worker": "src/worker/worker-deploy-entry.ts" },
     outDir: "dist",
-    copy: fsSafeNativeCopy("worker"),
     dts: false,
     env,
     define: {
@@ -209,6 +209,7 @@ function workerDeployBuildConfig(): UserConfig {
       onlyBundle: false,
     },
     fixedExtension: false,
+    minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
@@ -385,6 +386,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "auto-reply/continuation/lazy.runtime": "src/auto-reply/continuation/lazy.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
@@ -780,12 +782,23 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      copy: fsSafeNativeCopy("."),
+      copy: fsSafeNativeCopy(),
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),
   workerDeployBuildConfig(),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Keep retained config repairs in their own graph: shared public SDK chunks
+      // otherwise pull state-migration exports into these pre-install artifacts.
+      entry: collectChannelConfigDoctorBuildEntries(),
+      outDir: "dist/config-doctor",
+      deps: unifiedDeps,
+    },
+    false,
+  ),
   workerRsyncReceiverBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>

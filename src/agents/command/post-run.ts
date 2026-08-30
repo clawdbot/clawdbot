@@ -27,6 +27,7 @@ import {
 } from "../agent-run-terminal-outcome.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -565,8 +566,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const clearOwnedPendingFinal =
         deliveryResult?.deliverySucceeded === true &&
         pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId !== undefined;
-      // Preserve the exact local claim through sibling session writes so a delivered
-      // source is tombstoned before admission release can erase its ownership fields.
+      // Preserve the exact claim snapshot through sibling session writes, then
+      // revalidate its durable owner immediately before committing cleanup.
       const recoveryClaimEntry =
         entry.restartRecoveryDeliveryRunId === runId
           ? entry
@@ -575,6 +576,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
             : params.sessionEntry?.restartRecoveryDeliveryRunId === runId
               ? params.sessionEntry
               : undefined;
+      const clearsRecoveryCycle = entry.restartRecoveryDeliveryRunId === runId;
       if (clearOwnedPendingFinal || clearStaleTransportOnly || recoveryClaimEntry) {
         const now = Date.now();
         sessionEntry = await persistAgentSession({
@@ -601,12 +603,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
                   terminalRunId: runId,
                 })
               : {}),
+            ...(clearsRecoveryCycle ? buildMainSessionRecoveryClearPatch(entry) : {}),
           },
           shouldPersist: (current) =>
             shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
             (!recoveryClaimEntry ||
-              current?.restartRecoveryDeliveryRunId === undefined ||
-              current.restartRecoveryDeliveryRunId === runId) &&
+              current?.restartRecoveryDeliveryRunId === runId ||
+              (!clearsRecoveryCycle && current?.restartRecoveryDeliveryRunId === undefined)) &&
             (!clearOwnedPendingFinal ||
               current?.pendingFinalDelivery?.intentId ===
                 pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId) &&

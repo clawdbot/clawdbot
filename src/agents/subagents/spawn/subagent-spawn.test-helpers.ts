@@ -418,6 +418,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     countActiveRunsForSession: countActiveRunsForSessionImpl,
     getSubagentRunByRunId:
       params.getSubagentRunByRunIdMock ?? vi.fn(() => ({ execution: { status: "queued" } })),
+    getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: registerSubagentRunImpl,
     recordAcceptedSubagentSpawnRollback:

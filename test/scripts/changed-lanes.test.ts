@@ -1822,22 +1822,22 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("runs Plugin SDK export and surface checks for direct SDK changes", () => {
-    expect(
-      shouldRunPluginSdkSurfaceChecks([
-        "src/plugin-sdk/core.ts",
-        "scripts/plugin-sdk-surface-report.mts",
-        "scripts/sync-plugin-sdk-exports.mts",
-        "scripts/lib/plugin-sdk-entries.mts",
-        "scripts/lib/plugin-sdk-entrypoints.json",
-        "package.json",
-      ]),
-    ).toBe(true);
+  it.each([
+    "src/plugin-sdk/core.ts",
+    "scripts/plugin-sdk-surface-report.mts",
+    "scripts/sync-plugin-sdk-exports.mts",
+    "scripts/lib/plugin-sdk-entries.mts",
+    "scripts/lib/plugin-sdk-entrypoints.json",
+    "extensions/tsconfig.package-boundary.paths.json",
+    "extensions/xai/tsconfig.json",
+  ])("runs Plugin SDK export and surface checks for %s", (changedPath) => {
+    expect(shouldRunPluginSdkSurfaceChecks([changedPath])).toBe(true);
+    expect(shouldRunPluginSdkSurfaceChecks(["package.json"])).toBe(true);
     expect(shouldRunPluginSdkSurfaceChecks(["src/config/sessions/session-accessor.ts"])).toBe(
       false,
     );
 
-    const result = detectChangedLanes(["src/plugin-sdk/core.ts"]);
+    const result = detectChangedLanes([changedPath]);
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
@@ -2136,6 +2136,26 @@ describe("scripts/changed-lanes", () => {
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
+      "scripts/restart-mac.sh",
+      "scripts/stage-mac-node-worker.sh",
+      "scripts/test-macos-native.mts",
+      "test/scripts/macos-native-test-launch.test.ts",
+      "scripts/verify-mac-node-worker.mjs",
+      "scripts/verify-mac-node-worker-fs.mjs",
+      "scripts/materialize-mac-node-worker.py",
+      "scripts/lib/mac-app-bundle.sh",
+      "scripts/lib/mac-native-inventory.py",
+      "scripts/lib/mac-worker-portability.mjs",
+      "scripts/lib/mac-node-worker-proof-state.mjs",
+      "scripts/lib/mac-bundle-mutation.py",
+      "test/helpers/mac-native.ts",
+      "test/helpers/mac-signing.ts",
+      "test/scripts/mac-node-worker.test.ts",
+      "test/scripts/verify-mac-node-worker-fs.test.ts",
+      "test/scripts/restart-mac.test.ts",
+      "test/scripts/mac-elevation-artifact.test-support.ts",
+      "test/scripts/mac-native-fixtures.test-support.ts",
+      "test/scripts/mac-node-worker-materialization.test-support.ts",
       "test/scripts/codesign-mac-app.test.ts",
       "test/scripts/create-dmg.test.ts",
       "test/scripts/mac-elevation-host.test.ts",
@@ -2151,6 +2171,7 @@ describe("scripts/changed-lanes", () => {
       });
 
       expectLanes(result.lanes, {
+        scripts: changedPath.endsWith(".mts"),
         testRoot: changedPath.endsWith(".ts"),
         tooling: true,
       });

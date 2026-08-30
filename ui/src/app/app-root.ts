@@ -509,8 +509,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${desktopAvailable}
           .documentMode=${true}
-          .documentSource=${source}
-          .documentSession=${session}
+          .requestedSource=${source}
+          .sessionKey=${session}
           .documentControl=${focusTarget.control}
           .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>

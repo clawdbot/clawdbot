@@ -1,6 +1,7 @@
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { retireSessionPaneHandoffs } from "../../pages/chat/chat-pane-shared.ts";
 import { deleteStoredChatSessionSnapshots } from "../../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { showToast } from "../toast.ts";
 import { retireDurableComposerDrafts } from "./composer-draft-store.runtime.ts";
@@ -41,6 +42,13 @@ export async function retireDeletedComposerDrafts(
       { settings: { gatewayUrl: client.gatewayUrl } },
       targets,
     );
+    retireSessionPaneHandoffs(context, targets);
+    for (const retirement of stored.retirements) {
+      context.chatAttachmentHandoff.retireScope(
+        storedChatOutboxScopeKey(retirement.scope),
+        retirement.retireBeforeRevision,
+      );
+    }
     let failed = stored.storageFailed;
     if (!client.recoveryScopeReady || !client.recoveryScope) {
       failed = true;

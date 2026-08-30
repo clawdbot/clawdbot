@@ -287,25 +287,6 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(false);
   });
 
-  it("selects the requested tab for a targeted open request", () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      browserPanelIsOpen: () => boolean;
-      browserPanelController: { selectTab: (targetId: string) => Promise<void> };
-      handleToggleRequest: (event: Event) => void;
-    };
-    panel.available = true;
-    document.body.append(panel);
-    const selectTab = vi.spyOn(panel.browserPanelController, "selectTab").mockResolvedValue();
-
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:browser-toggle", { detail: { open: true, targetId: "tab-7" } }),
-    );
-
-    expect(panel.browserPanelIsOpen()).toBe(true);
-    expect(selectTab).toHaveBeenCalledWith("tab-7");
-  });
-
   it.each(["close", "suppress"] as const)(
     "ends an active annotation gesture on panel %s",
     async (transition) => {

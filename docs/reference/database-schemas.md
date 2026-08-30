@@ -45,6 +45,25 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+Transcript context eligibility uses a bare nullable
+`session_transcript_active_events.context_eligible INTEGER` column without
+changing agent schema 18. Database open installs the column and a non-unique
+partial index of unclassified rows. `1` includes an entry in bounded context
+acquisition, `0` excludes display-only activity, and `NULL` means the projection
+still needs reconciliation. Bootstrap control markers remain eligible; history
+counts, positions, and cursors do not change. Raw transcript JSON stays canonical.
+
+Older same-version writers can append or rebuild without supplying eligibility.
+The existing transcript reconciler detects their `NULL` rows even when its
+sequence watermark is current, then rebuilds from raw events before publishing
+readiness. Readers return a retryable projection-unavailable result while this
+work is pending; they do not parse every payload or guess eligibility. Initial
+index creation scans projection metadata once, and startup awaits reconciliation
+with off-thread parsing and bounded write chunks. Total rebuild cost remains
+proportional to history. Rewrites invalidate or rebuild the projection in their
+own transaction, and transcript deletion removes its eligibility rows. Downgrade
+leaves the additive column and index intact; re-upgrade reconciles unknown rows.
+
 User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
 column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database
@@ -122,9 +141,21 @@ Use a SQLite online backup or another WAL-aware snapshot produced while the sour
 | 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
 | 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
-| 19      | Durable session-key recipient-authority generations for delayed named returns, converged with both physical schema-18 lineages                                                                                                                         | Unreleased                                      |
+| 19      | Source-qualified immutable session creators (historical ambiguity remains unknown) and durable session-key recipient-authority generations for delayed named returns, converged with both physical schema-18 lineages                                  | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Creator namespace migration
+
+Agent schema **19** and shared-state schema **14** add a source discriminator to human creator actors in the existing session and cron JSON records. No table, sidecar, or separate identity ledger is added. The session node remains the immutable creator owner; mutable owner assignments and explicit sharing grants are unchanged.
+
+Historical human creators stamped directly by `operator` or `run` creation become `profile`; channel creation becomes `channel`. Origin-losing cron, inherited spawn or Talk, legacy `createdBy`, and missing-source history remain `unknown`. The migration preserves IDs, attribution, creation times, content, and existing sandbox restrictions. A UUID, profile lookup, participant, current route, or required sandbox never supplies missing creator authority. Recovery from incomplete physical projections also produces unknown human attribution.
+
+Before upgrading, stop the Gateway and all other writers, then [create and verify a WAL-aware backup](/cli/backup). Run `openclaw doctor --fix` with the new build. The agent migration retains the stopped-writer maintenance gate and runs after the schema-18 participant migration, without rebuilding already migrated participant rows. Canonical data and both schema markers commit in the owning database transaction. Shared-state and agent databases are separate transactions; if one fails, keep writers stopped and rerun Doctor before starting the Gateway.
+
+Older builds refuse the new versions. For rollback, stop all writers and restore the verified pre-upgrade backups with their matching older build. Do not decrement either schema marker: an older writer cannot maintain the creator-source contract. Unknown historical provenance is irrecoverable from the stored ID alone. Administrators retain sharing management access; assigning responsibility does not restore an implicit creator grant.
+
+Required sandbox resources keep their existing keys for proven profile creators. Channel and unknown creators instead use canonical-session isolation, with no new persisted principal field. Their old ambiguous resources are left untouched by migration, not automatically adopted or copied; operators must recover needed files explicitly before ordinary retention or cleanup. See [sandbox scope and recovery](/gateway/sandboxing#modes-scope-and-backend).
 
 ### Participant identity migration
 
@@ -163,6 +194,16 @@ Ordinary runtime readers and writers refuse either schema-18 input and direct op
 | 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                                                      | Unreleased          |
 | 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                                                         | Unreleased          |
 | 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
+| 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
+| 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
+
+### State schema 15
+
+Schema 15 removes `target_agent_id` and `target_session_id` from `current_conversation_bindings`. The target index uses the complete `target_session_key` and remains non-unique: several conversations may point at the same destination. This lets plugin-owned targets persist without inventing an OpenClaw agent owner. Channel/account isolation, plugin approvals, binding identifiers, target keys, JSON metadata, expiry, and detach behavior are unchanged.
+
+Startup and `openclaw doctor --fix` run the migration in the existing exclusive write transaction. They remove only the two projections and replace the target index, preserving all other row values. A dependent trigger, index, or failed schema check rolls the transaction back; migration does not discard an unknown dependency to force the upgrade. Column removal rewrites the binding table, so upgrade cost scales with its size.
+
+Stop older writers and create a verified, WAL-aware backup before upgrading. Builds supporting shared-state schema 14 or earlier refuse the migrated database. To return to an older build, restore that pre-upgrade backup into a separate state directory; do not lower the version markers or reconstruct an agent projection. See [downgrade limitations](#downgrades-are-unsupported) for the general recovery contract.
 
 ### State schema 13
 

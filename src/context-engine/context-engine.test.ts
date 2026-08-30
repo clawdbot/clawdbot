@@ -292,15 +292,16 @@ describe("Engine contract tests", () => {
       sessionKey: "agent:main:s2",
       storePath: testAgentDbPath,
     };
+    const runtimeContext = {
+      workspaceDir: "/tmp/workspace",
+      currentTokenCount: 12345,
+    };
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
       sessionKey: "agent:main:s2",
       sessionTarget,
       tokenBudget: 4096,
-      runtimeContext: {
-        workspaceDir: "/tmp/workspace",
-        currentTokenCount: 12345,
-      },
+      runtimeContext,
     });
 
     expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
@@ -312,6 +313,7 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeParams.tokenBudget).toBe(4096);
     expect(compactRuntimeParams.currentTokenCount).toBe(12345);
     expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
+    expect(compactRuntimeParams.contextEngineRuntimeContext).toBe(runtimeContext);
     expect(result).toEqual({
       ok: true,
       compacted: false,

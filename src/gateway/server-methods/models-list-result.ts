@@ -11,6 +11,7 @@ import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runt
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
@@ -48,7 +49,6 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
@@ -60,6 +60,7 @@ import {
 import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
 import {
   buildPublicModelProjection,
+  projectProviderCatalogOutcomes,
   resolveModelChoiceAgentRuntime,
 } from "./models-list-public-projection.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -71,7 +72,7 @@ type ApiKeyProviderCapabilities = {
 };
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
+  providerOutcomes?: ReturnType<typeof projectProviderCatalogOutcomes>;
 };
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
@@ -314,11 +315,18 @@ function createPublicModelsListProjector(params: {
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
             });
+      const fastModeState = resolveFastModeState({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        provider: entry.provider,
+        model: entry.id,
+      });
       preparedEntry = {
         ...buildPublicModelProjection(publicEntry),
         ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
         ...(agentRuntime ? { agentRuntime } : {}),
         ...thinkingProfile,
+        ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,
@@ -552,7 +560,10 @@ export async function prepareModelsListResult(
   // so account publication/revocation never repeats host preparation or discovery.
   const isCurrent = () => params.context.getRuntimeConfig() === initialConfig;
   const { routeVariants, providerOutcomes } = snapshot;
-  const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
+  const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
+  const outcomeProjection = publicProviderOutcomes?.length
+    ? { providerOutcomes: publicProviderOutcomes }
+    : {};
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;

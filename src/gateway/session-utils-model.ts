@@ -96,7 +96,9 @@ function resolveGatewaySessionThinkingLevel(params: {
   // projections must not reinterpret an already-validated level without it.
   if (
     !catalogEntry ||
-    (params.providerPolicySource === "active" && catalogEntry.reasoning === undefined)
+    (params.providerPolicySource !== undefined &&
+      params.providerPolicySource !== "active-or-bundled" &&
+      catalogEntry.reasoning === undefined)
   ) {
     return params.level;
   }
@@ -126,9 +128,12 @@ function resolveGatewaySessionThinkingDefault(params: {
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
     : undefined;
   const resolveDefault =
-    params.providerPolicySource === "active"
+    params.providerPolicySource !== undefined && params.providerPolicySource !== "active-or-bundled"
       ? (defaultParams: Parameters<typeof resolveThinkingDefault>[0]) =>
-          resolveThinkingDefaultCore({ ...defaultParams, providerPolicySource: "active" })
+          resolveThinkingDefaultCore({
+            ...defaultParams,
+            providerPolicySource: params.providerPolicySource,
+          })
       : resolveThinkingDefault;
   const defaultLevel =
     agentThinkingDefault ??
@@ -182,7 +187,9 @@ export function resolveGatewayModelThinkingProfile(params: {
       sessionKey: params.sessionKey,
     });
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  const policySource =
+    typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -355,7 +362,12 @@ export function getSessionDefaults(
     provider: resolved.provider,
     model: resolved.model,
     agentId,
-    modelCatalog: modelCatalog ?? (options?.providerPolicySource === "active" ? [] : undefined),
+    modelCatalog:
+      modelCatalog ??
+      (options?.providerPolicySource !== undefined &&
+      options.providerPolicySource !== "active-or-bundled"
+        ? []
+        : undefined),
     sessionKey,
     providerPolicySource: options?.providerPolicySource,
   });

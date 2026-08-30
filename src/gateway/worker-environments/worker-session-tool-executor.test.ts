@@ -10,6 +10,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -43,6 +44,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   return {
     ...actual,
     loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
+      agentId: parseAgentSessionKey(sessionKey)?.agentId,
       canonicalKey: sessionKey,
       entry: structuredClone(sessionEntries.get(sessionKey)),
     }),
@@ -430,6 +432,10 @@ describe("worker session tool topology", () => {
     });
   }
 
+  function spawn(toolCallId: string, task = "start the child") {
+    return execute({ identity, toolName: "sessions_spawn", request: { toolCallId, task } });
+  }
+
   it.each([false, true])(
     "creates and replays a cloud child with inherited required isolation (%s)",
     async (required) => {
@@ -440,16 +446,8 @@ describe("worker session tool topology", () => {
         ...(required ? { sandbox: "required" as const } : {}),
       });
 
-      const request = {
-        identity,
-        toolName: "sessions_spawn" as const,
-        request: {
-          toolCallId: "spawn-cloud-child",
-          task: "run in the nested cloud session",
-        },
-      };
-      const first = await execute(request);
-      const replay = await execute(request);
+      const first = await spawn("spawn-cloud-child", "run in the nested cloud session");
+      const replay = await spawn("spawn-cloud-child", "run in the nested cloud session");
 
       expect(childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
       expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
@@ -520,11 +518,7 @@ describe("worker session tool topology", () => {
       sessionEntries.get(SOURCE.sessionKey)!.permissionMode = mode;
     }
 
-    await execute({
-      identity,
-      toolName: "sessions_spawn",
-      request: { toolCallId: "spawn-cloud-child-with-permissions", task: "start the child" },
-    });
+    await spawn("spawn-cloud-child-with-permissions");
 
     const createParams = gatewayCreate.mock.calls[0]?.[0]?.params;
     expect(createParams).toMatchObject({ worktree: true });
@@ -538,11 +532,7 @@ describe("worker session tool topology", () => {
   it("carries the exact admitted parent identity into a worker-hosted child spawn", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
 
-    await execute({
-      identity,
-      toolName: "sessions_spawn",
-      request: { toolCallId: "spawn-with-parent-identity", task: "start the child" },
-    });
+    await spawn("spawn-with-parent-identity");
 
     expect(spawnCallerIdentity).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -596,13 +586,7 @@ describe("worker session tool topology", () => {
       });
       return await create(request);
     });
-    const request = {
-      identity,
-      toolName: "sessions_spawn" as const,
-      request: { toolCallId: "concurrent-spawn", task: "start one child" },
-    };
-
-    const retries = Array.from({ length: 32 }, () => execute(request));
+    const retries = Array.from({ length: 32 }, () => spawn("concurrent-spawn"));
     await vi.waitFor(() => expect(gatewayCreate).toHaveBeenCalledOnce());
     finishCreate?.();
     const results = await Promise.all(retries);
@@ -626,17 +610,8 @@ describe("worker session tool topology", () => {
         throw new Error("session creation response was lost");
       },
     );
-    const request = {
-      identity,
-      toolName: "sessions_spawn" as const,
-      request: {
-        toolCallId: "spawn-response-loss",
-        task: "continue after ambiguous session creation",
-      },
-    };
-
-    const first = await execute(request);
-    const replay = await execute(request);
+    const first = await spawn("spawn-response-loss");
+    const replay = await spawn("spawn-response-loss");
 
     expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
     expect(gatewayCreate).toHaveBeenCalledOnce();
@@ -664,14 +639,7 @@ describe("worker session tool topology", () => {
       },
     );
 
-    const result = await execute({
-      identity,
-      toolName: "sessions_spawn",
-      request: {
-        toolCallId: "spawn-dispatch-response-loss",
-        task: "continue after ambiguous cloud dispatch",
-      },
-    });
+    const result = await spawn("spawn-dispatch-response-loss");
 
     expect(result.resultJson).not.toContain('"status":"error"');
     expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
@@ -696,14 +664,7 @@ describe("worker session tool topology", () => {
       },
     );
 
-    const result = await execute({
-      identity,
-      toolName: "sessions_spawn",
-      request: {
-        toolCallId: "spawn-initial-task-response-loss",
-        task: "continue exactly once after response loss",
-      },
-    });
+    const result = await spawn("spawn-initial-task-response-loss");
 
     expect(result.resultJson).not.toContain('"status":"error"');
     expect(spawnOrder).toEqual(["create", "dispatch", "send", "send"]);
@@ -713,11 +674,7 @@ describe("worker session tool topology", () => {
 
   it("spawns a grandchild from the child cloud turn and communicates across both levels", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    await execute({
-      identity,
-      toolName: "sessions_spawn",
-      request: { toolCallId: "spawn-child-for-nesting", task: "start the child" },
-    });
+    await spawn("spawn-child-for-nesting");
     const spawnedChildKey = childSessionKey!;
     const childClaim = placements.claimTurn({
       sessionId: CHILD.sessionId,
@@ -858,17 +815,8 @@ describe("worker session tool topology", () => {
         throw new Error("session creation response was lost");
       },
     );
-    const request = {
-      identity,
-      toolName: "sessions_spawn" as const,
-      request: {
-        toolCallId: "spawn-unknown-owner",
-        task: "do not replay an unowned child",
-      },
-    };
-
-    const first = await execute(request);
-    const replay = await execute(request);
+    const first = await spawn("spawn-unknown-owner");
+    const replay = await spawn("spawn-unknown-owner");
 
     expect(first.resultJson).toContain("outcome is unknown");
     expect(replay.resultJson).toContain("prior operation outcome is unknown");
@@ -915,6 +863,52 @@ describe("worker session tool topology", () => {
       }),
     );
   });
+
+  it.each([
+    { relation: "parent", placement: "unplaced" },
+    { relation: "parent", placement: "local" },
+    { relation: "sibling", placement: "unplaced" },
+    { relation: "sibling", placement: "local" },
+  ] as const)(
+    "delivers to an authorized Gateway $relation with $placement placement",
+    async ({ relation, placement }) => {
+      setEntry(TARGET.sessionKey, TARGET.sessionId);
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId, relation === "parent" ? PARENT : TARGET);
+      setEntry(PARENT.sessionKey, PARENT.sessionId, relation === "sibling" ? TARGET : undefined);
+      if (placement === "local") {
+        const claim = placements.claimTurn({
+          ...PARENT,
+          agentId: SOURCE.agentId,
+          claimId: "gateway-target-claim",
+          runId: "gateway-target-run",
+          owner: { kind: "local" },
+        });
+        placements.releaseTurn(claim);
+        expect(placements.get(PARENT.sessionId)?.state).toBe("local");
+      } else {
+        expect(placements.get(PARENT.sessionId)).toBeUndefined();
+      }
+
+      const result = await execute({
+        identity,
+        toolName: "sessions_send",
+        request: {
+          toolCallId: "send-to-gateway",
+          sessionKey: PARENT.sessionKey,
+          message: "Report the Gateway result",
+          timeoutSeconds: 30,
+        },
+      });
+
+      expect(JSON.parse(result.resultJson)).toMatchObject({ details: { status: "ok" } });
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          args: expect.objectContaining({ sessionKey: PARENT.sessionKey }),
+          options: expect.objectContaining({ expectedTargetSessionId: PARENT.sessionId }),
+        }),
+      );
+    },
+  );
 
   it("deduplicates retries without collapsing distinct identical sends", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
@@ -1047,15 +1041,29 @@ describe("worker session tool topology", () => {
     expect(delivered).not.toHaveBeenCalled();
   });
 
-  it("denies a target key rebound to a replacement session id", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, "replacement-target", {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
+  it.each(["target", "shared parent"] as const)(
+    "denies a replaced %s incarnation after awaiting sibling admission",
+    async (replaced) => {
+      setEntry(PARENT.sessionKey, PARENT.sessionId);
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
+      setEntry(TARGET.sessionKey, TARGET.sessionId, PARENT);
+      scopedSessionAccess.mockImplementationOnce(async (params) => {
+        if (replaced === "target") {
+          setEntry(TARGET.sessionKey, "replacement-target", PARENT);
+          activate({ ...TARGET, sessionId: "replacement-target" });
+        } else {
+          setEntry(PARENT.sessionKey, "replacement-parent");
+        }
+        return await params.run();
+      });
 
-    const result = await send("stale-target");
-    expect(result.resultJson).toContain("not an active cloud session incarnation");
-    expect(delivered).not.toHaveBeenCalled();
-  });
+      const result = await send("replaced-during-admission");
+      expect(result.resultJson).toContain(
+        replaced === "target"
+          ? "target incarnation changed"
+          : "outside the authorized session tree",
+      );
+      expect(delivered).not.toHaveBeenCalled();
+    },
+  );
 });

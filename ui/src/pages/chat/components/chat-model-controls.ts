@@ -10,6 +10,7 @@ import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
+  type ChatFastModeTarget,
 } from "../../../lib/chat/model-select-state.ts";
 import {
   resolveChatThinkingSelectState,
@@ -47,7 +48,7 @@ type ChatModelControlsProps = {
   modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
-  showFastMode?: boolean;
+  fastModeTarget?: ChatFastModeTarget;
   sending: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
@@ -207,6 +208,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     catalog: props.modelCatalog,
     connected: props.connected,
     currentModelOverride: currentOverride,
+    fastModeTarget: props.fastModeTarget,
     gatewayAvailable: props.gatewayAvailable,
     loading: props.loading,
     sending: props.sending,
@@ -385,7 +387,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     effortMutationDisabled ||
     !managedCatalog.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
-  const showFastMode = props.showFastMode !== false;
   // One owner supplies the whole tuple: mixing an override session's fields with
   // the defaults row can render the default model's options for a session whose
   // model declares none, then patch an invalid option id.
@@ -398,7 +399,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const effortDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
+    (thinking.options.length === 0 && fastMode.disabled);
   // Floating UI deliberately tracks a live anchor. Keep the eventual effort
   // control in layout while catalog state is transient (and until an open model
   // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
@@ -453,7 +454,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
               disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
             },
             sessionKey: props.sessionKey,
-            showFastMode,
             thinkingDisabled,
             thinking,
             onFastModeSelect: async (next, targetSessionKey) =>

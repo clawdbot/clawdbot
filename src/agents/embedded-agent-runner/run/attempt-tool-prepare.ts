@@ -11,6 +11,7 @@ import {
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
@@ -32,7 +33,6 @@ import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
-  type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
@@ -107,6 +107,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sessionKey: params.sandboxSessionKey,
     forceDirectMessageTool,
     model: attempt.model,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
+    codeModeOverride: attempt.codeModeOverride,
     toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,
@@ -146,7 +149,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
       ? createToolSearchCatalogRef()
       : undefined;
-  const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+  const nestedToolActivities: NestedToolActivity[] = [];
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
@@ -414,7 +417,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolSearchConfig,
     toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     toolsEnabled,
     toolsRaw,
   };

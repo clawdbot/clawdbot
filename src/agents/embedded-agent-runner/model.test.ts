@@ -194,6 +194,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     const snapshot = {
+      catalogOwner: undefined,
       agentDir: input.agentDir,
       ...(workspaceDir ? { workspaceDir } : {}),
       activeProjectKeys: [],
@@ -1077,6 +1078,7 @@ describe("resolveModel", () => {
       models: [{ id: "deepseek-v4-pro", name: "Configured DeepSeek" }],
     });
     const preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
@@ -1118,6 +1120,7 @@ describe("resolveModel", () => {
     );
 
     const preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
@@ -1155,6 +1158,7 @@ describe("resolveModel", () => {
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const preparedModelRuntime = {
+      catalogOwner: undefined,
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,

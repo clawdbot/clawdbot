@@ -3,6 +3,11 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
+  capacityMeter: {
+    workerSlots: "{used} of {total} slots busy",
+    unavailable: "Slot utilization unavailable",
+    execHost: "Codex exec",
+  },
   common: {
     health: "Health",
     ok: "OK",
@@ -188,6 +193,7 @@ export const en: TranslationMap = {
     },
   },
   githubPreview: {
+    coAuthors: "Co-authored by {logins}",
     loading: "Loading GitHub details…",
     unavailable: "GitHub preview unavailable",
     states: {
@@ -212,11 +218,13 @@ export const en: TranslationMap = {
     projectLabel: "Project",
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
+    runsOn: "Runs on {providerId} · {profileId}",
     noPrYet: "No PR yet",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
     pullRequestLabel: "Pull request #{number}, {state}",
+    pullRequestAuthorLabel: "Opened by {login}",
     states: {
       open: "Open",
       draft: "Draft",
@@ -730,7 +738,6 @@ export const en: TranslationMap = {
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       workerVersion: "Worker {version}",
-      workerSlots: "Worker slots {available}/{total}",
       workerMissing: "worker missing",
       workerMissingTitle:
         "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
@@ -902,7 +909,6 @@ export const en: TranslationMap = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
-    workerSlots: "Worker slots {available}/{total}",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
@@ -1049,7 +1055,8 @@ export const en: TranslationMap = {
     sessionArchived: "Session archived",
     sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm: "Delete {count} archived sessions and their transcripts?",
+    deleteAllArchivedConfirm:
+      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -1095,7 +1102,7 @@ export const en: TranslationMap = {
     actions: "Actions",
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
-    dashboardAvailable: "Dashboard available",
+    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
@@ -1169,8 +1176,8 @@ export const en: TranslationMap = {
     automationAttached: "Automation attached",
     incognito: "Incognito session",
     cloudWorkerPlacement: "Placement: {state}",
-    cloudWorkerPlacementConflict: "Placement: {state} · 1 workspace conflict",
-    cloudWorkerPlacementConflicts: "Placement: {state} · {count} workspace conflicts",
+    placementWorkspaceConflict: "{placement} · 1 workspace conflict",
+    placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
     cloudWorkerDiskWarning: "Cloud session disk space is low",
     cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
@@ -1179,6 +1186,19 @@ export const en: TranslationMap = {
     renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
     setIconMenu: "Set icon",
+    setColorMenu: "Color",
+    setIconColorMenu: "Icon & color",
+    sessionColor: "Session color: {color}",
+    colors: {
+      red: "Red",
+      blue: "Blue",
+      green: "Green",
+      yellow: "Yellow",
+      purple: "Purple",
+      orange: "Orange",
+      pink: "Pink",
+      cyan: "Cyan",
+    },
     iconEmojiSection: "Emoji",
     iconGlyphSection: "Icons",
     customEmojiCell: "Custom emoji…",
@@ -1223,15 +1243,17 @@ export const en: TranslationMap = {
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionConfirm:
+      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
+    deleteSessionsConfirm:
+      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nThis will delete the session entry and archive its transcript.",
+      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nThis will delete the session entries and archive their transcripts.",
+      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -1959,6 +1981,8 @@ export const en: TranslationMap = {
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
+      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgressHint: "Keep active task progress collapsed until you open it.",
     },
     sidebarPrefs: {
       title: "Sidebar",
@@ -2057,6 +2081,7 @@ export const en: TranslationMap = {
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
+    requestedBySession: "Approval requested by session {session}",
     pending: "{count} pending",
     otherPending: "Other pending requests",
     reviewRequest: "Review approval from {agent}: {command}",
@@ -2438,6 +2463,10 @@ export const en: TranslationMap = {
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
   },
   browser: {
+    profile: "Browser profile: {profile}",
+    navigationBlocked:
+      "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+    navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
     title: "Browser",
     open: "Open",
     openPanel: "Open browser panel",
@@ -2485,6 +2514,7 @@ export const en: TranslationMap = {
       canvasUnavailable: "Canvas 2D context unavailable.",
     },
     annotatePrompt: {
+      browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never
       // retranslate on source-wording changes, so the provenance-label rewrite
       // required fresh key names to propagate to all locales.
@@ -2742,8 +2772,15 @@ export const en: TranslationMap = {
       action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
+    testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",
     checkAgain: "Check again",
+    recovery: {
+      unknown:
+        "The previous activation is unresolved. You can verify and use the selected model, or check again after the setup attempt has finished. No activation will be repeated automatically.",
+      wait: "The previous setup attempt may still be running. Wait for its bounded setup window to finish, then choose Check again to retry.",
+      useCurrent: "Verify & use selected model",
+    },
     verify: {
       title: "Selected model",
       button: "Check model",
@@ -2768,7 +2805,6 @@ export const en: TranslationMap = {
       testAndUse: "Test & use",
       retry: "Retry test",
       testingButton: "Testing…",
-      testing: "Testing — asking {modelRef} for a quick reply…",
     },
     empty: {
       title: "Recommended installs",
@@ -3487,7 +3523,7 @@ export const en: TranslationMap = {
     codeMode: {
       title: "Code Mode",
       description:
-        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
+        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
     swarm: {
       title: "Swarm",
@@ -5801,7 +5837,6 @@ export const en: TranslationMap = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        queued: "Queued",
         applyingSettings: "Applying chat settings",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
@@ -6084,7 +6119,6 @@ export const en: TranslationMap = {
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
       loading: "Loading chat",
-      earlierHistoryAvailable: "Earlier history available",
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
@@ -6579,6 +6613,7 @@ export const en: TranslationMap = {
     partial: "{saved}/{total}: {error}",
     confirmDelete: "Delete {name}?",
     deleted: "Deleted {name}.",
+    deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",

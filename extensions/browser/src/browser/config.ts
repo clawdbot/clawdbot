@@ -6,22 +6,26 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import type {
+  BrowserConfig,
+  BrowserProfileConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
+import { isLoopbackHost, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort } from "../config/paths.js";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { parseBooleanValue } from "../sdk-config.js";
-import { resolveUserPath } from "../utils.js";
-import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -36,7 +40,6 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -46,7 +49,6 @@ export {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-  DEFAULT_UPLOAD_DIR,
   parseBrowserHttpUrl,
   redactCdpUrl,
 };

@@ -1,14 +1,10 @@
-import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
-import { getMachineDisplayName } from "../../../infra/machine-name.js";
-import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
-import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
@@ -16,31 +12,22 @@ import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../../bootstrap-budget.js";
-import {
-  listChannelSupportedActions,
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "../../channel-tools.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
-import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
 import {
   buildProjectMemoryWriteInstruction,
   prepareProjectMemoryBootstrap,
 } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
-import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
+import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import type { SandboxContext } from "../../sandbox/types.js";
-import { detectRuntimeShell } from "../../shell-utils.js";
-import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import { prepareWatchedSessionsPrompt } from "../../watched-sessions-prompt.js";
-import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
@@ -85,21 +72,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       systemPromptText: "",
     };
   }
-  const machineName = await getMachineDisplayName();
-  const runtimeChannel = normalizeMessageChannel(attempt.messageChannel ?? attempt.messageProvider);
-  const runtimeCapabilities = collectRuntimeChannelCapabilities({
-    cfg: attempt.config,
-    channel: runtimeChannel,
-    accountId: attempt.agentAccountId,
-  });
-  const reactionGuidance =
-    runtimeChannel && attempt.config
-      ? resolveChannelReactionGuidance({
-          cfg: attempt.config,
-          channel: runtimeChannel,
-          accountId: attempt.agentAccountId,
-        })
-      : undefined;
   const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
     config: attempt.config,
     agentId: params.sessionAgentId,
@@ -122,30 +94,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     model: attempt.model,
     runtimeHandle: params.getProviderRuntimeHandle(),
   });
-  const channelActions = runtimeChannel
-    ? listChannelSupportedActions(
-        buildEmbeddedMessageActionDiscoveryInput({
-          cfg: attempt.config,
-          channel: runtimeChannel,
-          currentChannelId: attempt.currentChannelId,
-          currentThreadTs: attempt.currentThreadTs,
-          currentMessageId: attempt.currentMessageId,
-          accountId: attempt.agentAccountId,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          agentId: params.sessionAgentId,
-          senderId: attempt.senderId,
-          senderIsOwner: attempt.senderIsOwner,
-        }),
-      )
-    : undefined;
-  const messageToolHints = runtimeChannel
-    ? resolveChannelMessageToolHints({
-        cfg: attempt.config,
-        channel: runtimeChannel,
-        accountId: attempt.agentAccountId,
-      })
-    : undefined;
   const toolSchemaDirectoryPrompt = params.toolSearchDirectoryEnabled
     ? buildToolSchemaDirectoryPrompt({
         config: attempt.config,
@@ -158,17 +106,21 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       })
     : undefined;
 
-  const defaultModelRef = resolveDefaultModelForAgent({
-    cfg: attempt.config ?? {},
-    agentId: params.sessionAgentId,
-  });
   const activeProcessSessions = listActiveProcessSessionReferences({
     scopeKey: resolveProcessToolScopeKey({
       sessionKey: params.sandboxSessionKey,
       agentId: params.sessionAgentId,
     }),
   });
-  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
+  const {
+    runtimeChannel,
+    runtimeCapabilities,
+    reactionGuidance,
+    messageToolHints,
+    runtimeInfo,
+    userTimezone,
+    userDate,
+  } = await resolveAgentRuntimePrompt({
     config: attempt.config,
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
@@ -176,22 +128,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
       ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
       : {}),
-    runtime: {
-      sessionKey: attempt.sessionKey,
-      sessionId: attempt.sessionId,
-      host: machineName,
-      os: resolveRuntimeOsLabel(),
-      arch: os.arch(),
-      node: process.version,
-      model: `${attempt.provider}/${attempt.modelId}`,
-      defaultModel: `${defaultModelRef.provider}/${defaultModelRef.model}`,
-      shell: detectRuntimeShell(),
-      channel: runtimeChannel,
-      chatType: attempt.chatType,
-      capabilities: runtimeCapabilities,
-      channelActions,
-      activeProcessSessions,
-    },
+    sessionKey: attempt.sessionKey,
+    sessionId: attempt.sessionId,
+    model: `${attempt.provider}/${attempt.modelId}`,
+    channel: attempt.messageChannel ?? attempt.messageProvider,
+    accountId: attempt.agentAccountId,
+    chatType: attempt.chatType,
+    currentChannelId: attempt.currentChannelId,
+    currentThreadTs: attempt.currentThreadTs,
+    currentMessageId: attempt.currentMessageId,
+    senderId: attempt.senderId,
+    senderIsOwner: attempt.senderIsOwner,
+    activeProcessSessions,
   });
   const promptMode =
     attempt.promptMode ??

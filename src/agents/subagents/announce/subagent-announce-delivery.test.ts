@@ -4396,6 +4396,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: deliveredRequesterFinal,
     },
     {
+      name: "accepts a yielded requester final already committed by automatic delivery",
+      response: {
+        result: {
+          payloads: [],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects a yielded turn without a result",
       response: {},
       requireVisibleReply: true,
@@ -4488,6 +4499,28 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         result: {
           payloads: [{ text: "never delivered" }],
           deliveryStatus: { status: "suppressed", succeeded: true, resultCount: 0 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects an empty successful automatic delivery receipt",
+      response: {
+        result: {
+          payloads: [],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: 0 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a malformed automatic delivery receipt",
+      response: {
+        result: {
+          payloads: [],
+          deliveryStatus: { status: "sent", succeeded: true, resultCount: "1" },
         },
       },
       requireVisibleReply: true,

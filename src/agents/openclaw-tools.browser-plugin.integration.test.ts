@@ -499,6 +499,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         config,
         workspaceDir: "/tmp",
         preparedModelRuntime: {
+          catalogOwner: undefined,
           agentDir: "/tmp/agent",
           workspaceDir: "/tmp",
           activeProjectKeys: [],

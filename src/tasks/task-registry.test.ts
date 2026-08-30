@@ -75,6 +75,7 @@ import {
   getInspectableTaskAuditFindings,
   getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary,
+  getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   reconcileInspectableTasks,
@@ -185,6 +186,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   listAcpSessionEntries?: () => Promise<AcpSessionStoreEntry[]>;
   hasActiveAcpTurn?: (sessionKey: string) => boolean;
   isBackgroundExecSessionActive?: (sessionId: string) => boolean;
+  runtimeAuthoritative?: boolean;
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
@@ -268,7 +270,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
-    isRuntimeAuthoritative: () => true,
+    isRuntimeAuthoritative: () => params.runtimeAuthoritative ?? true,
     listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
   });
 }
@@ -3142,7 +3144,7 @@ describe("task-registry", () => {
           sourceId: session.id,
           runId: `exec:${session.id}`,
           task: "Background CLI command",
-          lastEventAt: Date.now() - 10 * 60_000,
+          lastEventAt: Date.now() - 40 * 60_000,
         });
         const currentTasks = new Map([[task.taskId, task]]);
         configureTaskRegistryMaintenanceRuntimeForTest({
@@ -3160,6 +3162,34 @@ describe("task-registry", () => {
         expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
 
         markExited(session, null, "SIGTERM", "killed");
+
+        configureTaskRegistryMaintenanceRuntimeForTest({
+          currentTasks,
+          snapshotTasks: [task],
+          isBackgroundExecSessionActive,
+          runtimeAuthoritative: false,
+        });
+        expect(previewTaskRegistryMaintenance().reconciled).toBe(0);
+        expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+          expect.objectContaining({
+            taskId: task.taskId,
+            decision: "retained",
+            reason: "cli_runtime_not_authoritative",
+          }),
+        );
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 0,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+
+        configureTaskRegistryMaintenanceRuntimeForTest({
+          currentTasks,
+          snapshotTasks: [task],
+          isBackgroundExecSessionActive,
+        });
 
         expect(await runTaskRegistryMaintenance()).toEqual({
           reconciled: 1,

@@ -1673,8 +1673,6 @@ CREATE INDEX IF NOT EXISTS idx_delegate_artifact_audit_recipient
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,
-  target_agent_id TEXT NOT NULL,
-  target_session_id TEXT,
   target_session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
   account_id TEXT NOT NULL,
@@ -1691,7 +1689,7 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
-  ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
+  ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
   ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires

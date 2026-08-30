@@ -58,6 +58,7 @@ export type AgentFallbackCycleState = {
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
   autoCompactionCount: number;
+  postCompactionModelAttempted: boolean;
   attemptedRuntimeProvider: string;
   attemptedRuntimeModel: string;
   bootstrapPromptWarningSignaturesSeen: string[];

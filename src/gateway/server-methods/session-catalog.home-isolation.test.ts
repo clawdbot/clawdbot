@@ -24,6 +24,11 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
 }));
+// HOME policy uses the real home path, but this fixture must not open its profile database.
+vi.mock("../../state/user-profiles.js", () => ({
+  getUserProfileRole: vi.fn(() => null),
+  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+}));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 const { listActiveSessionCatalogs } = await import("../../plugins/session-catalog-active.js");

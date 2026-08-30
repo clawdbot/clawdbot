@@ -22,6 +22,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -1114,8 +1115,8 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id after pairing validation and a successful dispatch. */
-    onDispatchReady?: (invokeId: string) => void;
+    /** Receives the id and armed hard deadline after a successful dispatch. */
+    onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
     /** Revalidates caller authority at the registry-owned transport handoff. */
     isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
@@ -1422,13 +1423,7 @@ export class NodeRegistry {
       return false;
     }
     try {
-      node.client.socket.send(
-        JSON.stringify({
-          type: "event",
-          event,
-          payload,
-        }),
-      );
+      node.client.socket.send(serializeNodeEvent(event, payload));
       return true;
     } catch {
       return false;

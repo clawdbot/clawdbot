@@ -63,23 +63,18 @@ export async function prepareSessionWorktree(params: {
     }
     const generatedTitle = existingDirectory ? undefined : await title?.generated;
     commitGuard?.();
-    const worktree =
-      existing && existingDirectory
-        ? existing
-        : await managedWorktrees.create({
-            repoRoot: workspace,
-            ownerKind: "session",
-            ownerId: target.key,
-            name: params.name,
-            suggestedName: slugifyWorktreeTitle(
-              params.label ?? generatedTitle ?? title?.source ?? "",
-            ),
-            baseRef: params.baseRef,
-            runSetupScript: params.runSetupScript,
-            signal: params.signal,
-            commitGuard,
-            onProgress: params.onProgress,
-          });
+    const worktree = await managedWorktrees.create({
+      repoRoot: workspace,
+      ownerKind: "session",
+      ownerId: target.key,
+      name: params.name,
+      suggestedName: slugifyWorktreeTitle(params.label ?? generatedTitle ?? title?.source ?? ""),
+      baseRef: params.baseRef,
+      runSetupScript: params.runSetupScript,
+      signal: params.signal,
+      commitGuard,
+      onProgress: params.onProgress,
+    });
     const rollback = existingDirectory
       ? undefined
       : async () => {

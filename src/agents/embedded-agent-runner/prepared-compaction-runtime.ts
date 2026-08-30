@@ -57,7 +57,10 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
-import { resolveSessionPermissionExecMode } from "../session-permission-exec-mode.js";
+import {
+  resolveSessionPermissionExecMode,
+  SESSION_PERMISSION_BY_EXEC_MODE,
+} from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
 import { toolPolicyRestrictsTools } from "../tool-policy.js";
@@ -107,15 +110,8 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveCwd,
     effectiveSkillAgentId,
   } = prepared;
-  const permissionModes = {
-    deny: "read-only",
-    allowlist: "read-only",
-    ask: "guarded",
-    auto: "workspace",
-    full: "full",
-  } as const;
   const mode = params.execOverrides?.mode
-    ? permissionModes[params.execOverrides.mode]
+    ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
     : (params.permissionMode ?? params.sessionEntry?.permissionMode);
   const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
   const sessionPermissionPolicy = mode

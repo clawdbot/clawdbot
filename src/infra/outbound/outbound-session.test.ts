@@ -112,19 +112,37 @@ describe("resolveOutboundSessionRoute", () => {
       name: "group binding collapses an exact room into main",
       globalSession: { groupScope: "per-group" as const },
       peer: { kind: "group" as const, id: "team-room" },
+      bindingAgentId: "main",
       bindingSession: { groupScope: "main" as const },
       pluginBaseKey: "agent:main:bound-channel:group:team-room",
       pluginSessionKey: "agent:main:bound-channel:group:team-room",
       expectedSessionKey: "agent:main:main",
+      expectedBaseSessionKey: "agent:main:main",
+      expectedRecipientSessionExact: true,
     },
     {
       name: "DM binding collapses an exact peer into main and preserves its thread",
       globalSession: { dmScope: "per-channel-peer" as const },
       peer: { kind: "direct" as const, id: "alice" },
+      bindingAgentId: "main",
       bindingSession: { dmScope: "main" as const },
       pluginBaseKey: "agent:main:bound-channel:direct:alice",
       pluginSessionKey: "agent:main:bound-channel:direct:alice:thread:topic-1",
       expectedSessionKey: "agent:main:main:thread:topic-1",
+      expectedBaseSessionKey: "agent:main:main",
+      expectedRecipientSessionExact: true,
+    },
+    {
+      name: "cross-agent binding downgrades an agent-local exact route",
+      globalSession: { dmScope: "per-channel-peer" as const },
+      peer: { kind: "direct" as const, id: "alice" },
+      bindingAgentId: "other",
+      bindingSession: { dmScope: "per-channel-peer" as const },
+      pluginBaseKey: "agent:main:bound-channel:direct:alice",
+      pluginSessionKey: "agent:main:bound-channel:direct:alice",
+      expectedSessionKey: "agent:main:bound-channel:direct:alice",
+      expectedBaseSessionKey: "agent:main:bound-channel:direct:alice",
+      expectedRecipientSessionExact: false,
     },
   ])("applies $name before returning the canonical route", async (testCase) => {
     const plugin = {
@@ -146,7 +164,7 @@ describe("resolveOutboundSessionRoute", () => {
         session: testCase.globalSession,
         bindings: [
           {
-            agentId: "main",
+            agentId: testCase.bindingAgentId,
             match: { channel: "bound-channel", peer: testCase.peer },
             session: testCase.bindingSession,
           },
@@ -159,7 +177,8 @@ describe("resolveOutboundSessionRoute", () => {
     });
 
     expect(route?.sessionKey).toBe(testCase.expectedSessionKey);
-    expect(route?.baseSessionKey).toBe("agent:main:main");
+    expect(route?.baseSessionKey).toBe(testCase.expectedBaseSessionKey);
+    expect(route?.recipientSessionExact).toBe(testCase.expectedRecipientSessionExact);
   });
 
   async function expectResolvedRoute(params: {
@@ -672,7 +691,7 @@ describe("ensureOutboundSessionEntry", () => {
   it.each(["operator", "required-parent", "unstamped-parent"] as const)(
     "carries %s creation policy without requiring current role configuration",
     async (source) => {
-      const actor = { type: "human" as const, id: "outbound-creator" };
+      const actor = { type: "human" as const, source: "profile" as const, id: "outbound-creator" };
       const creation = { via: "operator" as const, actor, sandbox: "required" as const };
       mocks.loadSessionEntryReadOnly.mockImplementation((params) =>
         params.sessionKey === "agent:other:main" && params.storePath === "/stores/other.json"

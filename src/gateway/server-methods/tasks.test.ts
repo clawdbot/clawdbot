@@ -512,7 +512,7 @@ describe("tasks gateway handlers", () => {
           {
             sessionId: `session-${sessionKey}`,
             updatedAt: 1,
-            createdActor: { type: "human", id: actorId },
+            createdActor: { type: "human", source: "profile", id: actorId },
             visibility: "shared",
             ...(access === "incognito" && sessionKey === foreignKey ? { incognito: true } : {}),
           },

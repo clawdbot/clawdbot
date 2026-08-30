@@ -3,6 +3,10 @@ import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import {
+  browserTabKey,
+  type BrowserTabSelection,
+} from "../../../components/browser/browser-target.ts";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
@@ -47,7 +51,7 @@ export {
 
 export function renderBrowserTabPreviews(
   groups: readonly MessageGroup[],
-  options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, string> },
+  options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection> },
 ) {
   const cards = groups.flatMap((group) =>
     group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
@@ -60,7 +64,7 @@ export function renderBrowserTabPreviews(
       card.preview?.kind === "browser-tab" &&
       resolveToolCardOutcome(card, false) === "succeeded"
     ) {
-      lastCardForTab.set(card.preview.targetId, card);
+      lastCardForTab.set(browserTabKey(card.preview), card);
     }
   }
   return [...lastCardForTab.values()].map((card) => {
@@ -72,7 +76,7 @@ export function renderBrowserTabPreviews(
     return renderToolPreview(preview, "chat_tool", {
       browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
       browserTabLatest: Boolean(
-        revision && options.latestBrowserTabs?.get(preview.targetId) === revision,
+        revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
       ),
     });
   });

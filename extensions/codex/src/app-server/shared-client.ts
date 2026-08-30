@@ -1101,7 +1101,26 @@ async function startInitializedCodexAppServerClient(params: {
       throw new Error("Codex app-server runtime artifact does not match verified inference");
     }
     assertDesktopGenerationCurrent();
-    const client = CodexAppServerClient.start(startOptions);
+    let starting: Promise<CodexAppServerClient> | undefined;
+    let client: CodexAppServerClient;
+    try {
+      client = await withCodexAppServerAcquireDeadline(
+        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+        (starting = CodexAppServerClient.start(startOptions, () => {
+          assertDesktopGenerationCurrent();
+          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
+        })),
+        params.abandonSignal,
+      );
+    } catch (error) {
+      // A timed-out registration may settle later; it cannot publish a live
+      // client after the acquisition owner has already released its claim.
+      void starting?.then(
+        (lateClient) => lateClient.close(),
+        () => {},
+      );
+      throw error;
+    }
     const nativeCommandAtStart =
       startOptions.commandSource === "resolved-managed"
         ? resolveManagedCodexNativeCommand(startOptions.command)

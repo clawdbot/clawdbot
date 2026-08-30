@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
-import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const boundary = vi.hoisted(() => ({ create: vi.fn() }));
@@ -20,18 +20,24 @@ vi.mock("./gateway-rpc-client.js", () => ({
 const dirs = createTempDirHarness();
 const owners: ReturnType<typeof createQaGatewayChild>[] = [];
 const groups: number[] = [];
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   boundary.create.mockReset();
-  for (const owner of owners.splice(0)) {
+  for (const owner of owners) {
     await owner.stop();
   }
-  for (const group of groups.splice(0)) {
+  for (const group of groups) {
     if (isQaPosixProcessGroupAlive(group)) {
-      process.kill(-group, "SIGKILL");
+      expect(signalQaPosixProcessGroup(group, "SIGKILL")).toBeUndefined();
     }
     await vi.waitFor(() => expect(isQaPosixProcessGroupAlive(group)).toBe(false));
   }
+  owners.length = 0;
+  groups.length = 0;
   await dirs.cleanup();
 });
 
@@ -306,6 +312,32 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     await rejected;
     await expect(stopping).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     expect(pids()).toHaveLength(1);
+  });
+
+  it("reports failed runtime removal without undoing confirmed shutdown and retries cleanup", async () => {
+    const { params, pids } = await fixture();
+    const owner = own(params);
+    const gateway = await owner.start();
+    pids();
+    const originalRm = fs.rm;
+    const fault = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === gateway.tempRoot) {
+        throw Object.assign(new Error("EACCES: runtime removal denied"), { code: "EACCES" });
+      }
+      return originalRm(target, options);
+    });
+    try {
+      const result = await owner.stop();
+      expect(result.process).toBe("confirmed-stopped");
+      expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+      await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+      expect(result.errors.map(String).join("; ")).toContain("EACCES");
+      await expect(gateway.stop()).rejects.toThrow("EACCES");
+    } finally {
+      fault.mockRestore();
+    }
+    await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
+    await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reports artifact failure while still confirming process shutdown", async () => {

@@ -4,14 +4,10 @@ import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/fram
 import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
-export type GatewayMethodDispatchResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
-  meta?: Record<string, unknown>;
-};
+export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 
 type InProcessGatewayDispatchOptions = {
   client: GatewayRequestOptions["client"];

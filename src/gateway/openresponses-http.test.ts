@@ -2201,7 +2201,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
               sessionId: "foreign-openresponses-http",
               updatedAt: 1,
               visibility: "shared",
-              createdActor: { type: "human", id: owner.id },
+              createdVia: "operator",
+              createdActor: { type: "human", source: "profile", id: owner.id },
             },
           );
 

@@ -81,6 +81,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_transcript_active_events.context_eligible",
     "session_conversations.route_context_json",
     "standing_intents.creator_sender",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
@@ -90,6 +91,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
+  allowedMissingIndexes: ["idx_agent_transcript_context_pending"],
   optionalCanonicalTriggerGroups: [
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,

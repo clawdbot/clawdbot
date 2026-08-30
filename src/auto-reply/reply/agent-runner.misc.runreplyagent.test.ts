@@ -4,6 +4,7 @@ import path from "node:path";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   abortEmbeddedAgentRun,
@@ -20,6 +21,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
@@ -304,6 +306,18 @@ function createBaseRun(options: BaseRunOptions = {}) {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "claude-cli", id: "opus-4.5", input: ["text", "image"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
+        { provider: "google", id: "gemini-2.5-pro", input: ["text", "image"] },
+        { provider: "google-gemini-cli", id: "gemini-3", input: ["text", "image"] },
+        {
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-sonnet-4-6",
+          input: ["text", "image"],
+        },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
@@ -380,11 +394,11 @@ function setupAgentRunnerMocks(): void {
   resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
-  runEmbeddedAgentMock.mockClear();
+  runEmbeddedAgentMock.mockReset();
   warnPrivateFinalSpy.mockClear();
-  runCliAgentMock.mockClear();
-  runWithModelFallbackMock.mockClear();
-  runtimeErrorMock.mockClear();
+  runCliAgentMock.mockReset();
+  runWithModelFallbackMock.mockReset();
+  runtimeErrorMock.mockReset();
   abortEmbeddedAgentRunMock.mockClear();
   compactState.compactEmbeddedAgentSessionMock.mockReset();
   compactState.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -397,7 +411,7 @@ function setupAgentRunnerMocks(): void {
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
-  loadCronStoreMock.mockClear();
+  loadCronStoreMock.mockReset();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
 
@@ -593,6 +607,118 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
+
+  it("executes the next user turn in the default 32K early-flush interval without compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-early-flush-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10_920,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    const prompt = "What is two plus two? Answer in one short sentence without tools.";
+    registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
+      expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
+        { id: "claude-opus-4-6", contextTokens: 32_768 },
+      ]);
+      expect(contextWindowTokens).toBe(32_768);
+      return {
+        softThresholdTokens: 4_000,
+        reserveTokensFloor: 20_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        prompt: "Pre-compaction memory flush.",
+        systemPrompt: "Write durable memory, then reply NO_REPLY.",
+        relativePath: "memory/active.md",
+      };
+    });
+    // The usage counters are from bounded QA metadata. This assembled prompt and
+    // transcript are synthetic; their estimates are not an observed second-turn budget.
+    const terminalEvent = (input: number, output: number) => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        stopReason: "stop",
+        usage: { input, output, totalTokens: input + output },
+      },
+    });
+    runEmbeddedAgentMock.mockImplementation(
+      async (params: { trigger?: string; prompt?: string }) => {
+        if (params.trigger === "memory") {
+          await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
+          return {
+            payloads: [],
+            meta: { agentMeta: { lastCallUsage: { input: 7_039, output: 34 } } },
+          };
+        }
+        expect(params.prompt).toContain(prompt);
+        return { payloads: [{ text: "Two plus two is four." }], meta: {} };
+      },
+    );
+    try {
+      await replaceSessionEntry(scope, sessionEntry);
+      await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
+      // Store preparation can populate the shared test config snapshot.
+      clearRuntimeConfigSnapshot();
+      const result = await createBaseRun({
+        followup: { prompt },
+        run: {
+          agentId: "main",
+          agentDir: path.join(tmp, "agent"),
+          sessionKey,
+          sessionFile: path.join(tmp, "session.jsonl"),
+          workspaceDir: tmp,
+          model: "claude-opus-4-6",
+          config: {
+            models: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://example.test",
+                  models: [
+                    {
+                      id: "claude-opus-4-6",
+                      name: "Test model",
+                      contextTokens: 32_768,
+                      reasoning: false,
+                      input: ["text"],
+                      maxTokens: 8_192,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        reply: {
+          commandBody: prompt,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+        },
+      }).run();
+
+      expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      expect(runtimeErrorMock).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual([
+        "memory",
+        "user",
+      ]);
+      expectReplyText(result, "Two plus two is four.");
+      expect(loadSessionEntry(scope)?.memoryFlush).toMatchObject({
+        kind: "succeeded",
+        compactionCount: 0,
+      });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -1123,6 +1249,7 @@ describe("runReplyAgent block streaming", () => {
   it("returns the final payload when onBlockReply times out", async () => {
     vi.useFakeTimers();
     let sawAbort = false;
+    const blockReplyStarted = createDeferred();
 
     const onBlockReply = vi.fn((_payload, context) => {
       return new Promise<void>((resolve) => {
@@ -1134,6 +1261,7 @@ describe("runReplyAgent block streaming", () => {
           },
           { once: true },
         );
+        blockReplyStarted.resolve();
       });
     });
 
@@ -1182,6 +1310,7 @@ describe("runReplyAgent block streaming", () => {
       },
     }).run();
 
+    await blockReplyStarted.promise;
     await vi.advanceTimersByTimeAsync(5);
     const result = await resultPromise;
 
@@ -2393,6 +2522,8 @@ describe("runReplyAgent response usage footer", () => {
 describe("runReplyAgent transient HTTP retry", () => {
   it("retries once after transient 521 HTML failure and then succeeds", async () => {
     vi.useFakeTimers();
+    const retryStarted = createDeferred();
+    runtimeErrorMock.mockImplementationOnce(() => retryStarted.resolve());
     runEmbeddedAgentMock
       .mockRejectedValueOnce(
         new Error(
@@ -2413,6 +2544,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       },
     }).run();
 
+    await retryStarted.promise;
     await vi.advanceTimersByTimeAsync(2_500);
     const result = await runPromise;
 
@@ -2610,6 +2742,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         thinkLevel: "low",
         reasoningLevel: "on",
         verboseLevel: "off",

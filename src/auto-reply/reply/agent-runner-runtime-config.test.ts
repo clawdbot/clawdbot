@@ -23,6 +23,14 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
     skipProviderRuntimeHints: true,
+    thinkingCatalog: [
+      {
+        provider: "openai",
+        id: "gpt-4.1-mini",
+        input: ["text"],
+        baseUrl: "https://api.openai.com/v1",
+      },
+    ],
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
@@ -37,7 +45,7 @@ afterEach(() => {
 });
 
 describe("buildEmbeddedRunBaseParams runtime config", () => {
-  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", () => {
+  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
     const staleSnapshot: OpenClawConfig = {
       models: {
         providers: {
@@ -66,7 +74,7 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     };
     setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run: makeRun(resolvedRunConfig),
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -77,11 +85,11 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     expect(resolved.config).toBe(resolvedRunConfig);
   });
 
-  it("carries out-of-band tool bindings into the embedded run", () => {
+  it("carries out-of-band tool bindings into the embedded run", async () => {
     const run = makeRun({});
     run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",

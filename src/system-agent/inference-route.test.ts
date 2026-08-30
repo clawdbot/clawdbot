@@ -42,18 +42,32 @@ afterEach(() => {
 });
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
-  it("admits the reserved execution agent for a dev-shaped roster", async () => {
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(devConfig());
+  it.each([
+    { label: "main", agentIds: ["main"], owner: "main" },
+    { label: "non-main", agentIds: ["dev"], owner: "dev" },
+    { label: "multi-agent", agentIds: ["main", "dev"], owner: "dev" },
+  ])(
+    "admits the route owner and reserved agent for a $label roster",
+    async ({ agentIds, owner }) => {
+      const config = devConfig();
+      config.agents = {
+        ...config.agents,
+        entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
+      };
+      const route = await resolveSystemAgentConfiguredRouteFromConfig(config, owner);
 
-    expect(route).not.toBeNull();
-    expect(() =>
-      resolveRunWorkspaceDir({
-        workspaceDir: "/tmp/x",
-        agentId: SYSTEM_AGENT_ID,
-        config: route!.runConfig,
-      }),
-    ).not.toThrow();
-  });
+      expect(route?.agentId).toBe(owner);
+      for (const agentId of [owner, SYSTEM_AGENT_ID]) {
+        expect(
+          resolveRunWorkspaceDir({
+            workspaceDir: "/tmp/x",
+            agentId,
+            config: route!.runConfig,
+          }).agentId,
+        ).toBe(agentId);
+      }
+    },
+  );
 
   it("keeps implicit harness selection fallible while forcing explicit policy", async () => {
     const supports = vi.fn((ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>

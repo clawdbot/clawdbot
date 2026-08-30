@@ -48,6 +48,7 @@ export async function getPluginCliCommandDescriptors(
       const pluginConfig = normalizedConfig.entries[normalizePluginPolicyId(plugin.id)]?.config;
       if (
         !validatePluginConfig({
+          origin: plugin.origin,
           schema: plugin.configSchema,
           cacheKey: plugin.schemaCacheKey,
           value: pluginConfig,

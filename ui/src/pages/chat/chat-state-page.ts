@@ -212,7 +212,6 @@ export function createPageState(
     chatModelSwitchPromises: {},
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
     modelAuthStatusResult: null,

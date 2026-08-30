@@ -220,6 +220,7 @@ export function renderSessionProgressCard(
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
+  collapseComposerByDefault = false,
 ) {
   if (!card) {
     return nothing;
@@ -314,7 +315,13 @@ export function renderSessionProgressCard(
       class="session-progress-card session-progress-card--composer"
       data-progress-card-placement="composer"
       data-complete=${String(complete)}
-      ${ref((element) => initializeComposerDisclosure(element, card.sessionKey, !complete))}
+      ${ref((element) =>
+        initializeComposerDisclosure(
+          element,
+          card.sessionKey,
+          !complete && !collapseComposerByDefault,
+        ),
+      )}
     >
       <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
         <span

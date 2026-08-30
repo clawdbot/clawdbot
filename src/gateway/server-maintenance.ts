@@ -3,7 +3,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { purgeExpiredDelegateArtifacts } from "../agents/delegate-artifacts.js";
-import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
+import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
@@ -13,12 +13,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite.js";
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import {
+  createGatewayActiveWorkSnapshot,
+  type GatewayActiveWorkInspectors,
+} from "../infra/gateway-active-work.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
-import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
@@ -30,7 +37,10 @@ import {
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
-import { createHostThawRecovery } from "./host-thaw-recovery.js";
+import {
+  createHostThawRecovery,
+  type HostThawChannelRestartOutcome,
+} from "./host-thaw-recovery.js";
 import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -78,7 +88,11 @@ export function startGatewayMaintenanceTimers(params: {
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
   logHealth: { info: (msg: string) => void; error: (msg: string) => void };
-  restartRunningChannels: () => Promise<void>;
+  restartRunningChannels: (
+    mode: "new-thaw" | "deferred-retry",
+    shouldContinue?: () => boolean,
+  ) => Promise<boolean>;
+  activeWorkInspectors: Partial<GatewayActiveWorkInspectors>;
   refreshPresence: () => void;
   resetEventLoopHealth: () => void;
   dedupe: Map<string, DedupeEntry>;
@@ -120,9 +134,47 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("health", snap);
   });
 
+  const restartChannelsIfIdle = async (
+    mode: "new-thaw" | "deferred-retry",
+  ): Promise<HostThawChannelRestartOutcome> => {
+    let invalidated = false;
+    const admission = tryBeginGatewaySuspendAdmission(() => {
+      invalidated = true;
+    });
+    if (!admission) {
+      return { status: "retry", reason: "admission-closed" };
+    }
+    let snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>;
+    try {
+      snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
+        ignoreTerminalSessions: true,
+      });
+    } catch (error) {
+      // Inspection runs while admission is preparing. Never strand that global
+      // fence closed when an inspector fails before the restart can commit.
+      admission.rollback();
+      throw error;
+    }
+    if (!snapshot.idle) {
+      admission.rollback();
+      return { status: "retry", reason: "active-work" };
+    }
+    if (!admission.commit()) {
+      return { status: "retry", reason: "admission-closed" };
+    }
+    try {
+      const restarted = await params.restartRunningChannels(mode, () => !invalidated);
+      return restarted
+        ? { status: "completed" }
+        : { status: "retry", reason: "channel-restart-incomplete" };
+    } finally {
+      admission.release();
+    }
+  };
+
   const hostThawRecovery = createHostThawRecovery({
     nowMs: Date.now,
-    restartChannels: params.restartRunningChannels,
+    restartChannelsIfIdle,
     refreshHealth: async () => {
       await params.refreshGatewayHealthSnapshot({ probe: true });
     },
@@ -169,7 +221,7 @@ export function startGatewayMaintenanceTimers(params: {
       return managedWorktrees.gc({
         // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
         // worktree activity so idle GC cannot remove a checkout still used by the session.
-        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+        ...createManagedWorktreeOwnerPolicy(cfg),
         // Read limits per run so a config edit applies at the next hourly sweep.
         limits: resolveWorktreeCleanupLimits(),
       });

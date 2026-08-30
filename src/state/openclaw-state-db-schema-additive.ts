@@ -16,6 +16,7 @@ import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
+  repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -459,8 +460,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "managed_outgoing_image_records",
     "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
   );
-  ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(
     db,
     "current_conversation_bindings",
@@ -494,6 +493,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "detail_json TEXT");
   repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);
+  repairLegacySubagentTaskBindings(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");

@@ -525,6 +525,46 @@ describe("createCliJsonlStreamingParser framing", () => {
 
   it.each([
     {
+      name: "uses complete tool args from content_block_start when no deltas arrive",
+      frames: [
+        claudeBlockStart(
+          {
+            type: "tool_use",
+            id: "toolu_start",
+            name: "Bash",
+            input: { command: "ls -la" },
+          },
+          0,
+        ),
+        claudeBlockStop(0),
+      ],
+      expected: [
+        {
+          toolCallId: "toolu_start",
+          name: "Bash",
+          kind: "tool_use",
+          args: { command: "ls -la" },
+        },
+      ],
+    },
+    {
+      name: "keeps an explicit empty streamed input over the start snapshot",
+      frames: [
+        claudeBlockStart(
+          {
+            type: "tool_use",
+            id: "toolu_empty",
+            name: "Bash",
+            input: { command: "stale --from-start-block" },
+          },
+          0,
+        ),
+        claudeInputJsonDelta("{}", 0),
+        claudeBlockStop(0),
+      ],
+      expected: [{ toolCallId: "toolu_empty", name: "Bash", kind: "tool_use", args: {} }],
+    },
+    {
       name: "reassembles streamed tool args from input_json_delta chunks",
       frames: [
         claudeBlockStart({ type: "tool_use", id: "toolu_chunked", name: "Bash", input: {} }, 0),

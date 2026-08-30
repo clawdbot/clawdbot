@@ -46,6 +46,10 @@ still-active child that owns the blocking failure.
 Same-parent continuation requires the original root to have been dispatched
 with `fail_fast=false`. The controller verifies that exact logged input before
 any rerun mutation.
+It is also unavailable when that parent produced the sealed candidate
+artifacts, because GitHub reruns make those prior-attempt artifacts unavailable.
+Keep the candidate and Tooling SHAs frozen, supersede the parent, and start a
+fresh all-group Full Release Validation.
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
@@ -96,6 +100,11 @@ child attempts, and writes the final all-group manifest. The manifest records
 the planned and effective attempt, accepted attempt for every logical job, and
 a digest of the composite job evidence.
 
+Each child or parent rerun mutation is sent exactly once. If GitHub returns an
+ambiguous transient error, the controller performs read-only reconciliation
+until the newer attempt becomes visible or the bounded reconciliation deadline
+expires. It never repeats the mutation, and provenance drift fails closed.
+
 The command stores no continuation ledger or local journal. GitHub run
 attempts, the immutable execution plan, Decision/Drain artifacts, and the final
 manifest are the complete state model. It never tags, publishes, changes a
@@ -134,8 +143,14 @@ creates or updates repository refs itself.
 Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
 after the reviewed SHA lands on protected `main`. The fixture contains one
 fixed no-op job that intentionally fails on attempt one and passes on attempt
-two. The broker validates the exact maintainer, pull request head, protected
+two. The broker validates the exact maintainer, merged pull request, protected
 main SHA, fixture workflow, and run tuple before rerunning only that failed job.
+Supply the merged pull request number and its exact landed commit. The broker
+requires the pull request to be merged into `main`, requires its recorded merge
+commit to equal that landed commit, and requires the landed commit to be
+identical to or an ancestor of the trusted broker workflow SHA. It repeats the
+maintainer, merged pull request, and ancestry checks immediately before the
+fixture rerun.
 
 Accept the hosted mutation proof only when the exact fixture run advances to
 attempt two and passes. The broker emits a receipt and must create no release
@@ -314,8 +329,12 @@ publish consumers. The verifier always prefers the attempt-qualified artifact;
 as a transition, it accepts the stable name only for an attempt-1 manifest v2
 producer. It rejects that legacy name for later attempts and manifest v3.
 
-Concurrency is keyed by Validation SHA, Tooling SHA, and rerun group and does
-not cancel an older run. Parent cancellation or timeout leaves adopted
+Concurrency is keyed by Validation SHA, Tooling SHA, rerun group, release
+profile, and effective soak coverage, and does not cancel an older run. The
+Release Checks child also separates profiles and effective soak, preserving
+independent admission through both workflow levels. Stable/full normalize soak
+to enabled, so explicitly enabling it does not admit a duplicate request.
+Parent cancellation or timeout leaves adopted
 identity-checked children running and records `cancelled_with_children` when
 the state collector can complete its cancellation handoff. Cancel an exact
 child explicitly when it is no longer useful. Do not run a second foreground
@@ -366,6 +385,12 @@ empty:
 | `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
 | `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
 | `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
+
+Expanded published-upgrade survivor and update-migration coverage runs in
+baseline-specific groups of at most three scenarios, with up to 32 targeted
+Docker jobs active per matrix. The grouping and execution planners share the
+same baseline compatibility rules; package identities, fresh scenario
+containers, per-runner npm limits, and failure reporting remain unchanged.
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun

@@ -33,14 +33,18 @@ function mockPerplexityResponseOnce(body: unknown): void {
   );
 }
 
-function createConfiguredPerplexityTool(structured: boolean, apiKey = directPerplexityApiKey) {
+function createConfiguredPerplexityTool(
+  structured: boolean,
+  apiKey = directPerplexityApiKey,
+  cacheTtlMinutes?: number,
+) {
   const webSearch = {
     apiKey,
     ...(structured ? {} : { baseUrl: "https://api.perplexity.ai" }),
   };
   const tool = createPerplexityWebSearchProvider().createTool({
     config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
-    searchConfig: {},
+    searchConfig: { cacheTtlMinutes },
   });
   if (!tool) {
     throw new Error("Expected tool definition");
@@ -251,6 +255,58 @@ describe("perplexity web search provider", () => {
     ).rejects.toThrow("Perplexity caller canceled");
     expect(withTrustedWebSearchEndpointMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "native Search API", structured: true, ttl: 0 },
+    { name: "native Search API", structured: true, ttl: 1 },
+    { name: "chat completions", structured: false, ttl: 0 },
+    { name: "chat completions", structured: false, ttl: 1 },
+  ])(
+    "applies the current cache TTL of $ttl minutes to $name results",
+    async ({ name, structured, ttl }) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      withTrustedWebSearchEndpointMock.mockReset();
+      for (const result of ["initial", "fresh", "uncached"]) {
+        mockPerplexityResponseOnce(
+          structured
+            ? { results: [{ title: result, url: `https://example.test/${result}` }] }
+            : {
+                choices: [{ message: { content: result } }],
+                citations: [`https://example.test/${result}`],
+              },
+        );
+      }
+
+      try {
+        const args = { query: `perplexity current cache TTL ${name} ${ttl}` };
+        const originalTool = createConfiguredPerplexityTool(structured, undefined, 15);
+        const initial = await originalTool.execute(args);
+        expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+
+        now.mockReturnValue(1_700_000_060_000);
+        const currentTool = createConfiguredPerplexityTool(structured, undefined, ttl);
+        const fresh = await currentTool.execute(args);
+        expect(fresh.cached).toBeUndefined();
+        expect(fresh).toMatchObject(
+          structured
+            ? { results: [expect.objectContaining({ url: "https://example.test/fresh" })] }
+            : { citations: ["https://example.test/fresh"] },
+        );
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+
+        const repeated = await currentTool.execute(args);
+        expect(repeated.cached).toBe(ttl === 0 ? undefined : true);
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(ttl === 0 ? 3 : 2);
+        if (ttl === 0) {
+          expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+        }
+      } finally {
+        now.mockRestore();
+        withTrustedWebSearchEndpointMock.mockReset();
+      }
+    },
+  );
 
   it.each([
     { name: "missing choices", response: {} },

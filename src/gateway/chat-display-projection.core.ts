@@ -5,6 +5,10 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { hasRawToolValidationOutput } from "../agents/tool-error-summary.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
+  readNestedToolActivity,
+  nestedToolActivityContent,
+} from "../sessions/nested-tool-activity.js";
+import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
@@ -321,7 +325,26 @@ export function projectChatDisplayMessagesWithState(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
-  const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
+  const projectedActivity = messages.map((message) => {
+    const activity = readNestedToolActivity(message);
+    if (!activity) {
+      return message;
+    }
+    const [call, result] = nestedToolActivityContent(activity);
+    const sanitized = sanitizeChatHistoryMessage(
+      { ...result, role: "toolResult" },
+      options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    ).message;
+    return {
+      ...asOptionalRecord(message),
+      runId: activity.details.runId,
+      content: [call, sanitized],
+    };
+  });
+  const source =
+    options?.stripEnvelope === false
+      ? projectedActivity
+      : stripEnvelopeFromMessages(projectedActivity);
   const mirrored = mirrorMessageToolVisibleReplies(source);
   const repairedStreamErrors = projectRepairedStreamErrorFallbackMessages(
     toProjectedMessages(mirrored),

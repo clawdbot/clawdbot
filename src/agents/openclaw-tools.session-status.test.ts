@@ -31,7 +31,7 @@ const resolveQueueSettingsMock = vi.hoisted(() =>
 );
 const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
   vi.fn(
-    (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
+    (_params: { relatedSessionKey: string; callerOwnerKey: string }) =>
       [] as Array<Record<string, unknown>>,
   ),
 );

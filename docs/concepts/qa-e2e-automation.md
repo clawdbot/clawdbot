@@ -1099,12 +1099,19 @@ QA Lab acquires an exclusive lease, heartbeats it for the duration of the
 run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
 `"slack"`, `"telegram"`, and `"whatsapp"`.
 
-The suite owns its Gateway lifecycle before startup begins, including startup
-retries and replacement processes. Transport adapters drain their driver work in
+The suite owns its Gateway lifecycle before startup begins, including packaged
+auth and plugin-repair commands, startup retries, replacement processes, and
+commands run against the active Gateway. Each CLI command has a two-minute
+execution limit. Stop closes admission immediately and settles all owned process
+groups; leader exit does not bypass shutdown or the bounded wait for inherited
+stdio to close. On POSIX, CLI commands use their own process groups, so concurrent
+commands do not replace the active Gateway's identity.
+
+Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
 `cleanupAfterGatewayStop()`. The suite runs that second phase only when no
-Gateway was spawned or process-group termination was confirmed. A readiness
-failure or an exited group leader is not shutdown proof.
+subprocess was spawned or all owned process groups were confirmed stopped. A
+readiness failure or an exited group leader is not shutdown proof.
 
 Failed startup or replacement settles the process without finalizing its logs
 or staging directory. The caller retains the lifecycle owner and always calls
@@ -1120,6 +1127,13 @@ after-stop cleanup when the process group is confirmed stopped. This ordering
 requires adapters to use the two cleanup phases; it does not change broker TTLs
 or provide a durable guarantee after the QA parent or host is lost.
 
+Temporary runtime and staged-plugin directories are removed independently, and
+removal failures are reported with redacted diagnostics. A cleanup error can
+therefore leave isolated runtime or auth state on disk even when process
+termination is confirmed. Correct the filesystem problem and retry `stop()` on
+the retained lifecycle owner; confirmed termination still permits after-stop
+credential cleanup.
+
 Payload shapes the broker validates on `admin/add`:
 
 - Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,
@@ -1132,27 +1146,9 @@ driverBotToken: string, sutBotToken: string, sutApplicationId: string,
 voiceChannelId?: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,
 sutToken: string }` - `groupId` must be a numeric chat-id string.
-- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken:
-string, testerUserId: string, testerUsername: string, telegramApiId:
-string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string,
-tdlibArchiveBase64: string, tdlibArchiveSha256: string,
-desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` -
-  Mantis Telegram Desktop proof only. Generic QA Lab lanes must not acquire
-  this kind.
 - WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164:
 string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string,
 groupJid?: string }` - phone numbers must be distinct E.164 strings.
-
-The Mantis Telegram Desktop proof workflow holds one exclusive Convex
-`telegram-user` lease for both the TDLib CLI driver and Telegram Desktop
-witness, then releases it after publishing proof.
-
-When a PR needs a deterministic visual diff, Mantis can use the same mock
-model reply on `main` and on the PR head while the Telegram formatter or
-delivery layer changes. Capture defaults are tuned for PR comments: standard
-Crabbox class, 24fps desktop recording, 24fps motion GIF, and 1920px preview
-width. Before/after comments should publish a clean bundle that contains
-only the intended GIFs.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live
 in the Slack QA runner rather than the broker; use `{ channelId: string,

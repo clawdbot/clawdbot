@@ -7,7 +7,8 @@
  * thin forwarder — the old assets/chrome-extension put this logic in an
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
-import { once } from "node:events";
+import { addAbortListener, once } from "node:events";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import {
@@ -17,6 +18,7 @@ import {
   type RelayTabInfo,
   type RelayToExtensionMessage,
 } from "./relay-protocol.js";
+import { RelaySessionOwner, type RelaySessionClient } from "./relay-session-owner.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
@@ -51,24 +53,18 @@ type PendingExtensionCommand = {
 
 type TabState = {
   info: RelayTabInfo;
-  /** Set while chrome.debugger is attached: real CDP targetId + synthetic root sessionId. */
-  attached?: { targetId: string; sessionId: string };
+  claimants: Set<{ client: CdpClientState }>;
+  /** Target identity lasts until access/extension loss; only the session ends on detach. */
+  target?: { id: string; sessionId?: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
+  retiring?: Promise<void>;
   /** Extension loss invalidated attachment work that auto-attach clients still expect restored. */
   restoreAttachment: boolean;
 };
 
-type CdpClientState = {
+type CdpClientState = RelaySessionClient & {
   socket: BridgeSocket;
   autoAttach: boolean;
-  /** Session ids this client has been told about (root and child sessions). */
-  announcedSessions: Set<string>;
-};
-
-type AuxiliaryTabSession = {
-  tabId: number;
-  parentSessionId: string;
-  client: CdpClientState;
 };
 
 /** Browser identity reported by the paired extension. */
@@ -99,10 +95,12 @@ export class ExtensionRelayBridge {
   private readonly tabs = new Map<number, TabState>();
   /** Browser-level sessions created by Playwright for page-scoped CDP access. */
   private readonly browserSessions = new Map<string, CdpClientState>();
-  /** Extra root-page sessions multiplexed over one chrome.debugger attachment. */
-  private readonly auxiliaryTabSessions = new Map<string, AuxiliaryTabSession>();
-  /** Child debugger sessions (iframes/workers) mapped to their owning tab. */
-  private readonly childSessions = new Map<string, number>();
+  private readonly sessions = new RelaySessionOwner(
+    this.clients,
+    (root) => this.retireAttachment(root),
+    (error) => log.warn(`Debugger cleanup incomplete: ${String(error)}`),
+    (tabId) => (this.tabs.get(tabId)?.claimants.size ?? 0) > 0,
+  );
   private readonly pendingExtension = new Map<number, PendingExtensionCommand>();
   private nextSeq = 1;
   private nextSessionOrdinal = 1;
@@ -170,7 +168,9 @@ export class ExtensionRelayBridge {
     // pin both the authenticated extension owner and the exact granted tab instance.
     return () =>
       this.extension === extension && this.tabs.get(target.tabId) === target.tab
-        ? target.tab.attached?.targetId
+        ? target.tab.target?.sessionId
+          ? target.tab.target.id
+          : undefined
         : undefined;
   }
 
@@ -178,7 +178,7 @@ export class ExtensionRelayBridge {
    * DevTools-style descriptors for `/json/list`: RelayTabInfo plus the `id`
    * and `type` fields CDP discovery clients expect. `id` is the live debugger
    * targetId once a tab is attached; before that it is the same `tab-<tabId>`
-   * fallback ensureTabAttached mints, so unattached tabs still list stably.
+   * discovery-only placeholder; native attachment never fabricates an identity.
    * No per-target webSocketDebuggerUrl: all CDP traffic multiplexes over the
    * single browser endpoint (`/cdp`).
    */
@@ -188,7 +188,7 @@ export class ExtensionRelayBridge {
       url: tab.info.url,
       title: tab.info.title,
       active: tab.info.active,
-      id: tab.attached?.targetId ?? `tab-${tab.info.tabId}`,
+      id: tab.target?.id ?? `tab-${tab.info.tabId}`,
       type: "page",
     }));
   }
@@ -297,7 +297,10 @@ export class ExtensionRelayBridge {
         return;
       }
       case "cdpEvent": {
-        this.forwardExtensionEvent(msg.tabId, msg.sessionId, msg.method, msg.params);
+        const root = this.tabs.get(msg.tabId)?.target?.sessionId;
+        if (root) {
+          this.sessions.forward(root, msg.sessionId, msg.method, msg.params);
+        }
         return;
       }
       case "tabs": {
@@ -306,9 +309,12 @@ export class ExtensionRelayBridge {
       }
       case "detached": {
         const tab = this.tabs.get(msg.tabId);
-        if (tab?.attached) {
-          this.emitDetachedFromTarget(msg.tabId, tab.attached.sessionId, tab.attached.targetId);
-          tab.attached = undefined;
+        if (tab) {
+          tab.attaching = undefined;
+        }
+        this.sessions.retireTab(msg.tabId);
+        if (tab?.target) {
+          tab.target.sessionId = undefined;
         }
         break;
       }
@@ -328,17 +334,15 @@ export class ExtensionRelayBridge {
       pending.reject(new Error("extension disconnected"));
     }
     this.pendingExtension.clear();
+    this.sessions.dispose();
     // Retire attach work synchronously so a replacement snapshot cannot reuse
     // a rejected promise. Keep the tab list so the same ids can be re-exposed.
-    for (const [tabId, tab] of this.tabs) {
-      tab.restoreAttachment ||= tab.attached !== undefined || tab.attaching !== undefined;
+    for (const tab of this.tabs.values()) {
+      tab.restoreAttachment ||= tab.target?.sessionId !== undefined || tab.attaching !== undefined;
       tab.attaching = undefined;
-      if (tab.attached) {
-        this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
-        tab.attached = undefined;
-      }
+      tab.retiring = undefined;
+      tab.target = undefined;
     }
-    this.childSessions.clear();
   }
 
   private startPing(): void {
@@ -380,15 +384,25 @@ export class ExtensionRelayBridge {
   private callExtension(
     command: RelayCommandBody,
     timeoutMs = EXTENSION_COMMAND_TIMEOUT_MS,
+    signal?: AbortSignal,
   ): Promise<unknown> {
+    signal?.throwIfAborted();
     const seq = this.nextSeq++;
-    return new Promise<unknown>((resolve, reject) => {
+    let abortListener: Disposable | undefined;
+    const result = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
         reject(new Error(`extension relay command timed out: ${command.type}`));
       }, timeoutMs);
       timer.unref?.();
       this.pendingExtension.set(seq, { resolve, reject, timer });
+      if (signal) {
+        abortListener = addAbortListener(signal, () => {
+          this.pendingExtension.delete(seq);
+          clearTimeout(timer);
+          reject(new Error("Physical session detached"));
+        });
+      }
       try {
         this.sendToExtension({ ...command, seq });
       } catch (err) {
@@ -397,16 +411,15 @@ export class ExtensionRelayBridge {
         reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
+    return result.finally(() => abortListener?.[Symbol.dispose]());
   }
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
     const shouldAutoAttach = [...this.clients].some((client) => client.autoAttach);
-    for (const [tabId, tab] of this.tabs) {
+    for (const tabId of this.tabs.keys()) {
       if (!nextIds.has(tabId)) {
-        if (tab.attached) {
-          this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
-        }
+        this.sessions.retireTab(tabId);
         this.tabs.delete(tabId);
       }
     }
@@ -416,51 +429,139 @@ export class ExtensionRelayBridge {
       if (existing) {
         existing.info = info;
       } else {
-        this.tabs.set(info.tabId, { info, restoreAttachment: false });
+        this.tabs.set(info.tabId, { info, claimants: new Set(), restoreAttachment: false });
       }
       if (shouldAutoAttach && shouldAttach) {
-        void this.ensureTabAttached(info.tabId)
-          .then(({ targetId, sessionId }) => {
-            this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
-          })
-          .catch((err: unknown) => {
-            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
-          });
+        for (const client of this.clients) {
+          if (!client.autoAttach) {
+            continue;
+          }
+          void this.withAttachedTab(client, info.tabId, ({ targetId, sessionId }) => {
+            if (client.autoAttach) {
+              this.announceAttachedTab(info.tabId, targetId, sessionId, {
+                onlyAutoAttach: false,
+                onlyClient: client,
+              });
+            }
+          }).catch((err: unknown) =>
+            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`),
+          );
+        }
       }
     }
   }
 
-  private async ensureTabAttached(tabId: number): Promise<{ targetId: string; sessionId: string }> {
+  private async withAttachedTab<T>(
+    client: CdpClientState,
+    tabId: number,
+    use: (attached: { targetId: string; sessionId: string }) => T,
+    createdTargetId?: string,
+  ): Promise<T> {
+    const tab = this.tabs.get(tabId);
+    const extension = this.extension;
+    if (!tab) {
+      throw new Error(`tab ${tabId} is not available to OpenClaw`);
+    }
+    // A pending claimant keeps the physical acquisition alive through announcement.
+    // Use a distinct token even for concurrent acquisitions by the same client.
+    const claimant = { client };
+    tab.claimants.add(claimant);
+    try {
+      const attached = await this.ensureTabAttached(tabId, createdTargetId);
+      if (
+        !this.clients.has(client) ||
+        this.tabs.get(tabId) !== tab ||
+        this.extension !== extension
+      ) {
+        throw new Error("Target claimant retired");
+      }
+      return use(attached);
+    } finally {
+      tab.claimants.delete(claimant);
+      this.detachUnusedAttachments();
+    }
+  }
+
+  private async ensureTabAttached(
+    tabId: number,
+    createdTargetId?: string,
+  ): Promise<{ targetId: string; sessionId: string }> {
+    const extension = this.extension;
     const tab = this.tabs.get(tabId);
     if (!tab) {
       throw new Error(`tab ${tabId} is not available to OpenClaw`);
     }
-    if (tab.attached) {
-      return tab.attached;
+    if (tab.retiring) {
+      await tab.retiring;
+      if (this.tabs.get(tabId) !== tab || this.extension !== extension) {
+        throw new Error(`tab ${tabId} closed during retirement`);
+      }
+    }
+    if (tab.target?.sessionId) {
+      return { targetId: tab.target.id, sessionId: tab.target.sessionId };
     }
     if (tab.attaching) {
       return await tab.attaching;
     }
-    const attaching = (async () => {
-      const result = (await this.callExtension({ type: "attach", tabId })) as {
-        targetId?: unknown;
-      } | null;
-      const targetId = typeof result?.targetId === "string" ? result.targetId : `tab-${tabId}`;
+    // Even atomic creation completes in a continuation: the pending identity
+    // must be installed before a detach or extension replacement can retire it.
+    const attachment =
+      createdTargetId !== undefined
+        ? Promise.resolve({ targetId: createdTargetId })
+        : this.callExtension({ type: "attach", tabId });
+    const attaching = attachment.then(async (response) => {
+      const result = asOptionalRecord(response);
+      const targetId = result?.targetId;
+      if (typeof targetId !== "string" || !targetId) {
+        if (
+          this.extension === extension &&
+          this.tabs.get(tabId) === tab &&
+          tab.attaching === attaching
+        ) {
+          await this.callExtension({ type: "detach", tabId });
+        }
+        throw new Error("Extension did not return a native target identity");
+      }
       const sessionId = `openclaw-tab-${tabId}-${this.nextSessionOrdinal++}`;
       const attached = { targetId, sessionId };
       // Identity check, not just presence: the tab could have lost and regained
       // access under the same tabId while this attach was in flight, replacing
       // the TabState. Writing onto the new TabState would bind stale attach data.
       const current = this.tabs.get(tabId);
-      if (current !== tab) {
-        // Original tab vanished (or was recreated); best-effort detach the banner.
-        void this.callExtension({ type: "detach", tabId }).catch(() => {});
+      if (current !== tab || this.extension !== extension || tab.attaching !== attaching) {
         throw new Error(`tab ${tabId} closed during attach`);
       }
-      current.attached = attached;
+      current.target = { id: targetId, sessionId };
+      this.sessions.registerRoot(
+        tabId,
+        targetId,
+        sessionId,
+        async (childSessionId, method, params, signal) => {
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            if (this.extension !== extension || this.tabs.get(tabId) !== tab) {
+              throw new Error("Extension or tab generation retired");
+            }
+          };
+          assertCurrent();
+          const commandResult = await this.callExtension(
+            {
+              type: "cdp",
+              tabId,
+              ...(childSessionId ? { sessionId: childSessionId } : {}),
+              method,
+              params,
+            },
+            EXTENSION_COMMAND_TIMEOUT_MS,
+            signal,
+          );
+          assertCurrent();
+          return commandResult;
+        },
+      );
       current.restoreAttachment = false;
       return attached;
-    })();
+    });
     tab.attaching = attaching;
     try {
       return await attaching;
@@ -481,7 +582,7 @@ export class ExtensionRelayBridge {
       // connectOverCDP owns this as a persistent default context, but still
       // asserts that attached page events carry a non-empty context id.
       browserContextId: BROWSER_CONTEXT_ID,
-      attached: true,
+      attached: Boolean(tab.target?.sessionId),
       canAccessOpener: false,
     };
   }
@@ -495,11 +596,11 @@ export class ExtensionRelayBridge {
     if (!this.extensionConnected) {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
-    if ([...this.tabs.values()].some((tab) => !tab.attached)) {
+    if ([...this.tabs.values()].some((tab) => !tab.target)) {
       return { status: "unavailable", reason: "target-identity-unresolved" };
     }
     const targetInfos = [...this.tabs.values()].map((tab) =>
-      this.targetInfoForTab(tab, tab.attached?.targetId ?? ""),
+      this.targetInfoForTab(tab, tab.target?.id ?? ""),
     );
     return { status: "available", targetInfos };
   }
@@ -511,7 +612,7 @@ export class ExtensionRelayBridge {
     opts: { onlyAutoAttach: boolean; onlyClient?: CdpClientState },
   ): void {
     const tab = this.tabs.get(tabId);
-    if (!tab) {
+    if (tab?.target?.sessionId !== sessionId) {
       return;
     }
     const event = {
@@ -526,99 +627,7 @@ export class ExtensionRelayBridge {
       ? [opts.onlyClient]
       : [...this.clients].filter((client) => !opts.onlyAutoAttach || client.autoAttach);
     for (const client of recipients) {
-      if (client.announcedSessions.has(sessionId)) {
-        continue;
-      }
-      client.announcedSessions.add(sessionId);
-      client.socket.send(JSON.stringify(event));
-    }
-  }
-
-  private emitDetachedFromTarget(tabId: number, sessionId: string, targetId: string): void {
-    const event = JSON.stringify({
-      method: "Target.detachedFromTarget",
-      params: { sessionId, targetId },
-    });
-    for (const client of this.clients) {
-      if (client.announcedSessions.delete(sessionId)) {
-        client.socket.send(event);
-      }
-    }
-    // Playwright's page-scoped CDP sessions listen on their synthetic parent
-    // browser session, so detach those aliases there when tab access is revoked.
-    for (const [auxiliarySessionId, auxiliary] of this.auxiliaryTabSessions) {
-      if (auxiliary.tabId !== tabId) {
-        continue;
-      }
-      auxiliary.client.socket.send(
-        JSON.stringify({
-          sessionId: auxiliary.parentSessionId,
-          method: "Target.detachedFromTarget",
-          params: { sessionId: auxiliarySessionId, targetId },
-        }),
-      );
-      this.auxiliaryTabSessions.delete(auxiliarySessionId);
-    }
-    // Reap this tab's child sessions (iframes/workers) by owner tabId. Callers
-    // clear tab.attached before/around this, so matching on the root sessionId
-    // would miss every child and leak the childSessions map. Deleting the
-    // current key during Map iteration is safe.
-    for (const [childSessionId, ownerTabId] of this.childSessions) {
-      if (ownerTabId !== tabId) {
-        continue;
-      }
-      this.childSessions.delete(childSessionId);
-      for (const client of this.clients) {
-        client.announcedSessions.delete(childSessionId);
-      }
-    }
-  }
-
-  private forwardExtensionEvent(
-    tabId: number,
-    childSessionId: string | undefined,
-    method: string,
-    params: unknown,
-  ): void {
-    const tab = this.tabs.get(tabId);
-    const rootSessionId = tab?.attached?.sessionId;
-    if (!rootSessionId) {
-      return;
-    }
-    const sessionId = childSessionId ?? rootSessionId;
-    if (childSessionId) {
-      this.childSessions.set(childSessionId, tabId);
-    }
-    // Child sessions announced through a parent's Target.attachedToTarget event
-    // must stay routable for clients that saw the parent announcement.
-    if (method === "Target.attachedToTarget") {
-      const announced = (params as { sessionId?: unknown } | null)?.sessionId;
-      if (typeof announced === "string") {
-        this.childSessions.set(announced, tabId);
-        for (const client of this.clients) {
-          if (client.announcedSessions.has(sessionId)) {
-            client.announcedSessions.add(announced);
-          }
-        }
-      }
-    }
-    const frame = JSON.stringify({ sessionId, method, params });
-    for (const client of this.clients) {
-      if (client.announcedSessions.has(sessionId)) {
-        client.socket.send(frame);
-      }
-    }
-    if (!childSessionId) {
-      // Page-scoped CDP sessions multiplex the same chrome.debugger root.
-      // Mirror root events so Runtime/Page/Network listeners observe the
-      // domains they enabled through their own synthetic session.
-      for (const [auxiliarySessionId, auxiliary] of this.auxiliaryTabSessions) {
-        if (auxiliary.tabId === tabId) {
-          auxiliary.client.socket.send(
-            JSON.stringify({ sessionId: auxiliarySessionId, method, params }),
-          );
-        }
-      }
+      this.sessions.announce(client, sessionId, sessionId, event.params);
     }
   }
 
@@ -631,9 +640,12 @@ export class ExtensionRelayBridge {
     onMessage: (raw: string) => void;
     onClose: () => void;
   } {
-    const client: CdpClientState = { socket, autoAttach: false, announcedSessions: new Set() };
+    const client: CdpClientState = { socket, autoAttach: false, sessions: new Map() };
     this.clients.add(client);
     const onMessage = (raw: string) => {
+      if (!this.clients.has(client)) {
+        return;
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
@@ -657,40 +669,85 @@ export class ExtensionRelayBridge {
     };
     const onClose = () => {
       this.clients.delete(client);
+      for (const tab of this.tabs.values()) {
+        for (const claim of tab.claimants) {
+          if (claim.client === client) {
+            tab.claimants.delete(claim);
+          }
+        }
+      }
+      void this.sessions
+        .close(client)
+        .catch((error: unknown) => log.warn(`Client cleanup incomplete: ${String(error)}`));
       for (const [sessionId, owner] of this.browserSessions) {
         if (owner === client) {
           this.browserSessions.delete(sessionId);
         }
       }
-      for (const [sessionId, auxiliary] of this.auxiliaryTabSessions) {
-        if (auxiliary.client === client) {
-          this.auxiliaryTabSessions.delete(sessionId);
-        }
-      }
-      this.detachAllWhenIdle();
+      this.detachUnusedAttachments();
     };
     return { onMessage, onClose };
   }
 
   /**
-   * Drop chrome.debugger sessions once no CDP client is connected so the
-   * "OpenClaw is debugging this browser" infobar only spans active automation.
+   * Release a tab only after its last pending or delivered logical claimant leaves.
    */
-  private detachAllWhenIdle(): void {
-    if (this.clients.size > 0 || !this.extension) {
+  private detachUnusedAttachments(): void {
+    if (!this.extension) {
       return;
     }
-    for (const [tabId, tab] of this.tabs) {
-      if (tab.attached) {
-        const { sessionId, targetId } = tab.attached;
-        tab.attached = undefined;
-        this.emitDetachedFromTarget(tabId, sessionId, targetId);
-        void this.callExtension({ type: "detach", tabId }).catch(() => {});
+    for (const tab of this.tabs.values()) {
+      if (
+        tab.target?.sessionId &&
+        tab.claimants.size === 0 &&
+        !this.sessions.hasRootSessions(tab.target.sessionId)
+      ) {
+        void this.retireAttachment(tab.target.sessionId).catch((error: unknown) =>
+          log.warn(`Debugger retirement failed: ${String(error)}`),
+        );
       }
     }
   }
 
+  private retireAttachment(rootSessionId: string): Promise<void> {
+    const entry = [...this.tabs].find(([, tab]) => tab.target?.sessionId === rootSessionId);
+    if (!entry) {
+      return Promise.resolve();
+    }
+    const [tabId, tab] = entry;
+    const extension = this.extension;
+    const target = tab.target;
+    if (!target) {
+      return Promise.resolve();
+    }
+    target.sessionId = undefined;
+    const retiring = this.sessions.retire(rootSessionId, async () => {
+      if (this.extension === extension && this.tabs.get(tabId) === tab) {
+        await this.callExtension({ type: "detach", tabId });
+      }
+    });
+    // This promise orders the current attempt, not native authority. After it
+    // settles, a fresh worker acquire must discharge exact native cleanup debt.
+    tab.retiring = retiring;
+    void retiring
+      .finally(() => {
+        if (tab.retiring === retiring) {
+          tab.retiring = undefined;
+        }
+      })
+      .catch(() => {});
+    return retiring;
+  }
+
   private respond(client: CdpClientState, request: CdpRequest, result: unknown): void {
+    if (!this.clients.has(client)) {
+      return;
+    }
+    const logical = request.sessionId ? client.sessions.get(request.sessionId) : undefined;
+    if (logical) {
+      this.sessions.emit(logical, { id: request.id, result: result ?? {} });
+      return;
+    }
     client.socket.send(
       JSON.stringify({
         id: request.id,
@@ -706,29 +763,19 @@ export class ExtensionRelayBridge {
     message: string,
     code = -32000,
   ): void {
-    client.socket.send(toErrorPayload(request.id, request.sessionId, message, code));
-  }
-
-  private tabBySessionId(sessionId: string): { tabId: number; child: boolean } | null {
-    for (const [tabId, tab] of this.tabs) {
-      if (tab.attached?.sessionId === sessionId) {
-        return { tabId, child: false };
+    if (this.clients.has(client)) {
+      const logical = request.sessionId ? client.sessions.get(request.sessionId) : undefined;
+      if (logical) {
+        this.sessions.emit(logical, { id: request.id, error: { code, message } });
+      } else {
+        client.socket.send(toErrorPayload(request.id, request.sessionId, message, code));
       }
     }
-    const auxiliary = this.auxiliaryTabSessions.get(sessionId);
-    if (auxiliary) {
-      return { tabId: auxiliary.tabId, child: false };
-    }
-    const childOwner = this.childSessions.get(sessionId);
-    if (childOwner !== undefined) {
-      return { tabId: childOwner, child: true };
-    }
-    return null;
   }
 
   private tabByTargetId(targetId: string): { tabId: number; tab: TabState } | null {
     for (const [tabId, tab] of this.tabs) {
-      if (tab.attached?.targetId === targetId) {
+      if (tab.target?.id === targetId) {
         return { tabId, tab };
       }
     }
@@ -756,23 +803,88 @@ export class ExtensionRelayBridge {
     request: CdpRequest,
   ): Promise<void> {
     const sessionId = request.sessionId as string;
-    const auxiliary = this.auxiliaryTabSessions.get(sessionId);
-    if (auxiliary && auxiliary.client !== client) {
+    const session = client.sessions.get(sessionId);
+    if (!session) {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
       return;
     }
-    const route = this.tabBySessionId(sessionId);
-    if (!route) {
-      this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
+    if (request.method === "Target.detachFromTarget") {
+      const child = this.sessions.child(session, request.params);
+      await this.sessions.detach(client, child.id);
+      this.respond(client, request, {});
       return;
     }
-    const result = await this.callExtension({
-      type: "cdp",
-      tabId: route.tabId,
-      ...(route.child ? { sessionId } : {}),
-      method: request.method,
-      params: request.params,
-    });
+    if (request.method === "Target.sendMessageToTarget") {
+      const child = this.sessions.child(session, request.params);
+      if (child.flat || typeof request.params?.message !== "string") {
+        throw new Error("Non-flat Target child session not found");
+      }
+      const nested = asOptionalRecord(JSON.parse(request.params.message));
+      if (!nested || typeof nested.id !== "number" || typeof nested.method !== "string") {
+        throw new Error("Invalid Target message");
+      }
+      const target =
+        nested.sessionId === undefined
+          ? child
+          : typeof nested.sessionId === "string"
+            ? client.sessions.get(nested.sessionId)
+            : undefined;
+      let ancestor = target;
+      while (ancestor && ancestor !== child && ancestor.flat) {
+        ancestor = ancestor.parent;
+      }
+      if (!target || ancestor !== child) {
+        throw new Error("Nested Target session not found");
+      }
+      void this.handleCdpRequest(client, {
+        id: nested.id,
+        method: nested.method,
+        params: asOptionalRecord(nested.params),
+        sessionId: target.id,
+      });
+      this.respond(client, request, {});
+      return;
+    }
+    if (request.method === "Target.setAutoAttach") {
+      const result = await session.physical.target.command(session, request.params, () => {
+        if (client.sessions.get(sessionId) !== session || !this.clients.has(client)) {
+          throw new Error("Target parent detached");
+        }
+      });
+      this.respond(client, request, result);
+      return;
+    }
+    const { runtime, fetch } = session.physical;
+    const emit = (method: string, params: unknown) =>
+      this.sessions.emit(session, { method, params });
+    const fetchResult = fetch.command(session, emit, request.method, request.params);
+    if (fetchResult) {
+      const result = await fetchResult;
+      if (client.sessions.get(sessionId) !== session) {
+        throw new Error(`Session detached: ${sessionId}`);
+      }
+      this.respond(client, request, result);
+      return;
+    }
+    if (request.method === "Runtime.disable") {
+      runtime.disable(session);
+      this.respond(client, request, {});
+      return;
+    }
+    const send = () =>
+      this.sessions.send(
+        session.physical,
+        request.method,
+        request.params,
+        request.method === "Runtime.runIfWaitingForDebugger" ? "target" : undefined,
+      );
+    const result =
+      request.method === "Runtime.enable"
+        ? await runtime.enable(session, emit, send)
+        : await send();
+    if (client.sessions.get(sessionId) !== session) {
+      throw new Error(`Session detached: ${sessionId}`);
+    }
     this.respond(client, request, result);
   }
 
@@ -854,23 +966,19 @@ export class ExtensionRelayBridge {
         client.autoAttach = autoAttach;
         if (autoAttach) {
           const attachResults = await Promise.allSettled(
-            [...this.tabs.keys()].map(async (tabId) => {
-              const { targetId, sessionId } = await this.ensureTabAttached(tabId);
-              return { tabId, targetId, sessionId };
-            }),
+            [...this.tabs.keys()].map((tabId) =>
+              this.withAttachedTab(client, tabId, ({ targetId, sessionId }) => {
+                if (client.autoAttach) {
+                  this.announceAttachedTab(tabId, targetId, sessionId, {
+                    onlyAutoAttach: false,
+                    onlyClient: client,
+                  });
+                }
+              }),
+            ),
           );
           for (const settled of attachResults) {
-            if (settled.status === "fulfilled") {
-              this.announceAttachedTab(
-                settled.value.tabId,
-                settled.value.targetId,
-                settled.value.sessionId,
-                {
-                  onlyAutoAttach: false,
-                  onlyClient: client,
-                },
-              );
-            } else {
+            if (settled.status === "rejected") {
               log.warn(`setAutoAttach attach failed: ${String(settled.reason)}`);
             }
           }
@@ -890,88 +998,102 @@ export class ExtensionRelayBridge {
           this.respondError(client, request, "targetId is required", -32602);
           return;
         }
-        const attached = await this.ensureTabAttached(found.tabId);
-        if (request.sessionId && this.browserSessions.get(request.sessionId) === client) {
-          // Playwright creates a fresh page-scoped session for helpers such as
-          // Target.getTargetInfo and DOM refs. Multiplex it onto the one real
-          // chrome.debugger attachment instead of reusing the auto-attach id.
+        await this.withAttachedTab(client, found.tabId, (attached) => {
+          if (attached.targetId !== targetId) {
+            throw new Error("Requested native target changed during attachment");
+          }
+          if (
+            found.tab.target?.sessionId !== attached.sessionId ||
+            (request.sessionId && this.browserSessions.get(request.sessionId) !== client)
+          ) {
+            throw new Error("Target attachment retired");
+          }
           const sessionId = `openclaw-tab-${found.tabId}-${this.nextSessionOrdinal++}`;
-          this.auxiliaryTabSessions.set(sessionId, {
-            tabId: found.tabId,
-            parentSessionId: request.sessionId,
+          this.sessions.announce(
             client,
-          });
+            sessionId,
+            attached.sessionId,
+            {
+              sessionId,
+              targetInfo: this.targetInfoForTab(found.tab, attached.targetId),
+              waitingForDebugger: false,
+            },
+            request.sessionId,
+          );
           this.respond(client, request, { sessionId });
-          return;
-        }
-        this.announceAttachedTab(found.tabId, attached.targetId, attached.sessionId, {
-          onlyAutoAttach: false,
-          onlyClient: client,
         });
-        this.respond(client, request, { sessionId: attached.sessionId });
         return;
       }
       case "Target.detachFromTarget": {
         const sessionId = request.params?.sessionId as string | undefined;
         if (sessionId && this.browserSessions.get(sessionId) === client) {
           this.browserSessions.delete(sessionId);
-          for (const [auxiliarySessionId, auxiliary] of this.auxiliaryTabSessions) {
-            if (auxiliary.parentSessionId === sessionId && auxiliary.client === client) {
-              this.auxiliaryTabSessions.delete(auxiliarySessionId);
-            }
+          await this.sessions.detachChildren(client, sessionId);
+        } else {
+          const session = sessionId ? client.sessions.get(sessionId) : undefined;
+          if (!sessionId || !session) {
+            this.respondError(client, request, `Session not found: ${String(sessionId)}`, -32001);
+            return;
           }
-          this.respond(client, request, {});
-          return;
-        }
-        const auxiliary = sessionId ? this.auxiliaryTabSessions.get(sessionId) : undefined;
-        if (auxiliary?.client === client) {
-          this.auxiliaryTabSessions.delete(sessionId as string);
-          this.respond(client, request, {});
-          return;
-        }
-        if (auxiliary) {
-          this.respondError(client, request, `Session not found: ${String(sessionId)}`, -32001);
-          return;
-        }
-        const route = sessionId ? this.tabBySessionId(sessionId) : null;
-        if (route && !route.child) {
-          const tab = this.tabs.get(route.tabId);
-          if (tab?.attached) {
-            const { sessionId: rootSession, targetId } = tab.attached;
-            tab.attached = undefined;
-            this.emitDetachedFromTarget(route.tabId, rootSession, targetId);
-            await this.callExtension({ type: "detach", tabId: route.tabId }).catch(() => {});
-          }
+          await this.sessions.detach(client, sessionId);
         }
         this.respond(client, request, {});
         return;
       }
       case "Target.createTarget": {
-        const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
+        const extension = this.extension;
+        const url =
+          typeof request.params?.url === "string" && request.params.url
+            ? request.params.url
+            : "about:blank";
         const createParams = resolveCreateTargetParams(request.params);
         const command = { type: "createTab", url, ...createParams } as const;
-        const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
+        const created = (await this.callExtension(command)) as {
+          tabId?: unknown;
+          targetId?: unknown;
+        } | null;
+        if (this.extension !== extension) {
+          return;
+        }
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");
           return;
         }
         const tabId = created.tabId;
+        if (!this.clients.has(client) && !this.tabs.has(tabId)) {
+          // An abandoned creator never publishes an invented inventory entry.
+          // No tab record means no pending/delivered peer can own this handoff.
+          if (typeof created.targetId === "string") {
+            void this.callExtension({ type: "detach", tabId }).catch((error: unknown) =>
+              log.warn(`Abandoned creation cleanup failed: ${String(error)}`),
+            );
+          }
+          return;
+        }
         if (!this.tabs.has(tabId)) {
           this.tabs.set(tabId, {
             info: { tabId, url, title: "", active: false },
+            claimants: new Set(),
             restoreAttachment: false,
           });
         }
-        const attached = await this.ensureTabAttached(tabId);
-        // Announce before responding, mirroring Chrome's event-then-result order.
-        this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
-          onlyAutoAttach: true,
-        });
-        this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
-          onlyAutoAttach: false,
-          onlyClient: client,
-        });
-        this.respond(client, request, { targetId: attached.targetId });
+        // Store 2.2.0 returns only tabId and still needs the separate attach.
+        // New workers own create/group/attach/rollback and return the attachment.
+        await this.withAttachedTab(
+          client,
+          tabId,
+          (attached) => {
+            this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
+              onlyAutoAttach: true,
+            });
+            this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
+              onlyAutoAttach: false,
+              onlyClient: client,
+            });
+            this.respond(client, request, { targetId: attached.targetId });
+          },
+          typeof created.targetId === "string" ? created.targetId : undefined,
+        );
         return;
       }
       case "Target.closeTarget": {
@@ -1042,14 +1164,13 @@ export class ExtensionRelayBridge {
     this.extension?.socket.close(1001, "relay stopped");
     this.extension = null;
     this.connectionEvents.dispatchEvent(new Event("ready"));
+    this.sessions.dispose();
     for (const client of this.clients) {
       client.socket.close(1001, "relay stopped");
     }
     this.clients.clear();
     this.browserSessions.clear();
-    this.auxiliaryTabSessions.clear();
     this.tabs.clear();
-    this.childSessions.clear();
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

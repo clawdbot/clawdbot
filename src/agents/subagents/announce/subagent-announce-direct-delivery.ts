@@ -18,6 +18,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
+import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agent-run-terminal-delivery.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
@@ -538,14 +539,18 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
+    const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
+      directAnnounceResult?.deliveryStatus,
+    );
     const requesterVisibleFinalDelivered = Boolean(
       directAnnounceResult &&
       (hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
         requireFinalReply: true,
       }) ||
         (shouldDeliverAgentFinal &&
-          hasVisibleNonSilentGatewayPayload &&
-          directAnnounceResult.deliveryStatus?.status !== "suppressed")),
+          ((hasVisibleNonSilentGatewayPayload &&
+            directAnnounceResult.deliveryStatus?.status !== "suppressed") ||
+            (terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0)))),
     );
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||

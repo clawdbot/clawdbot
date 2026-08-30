@@ -346,7 +346,11 @@ export async function persistAgentSessionPhase(params: {
               operatorRoleActor?.kind === "operator"
                 ? {
                     ...params.creation,
-                    actor: { type: "human" as const, id: operatorRoleActor.profileId },
+                    actor: {
+                      type: "human" as const,
+                      source: "profile" as const,
+                      id: operatorRoleActor.profileId,
+                    },
                   }
                 : params.creation;
             const sandbox = freshEntry

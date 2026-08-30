@@ -1771,9 +1771,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
 
   async setConfigOption(
     input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
-  ): Promise<void> {
+  ): ReturnType<NonNullable<AcpRuntime["setConfigOption"]>> {
     const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
-    await this.runWithProcessLeaseForHandle(input.handle, snapshot.record, () =>
+    return await this.runWithProcessLeaseForHandle(input.handle, snapshot.record, () =>
       this.setConfigOptionUnlocked(input, snapshot),
     );
   }
@@ -1781,7 +1781,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private async setConfigOptionUnlocked(
     input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
     snapshot: AcpxHandleOperationSnapshot,
-  ): Promise<void> {
+  ): ReturnType<NonNullable<AcpRuntime["setConfigOption"]>> {
     const { command } = snapshot;
     const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
     const key = input.key.trim().toLowerCase();
@@ -1796,17 +1796,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           failUnsupportedCodexAcpModel(input.value);
         }
         const { override } = classification;
-        if (override.model) {
-          await delegate.setConfigOption({ ...input, key: "model", value: override.model });
-        }
+        const modelResult = override.model
+          ? await delegate.setConfigOption({ ...input, key: "model", value: override.model })
+          : undefined;
         if (override.reasoningEffort) {
-          await delegate.setConfigOption({
+          return await delegate.setConfigOption({
             ...input,
             key: "reasoning_effort",
             value: override.reasoningEffort,
           });
         }
-        return;
+        return modelResult;
       }
       if (key === "thinking" || key === "thought_level" || key === "reasoning_effort") {
         const classification = classifyCodexAcpModelRequest(undefined, input.value);
@@ -1819,22 +1819,20 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             "Clearing Codex reasoning effort on an existing session is unsupported. Choose a supported explicit effort; the current effort is unchanged.",
           );
         }
-        await delegate.setConfigOption({
+        return await delegate.setConfigOption({
           ...input,
           key: "reasoning_effort",
           value: reasoningEffort,
         });
-        return;
       }
     }
     if (isClaudeAcpCommand(command) && key === "model") {
-      await delegate.setConfigOption({
+      return await delegate.setConfigOption({
         ...input,
         value: normalizeClaudeAcpModelOverride(input.value) ?? input.value,
       });
-      return;
     }
-    await delegate.setConfigOption(input);
+    return await delegate.setConfigOption(input);
   }
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {

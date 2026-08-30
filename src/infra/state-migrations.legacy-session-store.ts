@@ -42,6 +42,7 @@ import {
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../sessions/agent-harness-session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   deliveryContextFromChannelRoute,
   isCanonicalSessionDeliveryState,
@@ -236,7 +237,9 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
           normalizeRestartRecoveryFields(
-            normalizeLegacySessionEntryDelivery(modelSelectionLocked ? shaped : runtimeFields),
+            normalizeLegacySessionEntryDelivery(
+              migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
+            ),
           ),
         ),
       ),

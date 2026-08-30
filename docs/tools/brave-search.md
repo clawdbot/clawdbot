@@ -127,6 +127,7 @@ await web_search({
 - `llm-context` mode supports `freshness` and bounded `date_after` + `date_before` ranges. It does not support `ui_lang`; `date_before` without `date_after` is rejected because Brave requires custom freshness ranges to include both start and end dates.
 - `ui_lang` must include a region subtag like `en-US`.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
+- `tools.web.search.timeoutSeconds` covers endpoint validation, including DNS, the HTTP request, and response reading in both Brave modes.
 - Custom `webSearch.baseUrl` values are included in Brave cache identity, so
   proxy-specific responses do not collide.
 - Enable the `brave.http` diagnostics flag to log Brave request URLs/query params, response status/timing, and search-cache hit/miss/write events while troubleshooting. The flag never logs the API key or response bodies, but search queries can be sensitive.

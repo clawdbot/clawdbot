@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { captureEnv } from "../../test-utils/env.js";
 
-const systemAccountHome = os.userInfo().homedir;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
   checkCompletionStatus: vi.fn(),
@@ -136,6 +137,32 @@ const successfulPluginUpdate = {
   integrityDrifts: [],
   warnings: [],
 };
+
+function createManagedServiceIdentityFixture() {
+  const home = tempDirs.make("openclaw-post-update-service-home-");
+  const keys = [
+    "HOME",
+    "USERPROFILE",
+    "OPENCLAW_HOME",
+    "OPENCLAW_SUPERVISOR_MODE",
+    ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+  ];
+  const env = captureEnv(keys);
+  // A private HOME does not change the OS account home checked by the real service guard.
+  const userInfo = vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
+  for (const key of keys) {
+    delete process.env[key];
+  }
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  return {
+    home,
+    restore: () => {
+      userInfo.mockRestore();
+      env.restore();
+    },
+  };
+}
 
 async function finishSuccessfulPackageSwitch(params: {
   previousRoot: string;
@@ -574,6 +601,7 @@ describe("successful update finalization ordering", () => {
   });
 
   it("removes operator overrides and process identity from the managed install environment", async () => {
+    const identity = createManagedServiceIdentityFixture();
     const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
     const managedEnvironment = {
       ANTHROPIC_API_KEY: "managed-provider",
@@ -604,10 +632,8 @@ describe("successful update finalization ordering", () => {
     vi.stubEnv("OPENAI_API_KEY", effectiveEnvironment.OPENAI_API_KEY);
     vi.stubEnv("UNSET_PROVIDER_KEY", "removed-by-drop-in");
     vi.stubEnv("GEMINI_API_KEY", "allowed-runtime-credential");
-    vi.stubEnv("HOME", systemAccountHome);
-    vi.stubEnv("OPENCLAW_HOME", "");
     vi.stubEnv("OPENCLAW_PROFILE", "caller-only-profile");
-    const callerStateDir = path.join(systemAccountHome, ".openclaw-caller-only-profile");
+    const callerStateDir = path.join(identity.home, ".openclaw-caller-only-profile");
     vi.stubEnv("OPENCLAW_STATE_DIR", callerStateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(callerStateDir, "openclaw.json"));
     try {
@@ -635,6 +661,7 @@ describe("successful update finalization ordering", () => {
       expect(installEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     } finally {
       vi.unstubAllEnvs();
+      identity.restore();
     }
   });
 
@@ -663,14 +690,14 @@ describe("successful update finalization ordering", () => {
   });
 
   describe("managed service finalization", () => {
+    let identity: ReturnType<typeof createManagedServiceIdentityFixture>;
     beforeEach(() => {
-      vi.stubEnv("HOME", systemAccountHome);
-      vi.stubEnv("OPENCLAW_PROFILE", "default");
-      for (const key of ["OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]) {
-        vi.stubEnv(key, "");
-      }
+      identity = createManagedServiceIdentityFixture();
     });
-    afterEach(() => vi.unstubAllEnvs());
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      identity.restore();
+    });
 
     it.each([
       ["unknown", true],
@@ -721,7 +748,7 @@ describe("successful update finalization ordering", () => {
       { source: "preserved config", sealed: true, args: [], expected: 19304 },
       { source: "writable refresh", sealed: false, args: ["--port=19301"], expected: 19303 },
     ])("verifies the CLI service port for $source", async ({ sealed, args, expected }) => {
-      const serviceEnv = { HOME: systemAccountHome };
+      const serviceEnv = { HOME: identity.home };
       mocks.readServiceState.mockResolvedValue({
         installed: true,
         loadState: { status: "loaded" },
@@ -871,6 +898,28 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).not.toHaveBeenCalled();
         expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       }
+    });
+
+    it("leaves native service management blocked when HOME is relocated", async () => {
+      const home = tempDirs.make("openclaw-post-update-relocated-home-");
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+
+      await finishSuccessfulPackageSwitch({
+        previousRoot: home,
+        packageRoot: home,
+        restartEnvironment: { ...process.env },
+        stoppedForUpdate: false,
+      });
+
+      expect(mocks.readServiceState).not.toHaveBeenCalled();
+      expect(mocks.revalidateService).not.toHaveBeenCalled();
+      expect(mocks.restartService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shouldRestart: false,
+          serviceMutationSkipMessage: expect.stringContaining("HOME set to the OS account home"),
+        }),
+      );
     });
   });
 });

@@ -173,7 +173,7 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
     preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));
 
-vi.mock("./agent-scope.js", () => ({
+const agentScopeMocks = vi.hoisted(() => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => {
     if (preparedModelRuntimeMocks.configuredAgentIdsError) {
@@ -201,6 +201,14 @@ vi.mock("./agent-scope.js", () => ({
     defaultAgentId: "default",
     sessionAgentId: agentId ?? "default",
   }),
+}));
+
+vi.mock("./agent-scope.js", () => agentScopeMocks);
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  listAgentIds: agentScopeMocks.listAgentIds,
+  resolveAgentDir: agentScopeMocks.resolveAgentDir,
+  resolveAgentWorkspaceDir: agentScopeMocks.resolveAgentWorkspaceDir,
 }));
 
 vi.mock("./legacy-inherited-auth-dir.js", () => ({

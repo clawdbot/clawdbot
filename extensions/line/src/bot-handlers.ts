@@ -5,6 +5,7 @@ import {
   buildMentionRegexes,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
+  implicitMentionKindWhen,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -49,6 +50,8 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
+import { quotesLineBotMessage } from "./outbound-message-log.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -204,7 +207,12 @@ async function shouldProcessLineEvent(
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
-      return { canDetectMention: false, wasMentioned: false, hasAnyMention: false };
+      return {
+        canDetectMention: false,
+        wasMentioned: false,
+        hasAnyMention: false,
+        implicitMentionKinds: [],
+      };
     }
     const peerId = groupId ?? roomId ?? userId ?? "unknown";
     const { agentId } = resolveAgentRoute({
@@ -221,6 +229,10 @@ async function shouldProcessLineEvent(
       canDetectMention: event.message.type === "text",
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
       hasAnyMention: hasAnyLineMention(event.message),
+      implicitMentionKinds: implicitMentionKindWhen(
+        "quoted_bot",
+        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+      ),
     };
   })();
   const resolveAccess = async (contextBinding?: ChannelIngressContextBinding) =>
@@ -251,7 +263,7 @@ async function shouldProcessLineEvent(
               canDetectMention: mentionFacts.canDetectMention,
               wasMentioned: mentionFacts.wasMentioned,
               hasAnyMention: mentionFacts.hasAnyMention,
-              implicitMentionKinds: [],
+              implicitMentionKinds: mentionFacts.implicitMentionKinds,
             }
           : undefined,
       event: { kind: event.type === "postback" ? "postback" : "message" },
@@ -346,26 +358,11 @@ async function shouldProcessLineEvent(
   return null;
 }
 
-function getLineMentionees(
-  message: MessageEvent["message"],
-): Array<{ type?: string; isSelf?: boolean }> {
-  if (message.type !== "text") {
-    return [];
-  }
-  const mentionees = (
-    message as Record<string, unknown> & {
-      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
-    }
-  ).mention?.mentionees;
-  return Array.isArray(mentionees) ? mentionees : [];
-}
-
-function isLineBotMentioned(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
-}
-
-function hasAnyLineMention(message: MessageEvent["message"]): boolean {
-  return getLineMentionees(message).length > 0;
+// LINE reports a quote only on the message kinds a person can quote from.
+function resolveLineQuotedMessageId(message: MessageEvent["message"]): string | undefined {
+  return message.type === "text" || message.type === "sticker"
+    ? message.quotedMessageId
+    : undefined;
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {

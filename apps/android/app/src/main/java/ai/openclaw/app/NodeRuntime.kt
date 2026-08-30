@@ -153,6 +153,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1334,8 +1335,10 @@ class NodeRuntime private constructor(
   private val gatewayMethodsLock = Any()
   private var gatewayApprovalRpcFamily = GatewayApprovalRpcFamily.Unavailable
   private var gatewayAdvertisedMethods: Set<String>? = null
+  private var gatewayMethodCatalogPresent = false
   private var gatewayAdvertisedCapabilities: Set<String>? = null
-  private var gatewayMethodsEpoch = 0L
+  private val gatewayMethodsEpoch = MutableStateFlow(0L)
+  internal val gatewayCatalogRevision: StateFlow<Long> = gatewayMethodsEpoch.asStateFlow()
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
 
@@ -1512,7 +1515,8 @@ class NodeRuntime private constructor(
         when (mode) {
           NodeRuntimeMode.Live -> operatorSession.captureRequestLease(gatewayId)
           NodeRuntimeMode.ScreenshotFixture ->
-            GatewaySession.RequestLease(endpointStableId = AndroidScreenshotFixture.gatewayId) { method, paramsJson, _ ->
+            GatewaySession.RequestLease(endpointStableId = AndroidScreenshotFixture.gatewayId) { method, paramsJson, _, withEnqueue ->
+              withEnqueue {}
               screenshotRequester(method, paramsJson)
             }
         }
@@ -1686,7 +1690,7 @@ class NodeRuntime private constructor(
     _remoteAddress.value = null
     _gatewayVersion.value = null
     _gatewayUpdateAvailable.value = null
-    replaceGatewayMethods(null)
+    replaceGatewayMethods(null, present = false)
     replaceGatewayCapabilities(null)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
@@ -1937,6 +1941,7 @@ class NodeRuntime private constructor(
           currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
           gatewayAdvertisesMethod = ::gatewayAdvertisesMethod,
           gatewayAdvertisesCapability = ::gatewayAdvertisesCapability,
+          currentGatewayCatalogRevision = { gatewayMethodsEpoch.value },
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
@@ -2861,6 +2866,7 @@ class NodeRuntime private constructor(
   private val secondaryGatewayConnectionsEnabled = MutableStateFlow(!initialReconnectSuppressed)
 
   val chatSessionKey: StateFlow<String> = chat.sessionKey
+  internal val chatSelectionGeneration: StateFlow<Long> = chat.selectionGeneration
   val chatSessionOwnerAgentId: StateFlow<String?> = chat.sessionOwnerAgentId
   internal val gatewayComposerDefaultAgentOwner: StateFlow<GatewayDefaultAgentOwner?> = chat.composerDefaultAgentOwner
   val chatSessionId: StateFlow<String?> = chat.sessionId
@@ -4266,7 +4272,7 @@ class NodeRuntime private constructor(
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
@@ -4274,7 +4280,7 @@ class NodeRuntime private constructor(
     launchGatewayLifecycle {
       if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }
 
@@ -4296,10 +4302,11 @@ class NodeRuntime private constructor(
     }
   }
 
+  // connect() already replaces each role's socket. A later reconnect() can
+  // retire a replacement that published hello while the other role was starting.
   private fun connectWithAuth(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
-    reconnect: Boolean = false,
     beforeConnect: () -> Unit = {},
   ): Boolean =
     runGatewayConnectOperation {
@@ -4348,12 +4355,6 @@ class NodeRuntime private constructor(
         nodeConnectOptions,
         tls,
       )
-      if (reconnect && operatorAuth != null) {
-        operatorSession.reconnect()
-      }
-      if (reconnect) {
-        nodeSession.reconnect()
-      }
     }
 
   // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside
@@ -4955,6 +4956,8 @@ class NodeRuntime private constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    color: String? = null,
+    clearColor: Boolean = false,
     pinned: Boolean? = null,
     archived: Boolean? = null,
     unread: Boolean? = null,
@@ -4967,6 +4970,8 @@ class NodeRuntime private constructor(
       clearLabel = clearLabel,
       category = category,
       clearCategory = clearCategory,
+      color = color,
+      clearColor = clearColor,
       pinned = pinned,
       archived = archived,
       unread = unread,
@@ -5104,7 +5109,14 @@ class NodeRuntime private constructor(
     attachments: List<OutgoingAttachment>,
   ): Boolean = chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
 
-  internal fun canSendForOwner(owner: ChatComposerOwner): Boolean = chat.canSendForOwner(owner)
+  internal fun canSendForOwner(owner: ChatComposerOwner): Boolean = chat.isCurrentComposerOwner(owner)
+
+  internal fun prepareFullMessageRead(
+    owner: ChatComposerOwner,
+    selectionGeneration: Long,
+    catalogRevision: Long,
+    message: ChatMessage,
+  ) = chat.prepareFullMessageRead(owner, selectionGeneration, catalogRevision, message)
 
   private suspend fun awaitConnectedGateway(stableId: String): Boolean {
     _isConnected.first { connected ->
@@ -5523,7 +5535,7 @@ class NodeRuntime private constructor(
         // Lock order stays gateway data -> method catalog -> approval state. The
         // explicit disconnect path already takes the first two in this order.
         synchronized(gatewayMethodsLock) {
-          if (methodsSnapshot.epoch == gatewayMethodsEpoch) {
+          if (methodsSnapshot.epoch == gatewayMethodsEpoch.value) {
             publish()
             approvalPublished = true
           }
@@ -7499,15 +7511,22 @@ class NodeRuntime private constructor(
       ?: error("Malformed approval.get response")
   }
 
-  private fun replaceGatewayMethods(methods: Set<String>?) {
+  private fun replaceGatewayMethods(
+    methods: Set<String>?,
+    present: Boolean = true,
+  ) {
     synchronized(gatewayMethodsLock) {
+      // A hello may omit methods, so null alone does not mean disconnected. Retire
+      // each live catalog once; repeated failed reconnects must not dismiss offline UI.
+      if (!present && !gatewayMethodCatalogPresent) return
+      gatewayMethodCatalogPresent = present
       val advertisedMethods = methods.orEmpty()
       gatewayAdvertisedMethods = methods
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
       _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
-      gatewayMethodsEpoch += 1
+      gatewayMethodsEpoch.update { it + 1 }
     }
   }
 
@@ -7525,11 +7544,11 @@ class NodeRuntime private constructor(
     synchronized(gatewayMethodsLock) {
       GatewayMethodsSnapshot(
         approvalRpcFamily = gatewayApprovalRpcFamily,
-        epoch = gatewayMethodsEpoch,
+        epoch = gatewayMethodsEpoch.value,
       )
     }
 
-  private fun isGatewayMethodsSnapshotCurrent(snapshot: GatewayMethodsSnapshot): Boolean = synchronized(gatewayMethodsLock) { snapshot.epoch == gatewayMethodsEpoch }
+  private fun isGatewayMethodsSnapshotCurrent(snapshot: GatewayMethodsSnapshot): Boolean = synchronized(gatewayMethodsLock) { snapshot.epoch == gatewayMethodsEpoch.value }
 
   private fun pendingExecApprovalWrite(
     id: String,

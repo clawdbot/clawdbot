@@ -40,7 +40,7 @@ describe("first transcript turn initialization", () => {
     lifecycleRevision: "first-lifecycle",
     createdAt: now,
     createdVia: "operator",
-    createdActor: { type: "human", id: "operator-profile" },
+    createdActor: { type: "human", source: "profile", id: "operator-profile" },
     sandbox: "required",
   };
   const database = () => openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope())));

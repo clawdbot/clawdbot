@@ -1,11 +1,11 @@
 import {
   isActiveHarnessContextEngine,
   resolveSandboxContext,
-  resolveSessionAgentIds,
   resolveUserPath,
   type FastModeAutoProgressState,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
@@ -83,7 +83,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,

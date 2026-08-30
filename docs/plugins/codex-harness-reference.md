@@ -151,8 +151,13 @@ enumeration errors, cycles, or safety-limit exhaustion. Confirmation still
 covers unknown native clients and the status-to-archive race. A supervised
 model-locked Chat cannot be deleted while it protects the native binding.
 Active sources cannot create a branch or be archived, but an existing supervised
-Chat can still be opened. Every paired-node row stays read-only; the node
-transport does not yet provide the streaming lifecycle needed by the harness.
+Chat can still be opened. Paired-node continuation requires `operator.admin`, a
+stored or idle interactive thread, and a connected node advertising and
+permitting the catalog list, transcript read, and `codex.cli.session.resume`
+commands. It binds Chat to native CLI resume on that node, not the local branch
+flow or a streaming App Server harness. Other paired-node rows remain readable,
+and paired-node archive is unavailable. See
+[paired-node limits](/plugins/codex-supervision#understand-paired-node-limits).
 
 `appServer.homeScope: "user"` alone changes which Codex home a managed harness
 process uses; it does not publish the fleet catalog. Enabling supervision does
@@ -784,6 +789,13 @@ OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
 points `appServer.command` at a different Codex binary. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
+
+Automatic discovery and hosted-search model selection use visible picker entries.
+Bounded turns with an explicit model selection, including image understanding,
+structured extraction, isolated completion, and settled-turn finalization, also
+look up hidden entries returned by `model/list`. The model must still be listed
+and support the required input modalities. Listing does not prove account
+entitlement.
 
 Native discovery reads `model/list` and `account/read` from the same scoped
 app-server client. An API-key account remains API-key authentication; model

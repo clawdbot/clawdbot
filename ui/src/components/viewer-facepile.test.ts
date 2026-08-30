@@ -151,18 +151,20 @@ it.each(
     await vi.waitFor(async () => {
       await facepile.updateComplete;
       expect(facepile.querySelector("img")?.getAttribute("src")).toBe(
-        provenance === "profile" ? `/api/users/${id}/avatar` : undefined,
+        provenance !== "unqualified" ? `/api/users/${id}/avatar` : undefined,
       );
       expect(facepile.querySelector("a")?.getAttribute("href")).toBe(
-        provenance === "profile" ? `/activity?person=${id}` : undefined,
+        provenance !== "unqualified" ? `/activity?person=${id}` : undefined,
       );
       expect(facepile.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
-        "1",
+        provenance === "mixed" ? "2" : "1",
       );
       expect(facepile.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
         "Ada Lovelace",
       );
-      expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(1);
+      expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(
+        provenance === "mixed" ? 2 : 1,
+      );
     });
   },
 );
@@ -208,16 +210,7 @@ it("shares an authenticated avatar blob between the same user in the roster and 
   }
 });
 
-type ViewerFacepileElement = HTMLElement & {
-  presencePayload: unknown;
-  selfUserId?: string;
-  selfInstanceId?: string;
-  sessionKey?: string;
-  excludeUserId?: string;
-  staticParticipants?: readonly SessionParticipant[];
-  maxVisible: number;
-  updateComplete: Promise<boolean>;
-};
+type ViewerFacepileElement = HTMLElementTagNameMap["openclaw-viewer-facepile"];
 
 it.each(["first", "second"])(
   "merges device presence into one non-interactive face watching %s",
@@ -274,12 +267,12 @@ it("renders ordered static participant actors without presence filtering", async
 it("excludes the session owner before choosing visible avatars and overflow", async () => {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.sessionKey = "agent:main:active";
-  facepile.excludeUserId = "owner";
+  facepile.excludeIdentity = { type: "profile", id: "owner" };
   facepile.maxVisible = 2;
   facepile.presencePayload = {
     presence: ["owner", "alice", "bob", "carol"].map((id) => ({
       instanceId: `${id}-instance`,
-      user: { id, name: id },
+      user: { id, identity: { type: "profile", id }, name: id },
       watchedSessions: ["agent:main:active"],
     })),
   };
@@ -311,20 +304,17 @@ it("detects only other viewers watching the requested session", () => {
       },
       {
         instanceId: "alice-instance",
-        user: { id: "alice", name: "Alice" },
+        user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
         watchedSessions: ["agent:main:other"],
       },
     ],
   };
-  expect(hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:active")).toBe(
-    false,
-  );
-  expect(hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:other")).toBe(
-    true,
-  );
   expect(
-    hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:other", "alice"),
+    hasSessionPresenceViewers(payload, { id: "self" }, "self-instance", "agent:main:active"),
   ).toBe(false);
+  expect(
+    hasSessionPresenceViewers(payload, { id: "self" }, "self-instance", "agent:main:other"),
+  ).toBe(true);
 });
 
 it.each([
@@ -360,7 +350,7 @@ it.each([
   },
 ])("excludes authenticated self from session facepiles when $name", async (fixture) => {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.selfUserId = "self";
+  facepile.selfUser = { id: "self" };
   facepile.selfInstanceId = fixture.selfInstanceId;
   facepile.sessionKey = "agent:main:active";
   facepile.presencePayload = { presence: fixture.presence };

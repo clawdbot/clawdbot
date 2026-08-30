@@ -117,6 +117,12 @@ export async function handleAgentExecutionError(params: {
 }): Promise<ErrorAction> {
   const turn = params.turn;
   const err = params.error;
+  // A failed candidate leaves its backstop pending; settlement takes it before later work.
+  // This keeps session-override failures from being mislabeled as model failures.
+  const postCompactionModelFailure =
+    params.state.postCompactionModelAttempted && params.state.pendingLifecycleTerminal
+      ? true
+      : undefined;
   const takePendingLifecycleTerminal = () => {
     const terminal =
       params.state.pendingLifecycleTerminal?.backstop ??
@@ -169,6 +175,7 @@ export async function handleAgentExecutionError(params: {
       params.state.pendingLifecycleTerminal = undefined;
       return { kind: "retry", liveModelSwitchError: err };
     }
+    const visibleReplyDelivered = await turn.resolveVisibleReplyDelivery?.();
     defaultRuntime.error(
       `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
         `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
@@ -189,6 +196,7 @@ export async function handleAgentExecutionError(params: {
       payload: markAgentRunFailureReplyPayload({
         text: resolveExternalRunFailureTextForConversation({
           text: switchErrorText,
+          visibleReplyDelivered,
           sessionCtx: turn.sessionCtx,
           isGenericRunnerFailure: !params.shouldSurfaceToControlUi,
           cfg: turn.followupRun.run.config,
@@ -433,6 +441,7 @@ export async function handleAgentExecutionError(params: {
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
+      postCompactionModelFailure,
     };
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
@@ -505,6 +514,7 @@ export async function handleAgentExecutionError(params: {
                 : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
   const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
     text: fallbackText,
+    visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
     sessionCtx: turn.sessionCtx,
     isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
     cfg: turn.followupRun.run.config,
@@ -520,5 +530,6 @@ export async function handleAgentExecutionError(params: {
         ? { presentation: externalRunFailureReply.presentation }
         : {}),
     }),
+    postCompactionModelFailure,
   };
 }

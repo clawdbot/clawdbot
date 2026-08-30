@@ -55,12 +55,12 @@ import {
 } from "./chat-thread-interactions.ts";
 import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
+import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -70,7 +70,7 @@ type ChatTranscriptProjection = {
   isEmpty: boolean;
   showLoadingSkeleton: boolean;
   searchOpen: boolean;
-  renderRows: (overlay?: unknown) => TemplateResult;
+  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
 };
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
@@ -175,7 +175,10 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
-  const latestBrowserTabs = latestBrowserTabCards(props.messages, props.toolMessages);
+  const latestBrowserTabs =
+    props.browserTabPreviewsActive === false
+      ? latestBrowserTabCards([], [])
+      : latestBrowserTabCards(props.messages, props.toolMessages);
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,
@@ -323,6 +326,9 @@ export function projectChatTranscript(
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
     assistant: assistantIdentity,
+    startupLabel: props.startupLabel,
+    waitingApproval: props.waitingApproval,
+    runOutputTokens: props.runOutputTokens,
   } satisfies StreamGroupOptions;
   // Latest ownership crosses rows: the former owner must rerender when a
   // newer answer arrives even if its own message object stays stable.
@@ -340,14 +346,7 @@ export function projectChatTranscript(
       showToolCalls: props.showToolCalls,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-      onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-        setExpansionState(
-          expandedToolCards,
-          messageId,
-          !(expanded ?? expandedToolCards.get(messageId) ?? false),
-        );
-        requestUpdate();
-      },
+      onToggleToolMessageExpanded: toggleToolCardExpanded,
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
       onToggleUserMessageExpanded: (messageId: string) => {
         setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
@@ -365,7 +364,6 @@ export function projectChatTranscript(
       userAvatar: props.userAvatar ?? null,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
       queuedMessageAction: props.queuedMessageAction,
-      queueControls: props.queueControls,
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
@@ -440,9 +438,6 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        startupLabel: props.startupLabel,
-        waitingApproval: props.waitingApproval,
-        runOutputTokens: props.runOutputTokens,
       });
     }
     if (item.kind === "work-group") {
@@ -475,9 +470,6 @@ export function projectChatTranscript(
         streamOptions: {
           ...streamGroupOptions,
           questionPrompts,
-          startupLabel: props.startupLabel,
-          waitingApproval: props.waitingApproval,
-          runOutputTokens: props.runOutputTokens,
         },
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
@@ -543,12 +535,7 @@ export function projectChatTranscript(
     // Keeping the status in the reply avoids a second claw/assistant row.
     activeContinuationByGroupKey.set(previous.key, {
       parts: activeStatusParts,
-      options: {
-        ...streamGroupOptions,
-        startupLabel: props.startupLabel,
-        waitingApproval: props.waitingApproval,
-        runOutputTokens: props.runOutputTokens,
-      },
+      options: streamGroupOptions,
     });
     return false;
   });
@@ -701,11 +688,6 @@ export function projectChatTranscript(
     props.queuedMessageAction?.id,
     props.queuedMessageAction?.label,
     props.queuedMessageAction?.onAction,
-    props.queue.length ? props.queue : undefined,
-    props.queueControls?.offline,
-    props.queueControls?.editingId,
-    props.queueControls?.editingText,
-    Boolean(props.queueControls?.onQueueSteer),
     props.replyMessageAccess?.revision ?? 0,
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
@@ -729,13 +711,14 @@ export function projectChatTranscript(
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,
-    renderRows: (overlay: unknown = nothing) =>
+    renderRows: (overlay: unknown = nothing, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
+        header,
       ),
   };
 }

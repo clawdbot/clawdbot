@@ -48,6 +48,30 @@ For tab endpoints, `targetId` is the compatibility field name. Prefer passing
 `suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
 handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
+Tab handles are scoped to a browser host or node and profile; keep that route
+with the handle when making follow-up requests.
+
+The Control UI's `browser.request` Gateway method accepts `target: "host"` to
+pin the Gateway host or `target: "node"` with `node: "<node-id>"` to pin a browser
+node. Pass the profile in `query.profile`. Explicit routes do not fall back to
+another host; omitting them keeps the configured automatic routing. These
+routing fields do not grant access or change browser policy.
+
+Browser previews require a result from the `browser` tool with a known route.
+Browser-shaped metadata from other tools does not trigger screenshots or change
+the panel's selection; those results remain ordinary tool output.
+
+When URL validation fails during tab listing, the tab keeps its identity and
+title but returns `url: ""` and `urlUnavailableReason`:
+
+- `navigation_blocked`: navigation rules rejected the address.
+- `navigation_check_failed`: OpenClaw could not validate the address, for example
+  because DNS lookup failed. Refresh to check again.
+
+An empty URL alone does not indicate a policy denial. Navigation-policy errors
+also carry `reason: "navigation_blocked"`; raw blocked URLs and DNS details are
+not included in that metadata. Tab listings are observations, not authorization:
+every subsequent content read or action still enforces its own checks.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 

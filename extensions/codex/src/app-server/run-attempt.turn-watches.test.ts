@@ -5,17 +5,23 @@ import {
   embeddedAgentLog,
   invokeNativeHookRelay,
   nativeHookRelayTesting,
+  resolveActiveEmbeddedRunSessionId,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import {
+  TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
+  TURN_TERMINAL_SETTLEMENT_IDLE_TIMEOUT_MS,
+} from "./attempt-timeouts.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -517,6 +523,48 @@ describe("runCodexAppServerAttempt turn watches", () => {
       replayInvalid: true,
       livenessState: "abandoned",
     });
+  });
+
+  it("joins queued image projection when timeout aborts the turn", async () => {
+    const harness = createStartedThreadHarness();
+    const projection = createDeferred<void>();
+    const mediaPath = path.join(tempDir, "queued-image.png");
+    const saveMedia = vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async () => {
+      await projection.promise;
+      return { id: "queued-image", path: mediaPath, size: 1, contentType: "image/png" };
+    });
+    const settled = vi.fn();
+    const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: 60_000 }), {
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    void run.then(settled);
+    try {
+      await harness.waitForMethod("turn/start");
+      vi.useFakeTimers();
+      void harness.notify(
+        rawItemCompleted({
+          id: "queued-image",
+          type: "image_generation_call",
+          status: "generating",
+          result: tinyPngBase64,
+        }),
+      );
+      await vi.waitFor(() => expect(saveMedia).toHaveBeenCalledOnce(), fastWait);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await harness.waitForMethod("thread/unsubscribe");
+      await vi.advanceTimersByTimeAsync(1);
+
+      projection.resolve();
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+      const result = await run;
+      expect(readAttemptTerminal(result).timedOut).toBe(true);
+      expect(result.toolMediaUrls).toEqual([mediaPath]);
+    } finally {
+      projection.resolve();
+      vi.useRealTimers();
+    }
   });
 
   it("marks executed dynamic-tool completion-idle timeouts as replay-invalid", async () => {
@@ -2499,7 +2547,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
-  it("does not idle-timeout when terminal completion queues behind projection", async () => {
+  it("does not idle-timeout when terminal completion queues behind projection within the settlement window", async () => {
     const harness = createStartedThreadHarness();
     const params = makeTestParams({ timeoutMs: 120 });
     const turnStartProgressEvents: DiagnosticEventPayload[] = [];
@@ -2524,7 +2572,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     let settled = false;
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 5,
-      turnTerminalIdleTimeoutMs: 5,
+      // A queued terminal now settles within a bounded window instead of
+      // waiting forever; keep that window far beyond this test's drain time so
+      // it still proves a briefly blocked projection is not aborted early.
+      turnTerminalIdleTimeoutMs: 60_000,
     }).finally(() => {
       settled = true;
     });
@@ -2755,6 +2806,74 @@ describe("runCodexAppServerAttempt turn watches", () => {
       promptError: null,
       assistantTexts: ["Done."],
     });
+  });
+
+  it("settles blocked terminal delivery within the short window after a queued hook completes", async () => {
+    const harness = createStartedThreadHarness();
+    harness.client.close = () => harness.close();
+    const abortController = new AbortController();
+    const projection = createDeferred<void>();
+    const blockedReply = createDeferred<void>();
+    const onReasoningStream = vi.fn(() => projection.promise);
+    const onPartialReply = vi.fn(() => blockedReply.promise);
+    const params = makeTestParams({
+      timeoutMs: 60 * 60_000,
+      abortSignal: abortController.signal,
+      onReasoningStream,
+      onPartialReply,
+    });
+    const settled = vi.fn();
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 30 * 60_000 });
+    void run.then(settled);
+    try {
+      await harness.waitForMethod("turn/start");
+      await harness.notify(
+        itemNotification("item/started", {
+          id: "msg-final-1",
+          type: "agentMessage",
+          phase: "final_answer",
+          text: "",
+        }),
+      );
+      await harness.notify(finalizationHookNotification("hook/started", "running"));
+      void harness.notify({
+        method: "item/reasoning/textDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          delta: "thinking",
+        },
+      });
+      await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
+
+      vi.useFakeTimers();
+      const completedHook = harness.notify(
+        finalizationHookNotification("hook/completed", "completed"),
+      );
+      void harness.notify(makeAgentMessageDelta({ itemId: "msg-final-1", delta: "Done." }));
+      // Receipt sees the unsettled hook; its completion is still behind the first projection.
+      void harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      projection.resolve();
+      await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce(), fastWait);
+      await completedHook;
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_IDLE_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+      const result = await run;
+      expect(readAttemptTerminal(result)).toMatchObject({ aborted: true, timedOut: true });
+      expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("terminal");
+      expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
+    } finally {
+      projection.resolve();
+      blockedReply.resolve();
+      vi.useRealTimers();
+      abortController.abort("test_cleanup");
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+    }
   });
 
   it("rearms recovery after queued assistant projection outlives the receive-time watch", async () => {

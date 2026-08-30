@@ -11,7 +11,7 @@ import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginId?: string;
-  schemaPluginOrigin?: PluginOrigin;
+  schemaPluginOrigin: PluginOrigin;
 };
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
@@ -157,6 +157,26 @@ export function collectPluginSchemaMetadataCore(
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
+function prepareChannelConfigSchema(
+  origin: PluginOrigin,
+  channelId: string,
+  schema: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (origin === "bundled") {
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema });
+  }
+  try {
+    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
+  } catch {
+    // Normalization and official-channel widening both clone and walk the schema, so a deeply
+    // nested external manifest overflows here, before any validator runs. Surfacing the raw
+    // schema keeps metadata collection total and leaves the diagnostic to the one owner of it,
+    // validatePluginSchemaValue.
+    return schema;
+  }
+}
+
 /** Collects per-channel config metadata with the plugin that supplied the selected schema. */
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
@@ -180,7 +200,7 @@ export function collectChannelSchemaMetadataWithOwnership(
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
-          schemaPluginOrigin: current?.schemaPluginOrigin,
+          schemaPluginOrigin: current?.schemaPluginOrigin ?? record.origin,
           originRank,
         });
       }
@@ -197,14 +217,11 @@ export function collectChannelSchemaMetadataWithOwnership(
         // advertises the same channel id.
         continue;
       }
-      const coreOwnedSchema =
-        record.origin === "bundled" || channelConfig.schema === undefined
-          ? channelConfig.schema
-          : normalizeCoreOwnedChannelSchema(channelConfig.schema);
-      const configSchema = widenOfficialExternalChannelSecretSchema({
+      const configSchema = prepareChannelConfigSchema(
+        record.origin,
         channelId,
-        schema: coreOwnedSchema,
-      });
+        channelConfig.schema,
+      );
       byChannelId.set(channelId, {
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
@@ -212,7 +229,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         configSchema,
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
         schemaPluginId: configSchema === undefined ? undefined : record.id,
-        schemaPluginOrigin: configSchema === undefined ? undefined : record.origin,
+        schemaPluginOrigin: record.origin,
         originRank,
       });
     }

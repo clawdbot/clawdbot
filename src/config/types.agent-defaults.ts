@@ -49,6 +49,8 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Optional agent execution runtime for this specific provider/model entry. */
   agentRuntime?: AgentRuntimePolicyConfig;
+  /** OpenClaw Code Mode override; omitted inherits the enclosing activation policy. */
+  codeMode?: boolean;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
 };

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -13,6 +14,7 @@ import {
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertOpenClawStateWriteAllowed,
@@ -34,7 +36,7 @@ const NATIVE_STARTUP_BOOTSTRAP_OBJECTS = new Set([
   "index:idx_state_leases_owner",
 ]);
 
-function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
+export function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
   if (readSqliteUserVersion(db) !== 0) {
     return false;
   }
@@ -148,7 +150,33 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
   );
 }
 
-// One-time seed for the ledger footprint aggregates (#100622): estimate rows
-// written before the estimated_bytes columns existed, then roll them up per
-// session. Zero is a safe "not seeded" sentinel because every real row costs
-// at least its 32-byte overhead.
+/** Admit only recognized native bootstrap; versioned state stays on the read-only path. */
+export function initializeNativeOpenClawStateConnection(
+  options: OpenClawStateDatabaseOptions,
+  initializeCanonicalSchema: (db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) => void,
+): void {
+  if (
+    !withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => isUninitializedNativeStartupDatabase(db),
+      options,
+    )
+  ) {
+    return;
+  }
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  runWithOpenClawStateWriteAccess({ databasePath: pathname, env }, "native state bootstrap", () => {
+    const db = openNodeSqliteDatabase(pathname);
+    try {
+      if (!isUninitializedNativeStartupDatabase(db)) {
+        return;
+      }
+      assertSqliteIntegrity(db, pathname);
+      initializeCanonicalSchema(db, pathname, env);
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+    }
+    ensureOpenClawStatePermissions(pathname, env);
+  });
+}

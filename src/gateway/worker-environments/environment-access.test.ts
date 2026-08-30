@@ -9,6 +9,7 @@ import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -161,6 +162,7 @@ describe("worker environment service", () => {
     const nodeHandle = {
       environmentId: "pending",
       ownerEpoch: 0,
+      measureLaunchTurn,
       launchTurn: vi.fn(),
       runWorkspaceCommand: vi.fn(),
       quiesceWorkspace: vi.fn(),
@@ -308,6 +310,7 @@ describe("worker environment service", () => {
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
+        measureLaunchTurn,
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),

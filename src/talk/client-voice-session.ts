@@ -256,7 +256,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
       }
       return buildSessionCreationStamp({
         via: "talk",
-        actor: params.creation?.actor ?? { type: "human" },
+        actor: params.creation?.actor ?? { type: "human", source: "unknown" },
         sandbox: params.creation?.sandbox,
       });
     },

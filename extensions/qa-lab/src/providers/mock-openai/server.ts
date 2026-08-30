@@ -96,6 +96,8 @@ import {
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
   QA_RESTART_RECOVERY_PROMPT_RE,
+  QA_KILL_RESTART_PROMPT_RE,
+  QA_KILL_RESTART_RECOVERED_MARKER,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
@@ -293,9 +295,6 @@ const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
-// Code Mode uses this read-only continuation after an uncertain tool effect.
-const QA_CODE_MODE_RECONCILIATION_PROMPT_RE =
-  /the previous Code Mode mutation may have partially applied/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
@@ -913,6 +912,14 @@ async function buildResponsesPayload(
     return buildFailedResponseEvents();
   }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  // The hard-kill fixture shares the first real checkpoint below, but recovery
+  // must settle without scheduling the repeated-restart fixture's later waits.
+  if (
+    QA_KILL_RESTART_PROMPT_RE.test(allInputText) &&
+    QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
+  ) {
+    return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
+  }
   if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
     const progress = readRestartCheckpointProgress(input);
     const currentControlCallId = extractToolOutputCallId(input);
@@ -968,7 +975,9 @@ async function buildResponsesPayload(
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
             'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
             'if (!target) throw new Error("qa_restart_wait unavailable");',
-            "await target({});",
+            // Bridge calls drain inside exec; explicitly yield while this hold is pending.
+            // The restart scenario must interrupt a real wait call, not a timing guess.
+            'await Promise.all([target({}), yield_control("restart checkpoint")]);',
             `return "CHECKPOINT-${nextCheckpoint}";`,
           ].join("\n"),
         });
@@ -1046,11 +1055,6 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const isCodeModeReconciliation = QA_CODE_MODE_RECONCILIATION_PROMPT_RE.test(prompt);
-  const isActiveFailedToolTerminalRecovery =
-    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
-    ((prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) || isCodeModeReconciliation) &&
-      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1383,24 +1387,15 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
-  if (isActiveFailedToolTerminalRecovery) {
-    if (
-      allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) ||
-      isCodeModeReconciliation
-    ) {
-      if (
-        !isCodeModeReconciliation &&
-        !allInputText.includes("If a tool failed, say so; never claim completion or success.")
-      ) {
-        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
-      }
-      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
-      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
-    }
+  if (QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt)) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
     }
-    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
+    if (!hasToolErrorOutput(parseToolOutputJson(rawToolOutput), rawToolOutput)) {
+      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+    }
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+    return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
   }
   const heartbeatReply = resolveHeartbeatPromptReply(prompt);
   if (heartbeatReply) {

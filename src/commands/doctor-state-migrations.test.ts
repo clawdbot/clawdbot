@@ -15,6 +15,17 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
+  detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
+  runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
+} from "../infra/state-migrations.doctor.js";
+import {
+  autoMigrateLegacyStateDir,
+  autoMigrateLegacyTaskStateSidecars,
+  resetAutoMigrateLegacyStateDirForTest,
+  resetAutoMigrateLegacyTaskStateSidecarsForTest,
+} from "../infra/state-migrations.state-dir.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import {
   createPluginStateKeyedStore,
@@ -37,16 +48,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
-import {
-  autoMigrateLegacyStateDir,
-  autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
-  autoMigrateLegacyTaskStateSidecars,
-  detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyStateForTest,
-  resetAutoMigrateLegacyTaskStateSidecarsForTest,
-  runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
-} from "./doctor-state-migrations.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -252,7 +253,6 @@ async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenCl
 }
 
 afterEach(() => {
-  resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   closeOpenClawStateDatabaseForTest();

@@ -155,7 +155,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
+  # Profiles own different coverage and verdicts, so their admission is independent.
+  # Stable/full force soak, so their explicit soak flag must not split the lock.
+  group: full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
   cancel-in-progress: false
 
 env:
@@ -1672,8 +1674,8 @@ jobs:
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
         run: node scripts/full-release-validation-state.mjs verify
 
-      # Artifact v4 keeps prior attempts readable within the same workflow run.
-      # Exact IDs from the sealed plan prevent recovery from drifting to a newer upload.
+      # Exact IDs from the sealed plan prevent verification from drifting to a newer upload.
+      # Parent-owned candidate plans are rejected before same-parent continuation.
       - name: Verify sealed release candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1851,7 +1853,7 @@ jobs:
           if [[ "$EVIDENCE_REUSE" == "true" ]]; then
             # Inherit the evidence manifest (profile, soak, child runs) so future
             # reuse lookups and evidence consumers keep resolving the chain root.
-            jq \
+            jq -c \
               --arg runId "$GITHUB_RUN_ID" \
               --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
               --arg workflowRef "$GITHUB_REF_NAME" \
@@ -1896,7 +1898,7 @@ jobs:
               }' <<< "$EVIDENCE_MANIFEST" > "${manifest_dir}/full-release-validation-manifest.json"
             exit 0
           fi
-          jq -n \
+          jq -cn \
             --arg workflowName "Full Release Validation" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \

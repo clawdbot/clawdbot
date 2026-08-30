@@ -36,10 +36,7 @@ import {
 } from "../registry/subagent-registry.js";
 import { removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import {
-  materializeSubagentAttachments,
-  type SubagentAttachmentReceiptFile,
-} from "./subagent-attachments.js";
+import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
@@ -210,7 +207,7 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
-    const provisionalSessionIdentity = {
+    let provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
     };
@@ -234,6 +231,15 @@ export async function spawnSubagentDirect(
         status: "error",
         error: preparedSpawnContext.error,
         childSessionKey,
+      };
+    }
+    const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
+    if (childEntry) {
+      // Only preparation's committed entry can advance cleanup ownership. A reread
+      // of the key could capture a reset/rebound successor that this spawn does not own.
+      provisionalSessionIdentity = {
+        expectedSessionId: childEntry.sessionId,
+        expectedLifecycleRevision: childEntry.lifecycleRevision,
       };
     }
     const runtimeStatePersistError = await persistInitialChildRuntimeState({
@@ -290,7 +296,6 @@ export async function spawnSubagentDirect(
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
-      task: params.task,
       acpEnabled: isAcpRuntimeSpawnAvailable({
         config: cfg,
         sandboxed: childRuntimeSandboxed,
@@ -315,14 +320,7 @@ export async function spawnSubagentDirect(
     }
 
     let retainOnSessionKeep = false;
-    let attachmentsReceipt:
-      | {
-          count: number;
-          totalBytes: number;
-          files: SubagentAttachmentReceiptFile[];
-          relDir: string;
-        }
-      | undefined;
+    let attachmentsReceipt: SpawnSubagentResult["attachments"];
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
 
@@ -418,6 +416,7 @@ export async function spawnSubagentDirect(
           },
         ),
         childLaunch.authorization,
+        gatewayContextResolver,
       );
     };
 
@@ -606,11 +605,11 @@ export async function spawnSubagentDirect(
         ctx.continuationDelegateAdmission?.assertCurrent("final-acceptance"),
       publishRegistration: () => {
         ctx.continuationDelegateAdmission?.assertCurrent("lifecycle-publication");
-        if (initialSession.entry) {
+        if (childEntry) {
           recordSessionCreated({
             sessionKey: childSessionKey,
             agentId: targetAgentId,
-            entry: initialSession.entry,
+            entry: childEntry,
           });
         }
         recordSubagentSpawned({
@@ -693,6 +692,7 @@ export async function spawnSubagentDirect(
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
+      context: preparedSpawnContext.mode,
       taskName,
       note: preparedSpawnContext.forkFallbackNote
         ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`

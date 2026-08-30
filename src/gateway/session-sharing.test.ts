@@ -97,7 +97,12 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
       sessionId: "session-main",
       updatedAt: 1,
       visibility: "draft",
-      ...(createdActor ? { createdActor } : {}),
+      ...(createdActor
+        ? {
+            createdVia: "operator" as const,
+            createdActor: { ...createdActor, source: "profile" as const },
+          }
+        : {}),
     },
     storeKey: "agent:main:main",
     storeKeys: ["agent:main:main"],
@@ -159,7 +164,7 @@ describe("session sharing policy", () => {
           sessionId: "existing-maintainer-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         },
       );
 
@@ -218,7 +223,7 @@ describe("session sharing policy", () => {
           sessionId: "session-team-shared",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: ownerId! },
+          createdActor: { type: "human", source: "profile", id: ownerId! },
         },
       );
       const sharedTarget = resolveSessionSharingTarget({ cfg, sessionKey });
@@ -270,7 +275,13 @@ describe("session sharing policy", () => {
             context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
           }).error,
         ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-        for (const method of ["sessions.companion.ask", "sessions.companion.state"]) {
+        for (const method of [
+          "chat.history",
+          "chat.startup",
+          "chat.metadata",
+          "sessions.companion.ask",
+          "sessions.companion.state",
+        ]) {
           expect(
             resolveSessionMutationAuthorization({
               client: viewer,
@@ -360,7 +371,7 @@ describe("session sharing policy", () => {
             updatedAt: 1,
             visibility: visibility === "draft" ? "draft" : "shared",
             ...(visibility === "incognito" ? { incognito: true as const } : {}),
-            createdActor: { type: "human", id: owner.id },
+            createdActor: { type: "human", source: "profile", id: owner.id },
           },
         );
         const restricted = resolveSessionSharingTarget({ cfg, sessionKey });
@@ -397,7 +408,7 @@ describe("session sharing policy", () => {
         sessionId: "session-cron-run",
         updatedAt: 1,
         createdVia: "cron" as const,
-        createdActor: { type: "human" as const, id: creatorId },
+        createdActor: { type: "human" as const, source: "profile" as const, id: creatorId },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey: foreignKey }, foreignEntry);
       await upsertSessionEntryCore(
@@ -406,7 +417,7 @@ describe("session sharing policy", () => {
           sessionId: "session-team-own",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: restrictedId },
+          createdActor: { type: "human", source: "profile", id: restrictedId },
         },
       );
       addSessionMember(
@@ -422,7 +433,7 @@ describe("session sharing policy", () => {
         entryFilter?.(ownKey, {
           sessionId: "session-team-own",
           updatedAt: 1,
-          createdActor: { type: "human", id: restrictedId },
+          createdActor: { type: "human", source: "profile", id: restrictedId },
         }),
       ).toBe(true);
       expect(
@@ -438,6 +449,7 @@ describe("session sharing policy", () => {
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
       for (const [method, requestParams] of [
         ["chat.history", { sessionKey: foreignKey }],
+        ["chat.metadata", { sessionKey: foreignKey }],
         ["chat.send", { sessionKey: foreignKey }],
         ["mcp.app.callTool", { sessionKey: foreignKey }],
         ["mcp.app.updateModelContext", { sessionKey: foreignKey }],
@@ -564,7 +576,7 @@ describe("session sharing policy", () => {
           updatedAt: 1,
           visibility: "read-only",
           category: "Personal",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -590,7 +602,7 @@ describe("session sharing policy", () => {
           sessionId: "session-message-cut-target",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
       const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
@@ -639,7 +651,7 @@ describe("session sharing policy", () => {
           updatedAt: 1,
           visibility: "read-only",
           category: "Race",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -670,7 +682,7 @@ describe("session sharing policy", () => {
           updatedAt: 1,
           visibility: "read-only",
           category: "Projects",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
       const viewer = client({ user: "viewer@example.com" });
@@ -777,12 +789,7 @@ describe("session sharing policy", () => {
   it("uses the landed createdActor contract and hides drafts from other identified operators", () => {
     const owner = client({ user: "owner@example.com" });
     const viewer = client({ user: "viewer@example.com" });
-    const entry = {
-      sessionId: "session-main",
-      updatedAt: 1,
-      visibility: "draft" as const,
-      createdActor: { type: "human" as const, id: "owner@example.com", label: "Owner" },
-    };
+    const entry = target({ type: "human", id: "owner@example.com", label: "Owner" }).entry;
     expect(isListed(owner, "main", entry)).toBe(true);
     expect(isListed(viewer, "main", entry)).toBe(false);
   });
@@ -792,11 +799,10 @@ describe("session sharing policy", () => {
       const sessionKey = "agent:main:dashboard:incognito-private";
       const sessionAlias = "dashboard:incognito-private";
       const entry = {
+        ...target({ type: "human", id: "owner@example.com" }).entry,
         sessionId: "session-incognito",
-        updatedAt: 1,
         visibility: "shared" as const,
         incognito: true as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
       };
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       const owner = client({ user: "owner@example.com" });
@@ -807,55 +813,42 @@ describe("session sharing policy", () => {
       const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
       const directRequests = (requestedKey: string) => [
         { method: "chat.history", requestParams: { sessionKey: requestedKey } },
+        { method: "chat.metadata", requestParams: { sessionKey: requestedKey } },
         { method: "chat.send", requestParams: { sessionKey: requestedKey } },
         { method: "sessions.get", requestParams: { key: requestedKey } },
         { method: "sessions.preview", requestParams: { keys: [requestedKey] } },
         { method: "sessions.search", requestParams: { sessionKeys: [requestedKey] } },
       ];
 
-      for (const visibleClient of [admin, solo]) {
-        expect(isListed(visibleClient, sessionKey, entry)).toBe(true);
+      for (const [requestClient, visible] of [
+        [admin, true],
+        [solo, true],
+        [owner, false],
+        [viewer, false],
+      ] as const) {
+        expect(isListed(requestClient, sessionKey, entry)).toBe(visible);
         expect(
           canReceiveSessionEvent({
             cfg,
-            client: visibleClient as never,
+            client: requestClient as never,
             sessionKeys: [sessionKey],
           }),
-        ).toBe(true);
+        ).toBe(visible);
         for (const requestedKey of [sessionKey, sessionAlias]) {
           for (const request of directRequests(requestedKey)) {
-            expect(
-              resolveSessionMutationAuthorization({
-                client: visibleClient,
-                ...request,
-                context,
-              }).error,
-            ).toBeNull();
-          }
-        }
-      }
-
-      for (const hiddenClient of [owner, viewer]) {
-        expect(isListed(hiddenClient, sessionKey, entry)).toBe(false);
-        expect(
-          canReceiveSessionEvent({
-            cfg,
-            client: hiddenClient as never,
-            sessionKeys: [sessionKey],
-          }),
-        ).toBe(false);
-        for (const requestedKey of [sessionKey, sessionAlias]) {
-          for (const request of directRequests(requestedKey)) {
-            expect(
-              resolveSessionMutationAuthorization({
-                client: hiddenClient,
-                ...request,
-                context,
-              }).error,
-            ).toMatchObject({
-              code: "INVALID_REQUEST",
-              message: `Incognito session "${requestedKey}" was not found.`,
+            const { error } = resolveSessionMutationAuthorization({
+              client: requestClient,
+              ...request,
+              context,
             });
+            if (visible) {
+              expect(error).toBeNull();
+            } else {
+              expect(error).toMatchObject({
+                code: "INVALID_REQUEST",
+                message: `Incognito session "${requestedKey}" was not found.`,
+              });
+            }
           }
         }
       }
@@ -884,7 +877,7 @@ describe("session sharing policy", () => {
           sessionId: "session-work-global",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
       await upsertSessionEntryCore(
@@ -965,7 +958,7 @@ describe("session sharing policy", () => {
         {
           sessionId: "session-suggestions",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "suggest",
         },
       );
@@ -1010,7 +1003,7 @@ describe("session sharing policy", () => {
         {
           sessionId: "session-draft",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
+          createdActor: { type: "human", source: "profile", id: "owner" },
           visibility: "draft",
         },
       );

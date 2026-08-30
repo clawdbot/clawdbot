@@ -15,6 +15,7 @@ import {
   type SessionRunTerminal,
 } from "./reconcile.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
+import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
@@ -29,13 +30,6 @@ import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
 
-export {
-  buildSessionUsageDateParams,
-  requestSessionUsage,
-  requestSessionUsageContextWeight,
-  requestSessionUsageLogs,
-  requestSessionUsageTimeSeries,
-} from "./usage.ts";
 export type { SessionArchivedFilter } from "./navigation.ts";
 export type {
   SessionCapability,
@@ -163,8 +157,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
   // passes through the same overlay: swarm notes, then in-flight pin intents.
-  const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
-    mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
+  const decorateRows = (
+    result: SessionsListResult | null,
+    owner = roster.primaryList(),
+  ): SessionsListResult | null =>
+    deletions.apply(
+      mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result))),
+      owner,
+    );
 
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => connection.isCurrent(scope),
@@ -196,6 +196,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     observerError: () => sessionEventSubscriptionError,
     bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
     decorate: decorateRows,
+    reconcileList: (result, revision, agentId) =>
+      deletions.reconcileList(result, revision, agentId),
     onCanonicalList(result, requestRevision, agentId, observed) {
       mutations.settlePrepared(result);
       for (const row of observed?.sessions ?? []) {
@@ -231,11 +233,25 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
-    publishedRow: (key) => roster.publishedRow(key),
+    publishedRow: (key) => roster.publishedRow((row) => row.key === key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,
     clearThink: (key, agentId) => thinkingLevelClaims.delete(thinkingClaimKey(key, agentId)),
     retirePullRequestSummary,
+  });
+
+  const deletions = createSessionDeletions({
+    connection,
+    snapshot: () => gateway.snapshot,
+    requestRevision: () => roster.requestRevision,
+    readState: () => state,
+    publish,
+    publishedRow: (matches) => roster.publishedRow(matches),
+    redecorateLists: () => roster.redecorateLists(),
+    invalidateLists: () => roster.scheduleEvent(),
+    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    reconcilePreviousConnection: mutations.reconcileConfirmedPreviousConnection,
+    retire: mutations.retireDeletedSession,
   });
 
   const operations = createSessionScopedOperations({
@@ -280,6 +296,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ): boolean => {
+    if (
+      row &&
+      !deletions.acceptsGeneration(
+        row.key,
+        row.sessionId,
+        row.agentId ?? options?.resultAgentId ?? state.agentId,
+      )
+    ) {
+      return false;
+    }
     const { sourceCanonicalListRevision, ...historyOptions } = options ?? {};
     const preserveCanonicalRow =
       sourceCanonicalListRevision !== undefined &&
@@ -312,6 +338,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
     const previous = state.result;
     const eventInfo = readSessionChangedEvent(payload);
+    if (
+      eventInfo &&
+      !deletions.acceptsGeneration(
+        eventInfo.key,
+        eventInfo.sessionId,
+        eventInfo.agentId ?? state.agentId,
+      )
+    ) {
+      const reconciled: SessionChangedResult = { applied: false, result: previous };
+      return { eventInfo: null, reconciled, claimChanged: false };
+    }
     const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
     const archivesSelectedSession =
       eventInfo?.archived === true &&
@@ -360,6 +397,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (reconciled.result !== previous && reconciled.key && eventInfo) {
       mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
     }
+    if (
+      eventInfo &&
+      (eventInfo.reason !== "delete" || reconciled.deletedKey || !eventInfo.sessionId)
+    ) {
+      deletions.observe(eventInfo);
+    }
     return { eventInfo, reconciled, claimChanged };
   };
 
@@ -377,9 +420,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             result,
             row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
           };
-    if (reconciled.deletedKey) {
-      retirePullRequestSummary(reconciled.deletedKey);
-    }
     if (
       claimChanged ||
       (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey))
@@ -390,15 +430,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         agentId: options?.resultAgentId?.trim()
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
-        deletedSessions: reconciled.deletedKey
-          ? [
-              {
-                key: reconciled.deletedKey,
-                ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
-                retireBeforeRevision: Date.now(),
-              },
-            ]
-          : [],
       });
     }
     return reconciled;
@@ -420,6 +451,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const connectionChanged = connection.transition(next);
     connectionClient = next.client;
     if (connectionChanged) {
+      if (previousClient !== next.client) {
+        deletions.clear();
+      }
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       thinkingLevelClaims.clear();
       roster.reset();
@@ -539,35 +573,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (event.event === "session.message" && !runEnded) {
       return;
     }
-    if (reconciled.deletedKey) {
-      retirePullRequestSummary(reconciled.deletedKey);
-      publish({
-        ...state,
-        deletedSessions: [
-          {
-            key: reconciled.deletedKey,
-            ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
-            retireBeforeRevision: Date.now(),
-          },
-        ],
-      });
-    } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
-      const remainingDeletedSessions = state.deletedSessions.filter(
-        ({ key, agentId }) =>
-          !uiSessionEventMatches(
-            {
-              assistantAgentId: agentId ?? gateway.snapshot.assistantAgentId,
-              hello: gateway.snapshot.hello,
-              sessionKey: key,
-            },
-            eventInfo.key,
-            eventInfo.agentId,
-          ),
-      );
-      if (remainingDeletedSessions.length !== state.deletedSessions.length) {
-        publish({ ...state, deletedSessions: remainingDeletedSessions });
-      }
-    }
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
@@ -616,8 +621,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     pullRequestSummary,
     capturePullRequestEpoch,
     setPullRequestSummary,
-    delete: mutations.delete,
-    deleteMany: mutations.deleteMany,
+    delete: deletions.delete,
+    deleteMany: deletions.deleteMany,
+    deletionState: deletions.deletionState,
     reset: mutations.reset,
     compact: operations.compact,
     listFiles: operations.listFiles,
@@ -656,6 +662,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       hydratedClient = null;
       hydratedSelfUserId = null;
       mutations.dispose();
+      deletions.clear();
       swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();

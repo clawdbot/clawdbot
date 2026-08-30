@@ -96,7 +96,6 @@ export type SpawnSubagentContext = SpawnedToolContext & {
 };
 
 export type SpawnSubagentResult = {
-  status: "accepted" | "cancelled" | "forbidden" | "error";
   childSessionKey?: string;
   sessionKey?: string;
   runId?: string;
@@ -117,4 +116,7 @@ export type SpawnSubagentResult = {
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
   };
-};
+} & (
+  | { status: "accepted"; context: SpawnSubagentContextMode }
+  | { status: "cancelled" | "forbidden" | "error"; context?: never }
+);

@@ -57,6 +57,7 @@ jobs:
               ".github/workflows/macos-periphery.yml",
               ".github/workflows/ios-periphery-comment.yml",
               "apps/macos/.periphery.yml",
+              "scripts/install-periphery.sh",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);
@@ -103,8 +104,9 @@ jobs:
 
       - name: Install Periphery
         run: |
-          brew update
-          brew install periphery
+          periphery_dir="$RUNNER_TEMP/openclaw-periphery"
+          ./scripts/install-periphery.sh "$periphery_dir"
+          echo "$periphery_dir" >> "$GITHUB_PATH"
 
       - name: Run Periphery
         run: |

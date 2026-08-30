@@ -19,12 +19,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
+import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
   writeNpmInstallRetryFixture,
   writeNpmLifecycleFixture,
 } from "./install-npm-fixtures.js";
+import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.sh";
 const HIDE_ARCH_PACKAGE_MANAGER = `
@@ -278,6 +280,46 @@ describe("install.sh", () => {
     },
   );
 
+  it.each(["dnf", "yum"])(
+    "pins Node.js installation to the configured NodeSource %s repository",
+    (packageManager) => {
+      for (const rootMode of ["root", "sudo"]) {
+        const result = runInstallShell(`
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          OS=linux
+          PACKAGE_MANAGER=${JSON.stringify(packageManager)}
+          ROOT_MODE=${JSON.stringify(rootMode)}
+          require_sudo() { :; }
+          install_build_tools_linux() { return 0; }
+          is_root() { [[ "$ROOT_MODE" == "root" ]]; }
+          is_arch_linux() { return 1; }
+          is_alpine_linux() { return 1; }
+          command() {
+            if [[ "\${1:-}" == "-v" ]]; then
+              case "\${2:-}" in
+                pacman|apk|apt-get) return 1 ;;
+                dnf|yum) [[ "$PACKAGE_MANAGER" == "$2" ]]; return ;;
+              esac
+            fi
+            builtin command "$@"
+          }
+          download_validated_script() { :; }
+          ui_info() { :; }
+          run_required_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
+          finish_linux_node_install() { :; }
+          install_node
+        `);
+
+        const sudoPrefix = rootMode === "sudo" ? "sudo " : "";
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+        expect(result.stdout).toContain(
+          `step:Installing Node.js|${sudoPrefix}${packageManager} install -y -q --disablerepo=* --enablerepo=nodesource-nodejs nodejs`,
+        );
+      }
+    },
+  );
+
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
     expect(script).toContain('DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"');
@@ -335,13 +377,13 @@ NODE
       OS=macos
       check_git() { return 0; }
       ensure_pnpm() { :; }
-      ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { :; }
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
+      }
       cleanup_legacy_submodules() { :; }
-      activate_repo_pnpm_version() { :; }
-      git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
-      run_quiet_step() { return 0; }
+      run_pnpm() { :; }
       ensure_user_local_bin_on_path() {
         mkdir -p "$HOME/.local/bin"
         export PATH="$HOME/.local/bin:$PATH"
@@ -494,18 +536,18 @@ NODE
       ln -s "$target" "$alias_path"
 
       check_git() { return 0; }
-      ensure_pnpm() { :; }
-      ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
-      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
-      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
-      git_install_lockfile_flag() {
-        [[ "$1" == "$target" ]]
-        printf '%s\\n' '--frozen-lockfile'
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$target" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
       }
+      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
+      ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
-        [[ "$1" == "-C" && "$2" == "$target" ]]
+        [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
+        if [[ "\${3:-}" == "install" ]]; then
+          [[ " $* " == *" --no-frozen-lockfile "* ]] || return 1
+        fi
         if [[ "\${3:-}" == "build" ]]; then
           mkdir -p "$target/dist"
           printf '%s\n' 'process.stdout.write("fixture-version\\n");' > "$target/dist/entry.js"
@@ -975,6 +1017,15 @@ NODE
       );
       expect(result.status).toBe(0);
       expect(readFileSync(args, "utf8").includes("--allow-scripts=openclaw")).toBe(expected);
+      const tool = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} pnpm@12.0.0 "$PWD" pnpm@12.0.0`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: version },
+      );
+      expect(tool.status).toBe(0);
+      expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -1570,11 +1621,10 @@ EOF
       repo="$(cd "$repo" && pwd -P)"
       check_git() { return 0; }
       ensure_pnpm() { :; }
-      ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() { :; }
       cleanup_legacy_submodules() { :; }
-      activate_repo_pnpm_version() { :; }
+      ensure_pnpm() { :; }
       git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
       run_quiet_step() {
         printf 'step:%s|%s\\n' "$1" "\${*:2}"
@@ -3716,6 +3766,16 @@ EOF
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
   });
 
+  it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
+    const result = runInstallShell(createInstallGitCommitFixtureScript(source), {
+      OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
+    });
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("rejected=HEAD~1");
+  });
+
   it("prefers a release tag over a same-named branch", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -3970,12 +4030,6 @@ HOOK
     );
   });
 
-  it("aligns pnpm to the checked-out repo packageManager before installing", () => {
-    expect(script).toContain("activate_repo_pnpm_version()");
-    expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
-    expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
-  });
-
   it("preserves explicit pnpm prefer-offline settings", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -4021,59 +4075,139 @@ HOOK
     expect(result.stdout).toContain(`result=${expected}`);
   });
 
-  it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-pnpm-version-"));
-    const bin = join(tmp, "bin");
-    const outer = join(tmp, "outer");
-    const repo = join(tmp, "repo");
-    mkdirSync(bin, { recursive: true });
-    mkdirSync(outer, { recursive: true });
-    mkdirSync(repo, { recursive: true });
-    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
-    writeFileSync(
-      join(repo, "package.json"),
-      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
-    );
-    writeFileSync(
-      join(bin, "pnpm"),
-      ["#!/bin/bash", '[[ "${1:-}" == "--version" ]] && echo "11.8.0"', ""].join("\n"),
-    );
-    writeFileSync(
-      join(bin, "corepack"),
-      [
-        "#!/bin/bash",
-        'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else exit 1; fi',
-        "  exit 0",
-        "fi",
-        "exit 1",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(join(bin, "pnpm"), 0o755);
-    chmodSync(join(bin, "corepack"), 0o755);
-
-    try {
-      const result = runInstallShell(
-        [
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `cd ${JSON.stringify(outer)}`,
-          `activate_repo_pnpm_version ${JSON.stringify(repo)}`,
-          'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
-          `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
-        ].join("\n"),
-        { PATH: `${bin}:${process.env.PATH ?? ""}` },
+  it.each([
+    ["corepack", "12.0.0", ""],
+    ["missing", "12.0.0", ""],
+    ["failing", "12.0.0", ""],
+    ["corepack", "11.15.1", ""],
+    ["missing", "11.15.1", ""],
+    ["failing", "11.15.1", ""],
+    ["corepack", "12.0.0", "install"],
+    ["missing", "12.0.0", "build"],
+  ])(
+    "keeps selected pnpm through install and nested build (%s, %s, failure=%s)",
+    (mode, version, failure) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-pnpm-boundary-"));
+      const bin = join(tmp, "bin");
+      const repo = join(tmp, "repo");
+      const outer = join(tmp, "outer");
+      const temp = join(tmp, "temp");
+      for (const dir of [bin, repo, outer, temp]) mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(repo, "package.json"),
+        JSON.stringify({ packageManager: `pnpm@${version}` }),
       );
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("cmd=corepack pnpm");
-      expect(result.stdout).toContain("run=11.2.2");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
-  });
+      writeFileSync(join(repo, "pnpm-lock.yaml"), "unchanged lock\n");
+      writeFileSync(join(outer, "package.json"), '{"packageManager":"yarn@4.5.0"}');
+      linkPnpmBootstrapShellTools(bin);
+      symlinkSync(process.execPath, join(bin, "node"));
+      const executable = (name: string, body: string) => {
+        writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`);
+        chmodSync(join(bin, name), 0o755);
+      };
+      executable(
+        "pnpm",
+        `
+      echo "$*" >> "$FIXTURE/ambient.log"
+      echo corrupted > "$TARGET/pnpm-lock.yaml"
+      if [[ "$1" == --version ]]; then echo "$VERSION"; fi
+    `,
+      );
+      executable(
+        "selected",
+        `
+      [[ "\${COREPACK_ENABLE_DOWNLOAD_PROMPT:-}" == 0 ]] || { echo "Corepack would await terminal input" >&2; exit 91; }
+      [[ -z "\${CI:-}" ]]
+      [[ "$PWD" == "$TARGET" ]]
+      [[ "$NPM_CONFIG_WORKSPACE_DIR" == "$TARGET" && "$npm_config_workspace_dir" == "$TARGET" ]]
+      [[ "$PNPM_CONFIG_LOCKFILE_DIR" == "$TARGET" && "$pnpm_config_lockfile_dir" == "$TARGET" ]]
+      case "$1" in
+        --version) echo "$VERSION" ;;
+        config) echo undefined ;;
+        install) [[ "$2" == --frozen-lockfile ]]; echo install >> "$FIXTURE/steps"; [[ "$FAILURE" != install ]] || exit 42 ;;
+        build) echo build >> "$FIXTURE/steps"; pnpm nested ;;
+        nested) [[ "$FAILURE" != build ]] || exit 42; echo "nested:$VERSION" >> "$FIXTURE/steps" ;;
+        *) exit 90 ;;
+      esac
+    `,
+      );
+      executable(
+        "npm",
+        `
+      if [[ "$1" == --version ]]; then echo 12.0.0; exit; fi
+      [[ "$1 $2 $3" == 'install -g --prefix' ]]
+      [[ "$4" == "$FIXTURE/"* && "$4" != "$TARGET" ]]
+      [[ "$5" == "pnpm@$VERSION" && "$6" == "--allow-scripts=pnpm@$VERSION" ]]
+      mkdir -p "$4/bin"
+      cp "$FIXTURE/bin/selected" "$4/bin/pnpm"
+      echo "$4" > "$FIXTURE/npm-prefix"
+    `,
+      );
+      if (mode !== "missing") {
+        executable(
+          "corepack",
+          `
+        [[ "$1 $2" == 'enable --install-directory' && "$4" == pnpm ]]
+        [[ "$3" == "$FIXTURE/"* ]]
+        cp "$FIXTURE/bin/selected" "$3/pnpm"
+        ${mode === "failing" ? 'echo "#!/bin/bash" > "$3/pnpm"; echo "exit 1" >> "$3/pnpm"' : ":"}
+      `,
+        );
+      }
+      try {
+        const result = runInstallShell(
+          [
+            "set -euo pipefail",
+            "unset CI",
+            `source '${SCRIPT_PATH}'`,
+            'PREFIX="$FIXTURE/prefix"',
+            'node_bin() { printf "%s\\n" "$FIXTURE/bin/node"; }',
+            'npm_bin() { printf "%s\\n" "$FIXTURE/bin/npm"; }',
+            'cd "$FOREIGN"',
+            'ensure_pnpm "$TARGET"',
+            'run_pnpm -C "$TARGET" config get prefer-offline',
+            'run_pnpm -C "$TARGET" install --frozen-lockfile',
+            'run_pnpm -C "$TARGET" build',
+            '[[ "$NPM_CONFIG_WORKSPACE_DIR" == "$FOREIGN" && "$npm_config_workspace_dir" == "$FOREIGN" ]]',
+            '[[ "$PNPM_CONFIG_LOCKFILE_DIR" == "$FOREIGN" && "$pnpm_config_lockfile_dir" == "$FOREIGN" ]]',
+            '[[ "$(command -v pnpm)" == "$FIXTURE/bin/pnpm" ]]',
+            '[[ "$COREPACK_ENABLE_DOWNLOAD_PROMPT" == 1 ]]',
+            "echo completed",
+          ].join("\n"),
+          {
+            PATH: bin,
+            COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+            TMPDIR: temp,
+            HOME: tmp,
+            FIXTURE: tmp,
+            TARGET: repo,
+            FOREIGN: outer,
+            VERSION: version,
+            FAILURE: failure,
+            NPM_CONFIG_WORKSPACE_DIR: outer,
+            npm_config_workspace_dir: outer,
+            PNPM_CONFIG_LOCKFILE_DIR: outer,
+            pnpm_config_lockfile_dir: outer,
+          },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(failure ? 42 : 0);
+        expect(readFileSync(join(repo, "pnpm-lock.yaml"), "utf8")).toBe("unchanged lock\n");
+        expect(existsSync(join(tmp, "ambient.log"))).toBe(false);
+        expect(result.stdout.includes("completed")).toBe(!failure);
+        expect(readFileSync(join(tmp, "steps"), "utf8").trim().split("\n")).toEqual(
+          failure === "install"
+            ? ["install"]
+            : failure === "build"
+              ? ["install", "build"]
+              : ["install", "build", `nested:${version}`],
+        );
+        expect(existsSync(join(tmp, "npm-prefix"))).toBe(mode !== "corepack");
+        expect(readdirSync(temp)).toEqual([]);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("does not treat /dev/tty permissions as a controlling terminal", () => {
     const result = runInstallShell(`

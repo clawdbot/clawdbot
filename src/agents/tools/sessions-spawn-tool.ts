@@ -43,6 +43,7 @@ import {
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
   describeSessionsSpawnTool,
+  describeSubagentSpawnContext,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
@@ -110,7 +111,7 @@ function recordAcceptedSessionSpawn(
   const targetAgentId = childSessionKey
     ? parseAgentSessionKey(childSessionKey)?.agentId
     : undefined;
-  if (result.status !== "accepted" || !childSessionKey || !targetAgentId) {
+  if (result.status !== "accepted" || !childSessionKey || !targetAgentId || !context) {
     return;
   }
   recordSessionToolActionFact({
@@ -158,6 +159,7 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 function createSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
+  subagentThreadAvailable: boolean;
   swarmEnabled: boolean;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
@@ -193,7 +195,7 @@ function createSessionsSpawnToolSchema(params: {
     cwd: Type.Optional(
       Type.String({
         description:
-          "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
+          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
       }),
     ),
     ...(params.threadAvailable
@@ -208,8 +210,8 @@ function createSessionsSpawnToolSchema(params: {
       : {}),
     mode: optionalStringEnum(spawnModes, {
       description: params.threadAvailable
-        ? '"run" one-shot; "session" persistent/thread-bound. Omit with visible=true.'
-        : '"run" one-shot. Omit with visible=true; visible sessions are persistent.',
+        ? '"run" one-shot; "session" persistent/thread-bound. Visible sessions accept only omitted/default "run" and remain persistent.'
+        : '"run" one-shot. Visible sessions accept omitted/default "run" and remain persistent.',
     }),
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
@@ -218,8 +220,7 @@ function createSessionsSpawnToolSchema(params: {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
-      description:
-        "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
+      description: describeSubagentSpawnContext(params.subagentThreadAvailable),
     }),
     lightContext: Type.Optional(
       Type.Boolean({
@@ -259,7 +260,10 @@ function createSessionsSpawnToolSchema(params: {
             Type.String({ maxLength: MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES }),
           ),
         }),
-        { maxItems: 50, description: "Inline snapshots; unavailable with visible=true." },
+        {
+          maxItems: 50,
+          description: "Inline snapshots; visible=true accepts only an empty array.",
+        },
       ),
     ),
     attachAs: Type.Optional(
@@ -271,7 +275,10 @@ function createSessionsSpawnToolSchema(params: {
             Type.String({ maxLength: MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES }),
           ),
         },
-        { description: "Attachment mount hint; unavailable with visible=true." },
+        {
+          description:
+            "Attachment mount hint; visible=true accepts only an omitted or blank mountPath.",
+        },
       ),
     ),
     ...(params.acpAvailable
@@ -355,6 +362,7 @@ export function createSessionsSpawnTool(
     description: describeSessionsSpawnTool({
       acpAvailable,
       threadAvailable,
+      subagentThreadAvailable: threadAvailability.subagent,
       swarmEnabled: swarmConfig.enabled,
       sessionToolsVisibility,
       spawnRestricted: restrictToSpawned,
@@ -362,6 +370,7 @@ export function createSessionsSpawnTool(
     parameters: createSessionsSpawnToolSchema({
       acpAvailable,
       threadAvailable,
+      subagentThreadAvailable: threadAvailability.subagent,
       swarmEnabled: swarmConfig.enabled,
     }),
     execute: async (_toolCallId, args) => {
@@ -473,7 +482,7 @@ export function createSessionsSpawnTool(
           })
         : await spawnVisible();
       if (visibleResult) {
-        recordAcceptedSessionSpawn(visibleResult, context);
+        recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
         return jsonResult(
           addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
         );
@@ -574,7 +583,7 @@ export function createSessionsSpawnTool(
             parentExecutionIdentityToken,
           ),
         );
-        recordAcceptedSessionSpawn(result, context);
+        recordAcceptedSessionSpawn(result, "isolated");
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
@@ -646,7 +655,7 @@ export function createSessionsSpawnTool(
         ),
       );
 
-      recordAcceptedSessionSpawn(result, context);
+      recordAcceptedSessionSpawn(result, result.context);
       return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };

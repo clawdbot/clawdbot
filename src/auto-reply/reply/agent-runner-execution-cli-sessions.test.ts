@@ -141,6 +141,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         runId: run.runId,
         workspaceDir: run.workspaceDir,
         config: run.config,
+        sessionEntry: run.sessionEntry,
         backend,
       });
       prepared.params = {
@@ -188,6 +189,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         id: "claude-sonnet-4-6",
         contextWindow: 400_000,
         contextTokens: 321_000,
+        input: ["text", "image"],
       },
     ];
 

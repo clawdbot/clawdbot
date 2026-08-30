@@ -2426,6 +2426,45 @@ describe("models.list", () => {
     expect(payload.models[0]).not.toHaveProperty("compat");
   });
 
+  it.each([
+    { name: "model Fast", modelDefault: true, expected: true },
+    { name: "model Standard", modelDefault: false, expected: false },
+    { name: "model Auto", modelDefault: "auto", expected: "auto" },
+    {
+      name: "agent Fast over model Standard",
+      agentDefault: true,
+      modelDefault: false,
+      expected: true,
+    },
+  ] as const)("projects the $name default", async ({ agentDefault, modelDefault, expected }) => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      agentId: "main",
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.6-luna": { params: { fastMode: modelDefault } } },
+          },
+          list: [
+            {
+              id: "main",
+              default: true,
+              ...(agentDefault === undefined ? {} : { fastModeDefault: agentDefault }),
+            },
+          ],
+        },
+      },
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }]),
+      ),
+      reqId: `req-models-list-fast-mode-${String(expected)}`,
+    });
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as { models: Array<Record<string, unknown>> };
+    expect(payload.models[0]).toMatchObject({ effectiveFastMode: expected });
+  });
+
   it("does not reinterpret context tokens or expose model input metadata", async () => {
     const { request, respond } = requestModelsList({
       view: "all",

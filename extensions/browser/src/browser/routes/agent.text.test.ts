@@ -64,7 +64,10 @@ describe("browser page text route", () => {
     const base = await startServerAndBase();
     const response = await getBrowserTestFetch()(`${base}/text?targetId=abcd1234`);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "browser navigation blocked by policy" });
+    expect(await response.json()).toEqual({
+      error: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+    });
     expect(pageText).not.toHaveBeenCalled();
   });
 

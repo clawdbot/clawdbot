@@ -15,7 +15,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 
 export function replaceSessionOwnerInTransaction(
   database: OpenClawAgentDatabase,
@@ -53,8 +53,8 @@ export function replaceSessionOwnerInTransaction(
 export function assignSessionOwner(
   scope: SessionAccessScope,
   params: {
-    owner: SessionCreatedActor & { id: string };
-    assignedBy: SessionCreatedActor & { id: string };
+    owner: SessionActor & { id: string };
+    assignedBy: SessionActor & { id: string };
     assignedAt?: number;
     assertCurrent?: () => void;
   },

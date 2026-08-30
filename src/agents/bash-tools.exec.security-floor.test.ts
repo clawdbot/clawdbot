@@ -486,6 +486,33 @@ describe("exec security floor", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "honors ask-only tightening without restoring full-session host floors (approved=%s)",
+    async (approved) => {
+      writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
+      const calls = mockPendingApprovalGateway();
+      if (approved) {
+        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+          calls.push(method);
+          return { decision: "allow-once" };
+        });
+      }
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "always",
+        bypassHostApprovalFloors: true,
+        messageProvider: approved ? "webchat" : undefined,
+        approvalRunningNoticeMs: 0,
+      });
+
+      const result = await tool.execute("call-session-full-tightened-ask", { command: "echo ok" });
+
+      expect(result.details.status).toBe(approved ? "completed" : "approval-pending");
+      expect(calls).toContain("exec.approval.request");
+    },
+  );
+
   it("honors normalized auto mode before elevated full bypass", async () => {
     const calls = mockPendingApprovalGateway();
     const autoReviewer = createAskingAutoReviewer();

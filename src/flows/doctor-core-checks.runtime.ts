@@ -2,10 +2,10 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
-import {
-  type McpToolCatalogDiagnostic,
-  createBundleMcpToolRuntime,
-} from "../agents/agent-bundle-mcp-tools.js";
+import type {
+  BundleMcpToolRuntime,
+  McpToolCatalogDiagnostic,
+} from "../agents/agent-bundle-mcp-types.js";
 import {
   listAgentEntries,
   listAgentIds,
@@ -13,7 +13,6 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -66,7 +65,6 @@ import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
-type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
 const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const PROVIDER_CATALOG_ORDER_SET = new Set<ProviderCatalogOrder>(PROVIDER_CATALOG_ORDERS);
 
@@ -928,15 +926,16 @@ function agentRuntimeToolNormalizationFailureFinding(params: {
   };
 }
 
-function collectAgentRuntimeToolSchemaFindings(params: {
+async function collectAgentRuntimeToolSchemaFindings(params: {
   cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
   modelRef: { provider: string; model: string };
   model: ProviderRuntimeModel;
-}): readonly HealthFinding[] {
+}): Promise<readonly HealthFinding[]> {
   let tools: AnyAgentTool[];
   try {
+    const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
     tools = createOpenClawCodingTools({
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
@@ -1163,13 +1162,13 @@ export async function collectRuntimeToolSchemaFindings(
           return;
         }
         findings.push(
-          ...collectAgentRuntimeToolSchemaFindings({
+          ...(await collectAgentRuntimeToolSchemaFindings({
             cfg,
             agentId,
             workspaceDir,
             modelRef,
             model,
-          }),
+          })),
         );
         if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
           return;
@@ -1179,6 +1178,8 @@ export async function collectRuntimeToolSchemaFindings(
           !bundleRuntimeLoadErrorsByWorkspace.has(workspaceDir)
         ) {
           try {
+            const { createBundleMcpToolRuntime } =
+              await import("../agents/agent-bundle-mcp-tools.js");
             bundleRuntimeByWorkspace.set(
               workspaceDir,
               await createBundleMcpToolRuntime({

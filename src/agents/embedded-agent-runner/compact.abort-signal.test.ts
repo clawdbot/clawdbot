@@ -4,6 +4,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 vi.mock("../model-fallback-candidates.js", () => ({
   resolveModelCandidateChain: (params: { provider: string; model: string }) => [
@@ -111,6 +112,7 @@ describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
 

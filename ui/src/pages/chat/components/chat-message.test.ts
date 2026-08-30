@@ -867,47 +867,6 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
-  it("exposes queued editing and removal beside the user bubble without repeating its text", () => {
-    const container = document.createElement("div");
-    const onQueueEdit = vi.fn();
-    const onQueueRemove = vi.fn();
-    const queued = {
-      id: "future-send",
-      text: "Future prompt",
-      createdAt: 1,
-      sendState: "waiting-idle" as const,
-    };
-    renderGroupedMessage(
-      container,
-      createUserMessage(queued.text, {
-        __openclaw: { id: queued.id, kind: "pending-send", state: queued.sendState },
-      }),
-      "user",
-      { queueControls: { queue: [queued], onQueueEdit, onQueueRemove } },
-    );
-    const bubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
-    const controls = expectElement(container, ".chat-group.user .chat-queue__item", HTMLElement);
-    expect(bubble.textContent).toContain(queued.text);
-    expect(controls.textContent).toContain("Queued");
-    expect(controls.textContent).not.toContain(queued.text);
-    controls.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: {
-          item: Object.assign(document.createElement("wa-dropdown-item"), { value: "edit" }),
-        },
-      }),
-    );
-    expect(onQueueEdit).toHaveBeenCalledWith(queued.id);
-    const link = document.createElement("a");
-    bubble.append(link);
-    link.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    expect(onQueueEdit).toHaveBeenCalledOnce();
-    bubble.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    expect(onQueueEdit).toHaveBeenCalledTimes(2);
-    controls.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
-    expect(onQueueRemove).toHaveBeenCalledWith(queued.id);
-  });
-
   it.each([
     { state: "failed", label: "Not sent", actionLabel: undefined },
     { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: undefined },

@@ -194,7 +194,6 @@ extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts
-extensions/qa-lab/src/mantis/telegram-desktop-builder.runtime.ts
 extensions/qa-lab/src/mantis/visual-task.runtime.ts
 extensions/qa-lab/src/providers/mock-openai/server.test.ts
 extensions/qa-lab/src/providers/mock-openai/server.ts
@@ -672,7 +671,6 @@ src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
 src/gateway/session-utils.fs.test.ts
-src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts

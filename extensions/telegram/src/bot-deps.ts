@@ -17,7 +17,7 @@ import {
   recordInboundSession,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -72,7 +72,7 @@ export type TelegramBotDeps = {
   enqueueSystemEvent: typeof enqueuePluginSystemEvent;
   dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
   loadWebMedia?: typeof loadWebMedia;
-  buildModelsProviderData: typeof buildModelsProviderData;
+  buildModelsProviderData: typeof buildPreparedModelsProviderData;
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
@@ -136,7 +136,7 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
     return loadWebMedia;
   },
   get buildModelsProviderData() {
-    return buildModelsProviderData;
+    return buildPreparedModelsProviderData;
   },
   get listSkillCommandsForAgents() {
     return listSkillCommandsForAgents;

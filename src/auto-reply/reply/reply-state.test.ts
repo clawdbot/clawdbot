@@ -25,7 +25,7 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
-  resolveMemoryFlushThreshold,
+  resolveCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -271,9 +271,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 0, totalTokensFresh: true, totalTokensVersion: 1 },
-        contextWindowTokens: 16_000,
-        reserveTokensFloor: 20_000,
-        softThresholdTokens: 4_000,
+        threshold: 0,
       }),
     ).toBe(false);
   });
@@ -282,67 +280,48 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: undefined,
-        contextWindowTokens: 16_000,
-        reserveTokensFloor: 1_000,
-        softThresholdTokens: 4_000,
+        threshold: 11_000,
       }),
     ).toBe(false);
   });
 
-  it("preserves thresholds supplied by external memory providers", () => {
-    expect(
-      resolveMemoryFlushThreshold({
-        contextWindowTokens: 100,
-        reserveTokensFloor: 10,
-        softThresholdTokens: 80,
-      }),
-    ).toBe(10);
-
-    const disabled = {
-      entry: { totalTokens: 8_000, totalTokensFresh: true, totalTokensVersion: 1 as const },
-      contextWindowTokens: 32_000,
-      reserveTokensFloor: 50_000,
-      softThresholdTokens: 4_000,
-    };
-    expect(shouldRunMemoryFlush(disabled)).toBe(false);
-    expect(shouldRunPreflightCompaction(disabled)).toBe(false);
-  });
+  it.each([
+    [8_000, 4_000, 4_000],
+    [16_000, 8_000, 8_000],
+    [24_000, 16_000, 8_000],
+    [32_768, 20_000, 12_768],
+    [128_000, 20_000, 108_000],
+    [200_000, 20_000, 180_000],
+    [32_000, 50_000, 0],
+  ])(
+    "honors the selected reserve in a %i-token window",
+    (contextWindowTokens, reserveTokensFloor, expected) => {
+      const threshold = resolveCompactionThreshold({ contextWindowTokens, reserveTokensFloor });
+      expect(threshold).toBe(expected);
+      for (const tokenCount of [expected - 1, expected, expected + 1]) {
+        expect(
+          shouldRunPreflightCompaction({
+            entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
+            threshold,
+          }),
+        ).toBe(expected > 0 && tokenCount >= expected);
+      }
+    },
+  );
 
   it.each([
-    [8_000, 4_000, 2_000, 2_000],
-    [16_000, 8_000, 4_000, 4_000],
-    [24_000, 16_000, 4_000, 4_000],
-    [32_000, 20_000, 4_000, 8_000],
-    [128_000, 20_000, 4_000, 104_000],
-    [200_000, 20_000, 4_000, 176_000],
+    [12_000, 12_768],
+    [16_000, 16_000],
   ])(
-    "preserves a usable %i-token model window with provider-owned maintenance budgets",
-    (contextWindowTokens, reserveTokensFloor, softThresholdTokens, threshold) => {
-      const params = {
-        contextWindowTokens,
-        reserveTokensFloor,
-        softThresholdTokens,
-      };
-
-      expect(resolveMemoryFlushThreshold(params)).toBe(threshold);
+    "honors a server floor of %i without lowering the local threshold",
+    (minimumThresholdTokens, expected) => {
       expect(
-        shouldRunMemoryFlush({
-          ...params,
-          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
+        resolveCompactionThreshold({
+          contextWindowTokens: 32_768,
+          reserveTokensFloor: 20_000,
+          minimumThresholdTokens,
         }),
-      ).toBe(true);
-      expect(
-        shouldRunPreflightCompaction({
-          ...params,
-          entry: { totalTokens: threshold - 1, totalTokensFresh: true, totalTokensVersion: 1 },
-        }),
-      ).toBe(false);
-      expect(
-        shouldRunPreflightCompaction({
-          ...params,
-          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
-        }),
-      ).toBe(true);
+      ).toBe(expected);
     },
   );
 
@@ -350,9 +329,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 10_000, totalTokensFresh: true, totalTokensVersion: 1 },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 20_000,
-        softThresholdTokens: 10_000,
+        threshold: 70_000,
       }),
     ).toBe(false);
   });
@@ -361,9 +338,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 85, totalTokensFresh: true, totalTokensVersion: 1 },
-        contextWindowTokens: 100,
-        reserveTokensFloor: 10,
-        softThresholdTokens: 5,
+        threshold: 85,
       }),
     ).toBe(true);
   });
@@ -372,15 +347,13 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: {
-          totalTokens: 90_000,
+          totalTokens: 96_000,
           totalTokensFresh: true,
           totalTokensVersion: 1,
           compactionCount: 2,
           memoryFlush: { kind: "succeeded", compactionCount: 2 },
         },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(false);
   });
@@ -394,18 +367,14 @@ describe("shouldRunMemoryFlush", () => {
           totalTokensVersion: 1,
           compactionCount: 1,
         },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(true);
   });
 
   it("runs on consecutive compaction cycles when flush records the pre-increment count", () => {
     const params = {
-      contextWindowTokens: 100_000,
-      reserveTokensFloor: 5_000,
-      softThresholdTokens: 2_000,
+      threshold: 93_000,
     };
 
     for (const entry of [
@@ -438,9 +407,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(false);
   });
@@ -451,9 +418,7 @@ describe("shouldRunPreflightCompaction", () => {
     expect(
       shouldRunPreflightCompaction({
         entry: { totalTokens: 96_000, totalTokensFresh: false },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(false);
   });
@@ -463,9 +428,7 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 10, totalTokensFresh: false },
         tokenCount: 93_000,
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(true);
   });

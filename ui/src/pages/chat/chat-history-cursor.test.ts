@@ -325,24 +325,26 @@ describe("chat history cursor revalidation", () => {
     });
   });
 
-  it("recovers a missed terminal failure even when cursor catch-up has no new messages", async () => {
+  it("retires a missed terminal failure after a newer successful cursor catch-up", async () => {
     const cached = message("user", "cached", "cached-user", 1);
-    const handler = vi.fn(async (_params?: unknown) => ({
-      kind: "delta",
-      messages: [],
-      deltaCursor: "cursor-2",
-      sessionInfo: {
-        key: "main",
-        kind: "direct",
-        sessionId: "session-cursor",
-        updatedAt: 2,
-        status: "failed",
-        hasActiveRun: false,
-        lastRunId: "run-first",
-        lastRunError:
-          "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-      },
-    }));
+    const handler = vi.fn(
+      async (_params?: unknown): Promise<unknown> => ({
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-2",
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          sessionId: "session-cursor",
+          updatedAt: 2,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "run-first",
+          lastRunError:
+            "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+        },
+      }),
+    );
     const state = createState(handler);
     const cache = seedCachedHistory(state, [cached], "cursor-1");
 
@@ -355,6 +357,27 @@ describe("chat history cursor revalidation", () => {
     expect(
       readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
     ).toBe("cursor-2");
+
+    const reply = message("assistant", "Recovery completed.", "retry-answer", 2);
+    handler.mockResolvedValueOnce({
+      kind: "delta",
+      messages: [{ message: reply, messageId: "retry-answer", messageSeq: 2, runId: "run-retry" }],
+      deltaCursor: "cursor-3",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 3,
+        status: "done",
+        hasActiveRun: false,
+        lastRunId: "run-retry",
+      },
+    });
+    await loadChatHistory(state);
+
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-2" }));
+    expect(state.chatMessages.map(extractText)).toEqual(["cached", "Recovery completed."]);
+    expect(state.chatRunError).toBeNull();
   });
 
   it.each([

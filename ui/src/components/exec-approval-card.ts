@@ -381,6 +381,13 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
           </div>`
         : nothing}
     </div>
+    ${props.variant === "inline" && active.sourceSessionKey
+      ? html`<div class="exec-approval-warning" role="note">
+          ${t("execApproval.requestedBySession", {
+            session: resolveSessionDisplayName(active.sourceSessionKey),
+          })}
+        </div>`
+      : nothing}
     ${active.kind === "exec"
       ? renderExecBody(active.request, props.variant)
       : renderPluginBody(active, props.variant)}

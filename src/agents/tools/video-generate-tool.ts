@@ -9,6 +9,7 @@ import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -57,7 +58,6 @@ import {
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
-  readBooleanToolParam,
   readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -548,21 +548,22 @@ async function executeVideoGenerationJob(params: {
     });
   }
 
-  const urlOnlyVideos: Array<{ url: string; mimeType: string; fileName?: string }> = [];
+  type UrlVideo = { url: string; mimeType: string; fileName?: string };
   type PersistedVideo =
     | { kind: "saved"; media: Awaited<ReturnType<typeof saveMediaBuffer>> }
-    | { kind: "url"; media: (typeof urlOnlyVideos)[number] };
+    | { kind: "url"; media: UrlVideo };
+  const videoOrder: Array<PersistedVideo | number> = [];
   const bufferVideos: Array<(typeof result.videos)[number] & { buffer: Buffer }> = [];
   for (const video of result.videos) {
     if (video.buffer) {
+      videoOrder.push(bufferVideos.length);
       bufferVideos.push(video as (typeof result.videos)[number] & { buffer: Buffer });
       continue;
     }
     if (video.url) {
-      urlOnlyVideos.push({
-        url: video.url,
-        mimeType: video.mimeType,
-        fileName: video.fileName,
+      videoOrder.push({
+        kind: "url",
+        media: { url: video.url, mimeType: video.mimeType, fileName: video.fileName },
       });
       continue;
     }
@@ -605,15 +606,10 @@ async function executeVideoGenerationJob(params: {
       }
     }),
   });
-  const savedVideos: Array<Awaited<ReturnType<typeof saveMediaBuffer>>> = [];
-  for (const persisted of persistedVideos) {
-    if (persisted.kind === "saved") {
-      savedVideos.push(persisted.media);
-    } else {
-      urlOnlyVideos.push(persisted.media);
-    }
-  }
-  const totalCount = savedVideos.length + urlOnlyVideos.length;
+  // Preserve provider ordinals while replacing only buffer-backed slots with persistence results.
+  const deliveredVideos = videoOrder.map((video) =>
+    typeof video === "number" ? persistedVideos[video]! : video,
+  );
   const requestedDurationSeconds =
     result.normalization?.durationSeconds?.requested ??
     (typeof result.metadata?.requestedDurationSeconds === "number" &&
@@ -664,46 +660,48 @@ async function executeVideoGenerationJob(params: {
       typeof result.metadata?.requestedSize === "string" &&
       result.metadata.requestedSize === params.size &&
       Boolean(normalizedAspectRatio));
-  const allMediaUrls = [
-    ...savedVideos.map((video) => video.path),
-    ...urlOnlyVideos.map((video) => video.url),
-  ];
+  const allMediaUrls = deliveredVideos.map((video) =>
+    video.kind === "saved" ? video.media.path : video.media.url,
+  );
   const savedVideoMetadata = await probeMediaFilesWithinBudget(
-    savedVideos.map((video) => ({ filePath: video.path, kind: "video" })),
+    deliveredVideos.flatMap((video) =>
+      video.kind === "saved" ? [{ filePath: video.media.path, kind: "video" as const }] : [],
+    ),
     {
       budgetMs: GENERATED_VIDEO_PROBE_BUDGET_MS,
       concurrency: GENERATED_VIDEO_PROBE_CONCURRENCY,
       maxProbes: MAX_GENERATED_VIDEO_PROBES,
     },
   );
-  const attachments: AgentGeneratedAttachment[] = [
-    ...savedVideos.map((video, index) =>
-      Object.assign(
-        {
-          type: "video" as const,
-          path: video.path,
-          mimeType: video.contentType,
-          name: video.id,
-          sizeBytes: video.size,
-          ...(typeof normalizedDurationSeconds === "number"
-            ? { durationMs: normalizedDurationSeconds * 1000 }
-            : {}),
-        },
-        savedVideoMetadata[index] ?? {},
-      ),
-    ),
-    ...urlOnlyVideos.map((video) => ({
-      type: "video" as const,
-      url: video.url,
-      mimeType: video.mimeType,
-      name: video.fileName,
-      ...(typeof normalizedDurationSeconds === "number"
-        ? { durationMs: normalizedDurationSeconds * 1000 }
-        : {}),
-    })),
-  ];
+  let savedMetadataIndex = 0;
+  const attachments: AgentGeneratedAttachment[] = deliveredVideos.map((video) => {
+    if (video.kind === "url") {
+      return {
+        type: "video" as const,
+        url: video.media.url,
+        mimeType: video.media.mimeType,
+        name: video.media.fileName,
+        ...(typeof normalizedDurationSeconds === "number"
+          ? { durationMs: normalizedDurationSeconds * 1000 }
+          : {}),
+      };
+    }
+    return Object.assign(
+      {
+        type: "video" as const,
+        path: video.media.path,
+        mimeType: video.media.contentType,
+        name: video.media.id,
+        sizeBytes: video.media.size,
+        ...(typeof normalizedDurationSeconds === "number"
+          ? { durationMs: normalizedDurationSeconds * 1000 }
+          : {}),
+      },
+      savedVideoMetadata[savedMetadataIndex++] ?? {},
+    );
+  });
   const lines = [
-    `Generated ${totalCount} video${totalCount === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
+    `Generated ${deliveredVideos.length} video${deliveredVideos.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
     typeof requestedDurationSeconds === "number" &&
     typeof normalizedDurationSeconds === "number" &&
@@ -716,8 +714,10 @@ async function executeVideoGenerationJob(params: {
   return {
     provider: result.provider,
     model: result.model,
-    urlOnlyUrls: urlOnlyVideos.map((video) => video.url),
-    count: totalCount,
+    urlOnlyUrls: deliveredVideos.flatMap((video) =>
+      video.kind === "url" ? [video.media.url] : [],
+    ),
+    count: deliveredVideos.length,
     mediaUrls: allMediaUrls,
     attachments,
     contentText: lines.join("\n"),
@@ -725,7 +725,7 @@ async function executeVideoGenerationJob(params: {
     details: {
       provider: result.provider,
       model: result.model,
-      count: totalCount,
+      count: deliveredVideos.length,
       media: {
         mediaUrls: allMediaUrls,
         attachments,
@@ -900,8 +900,8 @@ export function createVideoGenerateTool(options?: {
       ) {
         throw new ToolInputError("durationSeconds must be a positive integer");
       }
-      const audio = readBooleanToolParam(args, "audio");
-      const watermark = readBooleanToolParam(args, "watermark");
+      const audio = readBooleanParam(args, "audio");
+      const watermark = readBooleanParam(args, "watermark");
       const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;
       // providerOptions must be a plain object. Arrays are objects in JS, so
       // exclude them explicitly — a bogus call like `providerOptions: ["seed", 42]`

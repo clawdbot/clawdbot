@@ -470,7 +470,11 @@ test.each([false, true])(
     });
     const sourceStamp = {
       createdVia: "operator" as const,
-      createdActor: { type: "human" as const, id: "checkpoint-source-owner" },
+      createdActor: {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "checkpoint-source-owner",
+      },
       createdAt: 123,
       ...(!required ? { sandbox: "required" as const } : {}),
     };
@@ -532,7 +536,7 @@ test.each([false, true])(
     const branch = loadSessionEntry({ sessionKey: branched.payload?.key ?? "", storePath });
     expect(branch).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: profile.id },
+      createdActor: { type: "human", source: "profile", id: profile.id },
       createdAt: expect.any(Number),
     });
     expect(branch?.createdAt).not.toBe(sourceStamp.createdAt);

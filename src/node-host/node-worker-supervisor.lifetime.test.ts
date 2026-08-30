@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import {
+  buildWorkerProcessTurn,
+  serializeWorkerProcessInput,
+} from "../worker/worker-process-protocol.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -87,6 +93,17 @@ describe("node worker environment lifetime", () => {
       ).toEqual({ pid: running.worker!.pid, starts: 1 });
 
       const poll = nextTurn("preview-poll", "background-poll");
+      poll.descriptor.assignment.systemPrompt = '"\\\0\n漢😀';
+      const encodePoll = () =>
+        serializeWorkerProcessInput(
+          buildWorkerProcessTurn(
+            completeWorkerLaunchDescriptor(poll.descriptor, TEST_WORKER_ENDPOINT),
+          ),
+        );
+      poll.descriptor.assignment.systemPrompt += "x".repeat(
+        WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES - (Buffer.byteLength(encodePoll()) - 1),
+      );
+      expect(Buffer.byteLength(encodePoll()) - 1).toBe(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
       expect(await supervisor.launch(poll, TEST_WORKER_ENDPOINT)).toMatchObject({
         state: "running",
         worker: running.worker,

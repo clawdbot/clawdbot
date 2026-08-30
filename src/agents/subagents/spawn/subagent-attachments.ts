@@ -43,7 +43,7 @@ type AttachmentLimits = InlineAttachmentSnapshotLimits & {
   retainOnSessionKeep: boolean;
 };
 
-export type SubagentAttachmentReceiptFile = {
+type SubagentAttachmentReceiptFile = {
   name: string;
   bytes: number;
   sha256: string;

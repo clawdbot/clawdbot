@@ -32,6 +32,7 @@ enum NodeServiceManager {
 
     static func waitUntilRunning(profile: AppProfile = .current) async -> Bool {
         if self.skipUnderProfile(profile, action: "status poll") { return false }
+        guard let arguments = self.launchdProgramArguments(profile: profile), !arguments.isEmpty else { return false }
         var consecutiveRunningChecks = 0
         for attempt in 0..<20 {
             let result = await self.runServiceCommandResult(
@@ -117,6 +118,18 @@ extension NodeServiceManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
+        // The bundled app worker is not a launchd service. Only a separate installed
+        // service owns CLI lifecycle work; an unreadable record must still fail closed.
+        guard let arguments = self.launchdProgramArguments() else {
+            return CommandResult(
+                success: false,
+                payload: nil,
+                message: "Could not read the node service ownership record. Check the node LaunchAgent and retry.",
+                parsed: nil)
+        }
+        guard !arguments.isEmpty else {
+            return CommandResult(success: true, payload: nil, message: nil, parsed: nil)
+        }
         #if DEBUG
         self.testingServiceCommandCalls.append(args)
         #endif
@@ -192,7 +205,10 @@ extension NodeServiceManager {
         self.testingOwnershipReadCount += 1
         #endif
         guard fileManager.fileExists(atPath: plistURL.path) else { return [] }
-        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
+        guard let arguments = LaunchAgentPlist.snapshot(url: plistURL)?.programArguments,
+              !arguments.isEmpty
+        else { return nil }
+        return arguments
     }
 
     private static func runtimeIsRunning(in object: [String: Any]) -> Bool {

@@ -3,7 +3,8 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
 // v19 converges the v18 participant migration with durable session-key return
-// authority, including fork-only v18 authority databases.
+// authority (including fork-only v18 authority databases) and qualifies immutable
+// creator namespaces without deriving authority from sandbox policy.
 // v18 separates participant identity namespaces and preserves unknown historical times.
 // v17 retires the tenant-free per-agent state lease table.
 // v16 retires legacy top-level Media* transcript fields. It is a downgrade

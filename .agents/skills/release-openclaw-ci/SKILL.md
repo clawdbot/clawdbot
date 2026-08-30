@@ -58,6 +58,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Same-parent continuation requires the original root to have been dispatched
   with `fail_fast=false`. The controller verifies that exact logged input
   before any rerun mutation.
+- A parent that produced its own sealed candidate artifacts cannot be continued:
+  GitHub reruns make those prior-attempt artifacts unavailable. Keep the
+  candidate and Tooling SHAs frozen, supersede that parent, and start a fresh
+  all-group Full Release Validation.
 - After dispatch, one immutable execution-plan artifact records the original
   parent attempt, exact child tuples and titles, selected coverage, gates, and
   reuse identity. The same bytes are saved under an exact run-ID cache key.
@@ -84,6 +88,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   publication.
 - Post-merge controller proof must use the reviewed landed SHA on protected
   `main` through the non-release `FRV Proof Broker` and `FRV Proof Fixture`.
+  Dispatch the broker with the merged pull request number and exact landed
+  commit. The broker must require that pull request's merge commit to match the
+  landed commit, prove the landed commit is identical to or an ancestor of its
+  trusted workflow SHA, and repeat authority, merge, and ancestry checks
+  immediately before rerunning the fixture.
   Require the exact fixed no-op fixture run to advance from its intentional
   attempt-one failure to an attempt-two pass. The broker must emit its receipt
   without creating a release candidate, release artifact, publication,
@@ -147,7 +156,9 @@ until their dependent enforcement changes land.
     `run_release_soak=true` or explicit focused groups
   - `stable-publish`: `release_profile=stable`
 - Keep at most one active parent for the same Validation SHA + Tooling SHA + rerun
-  group. Concurrency does not cancel an older exact child automatically.
+  group + release profile + effective soak coverage. Stable/full always include
+  soak. Distinct coverage profiles can run independently; concurrency does not
+  cancel an older exact child automatically.
 - Parent cancellation or timeout leaves adopted identity-checked children
   running. The operator must cancel an exact child explicitly when it is no
   longer useful. Do not infer a child identity from branch, title prefix, or
@@ -159,7 +170,10 @@ until their dependent enforcement changes land.
   adopts any active newer child attempt, reruns failed child jobs in parallel,
   leaves green children untouched, then reruns the parent once to restore the
   immutable plan and seal a trusted all-group manifest. It does not start a
-  second child retry while an attempt is active.
+  second child retry while an attempt is active. Each child or parent rerun
+  mutation is sent exactly once; ambiguous transport failures trigger only
+  bounded read reconciliation. The controller never repeats the mutation, and
+  provenance drift fails closed.
 - Inspect without mutation:
 
   ```bash
