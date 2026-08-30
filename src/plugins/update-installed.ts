@@ -377,11 +377,6 @@ export async function updateNpmInstalledPlugins(params: {
         return false;
       }
     };
-    const extensionsDir = resolveRecordedExtensionsDir({
-      pluginId,
-      installPath,
-    });
-
     if (
       !params.dryRun &&
       record.source === "npm" &&
@@ -483,37 +478,36 @@ export async function updateNpmInstalledPlugins(params: {
       expectedIntegrity,
       onCapabilityConsent: consentCallbacks.onCapabilityConsent,
     });
-    const runAttempt = () =>
-      runPluginUpdateAttempt(
-        copyPluginInstallTransactionRequest(params, {
-          pluginId,
-          record,
-          config: params.config,
-          dryRun: params.dryRun === true,
-          effectiveSpec,
-          extensionsDir,
-          timeoutMs: params.timeoutMs,
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-          onInstallPolicyWarning: params.onInstallPolicyWarning,
-          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-          onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
-          expectedIntegrity,
-          npmSpecs,
-          clawhubSpecs,
-          officialNpmFallbackSpecs,
-          trustedSourceLinkedOfficialInstall,
-          expectedReplacementPluginId: replacementPluginId,
-          getFallbackExpectedIntegrity,
-          installNpmSpecForUpdate,
-          logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-      );
     const attempt = await runPluginUpdateWithClawHubLease({
       pluginId,
       clawhubPackage: recordClawHubPackage,
       dryRun: params.dryRun === true,
-      run: runAttempt,
+      run: () =>
+        runPluginUpdateAttempt(
+          copyPluginInstallTransactionRequest(params, {
+            pluginId,
+            record,
+            config: params.config,
+            dryRun: params.dryRun === true,
+            effectiveSpec,
+            extensionsDir: resolveRecordedExtensionsDir({ pluginId, installPath }),
+            timeoutMs: params.timeoutMs,
+            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
+            onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+            onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
+            expectedIntegrity,
+            npmSpecs,
+            clawhubSpecs,
+            officialNpmFallbackSpecs,
+            trustedSourceLinkedOfficialInstall,
+            expectedReplacementPluginId: replacementPluginId,
+            getFallbackExpectedIntegrity,
+            installNpmSpecForUpdate,
+            logger,
+            onIntegrityDrift: params.onIntegrityDrift,
+          }),
+        ),
     });
     consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {
