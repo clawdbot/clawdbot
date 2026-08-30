@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
@@ -62,6 +62,42 @@ async function payloadCount(page: Page): Promise<number> {
       database.close();
     }
   });
+}
+
+async function readPayloadBytes(page: Page, key: string): Promise<string[] | null> {
+  return page.evaluate(async (payloadKey) => {
+    type StoredPayload = { attachments: Array<{ blob: Blob }> };
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("openclaw-control-ui");
+      request.onsuccess = () => resolve(request.result);
+      request.addEventListener("error", () =>
+        reject(request.error ?? new Error("IDB open failed")),
+      );
+    });
+    try {
+      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
+        const request = database
+          .transaction("outboxPayloads")
+          .objectStore("outboxPayloads")
+          .get(payloadKey);
+        request.onsuccess = () => resolve(request.result as StoredPayload | undefined);
+        request.addEventListener("error", () =>
+          reject(request.error ?? new Error("IDB read failed")),
+        );
+      });
+      if (!payload) {
+        return null;
+      }
+      return Promise.all(
+        payload.attachments.map(async ({ blob }) => {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
+        }),
+      );
+    } finally {
+      database.close();
+    }
+  }, key);
 }
 
 async function stage(page: Page, message: string) {
@@ -287,6 +323,194 @@ suite.define(() => {
       expect((await readQueue(lateDuplicate))[0]?.sendRunId).toBe(original.sendRunId);
     });
   });
+  it("keeps source Blob bytes when a duplicate removes its row before lock-confirmed adoption", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+      async ({ context, page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+          deferredMethods: ["chat.send"],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+        await paneFor(page)
+          .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
+          .waitFor();
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        const message = "Mock Gateway: source keeps its pre-adoption bytes";
+        await stage(page, message);
+        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        await expect.poll(async () => (await readQueue(page)).length).toBe(1);
+        const original = (await readQueue(page))[0];
+        assert(
+          original?.attachmentPayload && original.sendRunId,
+          "Expected a durable source submission",
+        );
+        const reference = original.attachmentPayload;
+        const runId = original.sendRunId;
+        const sourceLockName = `openclaw-outbox:${reference.tabId}`;
+        const sourceOwnsLock = () =>
+          page.evaluate(
+            async (name) =>
+              (await navigator.locks.query()).held?.some((lock) => lock.name === name) ?? false,
+            sourceLockName,
+          );
+        expect(await sourceOwnsLock()).toBe(true);
+        expect(await readPayloadBytes(page, reference.key)).toEqual([
+          file.buffer.toString("base64"),
+        ]);
+        await expectRequestCountStable(gateway, "chat.send", 0);
+
+        const popup = context.waitForEvent("page");
+        await page.evaluate(() => window.open("about:blank"));
+        const duplicate = await popup;
+        const releaseEvent = "openclaw-test-release-outbox-claim";
+        await duplicate.addInitScript((eventName) => {
+          const manager = navigator.locks;
+          const nativeRequest = manager.request.bind(manager);
+          let release!: () => void;
+          let released = false;
+          const latch = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          window.addEventListener(
+            eventName,
+            () => {
+              released = true;
+              release();
+            },
+            { once: true },
+          );
+          function delay<T>(
+            name: string,
+            callback: LockGrantedCallback<T>,
+          ): LockGrantedCallback<T | Promise<T>> {
+            if (!name.startsWith("openclaw-outbox:")) {
+              return callback;
+            }
+            return (lock) => {
+              if (released) {
+                return callback(lock);
+              }
+              document.documentElement.dataset.outboxClaimName = name;
+              document.documentElement.dataset.outboxClaimGranted = String(lock !== null);
+              document.documentElement.dataset.outboxClaimState = "blocked";
+              // Native arbitration has already decided; delay only its callback delivery.
+              return latch.then(() => callback(lock));
+            };
+          }
+          function delayedRequest<T>(
+            name: string,
+            optionsOrCallback: LockOptions | LockGrantedCallback<T>,
+            callback?: LockGrantedCallback<T>,
+          ): Promise<Awaited<T>> {
+            if (typeof optionsOrCallback === "function") {
+              return nativeRequest(name, delay(name, optionsOrCallback));
+            }
+            if (!callback) {
+              throw new TypeError("A Web Lock request requires a callback");
+            }
+            return nativeRequest(name, optionsOrCallback, delay(name, callback));
+          }
+          // Only this duplicate's LockManager changes; source ownership stays native.
+          manager.request = delayedRequest;
+        }, releaseEvent);
+        const duplicateGateway = await installMockGateway(duplicate, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        try {
+          await duplicate.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+          await duplicateGateway.setOnline(true);
+          await waitForControlUiGatewayReady(duplicate);
+          await duplicate.waitForFunction(
+            () => document.documentElement.dataset.outboxClaimState === "blocked",
+          );
+          expect(
+            await duplicate.evaluate(() => ({
+              name: document.documentElement.dataset.outboxClaimName,
+              granted: document.documentElement.dataset.outboxClaimGranted,
+              marker: sessionStorage.getItem("openclaw.control.outboxTab.v1"),
+            })),
+          ).toEqual({ name: sourceLockName, granted: "false", marker: reference.tabId });
+          expect((await readQueue(duplicate))[0]?.attachmentPayload).toEqual(reference);
+          const row = paneFor(duplicate).locator(".chat-queue__item");
+          await expect.poll(() => row.count()).toBe(1);
+          await mkdir(proofDir, { recursive: true });
+          await duplicate.screenshot({
+            path: path.join(proofDir, "duplicate-before-claim-removal.png"),
+            fullPage: true,
+            animations: "disabled",
+          });
+          await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
+          await expect.poll(async () => (await readQueue(duplicate)).length).toBe(0);
+          await expect.poll(() => row.count()).toBe(0);
+          await duplicate.evaluate(
+            (eventName) => window.dispatchEvent(new Event(eventName)),
+            releaseEvent,
+          );
+          await expect
+            .poll(() =>
+              duplicate.evaluate(async (sourceTab) => {
+                const tab = sessionStorage.getItem("openclaw.control.outboxTab.v1");
+                return Boolean(
+                  tab &&
+                  tab !== sourceTab &&
+                  (await navigator.locks.query()).held?.some(
+                    (lock) => lock.name === `openclaw-outbox:${tab}`,
+                  ),
+                );
+              }, reference.tabId),
+            )
+            .toBe(true);
+          await expectRequestCountStable(duplicateGateway, "chat.send", 0);
+          expect(await sourceOwnsLock()).toBe(true);
+          expect((await readQueue(page))[0]).toMatchObject({
+            id: original.id,
+            sendRunId: runId,
+            sendAttempts: 0,
+            attachmentPayload: reference,
+          });
+          await page.bringToFront();
+          await page.screenshot({
+            path: path.join(proofDir, "source-after-duplicate-removal.png"),
+            fullPage: true,
+            animations: "disabled",
+          });
+          const sourceBytes = await readPayloadBytes(page, reference.key);
+          assert(
+            sourceBytes !== null,
+            "Removing an unclaimed duplicate must not delete the source Blob",
+          );
+          expect(sourceBytes).toEqual([file.buffer.toString("base64")]);
+          await gateway.setOnline(true);
+          const sent = await gateway.waitForRequest("chat.send");
+          expect(sent.params).toEqual(
+            expect.objectContaining({
+              message,
+              idempotencyKey: runId,
+              attachments: [
+                {
+                  type: "file",
+                  mimeType: file.mimeType,
+                  fileName: file.name,
+                  content: file.buffer.toString("base64"),
+                },
+              ],
+            }),
+          );
+          await expectRequestCountStable(gateway, "chat.send", 1);
+          await expectRequestCountStable(duplicateGateway, "chat.send", 0);
+        } finally {
+          await duplicate
+            .evaluate((eventName) => window.dispatchEvent(new Event(eventName)), releaseEvent)
+            .catch(() => undefined);
+        }
+      },
+    );
+  });
+
   it("upgrades inline queues and the existing draft database, then edits and cancels without touching a newer composer", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await page.route("**/outbox-upgrade", (route) =>

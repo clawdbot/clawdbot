@@ -108,8 +108,10 @@ suite.define(() => {
       await page.locator(".chat-queue__item").nth(2).locator(".chat-queue__grip").focus();
       await page.keyboard.press("ArrowUp");
 
-      // Give the failed move a moment to settle, then confirm nothing moved.
-      await page.waitForTimeout(300);
+      await page
+        .getByRole("alert")
+        .filter({ hasText: "Could not store this message for reconnect." })
+        .waitFor();
       expect(await queueText()).toEqual([...QUEUED]);
       if (captureUiProofEnabled) {
         await page.screenshot({
@@ -127,7 +129,7 @@ suite.define(() => {
       const storedQueueOrder = () =>
         page.evaluate(() =>
           Object.entries(sessionStorage)
-            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
+            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v3:"))
             .flatMap(([, value]) => {
               try {
                 const parsed = JSON.parse(value) as {

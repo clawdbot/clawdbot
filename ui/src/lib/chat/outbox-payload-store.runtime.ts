@@ -159,10 +159,17 @@ export async function readOutboxPayload(
 
 export async function removeOutboxPayloads(references: readonly PayloadReference[]): Promise<void> {
   try {
+    // Duplicated storage carries the source marker until adoption finishes. Only
+    // the document's held lock can authorize deletion, including cleanup callers.
+    const tabId = await outboxPayloadTab();
+    const owned = references.filter((reference) => reference.tabId === tabId);
+    if (!owned.length) {
+      return;
+    }
     const database = await openControlUiDatabase();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
-    for (const reference of references) {
+    for (const reference of owned) {
       store.delete(reference.key);
     }
     await transactionComplete(transaction);

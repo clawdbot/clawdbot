@@ -665,10 +665,7 @@ function retireRemovedOutboxPayloads(previous: string | null, retained: ChatQueu
     const removed = Object.values(parsed.sessions)
       .flatMap((value) => normalizeStoredSession(value)?.queue ?? [])
       .flatMap((item) =>
-        item.attachmentPayload &&
-        item.attachmentPayload.tabId ===
-          getSafeSessionStorage()?.getItem("openclaw.control.outboxTab.v1") &&
-        !remaining.has(item.attachmentPayload.key)
+        item.attachmentPayload && !remaining.has(item.attachmentPayload.key)
           ? [item.attachmentPayload]
           : [],
       );

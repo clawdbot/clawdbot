@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { DurableComposerDraftAttachment } from "../lib/chat/composer-draft-store.runtime.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -715,6 +717,7 @@ suite.define(() => {
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
+      expect(secondParams.sessionKey).toBe(firstParams.sessionKey);
       expect(secondParams.message).toBe(prompt);
       await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
@@ -884,50 +887,60 @@ suite.define(() => {
       expect(requestsBeforeReconnect).toHaveLength(0);
       const readStoredProof = () =>
         page.evaluate(
-          ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
-            const storedValues = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
-              .map(([, value]) => value);
-            const stored = storedValues.join("\n");
-            let runId: string | null = null;
-            for (const value of storedValues) {
-              try {
+          async ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
+            const item = Object.entries(sessionStorage)
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v3:"))
+              .flatMap(([, value]) => {
                 const parsed = JSON.parse(value) as {
-                  sessions?: Record<
-                    string,
-                    {
-                      queue?: Array<{
-                        attachments?: Array<{ dataUrl?: unknown; fileName?: unknown }>;
-                        sendRunId?: unknown;
-                        text?: unknown;
-                      }>;
-                    }
-                  >;
+                  sessions: Record<string, { queue?: ChatQueueItem[] }>;
                 };
-                const item = Object.values(parsed.sessions ?? {})
-                  .flatMap((session) => session.queue ?? [])
-                  .find((entry) => entry.text === expectedPrompt);
-                if (typeof item?.sendRunId === "string") {
-                  runId = item.sendRunId;
-                  const attachment = item.attachments?.find(
-                    (entry) => entry.fileName === expectedAttachmentName,
+                return Object.values(parsed.sessions).flatMap((session) => session.queue ?? []);
+              })
+              .find((entry) => entry.text === expectedPrompt);
+            const attachment = item?.attachments?.find(
+              (entry) => entry.fileName === expectedAttachmentName,
+            );
+            const reference = item?.attachmentPayload;
+            let attachmentMatches = false;
+            if (reference && attachment) {
+              const database = await new Promise<IDBDatabase>((resolve, reject) => {
+                const request = indexedDB.open("openclaw-control-ui");
+                request.onsuccess = () => resolve(request.result);
+                request.addEventListener("error", () =>
+                  reject(request.error ?? new Error("IndexedDB request failed")),
+                );
+              });
+              try {
+                const record = await new Promise<
+                  { attachments: DurableComposerDraftAttachment[] } | undefined
+                >((resolve, reject) => {
+                  const request = database
+                    .transaction("outboxPayloads")
+                    .objectStore("outboxPayloads")
+                    .get(reference.key);
+                  request.onsuccess = () => resolve(request.result);
+                  request.addEventListener("error", () =>
+                    reject(request.error ?? new Error("IndexedDB request failed")),
                   );
-                  return {
-                    attachment: attachment?.dataUrl === expectedAttachmentDataUrl,
-                    prompt: true,
-                    runId,
-                    waitingReconnect: value.includes('"sendState":"waiting-reconnect"'),
-                  };
+                });
+                const storedAttachment = record?.attachments.find(
+                  (entry) => entry.fileName === expectedAttachmentName,
+                );
+                if (storedAttachment) {
+                  const bytes = new Uint8Array(await storedAttachment.blob.arrayBuffer());
+                  const dataUrl = `data:${storedAttachment.mimeType};base64,${btoa(String.fromCharCode(...bytes))}`;
+                  attachmentMatches =
+                    attachment.dataUrl === undefined && dataUrl === expectedAttachmentDataUrl;
                 }
-              } catch {
-                // Ignore unrelated malformed session storage in this focused proof.
+              } finally {
+                database.close();
               }
             }
             return {
-              attachment: false,
-              prompt: stored.includes(expectedPrompt),
-              runId,
-              waitingReconnect: stored.includes('"sendState":"waiting-reconnect"'),
+              attachment: attachmentMatches,
+              prompt: item !== undefined,
+              runId: item?.sendRunId ?? null,
+              waitingReconnect: item?.sendState === "waiting-reconnect",
             };
           },
           {

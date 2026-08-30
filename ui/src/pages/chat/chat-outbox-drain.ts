@@ -364,11 +364,14 @@ async function drainStoredChatOutbox(
           entry.sendState !== "failed" ||
           entry.localCommandName,
       );
-    const freshItem = storedItem && lane.freshAdmissions.has(storedItem.id);
+    if (!storedItem) {
+      return "empty";
+    }
+    const freshItem = lane.freshAdmissions.has(storedItem.id);
     const item = freshItem
       ? (readQueuedMessageById(host, storedItem.id) ?? storedItem)
       : storedItem;
-    if (!item || (item.sendState === "failed" && !freshItem)) {
+    if (item.sendState === "failed" && !freshItem) {
       return "empty";
     }
     if (
@@ -570,10 +573,11 @@ async function drainStoredChatOutbox(
     const pendingOptions = lane.pendingOptions.get(item.id);
     const retryUnconfirmed = freshAdmission && item.sendState === "unconfirmed";
     if (!freshAdmission || retryUnconfirmed) {
+      // History reconciles canonical stored versions, not the live row's transport alias.
       const reconciled = await reconcileStoredChatOutboxHead(
         host,
         outbox,
-        item,
+        storedItem,
         dependencies,
         retryUnconfirmed,
       );
