@@ -19,6 +19,8 @@ Sessions can run in three places, and every one of them uses the same session, t
 
 In all remote placements, model inference stays proxied through the Gateway — provider credentials never reach the remote machine — and completed work reconciles back into the session's managed worktree. Both the OpenClaw runtime (`worker-turn`) and Codex (`remote-exec`) can use the same destinations.
 
+A **session** is the conversation clients attach to. A **device** is paired hardware (`node` in the protocol); **runner** is an internal term for an execution host. Placement chooses where work runs, while isolation describes the boundary on that host, not another destination.
+
 ## Images and attachments
 
 Attach images and PDFs through the normal chat composer, including on later turns in an existing cloud session. The Gateway prepares native image input, including rendered pages from scanned PDFs. Codex receives image input through its Gateway-side app-server. Its `remote-exec` placement stages managed originals for remote file tools before execution; those temporary copies are excluded from workspace reconciliation. The retained-input rules below apply to OpenClaw `worker-turn` sessions.

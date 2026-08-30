@@ -435,7 +435,7 @@ the same policy under `streaming.progress`:
 
 ## Related
 
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
+- [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure

@@ -163,7 +163,8 @@ Bare silent replies are dropped on all surfaces, so parent sessions stay quiet i
 
 ## Related
 
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
+- [Channel inbound API](/plugins/sdk-channel-inbound) - receive orchestration and acknowledgment policy
+- [Channel outbound API](/plugins/sdk-channel-outbound) - durable sends and delivery receipts
 - [Streaming](/concepts/streaming) - real-time message delivery
 - [Retry](/concepts/retry) - message delivery retry behavior
 - [Queue](/concepts/queue) - message processing queue
