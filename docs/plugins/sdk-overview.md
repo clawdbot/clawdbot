@@ -413,13 +413,13 @@ Telegram-specific; other channels keep their own interactive result contracts.
 The Telegram interactive handler context exposes two ingress metadata fields:
 
 - `updateId: number | null` — the Telegram update identity, taken verbatim from
-the incoming update's `update_id` (`resolveTelegramUpdateId(ctx.update)`). It is
-`null` when the update has no valid `update_id` (synthetic updates or malformed
-values); valid Bot API `callback_query` updates always provide a number. The
-value is never synthesized, hashed, or derived, and consumers must treat `null`
-fail-closed (no substitute value).
+  the incoming update's `update_id` (`resolveTelegramUpdateId(ctx.update)`). It is
+  `null` when the update has no valid `update_id` (synthetic updates or malformed
+  values); valid Bot API `callback_query` updates always provide a number. The
+  value is never synthesized, hashed, or derived, and consumers must treat `null`
+  fail-closed (no substitute value).
 - `messageDate: number` — the callback message's Unix timestamp in seconds,
-taken verbatim from `callback_query.message.date`. It is never synthesized.
+  taken verbatim from `callback_query.message.date`. It is never synthesized.
 
 ### Host hooks for workflow plugins
 
