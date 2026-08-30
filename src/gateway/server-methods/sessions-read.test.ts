@@ -64,7 +64,7 @@ async function listAgentsViaRpc(
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
-      readPreparedGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
       ...catalogContext,
     } as unknown as GatewayRequestContext,
     client: includeSystem
@@ -96,14 +96,16 @@ async function setAgentsConfig(agentsConfig: Record<string, unknown> | undefined
 test("agents.list includes system rows only when negotiated", async () => {
   fs.mkdirSync(path.join(requireStateDir(), "agents", "openclaw"), { recursive: true });
   testState.agentConfig = { model: { primary: "local/shared-reasoner" } };
-  const readPreparedGatewayModelCatalog = vi.fn(async () => [
-    {
-      id: "shared-reasoner",
-      name: "Shared Reasoner",
-      provider: "local",
-      reasoning: false,
-    },
-  ]);
+  const readPreparedGatewayModelCatalog = vi.fn(async () => ({
+    entries: [
+      {
+        id: "shared-reasoner",
+        name: "Shared Reasoner",
+        provider: "local",
+        reasoning: false,
+      },
+    ],
+  }));
 
   expect(await listAgentIdsViaRpc(false, { readPreparedGatewayModelCatalog })).toEqual(["main"]);
   const result = await listAgentsViaRpc(true, { readPreparedGatewayModelCatalog });
@@ -121,7 +123,7 @@ test("agents.list includes system rows only when negotiated", async () => {
 
 test("agents.list reads published model facts without starting provider discovery", async () => {
   const loadGatewayModelCatalog = vi.fn(async () => []);
-  const readPreparedGatewayModelCatalog = vi.fn(async () => []);
+  const readPreparedGatewayModelCatalog = vi.fn(async () => ({ entries: [] }));
 
   await expect(
     listAgentIdsViaRpc(false, {
@@ -167,14 +169,16 @@ test.each([
       if (!options?.agentId || options.agentId === unavailableAgentId) {
         return undefined;
       }
-      return [
-        {
-          id: "shared-reasoner",
-          name: "Shared Reasoner",
-          provider: "local",
-          reasoning: options.agentId === "work",
-        },
-      ];
+      return {
+        entries: [
+          {
+            id: "shared-reasoner",
+            name: "Shared Reasoner",
+            provider: "local",
+            reasoning: options.agentId === "work",
+          },
+        ],
+      };
     });
 
     const result = await listAgentsViaRpc(false, { readPreparedGatewayModelCatalog });
@@ -335,7 +339,7 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       {
         sessionId,
         updatedAt: 42,
-        createdActor: { type: "human", id: actorId },
+        createdActor: { type: "human", source: "profile", id: actorId },
         visibility: "shared",
       },
     );

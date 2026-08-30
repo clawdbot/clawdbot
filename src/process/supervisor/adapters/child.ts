@@ -9,11 +9,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
-import {
-  addSecretInputStdio,
-  type SpawnStdioEntry,
-  writeSecretInputToChild,
-} from "../../spawn-secret-input.js";
+import { prepareSecretInputStdio, type SpawnStdioEntry } from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -151,7 +147,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     (params.ownedWorker !== undefined || !isServiceManagedRuntime());
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  addSecretInputStdio(stdio, params.secretInput);
+  using secretDelivery = prepareSecretInputStdio(stdio, params.secretInput);
   if (params.ownedWorker !== undefined) {
     stdio.push("ipc");
   }
@@ -237,6 +233,8 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
+  let workerIpcDisconnected = false;
+  let openWorkerStdio = 0;
 
   const clearForceKillWaitFallback = () => {
     if (!forceKillWaitFallbackTimer) {
@@ -318,9 +316,9 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   const isWindowsHardKillSettlementBlocked = () =>
     process.platform === "win32" && hardKillRequested && !windowsTreeKillCompleted;
 
-  const maybeSettleAfterWindowsExit = () => {
+  const maybeSettleAfterExit = () => {
     if (
-      process.platform !== "win32" ||
+      (process.platform !== "win32" && (!workerIpcDisconnected || openWorkerStdio > 0)) ||
       isWindowsHardKillSettlementBlocked() ||
       childExitState == null ||
       !stdoutDrained ||
@@ -331,21 +329,40 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     settleWait(resolveObservedExitState(childExitState));
   };
 
+  if (params.ownedWorker) {
+    // Parent-initiated IPC disconnect can suppress Node's child close event.
+    // Preserve its exit-and-closed-pipes boundary, including secret descriptors.
+    child.once("disconnect", () => {
+      workerIpcDisconnected = true;
+      maybeSettleAfterExit();
+    });
+    for (const stream of child.stdio.slice(1)) {
+      if (!stream || stream.closed) {
+        continue;
+      }
+      openWorkerStdio += 1;
+      stream.once("close", () => {
+        openWorkerStdio -= 1;
+        maybeSettleAfterExit();
+      });
+    }
+  }
+
   child.stdout?.once("end", () => {
     stdoutDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.stdout?.once("close", () => {
     stdoutDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.stderr?.once("end", () => {
     stderrDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.stderr?.once("close", () => {
     stderrDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
 
   // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
@@ -353,7 +370,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   child.once("exit", (code, signal) => {
     childExitState = { code, signal };
     scheduleForcedWindowsCloseSettlement();
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.once("close", (code, signal) => {
     childCloseState = { code, signal };
@@ -366,7 +383,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
 
   if (params.secretInput) {
     try {
-      await writeSecretInputToChild(spawned.child, params.secretInput);
+      await secretDelivery?.deliverTo(spawned.child);
     } catch (error) {
       spawned.child.kill("SIGKILL");
       throw error;
@@ -408,7 +425,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
             settleWait(resolveObservedExitState(childCloseState));
             return;
           }
-          maybeSettleAfterWindowsExit();
+          maybeSettleAfterExit();
           scheduleForcedWindowsCloseSettlement();
         });
       } else {

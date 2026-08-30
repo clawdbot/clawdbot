@@ -51,6 +51,7 @@ function buildRestrictedFinalizationAttempt(
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,
     sessionFile: attempt.sessionFile,
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
     resolvedApiKey: attempt.resolvedApiKey,

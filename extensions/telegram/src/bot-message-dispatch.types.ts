@@ -139,6 +139,7 @@ type TelegramProgressCompositor = {
   readonly commentaryProgressEnabled: boolean;
   readonly hasStatusHeadline: boolean;
   readonly hasPlanProgress: boolean;
+  getSnapshot: () => { lines: ReadonlyArray<string | ChannelProgressDraftLine> };
   markFinalReplyStarted: () => void;
   markFinalReplyDelivered: () => void;
   beginNewTurn: (options?: { force?: boolean }) => boolean;

@@ -456,19 +456,25 @@ export async function createOpenClawTestInstance(
     applyEnv: false,
     env: options.env,
   });
-  await state.writeConfig(
-    mergeConfig(
-      {
-        gateway: {
-          port,
-          auth: { mode: "token", token: gatewayToken },
-          controlUi: { enabled: false },
+  try {
+    await state.writeConfig(
+      mergeConfig(
+        {
+          gateway: {
+            port,
+            auth: { mode: "token", token: gatewayToken },
+            controlUi: { enabled: false },
+          },
+          hooks: { enabled: true, token: hookToken, path: "/hooks" },
         },
-        hooks: { enabled: true, token: hookToken, path: "/hooks" },
-      },
-      options.config,
-    ),
-  );
+        options.config,
+      ),
+    );
+  } catch (error) {
+    // Config staging can fail before the instance exposes its cleanup handle.
+    await state.cleanup();
+    throw error;
+  }
 
   const stdout = createBoundedStringLog();
   const stderr = createBoundedStringLog();

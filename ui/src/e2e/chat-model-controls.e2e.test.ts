@@ -54,7 +54,7 @@ suite.define(() => {
               },
               sessions: [
                 {
-                  key: "main",
+                  key: "agent:main:main",
                   kind: "direct",
                   model: "gpt-5.6-luna",
                   modelProvider: "openai",
@@ -162,7 +162,7 @@ suite.define(() => {
         await expect.poll(needleAngle).toBe(-120);
         if (route === "chat") {
           expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-            key: "main",
+            key: "agent:main:main",
             thinkingLevel: "low",
           });
         }
@@ -225,9 +225,16 @@ suite.define(() => {
             .poll(async () =>
               (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
             )
-            .toContainEqual({ key: "main", model: "openai/speed-only" });
+            .toContainEqual({
+              key: "agent:main:main",
+              model: "openai/speed-only",
+            });
         } else {
-          await expect.poll(() => effort.count()).toBe(0);
+          await expect.poll(() => effort.count()).toBe(1);
+          await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
+          await expect
+            .poll(() => composer.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
+            .toBe("false");
           await model.click();
           await composer.locator('[data-chat-model-option="example/basic"]').click();
           await expect.poll(() => effort.count()).toBe(0);
@@ -255,7 +262,7 @@ suite.define(() => {
               },
               sessions: [
                 {
-                  key: "main",
+                  key: "agent:main:main",
                   kind: "direct",
                   model: "basic",
                   modelProvider: provider,
@@ -294,7 +301,7 @@ suite.define(() => {
         expect(await composer.locator("[data-chat-thinking-slider]").count()).toBe(0);
         await composer.getByRole("switch", { name: /Fast responses/ }).click();
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-          key: "main",
+          key: "agent:main:main",
           fastMode: true,
         });
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Fast");

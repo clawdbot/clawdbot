@@ -4,6 +4,7 @@ import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { authorizeHttpGatewayConnect, resolveGatewayAuth } from "../gateway/auth.js";
+import { isTrustedProxyAddress } from "../gateway/net.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -212,6 +213,38 @@ describe("promptGatewayConfig", () => {
   });
 
   it.each([
+    ["10.42.0.1", true],
+    ["2001:db8::1", true],
+    ["10.42.0.0/24", true],
+    ["2001:db8::/32", true],
+    ["127.1/8", true],
+    [" 10.42.0.1 , \t2001:db8::/32 ", true],
+    ["junk", false],
+    ["10.42.0.999", false],
+    ["2001:db8::gg", false],
+    ["10.42.0.0/33", false],
+    ["2001:db8::/129", false],
+    ["10.42.0.0/-1", false],
+    ["10.42.0.0/nope", false],
+    ["10.42.0.1, junk", false],
+    ["", false],
+    [" \t ", false],
+    [",", false],
+    ["10.42.0.1, ", false],
+  ])("validates trusted proxy input %j (valid=%s)", async (input, valid) => {
+    await runTrustedProxyPrompt({
+      textQueue: ["18789", "x-forwarded-user", "", "", "10.42.0.1"],
+    });
+    const prompt = mocks.text.mock.calls.find(
+      ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
+    )?.[0];
+    expect(prompt?.validate).toBeTypeOf("function");
+    expect(prompt.validate(input)).toEqual(
+      valid ? undefined : expect.stringMatching(/IPv4.*IPv6.*CIDR/),
+    );
+  });
+
+  it.each([
     ["127.0.0.1", "127.0.0.1"],
     ["127.0.0.2", "127.0.0.2"],
     ["::1", "::1"],
@@ -219,6 +252,13 @@ describe("promptGatewayConfig", () => {
     ["10.0.0.1, 127.0.0.1", "127.0.0.1"],
     ["127.0.0.0/8", "127.0.0.1"],
     ["::1/128", "::1"],
+    ["127.1/8", "127.0.0.1"],
+    ["127.42.0.0/16", "127.42.0.1"],
+    ["126.0.0.0/7", "127.0.0.1"],
+    ["::/127", "::1"],
+    ["::/0", "::1"],
+    ["::ffff:127.0.0.2/128", "127.0.0.2"],
+    [" 127.0.0.1 , \t::1/128 ", "::1"],
   ])("accepts runtime auth after consent for loopback proxy %s", async (proxies, remoteAddress) => {
     vi.stubEnv("OPENCLAW_LOCALE", "en");
     const result = await runTrustedProxyPrompt({
@@ -226,6 +266,10 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
     });
     expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
+    const prompt = mocks.text.mock.calls.find(
+      ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
+    )?.[0];
+    expect(prompt.validate(proxies)).toBeUndefined();
     expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Any local process"),
@@ -237,6 +281,21 @@ describe("promptGatewayConfig", () => {
       user: "operator@example.test",
     });
   });
+
+  it.each(["126.0.0.0/8", "::/128", "::2/127", "::ffff:0:0/96", "::1%LO0"])(
+    "does not ask for loopback consent when runtime cannot match loopback through %s",
+    async (proxies) => {
+      const result = await runTrustedProxyPrompt({
+        textQueue: ["18789", "x-forwarded-user", "", "", proxies],
+      });
+      expect(mocks.confirm).not.toHaveBeenCalled();
+      expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBeUndefined();
+      for (const peer of ["127.0.0.1", "::1", "::1%LO0"]) {
+        expect(isTrustedProxyAddress(peer, result.config.gateway?.trustedProxies)).toBe(false);
+        expect(await authorizeConfiguredProxy(result.config, peer)).toMatchObject({ ok: false });
+      }
+    },
+  );
 
   it.each([
     ["en", "Any local process", "Allow loopback", "will be rejected"],

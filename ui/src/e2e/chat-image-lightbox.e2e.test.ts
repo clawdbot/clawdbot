@@ -130,6 +130,49 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const openOriginal = page.getByRole("link", { name: "Open in new tab" });
       await openOriginal.waitFor({ state: "visible" });
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
+      const readControlContrast = () =>
+        page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
+          const root = lightbox.shadowRoot!;
+          return [".open-original", ".close", '[aria-label="Zoom in"]'].map((selector) => {
+            const style = getComputedStyle(root.querySelector(selector)!);
+            return {
+              backdropFilter: style.backdropFilter,
+              backgroundColor: style.backgroundColor,
+              borderWidth: style.borderWidth,
+              color: style.color,
+            };
+          });
+        });
+      for (const [theme, backgroundColor] of [
+        ["dark", "rgba(255, 255, 255, 0.16)"],
+        ["light", "rgba(12, 16, 24, 0.64)"],
+      ] as const) {
+        await page.evaluate(
+          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
+          theme,
+        );
+        await expect.poll(readControlContrast).toEqual([
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+          expect.objectContaining({
+            backdropFilter: expect.stringContaining("blur(16px)"),
+            backgroundColor,
+            borderWidth: "0px",
+            color: "rgb(255, 255, 255)",
+          }),
+        ]);
+      }
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       const focusIsInsideLightbox = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
           let active: Element | null = document.activeElement;

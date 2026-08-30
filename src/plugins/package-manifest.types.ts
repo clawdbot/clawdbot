@@ -80,7 +80,7 @@ export type PluginPackageInstall = {
 };
 
 type OpenClawPackageSetupFeatures = {
-  configPromotion?: boolean;
+  configPromotion?: boolean | "preserve-root";
   /**
    * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
    * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.

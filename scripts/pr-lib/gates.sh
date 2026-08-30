@@ -25,7 +25,7 @@ run_hosted_prepare_gates() {
   fi
 
   local repo
-  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -35,6 +35,7 @@ run_hosted_prepare_gates() {
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"
+    --main-sha "$PR_MAIN_SHA"
     --output ".local/gates-hosted-checks.json"
   )
   if [ -n "$recent_sha" ]; then
@@ -318,7 +319,7 @@ write_gates_env_stamp() {
 }
 
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true
@@ -428,7 +429,8 @@ prepare_gates() {
     exit 2
   fi
 
-  enter_worktree "$pr" false
+  PR_MAIN_SHA=""
+  enter_worktree "$pr" false || return 1
 
   mark_pr_operation_side_effects_if_available
   refresh_prep_branch_for_reviewed_head "$pr"
@@ -527,7 +529,7 @@ prepare_gates() {
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
-      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
+      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check "$PR_MAIN_SHA...HEAD"
     fi
     run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
     hosted_gates_head="$current_head"

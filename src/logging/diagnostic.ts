@@ -511,8 +511,9 @@ function isBlockedToolCallRecoveryEligible(params: {
     params.classification.activeWorkKind === "tool_call" &&
     typeof toolAgeMs === "number" &&
     typeof lastProgressAgeMs === "number" &&
-    toolAgeMs >= abortMs &&
-    lastProgressAgeMs >= abortMs
+    (params.activity?.activeToolDeadlineAtMs !== undefined
+      ? Date.now() >= params.activity.activeToolDeadlineAtMs
+      : toolAgeMs >= abortMs && lastProgressAgeMs >= abortMs)
   );
 }
 

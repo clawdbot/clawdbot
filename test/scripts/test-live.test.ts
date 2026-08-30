@@ -1,6 +1,6 @@
 // Test Live tests cover test live script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -83,45 +83,49 @@ describe("scripts/test-live", () => {
     });
   });
 
-  posixIt("signals the live pnpm child when the wrapper is terminated", async ({ signal }) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-signal-"));
-    const fakePnpmPath = join(root, "pnpm");
-    const signaledPath = join(root, "signaled");
+  posixIt.for(["SIGINT", "SIGTERM"] as const)(
+    "signals the live pnpm child on %s and removes its joined namespace",
+    async (stopSignal, { signal }) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-signal-"));
+      const fakePnpmPath = join(root, "pnpm");
+      const signaledPath = join(root, "signaled");
 
-    writeFakePnpm(fakePnpmPath);
-    const runner = spawn(
-      process.execPath,
-      ["--import", "tsx", "scripts/test-live.mts", "--", "fake.live.test.ts"],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-          npm_execpath: fakePnpmPath,
+      writeFakePnpm(fakePnpmPath);
+      const runner = spawn(
+        process.execPath,
+        ["--import", "tsx", "scripts/test-live.mts", "--", "fake.live.test.ts"],
+        {
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+            npm_execpath: fakePnpmPath,
+          },
+          stdio: ["ignore", "pipe", "ignore"],
         },
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    );
-    let childPid = 0;
-    let descendantPid = 0;
+      );
+      let childPid = 0;
+      let descendantPid = 0;
 
-    try {
-      ({ childPid, descendantPid } = await waitForFixtureReady(runner, signal));
+      try {
+        ({ childPid, descendantPid } = await waitForFixtureReady(runner, signal));
 
-      expect(runner.pid).toBeGreaterThan(0);
-      const completion = waitForClose(runner);
-      process.kill(runner.pid!, "SIGTERM");
-      const result = await completion;
+        expect(runner.pid).toBeGreaterThan(0);
+        const completion = waitForClose(runner);
+        process.kill(runner.pid!, stopSignal);
+        const result = await completion;
 
-      expect(result).toEqual({ code: null, signal: "SIGTERM" });
-      await waitFor(() => fileExists(signaledPath), 5_000);
-      expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
-      await waitFor(() => !isProcessAlive(childPid), 5_000);
-      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
-    } finally {
-      await stopFixture(runner, [childPid, descendantPid]);
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result).toEqual({ code: null, signal: stopSignal });
+        await waitFor(() => fileExists(signaledPath), 5_000);
+        expect(readFileSync(signaledPath, "utf8")).toBe(stopSignal);
+        await waitFor(() => !isProcessAlive(childPid), 5_000);
+        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+        expect(existsSync(readFileSync(join(root, "namespace"), "utf8"))).toBe(false);
+      } finally {
+        await stopFixture(runner, [childPid, descendantPid]);
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   posixIt("kills the live pnpm process group after the no-output timeout", async ({ signal }) => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-timeout-"));
@@ -175,6 +179,7 @@ describe("scripts/test-live", () => {
       expect(Buffer.concat(stderr).toString("utf8")).toContain("[test:live] still running");
       await waitFor(() => !isProcessAlive(childPid), 5_000);
       await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+      expect(existsSync(readFileSync(join(root, "namespace"), "utf8"))).toBe(false);
     } finally {
       await stopFixture(runner, [childPid, descendantPid]);
       rmSync(root, { force: true, recursive: true });
@@ -221,8 +226,11 @@ function writeFakePnpm(filePath: string): void {
       "#!/usr/bin/env node",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
-      'process.on("SIGTERM", () => {',
-      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
+      'const tmp = require("node:os").tmpdir();',
+      'fs.writeFileSync(require("node:path").join(__dirname, "namespace"), tmp);',
+      'fs.writeFileSync(require("node:path").join(tmp, "owned-marker"), "owned");',
+      'for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {',
+      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, signal);",
       "  process.exit(0);",
       "});",
       "const child = spawn(process.execPath, [",

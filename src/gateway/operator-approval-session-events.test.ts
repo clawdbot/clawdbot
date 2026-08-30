@@ -440,6 +440,7 @@ describe("operator approval session events", () => {
         {
           id: "source-and-parent",
           status: "pending",
+          sourceSessionKey: SOURCE_SESSION_KEY,
           presentation: createPendingRecord({ id: "source-and-parent" }).presentation,
           urlPath: "/operator/approve/source-and-parent",
           createdAtMs: 1_000,
@@ -448,6 +449,7 @@ describe("operator approval session events", () => {
         {
           id: parentOnly.id,
           status: "pending",
+          sourceSessionKey: PARENT_SESSION_KEY,
           presentation: parentOnly.presentation,
           urlPath: "/operator/approve/parent-only",
           createdAtMs: 1_001,

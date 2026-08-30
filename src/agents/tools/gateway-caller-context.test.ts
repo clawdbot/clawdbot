@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,

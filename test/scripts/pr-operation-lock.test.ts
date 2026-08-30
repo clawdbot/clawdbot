@@ -6,6 +6,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   cpSync,
@@ -13,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -25,8 +27,10 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const freshMainTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
 const escapedPipeHolderPidFiles = new Set<string>();
 afterEach(async () => {
   const failures: unknown[] = [];
@@ -52,6 +56,7 @@ const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
 let templateRepo = "";
+let freshMainTemplate: ReturnType<typeof createFreshMainTemplate> | undefined;
 
 // Direct preload affects only the supervisor; operation fixtures keep real clocks.
 // The source assertions below pin the production safety durations being accelerated.
@@ -81,14 +86,36 @@ function spawnDetached(command: string, args: readonly string[], options: SpawnO
   return child;
 }
 
+function createPrFixtureEnv(homeDir: string, path: string): NodeJS.ProcessEnv {
+  return {
+    HOME: homeDir,
+    XDG_CONFIG_HOME: join(homeDir, "config"),
+    TMPDIR: homeDir,
+    PATH: path,
+    LC_ALL: "C",
+    TZ: "UTC0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_ALLOW_PROTOCOL: "file",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: "/dev/null",
+    GIT_CONFIG_KEY_1: "commit.gpgSign",
+    GIT_CONFIG_VALUE_1: "false",
+  };
+}
+
 function createTemplateRepo() {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-operation-lock-template-"));
-  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
-  execFileSync("git", ["config", "user.name", "OpenClaw Test"], { cwd: dir });
-  execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], { cwd: dir });
+  // This shared template must not inherit the operator's Git hooks or identity.
+  const options = { cwd: dir, env: createPrFixtureEnv(dir, process.env.PATH ?? "") };
+  execFileSync("git", ["init", "-q", "-b", "main"], options);
+  execFileSync("git", ["config", "user.name", "OpenClaw Test"], options);
+  execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], options);
   writeFileSync(join(dir, "base.txt"), "base\n");
-  execFileSync("git", ["add", "base.txt"], { cwd: dir });
-  execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+  execFileSync("git", ["add", "base.txt"], options);
+  execFileSync("git", ["commit", "-qm", "base"], options);
   return dir;
 }
 
@@ -202,7 +229,7 @@ function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
   ]);
 }
 
-function installPrCliFixture(repoDir: string) {
+function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
   const files = [
     "scripts/pr",
     "scripts/watch-pr-ci.mjs",
@@ -212,6 +239,7 @@ function installPrCliFixture(repoDir: string) {
     "scripts/lib/plain-gh.sh",
     "scripts/lib/plain-gh.mjs",
     "scripts/lib/direct-run.mjs",
+    "scripts/lib/record-shared.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
     "scripts/lib/local-check-runtime.mts",
     "scripts/tsx.mjs",
@@ -231,6 +259,7 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr-lib/review-artifacts.mjs",
     "scripts/pr-lib/prepare-core.sh",
     "scripts/pr-lib/merge.sh",
+    "scripts/pr-lib/merge-outcome.sh",
     "scripts/crabbox-untrusted-bootstrap.sh",
     "scripts/pr-crabbox-gate-publisher.mjs",
     ".github/workflows/pr-crabbox-gate-publisher.yml",
@@ -245,10 +274,71 @@ function installPrCliFixture(repoDir: string) {
   const binDir = join(repoDir, "isolated-bin");
   mkdirSync(binDir);
   for (const command of ["bash", "basename", "dirname", "git"]) {
-    const resolved = execFileSync("which", [command], { encoding: "utf8" }).trim();
+    const resolved = execFileSync("which", [command], { encoding: "utf8", env }).trim();
     symlinkSync(resolved, join(binDir, command));
   }
   return { binDir, cli };
+}
+
+function createFreshMainTemplate() {
+  // Freeze only the committed wrapper/tool prefix. Origins, FETCH_HEAD,
+  // linked worktrees, and failure proxies are created in each private copy.
+  const repoDir = freshMainTemplateDirs.make("openclaw-pr-fresh-main-template-");
+  cpSync(templateRepo, repoDir, { recursive: true });
+  const stateDir = join(repoDir, "fixture-state");
+  const homeDir = join(stateDir, "home");
+  const tmpDir = join(stateDir, "tmp");
+  mkdirSync(homeDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  const setupEnv = createPrFixtureEnv(homeDir, process.env.PATH ?? "");
+  const { binDir } = installPrCliFixture(repoDir, setupEnv);
+  const realGit = realpathSync(join(binDir, "git"));
+  // Only these real tools are reachable. rg/pnpm are required by the CLI
+  // preflight; these cases must stop before invoking either of them.
+  for (const command of [
+    "awk",
+    "cat",
+    "date",
+    "env",
+    "jq",
+    "mkdir",
+    "mktemp",
+    "mv",
+    "ps",
+    "rm",
+    "seq",
+    "sh",
+    "sleep",
+  ]) {
+    symlinkSync(
+      execFileSync("which", [command], { encoding: "utf8", env: setupEnv }).trim(),
+      join(binDir, command),
+    );
+  }
+  symlinkSync(process.execPath, join(binDir, "node"));
+  for (const command of ["rg", "pnpm"]) {
+    const stub = writeFixtureFile(binDir, command, [
+      "#!/bin/sh",
+      "echo 'unexpected command in review-init fixture' >&2",
+      "exit 99",
+    ]);
+    chmodSync(stub, 0o755);
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...createPrFixtureEnv(homeDir, binDir),
+    TMPDIR: tmpDir,
+  };
+  const git = (...args: string[]) =>
+    execFileSync(realGit, args, { cwd: repoDir, env, encoding: "utf8", timeout: 5000 }).trim();
+  writeFileSync(
+    join(repoDir, ".git/info/exclude"),
+    "/.local/\n/.worktrees/\n/isolated-bin/\n/fixture-state/\n",
+  );
+  git("add", "scripts", ".github");
+  git("commit", "-qm", "test: unmodified public PR wrapper fixture");
+  const cachedMain = git("rev-parse", "HEAD");
+  const canonicalTree = git("rev-parse", "HEAD^{tree}");
+  return { repoDir, cachedMain, canonicalTree };
 }
 
 function installRequiredPrCommandStubs(binDir: string) {
@@ -563,14 +653,15 @@ async function cleanupRecordedProcessGroup(path: string, pgid?: number) {
   }
 }
 
-function readOperationProcessGroup(repoDir: string) {
-  if (!refExists(repoDir)) {
+function readOperationProcessGroup(repoDir: string, env?: NodeJS.ProcessEnv) {
+  if (!refExists(repoDir, lockRef, env)) {
     return undefined;
   }
   try {
-    const payload = execFileSync("git", ["cat-file", "blob", refOid(repoDir)], {
+    const payload = execFileSync("git", ["cat-file", "blob", refOid(repoDir, lockRef, env)], {
       cwd: repoDir,
       encoding: "utf8",
+      env,
     });
     const pgid = Number(/^version=3\nstate=active\npgid=([1-9][0-9]*)\n/u.exec(payload)?.[1]);
     return validProcessId(pgid) ? pgid : undefined;
@@ -583,28 +674,30 @@ async function cleanupController(
   repoDir: string,
   controller: ChildProcess,
   operationPgidFile?: string,
+  env?: NodeJS.ProcessEnv,
 ) {
   let pgid = operationPgidFile ? readProcessIdFile(operationPgidFile) : undefined;
-  pgid ??= readOperationProcessGroup(repoDir);
+  pgid ??= readOperationProcessGroup(repoDir, env);
   if (pgid) {
     await cleanupProcessGroup(pgid);
   }
   await cleanupChildren(controller);
   pgid = operationPgidFile ? readProcessIdFile(operationPgidFile) : undefined;
-  pgid ??= readOperationProcessGroup(repoDir);
+  pgid ??= readOperationProcessGroup(repoDir, env);
   if (pgid) {
     await cleanupProcessGroup(pgid);
   }
 }
 
-function refOid(repoDir: string, ref = lockRef) {
-  return execFileSync("git", ["rev-parse", ref], { cwd: repoDir, encoding: "utf8" }).trim();
+function refOid(repoDir: string, ref = lockRef, env?: NodeJS.ProcessEnv) {
+  return execFileSync("git", ["rev-parse", ref], { cwd: repoDir, encoding: "utf8", env }).trim();
 }
 
-function refExists(repoDir: string, ref = lockRef) {
+function refExists(repoDir: string, ref = lockRef, env?: NodeJS.ProcessEnv) {
   return (
     spawnSync("git", ["show-ref", "--verify", "--quiet", ref], {
       cwd: repoDir,
+      env,
     }).status === 0
   );
 }
@@ -689,6 +782,371 @@ describe("scripts/pr process-group platform guard", () => {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
+  it.each([
+    ...(["healthy", "first", "second"] as const).flatMap((failure) =>
+      [false, true]
+        .filter((existing) => !existing || failure !== "second")
+        .map((existing) => ({ command: "review-init" as const, failure, existing })),
+    ),
+    ...(["review-init", "review-claim"] as const).flatMap((command) =>
+      [false, true].map((existing) => ({ command, failure: "auth" as const, existing })),
+    ),
+    ...(["review-validate-artifacts", "review-guard", "review-tests"] as const).flatMap((command) =>
+      (["healthy", "first", "auth"] as const).map((failure) => ({
+        command,
+        failure,
+        existing: true,
+      })),
+    ),
+  ])(
+    "$command requires fresh main before replacing PR artifacts ($failure, existing=$existing)",
+    async ({ command, failure, existing }) => {
+      const template = (freshMainTemplate ??= createFreshMainTemplate());
+      const repoDir = tempDirs.make("openclaw-pr-fresh-main-");
+      cpSync(template.repoDir, repoDir, { recursive: true });
+      const { cachedMain, canonicalTree } = template;
+      const stateDir = join(repoDir, "fixture-state");
+      const homeDir = join(stateDir, "home");
+      const tmpDir = join(stateDir, "tmp");
+      const binDir = join(repoDir, "isolated-bin");
+      const cli = join(repoDir, "scripts/pr");
+      const realGit = realpathSync(join(binDir, "git"));
+      const env: NodeJS.ProcessEnv = {
+        ...createPrFixtureEnv(homeDir, binDir),
+        TMPDIR: tmpDir,
+      };
+      const git = (...args: string[]) =>
+        execFileSync(realGit, args, { cwd: repoDir, env, encoding: "utf8", timeout: 5000 }).trim();
+      const newCommit = (message: string) =>
+        execFileSync(realGit, ["commit-tree", canonicalTree, "-p", cachedMain], {
+          cwd: repoDir,
+          env,
+          input: message,
+          encoding: "utf8",
+          timeout: 5000,
+        }).trim();
+      const remoteMain = newCommit("new main\n");
+      const pullHead = newCommit("available PR\n");
+      const originDir = tempDirs.make("openclaw-pr-fetch-origin-");
+      git("clone", "--bare", "--no-local", pathToFileURL(repoDir).href, originDir);
+      git("remote", "add", "origin", pathToFileURL(originDir).href);
+      git("fetch", "origin", "main");
+      git(
+        "push",
+        "origin",
+        `${remoteMain}:refs/heads/main`,
+        `${remoteMain}:refs/heads/saved-main`,
+        `${pullHead}:refs/pull/42/head`,
+      );
+      // Pushing also updates tracking refs; restore the deliberately stale cache
+      // that a previous successful main fetch left before this invocation.
+      git("update-ref", "refs/remotes/origin/main", cachedMain);
+      git("update-ref", "refs/heads/pr-42", cachedMain);
+      expect(git("rev-parse", "refs/remotes/origin/main")).toBe(cachedMain);
+      expect(git("ls-remote", "origin", "refs/pull/42/head")).toBe(
+        `${pullHead}\trefs/pull/42/head`,
+      );
+      const worktreeDir = join(repoDir, ".worktrees/pr-42");
+      const localDir = join(worktreeDir, ".local");
+      const artifactNames = [
+        "pr-meta.json",
+        "pr-meta.env",
+        "review-context.env",
+        "review-mode.env",
+        "review.md",
+        "review.json",
+      ];
+      if (existing) {
+        git("worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir, pullHead);
+        mkdirSync(localDir);
+        for (const artifact of artifactNames) {
+          writeFileSync(join(localDir, artifact), `prior ${artifact}\n`);
+        }
+      }
+      if (
+        command === "review-validate-artifacts" ||
+        command === "review-guard" ||
+        command === "review-tests"
+      ) {
+        writeReviewArtifacts(worktreeDir, validReview(pullHead), { headSha: pullHead });
+      }
+      const priorArtifacts = existing
+        ? artifactNames.map((name) => [name, readFileSync(join(localDir, name), "utf8")] as const)
+        : [];
+      const metadataPath = join(stateDir, "metadata.json");
+      writeFileSync(
+        metadataPath,
+        JSON.stringify({
+          number: 42,
+          title: "Fixture",
+          url: "https://example.invalid/pull/42",
+          state: "OPEN",
+          isDraft: false,
+          author: { login: "fixture-author" },
+          baseRefName: "main",
+          headRefName: "fixture-pr",
+          headRefOid: pullHead,
+          headRepository: {
+            name: "fixture",
+            nameWithOwner: "fixture/fixture",
+            url: "https://example.invalid/fixture",
+          },
+          headRepositoryOwner: { login: "fixture" },
+          body: "",
+          labels: [],
+          assignees: [],
+          changedFiles: 0,
+          additions: 0,
+          deletions: 0,
+          statusCheckRollup: [],
+          files: [],
+        }),
+      );
+      const ghEventsPath = join(stateDir, "gh-events");
+      writeFileSync(ghEventsPath, "");
+      const gh = writeFixtureFile(binDir, "gh", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'case "$*" in',
+        '  "auth token") printf "token:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1 ;;',
+        '  "api graphql -f query=query { viewer { login } } --jq .data.viewer.login")',
+        '    if [ "$OPENCLAW_TEST_AUTH_FAILURE" = 1 ]; then',
+        '      printf "viewer:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1',
+        "    fi",
+        '    printf "viewer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
+        '    printf "fixture-user\\n" ;;',
+        '  "pr view 42 --json headRefOid")',
+        '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "head:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '  "pr view 42 --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files")',
+        '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "metadata:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '  *) printf "unexpected:99\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; echo "unexpected fixture gh request" >&2; exit 99 ;;',
+        "esac",
+      ]);
+      chmodSync(gh, 0o755);
+      const eventsPath = join(stateDir, "events");
+      const firstMainPath = join(stateDir, "first-main");
+      writeFileSync(eventsPath, "");
+      // The proxy delegates every Git operation and exit status unchanged.
+      // Armed failures remove only the owned remote ref after a successful real
+      // fetch, preserving the completed prefix's legitimate effects.
+      unlinkSync(join(binDir, "git"));
+      const gitProxy = writeFixtureFile(binDir, "git", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'original=("$@")',
+        'if [ "${1-}" = -C ]; then shift 2; fi',
+        'case "${1-}" in --git-dir=*) shift ;; esac',
+        'if [ "${1-}" = fetch ]; then',
+        '  target="${3-}"; [[ " $* " != *" +refs/heads/main:refs/remotes/origin/main "* ]] || target=main',
+        '  result=0; "$OPENCLAW_TEST_REAL_GIT" "${original[@]}" || result=$?',
+        '  printf "fetch:%s:%s\\n" "$target" "$result" >> "$OPENCLAW_TEST_EVENTS"',
+        '  if [ "$target" = main ] && [ "$result" -eq 0 ] && [ "$OPENCLAW_TEST_FAILURE" = second ] && [ ! -e "$OPENCLAW_TEST_FIRST_MAIN" ]; then',
+        '    "$OPENCLAW_TEST_REAL_GIT" -C "$OPENCLAW_TEST_REPO" rev-parse refs/remotes/origin/main > "$OPENCLAW_TEST_FIRST_MAIN"',
+        '    "$OPENCLAW_TEST_REAL_GIT" --git-dir="$OPENCLAW_TEST_ORIGIN" update-ref -d refs/heads/main',
+        "  fi",
+        '  exit "$result"',
+        "fi",
+        'case "${1-} ${2-}" in',
+        '  "worktree add"|"checkout "*|"restore "*) printf "mutation:%s\\n" "$1" >> "$OPENCLAW_TEST_EVENTS" ;;',
+        "esac",
+        'exec "$OPENCLAW_TEST_REAL_GIT" "${original[@]}"',
+      ]);
+      chmodSync(gitProxy, 0o755);
+      if (failure === "first") {
+        git(`--git-dir=${originDir}`, "update-ref", "-d", "refs/heads/main");
+      }
+      const childEnv: NodeJS.ProcessEnv = {
+        ...env,
+        OPENCLAW_GH_BIN: gh,
+        OPENCLAW_TEST_PR_METADATA: metadataPath,
+        OPENCLAW_TEST_GH_EVENTS: ghEventsPath,
+        OPENCLAW_TEST_REAL_GIT: realGit,
+        OPENCLAW_TEST_REPO: repoDir,
+        OPENCLAW_TEST_ORIGIN: originDir,
+        OPENCLAW_TEST_EVENTS: eventsPath,
+        OPENCLAW_TEST_FIRST_MAIN: firstMainPath,
+        OPENCLAW_TEST_FAILURE: failure,
+        OPENCLAW_TEST_AUTH_FAILURE: failure === "auth" ? "1" : "0",
+      };
+      const controller = spawn(
+        cli,
+        [command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
+        {
+          cwd: repoDir,
+          env: childEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let output = "";
+      controller.stdout!.setEncoding("utf8");
+      controller.stderr!.setEncoding("utf8");
+      controller.stdout!.on("data", (chunk) => (output += chunk));
+      controller.stderr!.on("data", (chunk) => (output += chunk));
+      try {
+        await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        const events = readFileSync(eventsPath, "utf8").trim().split("\n");
+        expect(git("ls-remote", "origin", "refs/pull/42/head"), output).toBe(
+          `${pullHead}\trefs/pull/42/head`,
+        );
+        expect.soft(controller.signalCode, output).toBeNull();
+        expect.soft(git("rev-parse", "HEAD")).toBe(cachedMain);
+        expect.soft(git("branch", "--show-current")).toBe("main");
+        expect.soft(git("write-tree")).toBe(canonicalTree);
+        expect.soft(git("diff", "--exit-code")).toBe("");
+        if (failure === "auth" && (command === "review-init" || command === "review-claim")) {
+          // The exact GH trace distinguishes the intended auth failure from an
+          // unexpected fixture command that the auth diagnostic would also hide.
+          const ghEvents = readFileSync(ghEventsPath, "utf8").trim().split("\n");
+          expect
+            .soft(ghEvents, output)
+            .toEqual(
+              command === "review-init"
+                ? ["metadata:0", "head:0", "token:1", "viewer:1"]
+                : ["token:1", "viewer:1"],
+            );
+          expect.soft(controller.exitCode, output).toBe(1);
+          expect.soft(output).toContain("GitHub CLI auth is not usable");
+          expect.soft(events.filter(Boolean), output).toEqual([]);
+          expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(cachedMain);
+          expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
+          expect.soft(existsSync(worktreeDir)).toBe(existing);
+          if (existing) {
+            expect.soft(git("-C", worktreeDir, "rev-parse", "HEAD")).toBe(pullHead);
+            expect.soft(git("-C", worktreeDir, "branch", "--show-current")).toBe("temp/pr-42");
+            expect.soft(git("-C", worktreeDir, "write-tree")).toBe(canonicalTree);
+            expect.soft(git("-C", worktreeDir, "diff", "--exit-code")).toBe("");
+            expect.soft(readdirSync(localDir).sort()).toEqual([...artifactNames].sort());
+            for (const [name, contents] of priorArtifacts) {
+              expect.soft(readFileSync(join(localDir, name), "utf8"), name).toBe(contents);
+            }
+          }
+          expect.soft(refExists(repoDir, lockRef, childEnv), output).toBe(false);
+          expect.soft(output).not.toContain("Retaining the operation lock");
+          expect.soft(output).not.toContain("scripts/pr lock-recover");
+          expect.soft(output).not.toContain("wrote=.local/pr-meta.json");
+          expect.soft(output).not.toContain("review claim succeeded");
+          return;
+        }
+        if (command !== "review-init") {
+          const fetches = events.filter((event) => event.startsWith("fetch:"));
+          expect
+            .soft(
+              events.filter((event) => event.startsWith("mutation:")),
+              output,
+            )
+            .toEqual([]);
+          expect.soft(git("-C", worktreeDir, "rev-parse", "HEAD")).toBe(pullHead);
+          expect.soft(git("-C", worktreeDir, "branch", "--show-current")).toBe("temp/pr-42");
+          expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
+          for (const [name, contents] of priorArtifacts) {
+            expect.soft(readFileSync(join(localDir, name), "utf8"), name).toBe(contents);
+          }
+          // Authentication fails before fetch can launch helpers or mutate Git.
+          // Once fetching starts, later failure retains the native exact-owner lock.
+          const retained =
+            failure === "first" || (command === "review-tests" && failure === "healthy");
+          expect.soft(refExists(repoDir, lockRef, childEnv), output).toBe(retained);
+          if (retained && refExists(repoDir, lockRef, childEnv)) {
+            expect(output).toContain(
+              `scripts/pr lock-recover 42 ${refOid(repoDir, lockRef, childEnv)} --confirmed-no-running-tools`,
+            );
+          }
+          if (failure !== "healthy") {
+            expect.soft(controller.exitCode, output).toBe(1);
+            expect.soft(output).not.toContain("review guard passed");
+            expect.soft(output).not.toContain("review artifacts validated");
+            expect.soft(output).not.toContain("review summary:");
+            expect.soft(output).not.toContain("Missing test target file:");
+            if (failure === "auth") {
+              expect.soft(fetches, output).toEqual([]);
+              expect.soft(output).toContain("GitHub CLI auth is not usable");
+            } else {
+              expect.soft(fetches, output).toEqual(["fetch:main:128"]);
+              expect.soft(output).toContain("couldn't find remote ref refs/heads/main");
+              const failedFetch = events.indexOf("fetch:main:128");
+              expect.soft(events.slice(failedFetch + 1), output).toEqual([]);
+            }
+            return;
+          }
+          // Nested validation shares the same captured main snapshot.
+          expect.soft(fetches, output).toEqual(["fetch:main:0"]);
+          expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(remoteMain);
+          expect.soft(output).toContain("review guard passed");
+          if (command === "review-tests") {
+            expect.soft(controller.exitCode, output).toBe(1);
+            expect.soft(output).toContain("Missing test target file: missing-fixture.test.ts");
+            expect.soft(output).not.toContain("unexpected command in review-init fixture");
+          } else {
+            expect.soft(controller.exitCode, output).toBe(0);
+            if (command === "review-validate-artifacts") {
+              expect.soft(output).toContain("review artifacts validated");
+              expect.soft(output).toContain("review summary:");
+            }
+          }
+          return;
+        }
+        if (failure === "healthy") {
+          expect(controller.exitCode, output).toBe(0);
+          expect(git("-C", worktreeDir, "rev-parse", "HEAD")).toBe(remoteMain);
+          expect(git("rev-parse", "refs/heads/pr-42")).toBe(pullHead);
+          expect(JSON.parse(readFileSync(join(localDir, "pr-meta.json"), "utf8"))).toMatchObject({
+            number: 42,
+            headRefOid: pullHead,
+          });
+          expect(readFileSync(join(localDir, "review-context.env"), "utf8")).toContain(
+            `MERGE_BASE=${cachedMain}`,
+          );
+          expect(readFileSync(join(localDir, "review-mode.env"), "utf8")).toContain(
+            "REVIEW_MODE=main",
+          );
+          expect(events.filter((event) => event.startsWith("fetch:"))).toEqual([
+            ...Array.from({ length: existing ? 1 : 2 }, () => "fetch:main:0"),
+            "fetch:pull/42/head:pr-42:0",
+          ]);
+          expect(refExists(repoDir, lockRef, childEnv), output).toBe(false);
+          return;
+        }
+        const failedFetch = events.indexOf("fetch:main:128");
+        expect.soft(failedFetch, output).toBeGreaterThanOrEqual(0);
+        expect.soft(events.slice(failedFetch + 1), output).toEqual([]);
+        expect.soft(controller.exitCode, output).toBe(1);
+        expect.soft(output).toContain("couldn't find remote ref refs/heads/main");
+        expect.soft(output).not.toContain("wrote=.local/pr-meta.json");
+        expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
+        expect
+          .soft(git("rev-parse", "refs/remotes/origin/main"))
+          .toBe(failure === "first" ? cachedMain : remoteMain);
+        if (failure === "second") {
+          expect.soft(readFileSync(firstMainPath, "utf8").trim()).toBe(remoteMain);
+        }
+        if (existing) {
+          expect.soft(git("-C", worktreeDir, "rev-parse", "HEAD")).toBe(pullHead);
+          expect.soft(git("-C", worktreeDir, "branch", "--show-current")).toBe("temp/pr-42");
+        } else {
+          expect.soft(existsSync(worktreeDir)).toBe(failure === "second");
+          if (failure === "second") {
+            expect.soft(git("-C", worktreeDir, "rev-parse", "HEAD")).toBe(remoteMain);
+          }
+        }
+        for (const artifact of artifactNames) {
+          const path = join(localDir, artifact);
+          expect.soft(existsSync(path), artifact).toBe(existing);
+          if (existing) {
+            expect.soft(readFileSync(path, "utf8"), artifact).toBe(`prior ${artifact}\n`);
+          }
+        }
+        expect.soft(refExists(repoDir, lockRef, childEnv), output).toBe(true);
+        if (refExists(repoDir, lockRef, childEnv)) {
+          expect(output).toContain(
+            `scripts/pr lock-recover 42 ${refOid(repoDir, lockRef, childEnv)} --confirmed-no-running-tools`,
+          );
+        }
+      } finally {
+        await cleanupController(repoDir, controller, undefined, childEnv);
+      }
+    },
+    30_000,
+  );
   it("serializes the same PR and releases the waiter after SIGTERM", async () => {
     const repoDir = createRepo();
     const held = join(repoDir, "held");
@@ -1224,6 +1682,96 @@ describePosix("scripts/pr per-PR operation lock", () => {
     }
   });
   it.each([
+    ...["enter_worktree", "review_guard", "review_validate_artifacts"].flatMap((invocation) => [
+      { invocation, failure: "auth", code: 1, fetches: 0, retained: false },
+      { invocation, failure: "fetch-1", code: 130, fetches: 1, retained: true },
+      { invocation, failure: "fetch-1", code: 73, fetches: 1, retained: true },
+      { invocation, failure: "fetch-1", code: 143, fetches: 1, retained: true },
+      { invocation, failure: "fetch-1", code: 128, fetches: 1, retained: true },
+      { invocation, failure: "none", code: 0, fetches: 1, retained: false },
+    ]),
+    {
+      invocation: "review_validate_artifacts",
+      failure: "artifact",
+      code: 1,
+      fetches: 1,
+      retained: true,
+    },
+    { invocation: "enter_worktree", failure: "notification", code: 1, fetches: 0, retained: true },
+  ])(
+    "preserves native entry phase ownership for $invocation ($failure, $code)",
+    async ({ invocation, failure, code, fetches, retained }) => {
+      const repoDir = createRepo();
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+      git("remote", "add", "origin", repoDir);
+      git("checkout", "-qb", "sibling/work");
+      writeFileSync(join(repoDir, "base.txt"), "sibling\n");
+      git("commit", "-qam", "sibling fixture");
+      const head = git("rev-parse", "HEAD");
+      const worktree = join(repoDir, ".worktrees", "pr-42");
+      git("worktree", "add", "-qb", "temp/pr-42", worktree, head);
+      const review = validReview(head);
+      if (failure === "artifact") {
+        review.docs = "invalid";
+      }
+      writeReviewArtifacts(worktree, review, { headSha: head });
+      const traceFile = join(repoDir, "entry-commands.log");
+      const ownerFile = join(repoDir, "entry-owner-oid");
+      const result = await runSupervisedOperation(repoDir, "entry-validation.sh", [
+        `source '${join(repoRoot, "scripts/pr-lib/review.sh")}'`,
+        `script_parent_dir='${join(repoRoot, "scripts")}'`,
+        "acquire_pr_operation_lock 42",
+        `printf '%s\\n' "$PR_OPERATION_LOCK_OWNER_OID" > '${ownerFile}'`,
+        "begin_pr_operation_validation_phase",
+        ...(failure === "notification" ? ["OPENCLAW_PR_LOCK_NOTIFY_FD=invalid"] : []),
+        "fetch_count=0",
+        "gh_plain() {",
+        `  printf 'auth\\n' >> '${traceFile}'`,
+        `  return ${failure === "auth" ? code : 0}`,
+        "}",
+        "git() {",
+        `  printf 'git %s\\n' "$*" >> '${traceFile}'`,
+        '  case "$*" in fetch\\ *|-C\\ *\\ fetch\\ *)',
+        "    fetch_count=$((fetch_count + 1))",
+        `    if [ "fetch-$fetch_count" = '${failure}' ]; then`,
+        `      printf 'failed-fetch\\n' >> '${traceFile}'`,
+        `      return ${code}`,
+        "    fi ;;",
+        "  esac",
+        '  command git "$@"',
+        "}",
+        `${invocation} 42 || exit $?`,
+      ]);
+
+      expect.soft(result.status, `${result.stdout}\n${result.stderr}`).toBe(code === 0 ? 0 : 1);
+      const commands = readFileSync(traceFile, "utf8").trim().split("\n");
+      expect.soft(commands.filter((command) => command === "auth")).toHaveLength(1);
+      expect.soft(commands.filter((command) => command.includes(" fetch "))).toHaveLength(fetches);
+      if (failure.startsWith("fetch-")) {
+        const failedAt = commands.indexOf("failed-fetch");
+        expect(failedAt).toBeGreaterThanOrEqual(0);
+        expect.soft(commands.slice(failedAt + 1)).toEqual([]);
+      }
+      if (invocation === "review_validate_artifacts") {
+        expect.soft(result.stdout.includes("review artifacts validated")).toBe(code === 0);
+      }
+      expect.soft(git("branch", "--show-current")).toBe("sibling/work");
+      expect.soft(git("rev-parse", "HEAD")).toBe(head);
+      expect.soft(git("-C", worktree, "branch", "--show-current")).toBe("temp/pr-42");
+      expect.soft(git("-C", worktree, "rev-parse", "HEAD")).toBe(head);
+      expect.soft(refExists(repoDir)).toBe(retained);
+      if (retained && refExists(repoDir)) {
+        const ownerOid = readFileSync(ownerFile, "utf8").trim();
+        expect(refOid(repoDir)).toBe(ownerOid);
+        expect(result.stderr).toContain(
+          `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
+        );
+        recoverOperationLock(repoDir, ownerOid);
+      }
+    },
+  );
+  it.each([
     { wrapper: "canonical", command: "merge-run", failure: "none" },
     { wrapper: "linked", command: "merge-run", failure: "none" },
     { wrapper: "linked", command: "gc", failure: "none" },
@@ -1266,7 +1814,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       git("add", "scripts", ".github");
       git("commit", "-qm", "test: native cleanup fixture");
       const preparedHead = git("rev-parse", "HEAD");
-      git("update-ref", "refs/remotes/origin/main", preparedHead);
+      const origin = tempDirs.make("openclaw-pr-cleanup-origin-");
+      git("init", "--bare", "-q", origin);
+      git("remote", "add", "origin", origin);
+      git("push", "-q", "origin", `${preparedHead}:refs/heads/main`);
+      git("fetch", "-q", "origin", "refs/heads/main:refs/remotes/origin/main");
       git("worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir);
       if (wrapper === "linked") {
         // origin/main still names the linked wrapper; canonical code must not
@@ -1293,23 +1845,23 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'case "$*" in',
         '  "auth token") exit 1 ;;',
+        '  "api graphql --hostname "*)',
+        '    state=OPEN; if grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE"; then state=MERGED; fi',
+        `    jq -cn --arg state "$state" --arg head '${preparedHead}' '{data:{repository:{id:"fixture-repo",url:"https://github.com/fixture/repo",nameWithOwner:"fixture/repo",ref:{target:{oid:$head}},pullRequest:{id:"fixture-pr",number:42,url:"https://github.com/fixture/repo/pull/42",state:$state,headRefOid:$head,baseRefName:"main",isDraft:false,mergeCommit:(if $state=="MERGED" then {oid:$head} else null end),autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,mergeable:"MERGEABLE",mergeStateStatus:"CLEAN"}}}}' ;;`,
         '  "api graphql "*) printf "fixture-user\\n" ;;',
-        '  "pr view 42 --json baseRefName")',
-        '    printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"',
-        `    printf '%s\\n' '{"baseRefName":"main"}' ;;`,
-        `  "pr view 42 --json state,isDraft") printf '%s\\n' '{"state":"OPEN","isDraft":false}' ;;`,
         '  "pr merge 42 "*)',
         '    git rev-parse refs/openclaw/pr-operation-locks/42 > "$OPENCLAW_TEST_OWNER"',
         '    if [ "$OPENCLAW_TEST_FAILURE" = merge ]; then echo "fixture merge failed" >&2; exit 7; fi',
         '    printf "merged\\n" >> "$OPENCLAW_TEST_LIFECYCLE" ;;',
         '  "pr view 42 --json state --jq .state") printf "MERGED\\n" ;;',
-        `  "pr view 42 --json mergeCommit "*) printf '%s\\n' '${preparedHead}' ;;`,
+        '  "repo view --json id,nameWithOwner,url")',
+        '    printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        `    printf '%s\\n' '{"id":"fixture-repo","url":"https://github.com/fixture/repo","nameWithOwner":"fixture/repo"}' ;;`,
         '  "repo view "*) printf "fixture/repo\\n" ;;',
-        '  "api --method POST repos/{owner}/{repo}/issues/42/comments "*)',
+        '  "api --hostname github.com --method POST repos/fixture/repo/issues/42/comments "*)',
         '    printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
         '    printf "https://example.invalid/comment\\n" ;;',
-        `  "pr view 42 --json headRefName,"*) printf '%s\\n' '{"headRefName":""}' ;;`,
-        '  "pr view 42 --json url --jq .url") printf "https://example.invalid/42\\n" ;;',
+        `  "pr view 42 --repo "*) printf '%s\\n' '{"headRefName":""}' ;;`,
         '  *) echo "unexpected fixture gh call: $*" >&2; exit 99 ;;',
         "esac",
       ]);
@@ -1320,7 +1872,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'case "$*" in',
-        '  "fetch "*|"-C "*" fetch "*) exit 0 ;;',
         '  "worktree remove "*)',
         '    "$OPENCLAW_TEST_REAL_GIT" "$@"',
         '    printf "removed\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
@@ -1346,7 +1897,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
             ...process.env,
             OPENCLAW_GH_BIN: gh,
             OPENCLAW_PR_AUTO_MERGE: "0",
-            OPENCLAW_PR_MERGE_METHOD: "squash",
+            OPENCLAW_PR_MERGE_METHOD: "merge",
             OPENCLAW_TEST_FAILURE: failure,
             OPENCLAW_TEST_LIFECYCLE: lifecycle,
             OPENCLAW_TEST_OWNER: ownerFile,
@@ -1362,7 +1913,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(existsSync(lifecycle), output).toBe(true);
       const events = readFileSync(lifecycle, "utf8");
       expect(git("rev-parse", "HEAD")).toBe(canonicalHead);
-      expect(existsSync(worktreeDir)).toBe(failure === "merge");
+      expect(existsSync(worktreeDir), output).toBe(failure === "merge");
       if (failure === "merge") {
         expect(result.status, output).toBe(1);
         expect(output).toContain("fixture merge failed");
@@ -1374,7 +1925,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         expect(readFileSync(releaseCwd, "utf8").trim(), output).toBe(repoDir);
         expect(result.status, output).toBe(failure === "none" ? 0 : 1);
         expect(result.stdout).toContain(
-          command === "gc" ? "removed .worktrees/pr-42" : "merge-run complete for PR #42",
+          command === "gc" ? "removed .worktrees/pr-42" : "Merge confirmed; completion pending",
         );
       }
       if (failure === "none") {

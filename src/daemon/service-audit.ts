@@ -30,8 +30,7 @@ import {
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
-import { resolveSystemdServiceName } from "./systemd-service-files.js";
-import { resolveSystemdUserUnitPath } from "./systemd.js";
+import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
 
 export type GatewayServiceCommand = {
   programArguments: string[];
@@ -188,7 +187,7 @@ async function auditSystemdUnit(
   issues: ServiceConfigIssue[],
   timeoutMs?: number,
 ) {
-  const unitPath = resolveSystemdUserUnitPath(env);
+  const unitPath = resolveSystemdUnitPath(env);
   let content;
   try {
     content = await fs.readFile(unitPath, "utf8");

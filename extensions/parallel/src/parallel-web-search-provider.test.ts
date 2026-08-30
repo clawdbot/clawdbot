@@ -60,9 +60,9 @@ function paidTool(searchConfig: Record<string, unknown> = { parallel: { apiKey: 
     "Parallel tool definition",
   );
 }
-function freeTool() {
+function freeTool(searchConfig: Record<string, unknown> = {}) {
   return expectDefined(
-    createParallelFreeWebSearchProvider().createTool({ config: {}, searchConfig: {} }),
+    createParallelFreeWebSearchProvider().createTool({ config: {}, searchConfig }),
     "Parallel free tool definition",
   );
 }
@@ -127,6 +127,58 @@ beforeEach(() => {
   endpointMockState.calls = [];
   endpointMockState.effects = [];
   endpointMockState.responses = [];
+});
+describe.each(["paid", "free"] as const)("Parallel %s cache policy", (transport) => {
+  it.each([0, 1])(
+    "honors the current %i-minute TTL after populating at 15 minutes",
+    async (ttl) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const createTool = (cacheTtlMinutes: number) =>
+        transport === "paid"
+          ? paidTool({ parallel: { apiKey: "par-secret" }, cacheTtlMinutes })
+          : freeTool({ cacheTtlMinutes });
+      const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
+      const callsPerSearch = transport === "paid" ? 1 : 3;
+      const args = { search_queries: [`parallel-${transport}-ttl-${ttl}`] };
+      try {
+        enqueue({ search_id: "original", results: [] });
+        const originalTool = createTool(15);
+        await originalTool.execute(args);
+        expect(await originalTool.execute(args)).toMatchObject({
+          searchId: "original",
+          cached: true,
+        });
+        expect(endpointMockState.calls).toHaveLength(callsPerSearch);
+
+        clock.mockReturnValue(now + 60_000);
+        enqueue({ search_id: "fresh", results: [] });
+        const currentTool = createTool(ttl);
+        const fresh = await currentTool.execute(args);
+        expect(fresh.searchId).toBe("fresh");
+        expect(fresh).not.toHaveProperty("cached");
+        expect(endpointMockState.calls).toHaveLength(2 * callsPerSearch);
+
+        if (ttl === 0) {
+          enqueue({ search_id: "fresh-again", results: [] });
+          expect(await currentTool.execute(args)).toMatchObject({ searchId: "fresh-again" });
+          expect(await originalTool.execute(args)).toMatchObject({
+            searchId: "original",
+            cached: true,
+          });
+          expect(endpointMockState.calls).toHaveLength(3 * callsPerSearch);
+        } else {
+          expect(await currentTool.execute(args)).toMatchObject({
+            searchId: "fresh",
+            cached: true,
+          });
+          expect(endpointMockState.calls).toHaveLength(2 * callsPerSearch);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 });
 describe("parallel web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {

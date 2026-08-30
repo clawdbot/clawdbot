@@ -97,7 +97,14 @@ suite.define(() => {
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           hasMultipleSessionSharingIdentities: true,
-          presenceUsers: [{ self: true, id: "profile-self", name: "You" }],
+          presenceUsers: [
+            {
+              self: true,
+              id: "profile-self",
+              identity: { type: "profile", id: "profile-self" },
+              name: "You",
+            },
+          ],
           methodResponses: {
             "progressCard.get": { card: null },
             "sessions.list": {
@@ -245,16 +252,41 @@ suite.define(() => {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
-            { self: true, id: "profile-self", name: "You" },
-            { id: "profile-ada", name: "Ada King" },
-            { id: "profile-mira", name: "Mira" },
+            {
+              self: true,
+              id: "profile-self",
+              identity: { type: "profile", id: "profile-self" },
+              name: "You",
+            },
+            {
+              id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
+              name: "Ada King",
+            },
+            { id: "profile-mira", identity: { type: "profile", id: "profile-mira" }, name: "Mira" },
           ],
           historyMessages: [
             {
               role: "user",
+              content: [{ type: "text", text: "Historical attribution stays display-only." }],
+              timestamp: now - 180_000,
+              // The same raw ID in a historical row is not profile provenance.
+              __openclaw: {
+                id: "legacy-ada-message",
+                senderId: "profile-ada",
+                senderName: "Historical Ada",
+              },
+            },
+            {
+              role: "user",
               content: [{ type: "text", text: "Handing this over." }],
               timestamp: now - 120_000,
-              __openclaw: { id: "ada-message", senderId: "profile-ada", senderName: "Ada King" },
+              __openclaw: {
+                id: "ada-message",
+                senderId: "profile-ada",
+                senderIdentity: { type: "profile", id: "profile-ada" },
+                senderName: "Ada King",
+              },
             },
           ],
           methodResponses: {
@@ -290,10 +322,17 @@ suite.define(() => {
         );
         expect(await participantLink.getAttribute("href")).toBe("/activity?person=profile-mira");
 
-        const author = page.locator("a.chat-sender-name");
+        const authorGroup = page.locator(".chat-group.user", { hasText: "Handing this over." });
+        const author = authorGroup.locator("a.chat-sender-name");
         await author.waitFor({ state: "visible" });
         await expect.poll(() => author.textContent()).toBe("Ada King");
         expect(await author.getAttribute("href")).toBe("/activity?person=profile-ada");
+        const legacyGroup = page.locator(".chat-group.user", {
+          hasText: "Historical attribution stays display-only.",
+        });
+        await legacyGroup.locator(".chat-sender-name").waitFor({ state: "visible" });
+        expect(await legacyGroup.locator(".chat-sender-name").textContent()).toBe("Historical Ada");
+        expect(await legacyGroup.locator('a[href*="/activity?person="]').count()).toBe(0);
         await captureProof(page, "chat-identity-links.png");
 
         await participantLink.click();
@@ -310,12 +349,11 @@ suite.define(() => {
         await captureProof(page, "chat-participant-activity.png");
 
         await page.goBack();
-        const authorAgain = page.locator("a.chat-sender-name");
-        await authorAgain.waitFor({ state: "visible" });
+        await author.waitFor({ state: "visible" });
         // The persistent-identity footer only takes pointer events once its group is hovered,
         // which is what reaching for the name does anyway.
-        await page.locator(".chat-group--peer").hover();
-        await authorAgain.click();
+        await authorGroup.hover();
+        await author.click();
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         expect(new URL(page.url()).searchParams.get("person")).toBe("profile-ada");
         await captureProof(page, "chat-author-activity.png");

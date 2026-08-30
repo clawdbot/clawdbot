@@ -458,6 +458,76 @@ describe("discordMessageActions", () => {
     ).toBeNull();
   });
 
+  it("proves only the exact current Discord thread-reply target", () => {
+    const spec = discordMessageActions.messageActionTargetAliases?.["thread-reply"];
+
+    expect(spec?.resolveDeliveryTarget?.({ args: { threadId: "123456" } })).toBe("channel:123456");
+    for (const args of [
+      { target: "123456" },
+      { to: "123456" },
+      { channelId: "123456" },
+      { target: "channel:123456" },
+      { threadId: "123456", target: "parent" },
+      { threadId: "123456", to: "parent" },
+      { threadId: "123456", channelId: "parent" },
+    ]) {
+      expect(spec?.resolveDeliveryTarget?.({ args })).toBeUndefined();
+    }
+    for (const args of [
+      { threadId: "123456" },
+      { target: "123456" },
+      { to: "123456" },
+      { channelId: "123456" },
+      { target: "channel:123456" },
+      { to: "channel:123456" },
+      { channelId: "123456" },
+    ]) {
+      expect(
+        spec?.matchesCurrentConversation?.({
+          args,
+          accountId: "default",
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "123456",
+            currentMessagingTarget: "channel:123456",
+          },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: { threadId: "123456", target: "channel:999999", to: "channel:999999" },
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          currentMessagingTarget: "channel:123456",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: { threadId: "999999" },
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          currentMessagingTarget: "channel:123456",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: {},
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("prepares Discord send payload channel data for durable core delivery", async () => {
     const prepared = await discordMessageActions.prepareSendPayload?.({
       ctx: {

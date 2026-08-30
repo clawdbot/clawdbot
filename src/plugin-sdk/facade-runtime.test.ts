@@ -752,7 +752,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: "",
-        resolutionKey: "runtime-core:image-generation-core",
       }),
     ).toEqual({
       allowed: true,
@@ -769,7 +768,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: "",
-        resolutionKey: "runtime-core:speech-core",
       }),
     ).toEqual({
       allowed: false,
@@ -817,7 +815,6 @@ describe("plugin-sdk facade runtime", () => {
           boundaryRoot: dir,
         },
         sourceExtensionsRoot: dir,
-        resolutionKey: "source-snapshot-demo",
       }),
     ).toEqual({
       allowed: true,
@@ -843,19 +840,21 @@ describe("plugin-sdk facade runtime", () => {
       } = {},
     ): PluginMetadataSnapshot {
       const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+      const index: PluginMetadataSnapshot["index"] = {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash,
+        generatedAtMs: 1,
+        installRecords: {},
+        plugins: [],
+        diagnostics: [],
+      };
       return {
         policyHash,
-        index: {
-          version: 1,
-          hostContractVersion: "test",
-          compatRegistryVersion: "test",
-          migrationVersion: 1,
-          policyHash,
-          generatedAtMs: 1,
-          installRecords: {},
-          plugins: [],
-          diagnostics: [],
-        },
+        index,
+        registryIndex: index,
         registryDiagnostics: [],
         manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
         plugins: [],
@@ -939,7 +938,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: dir,
-        resolutionKey: "snapshot-validate-demo",
       }),
     ).toEqual({
       allowed: false,
@@ -954,7 +952,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: dir,
-        resolutionKey: "snapshot-validate-demo",
       }),
     ).toEqual({
       allowed: true,

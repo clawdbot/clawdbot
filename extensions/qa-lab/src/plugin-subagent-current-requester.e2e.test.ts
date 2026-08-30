@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 
@@ -54,7 +54,11 @@ describe("plugin subagent current-requester delivery", () => {
     const mock = await startQaMockOpenAiServer();
     cleanups.push(() => mock.stop());
 
-    const gateway = await startQaGatewayChild({
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(async () => {
+      expect((await gatewayOwner.stop()).errors).toEqual([]);
+    });
+    const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -64,7 +68,6 @@ describe("plugin subagent current-requester delivery", () => {
       controlUiEnabled: false,
       mutateConfig: withFixturePlugin,
     });
-    cleanups.push(() => gateway.stop());
     await transport.waitReady({ gateway });
 
     const outsideHookResponse = await fetch(

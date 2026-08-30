@@ -22,6 +22,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
 const PARALLEL_MAX_SEARCH_COUNT = 40;
@@ -35,7 +36,6 @@ const PARALLEL_MAX_SEARCH_QUERIES = 5;
 // `tools/list` schema caps session_id at 100. Each runtime passes its own limit
 // (and advertises it in the tool schema) so callers never send an out-of-contract id.
 const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
-export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
 
 export const normalizeParallelSessionId: (
@@ -111,7 +111,8 @@ export async function executeParallelSearchRequest(params: {
     return request.error;
   }
   const cacheKey = buildParallelCacheKey({ endpoint: params.endpoint, ...request });
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -128,7 +129,7 @@ export async function executeParallelSearchRequest(params: {
     start,
   });
   const cachePayload = request.sessionId ? payload : stripParallelGeneratedSessionId(payload);
-  writeCachedSearchPayload(cacheKey, cachePayload, resolveSearchCacheTtlMs(params.searchConfig));
+  writeCachedSearchPayload(cacheKey, cachePayload, cacheTtlMs);
   return payload;
 }
 

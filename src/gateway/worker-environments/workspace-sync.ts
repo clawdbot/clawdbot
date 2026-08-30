@@ -67,6 +67,7 @@ import {
   createWorkspaceGitTransferList,
   filterExistingGitTransferList,
   runWorkspaceInventoryCommandToFile,
+  readWorkspaceStagedInputDirectories,
 } from "./workspace-sync-inventory.js";
 import {
   REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
@@ -156,6 +157,7 @@ export function createWorkerWorkspaceActions(
       command.signal,
     );
     signal.throwIfAborted();
+    command.assertCurrent?.();
     const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
@@ -180,11 +182,13 @@ export function createWorkerWorkspaceActions(
     return await runWorkerSshCandidates(
       prepared,
       remainingCommandTimeoutMs(),
-      async (port, remainingTimeoutMs) =>
-        await runTask(
+      async (port, remainingTimeoutMs) => {
+        command.assertCurrent?.();
+        return await runTask(
           workerWorkspaceSshArgv(prepared, command.argv, port),
           commandOptions(remainingTimeoutMs),
-        ),
+        );
+      },
     );
   };
 
@@ -333,6 +337,13 @@ export function createWorkerWorkspaceActions(
         }
       }
 
+      const stagedInputDirectories = await readWorkspaceStagedInputDirectories(gitRoot);
+      const inputIncludes = path.join(temporaryDirectory, "input-includes");
+      await fs.writeFile(
+        inputIncludes,
+        stagedInputDirectories.map((directory) => `/${directory}/***\0`).join(""),
+        { mode: 0o600 },
+      );
       const localSource = gitRoot.endsWith(path.sep) ? gitRoot : `${gitRoot}${path.sep}`;
       const transferArgv = (rsyncSsh: string, fileListPath?: string) => [
         "rsync",
@@ -340,8 +351,10 @@ export function createWorkerWorkspaceActions(
         "--checksum",
         "--delete-delay",
         "--exclude=.git",
+        "--from0",
+        `--include-from=${inputIncludes}`,
         ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
-        ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
+        ...(fileListPath ? ["--recursive", `--files-from=${fileListPath}`] : []),
         `--rsync-path=${mutationReceiverPath("workspace-root")}`,
         "-e",
         rsyncSsh,

@@ -1,9 +1,15 @@
 // Release Workflow Matrix Plan tests cover release workflow matrix plan script behavior.
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function workflow(): WorkflowDocument {
   return parse(
@@ -29,6 +35,7 @@ type MatrixEntry = {
   advisory?: boolean;
   chunk_id?: string;
   id?: string;
+  label?: string;
   profiles?: string;
   providers?: string;
   suite_group?: string;
@@ -159,6 +166,96 @@ function staticProfileMatrixJobs() {
 }
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
+  it("builds provider owners used by every direct and Gateway Docker live lane", () => {
+    const definition = workflow();
+    const outputDir = tempDirs.make("openclaw-live-image-selection-");
+    const outputPath = path.join(outputDir, "outputs");
+    symlinkSync(path.resolve("scripts"), path.join(outputDir, "scripts"), "dir");
+    mkdirSync(path.join(outputDir, ".release-target"));
+    symlinkSync(
+      path.resolve("extensions"),
+      path.join(outputDir, ".release-target/extensions"),
+      "dir",
+    );
+    const env = {
+      PATH: process.env.PATH,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_STEP_SUMMARY: path.join(outputDir, "summary"),
+      SELECTED_SHA: "a".repeat(40),
+      SHARED_IMAGE_POLICY: "no-push-artifact",
+    };
+    const planner = expectDefined(
+      requiredJob(definition, "plan_release_workflow_matrices").steps.find(
+        (entry) => entry.name === "Plan shared live image plugins",
+      ),
+      "live image planner step",
+    );
+    const planned = spawnSync("bash", ["-c", expectDefined(planner.run, "planner command")], {
+      cwd: outputDir,
+      encoding: "utf8",
+      env,
+    });
+    expect(planned.status, planned.stderr).toBe(0);
+    const selected = readFileSync(outputPath, "utf8").trim().split("=")[1];
+    const step = expectDefined(
+      requiredJob(definition, "prepare_live_test_image").steps.find(
+        (entry) => entry.name === "Resolve shared live-test image tag",
+      ),
+      "live image selection step",
+    );
+    const result = spawnSync("bash", ["-c", expectDefined(step.run, "selection command")], {
+      encoding: "utf8",
+      env: {
+        ...env,
+        LIVE_IMAGE_EXTENSIONS: selected,
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const outputs = Object.fromEntries(
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=")),
+    );
+    expect(outputs.live_image?.split(":")[1]?.length).toBeLessThanOrEqual(128);
+    const builtIds = new Set(
+      collectBundledPluginBuildEntries({
+        env: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: outputs.live_image_extensions },
+      }).map((entry: { id: string }) => entry.id),
+    );
+    const plan = createReleaseWorkflowMatrixPlan({
+      releaseProfile: "full",
+      includeLiveSuites: true,
+    });
+    const providers = new Set(
+      plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers),
+    );
+    for (const entry of requiredJob(definition, "validate_live_docker_provider_suites").strategy
+      .matrix.include) {
+      for (const match of JSON.stringify(entry).matchAll(
+        /OPENCLAW_LIVE_GATEWAY_PROVIDERS=([^\s"]+)/gu,
+      )) {
+        for (const provider of expectDefined(match[1], "Gateway provider selection").split(",")) {
+          providers.add(provider);
+        }
+      }
+    }
+    const manifests = readdirSync("extensions").flatMap((id) => {
+      const manifestPath = path.join("extensions", id, "openclaw.plugin.json");
+      return existsSync(manifestPath)
+        ? [{ id, manifest: JSON.parse(readFileSync(manifestPath, "utf8")) }]
+        : [];
+    });
+    for (const provider of providers) {
+      const owners = manifests.filter(({ manifest }) => manifest.providers?.includes(provider));
+      expect(
+        owners.some(({ id }) => builtIds.has(id)),
+        `compiled owner for ${provider}`,
+      ).toBe(true);
+    }
+  });
+
   it("declares every job input for both workflow entry points", () => {
     const definition = workflow();
     const referencedInputs = new Set<string>();
@@ -289,6 +386,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       .filter((entry: MatrixEntry) => entry.suite_group === "live-gateway-anthropic-docker")
       .map((entry: MatrixEntry) => ({
         advisory: entry.advisory,
+        label: entry.label,
         profiles: entry.profiles,
         suiteId: entry.suite_id,
       }));
@@ -296,11 +394,13 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(anthropicEntries).toEqual([
       {
         advisory: undefined,
+        label: "Docker live gateway Anthropic",
         profiles: "stable",
         suiteId: "live-gateway-anthropic-docker",
       },
       {
         advisory: true,
+        label: "Docker live gateway Anthropic (full advisory)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },
@@ -345,6 +445,22 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
 
     expect(planner.outputs.docker_e2e_matrix).toBe("${{ steps.plan.outputs.docker_e2e_matrix }}");
     expect(planner.outputs.live_models_matrix).toBe("${{ steps.plan.outputs.live_models_matrix }}");
+    expect(planner.outputs.live_image_extensions).toBe(
+      "${{ steps.live_image.outputs.live_image_extensions }}",
+    );
+    const metadataCheckout = expectDefined(
+      planner.steps.find((step) => step.name === "Checkout selected live plugin metadata"),
+      "selected target metadata checkout",
+    );
+    expect(metadataCheckout.with?.ref).toBe(
+      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+    );
+    const liveImage = requiredJob(workflow(), "prepare_live_test_image");
+    expect(liveImage.needs).toContain("plan_release_workflow_matrices");
+    expect(
+      liveImage.steps.find((step) => step.name === "Resolve shared live-test image tag")?.env
+        ?.LIVE_IMAGE_EXTENSIONS,
+    ).toBe("${{ needs.plan_release_workflow_matrices.outputs.live_image_extensions }}");
     expect(dockerE2e.needs).toContain("plan_release_workflow_matrices");
     expect(liveModels.needs).toContain("plan_release_workflow_matrices");
     expect(dockerE2e.strategy.matrix).toBe(

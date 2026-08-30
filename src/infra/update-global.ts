@@ -21,6 +21,7 @@ import {
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
+import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 
 /** Supported package managers for OpenClaw global install and update flows. */
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
@@ -43,7 +44,6 @@ type ResolvedGlobalInstallCommand = {
   command: string;
   pnpmIsolated?: {
     layoutVersion: number;
-    globalBinDir?: string;
   };
 };
 
@@ -269,15 +269,30 @@ export function resolveExpectedInstalledVersionFromSpec(
 }
 
 /**
- * Verifies that a global package root looks like a packaged OpenClaw install
- * and, when supplied, matches the expected concrete version.
+ * Verifies packaged installs, or the exact checkout built by a Git update.
+ * An explicit package spec alone never authorizes a source checkout.
  */
 export async function collectInstalledGlobalPackageErrors(params: {
   packageRoot: string;
   expectedVersion?: string | null;
+  expectedGitCheckout?: GitRuntimeIdentity;
 }): Promise<string[]> {
   const errors: string[] = [];
-  errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
+  if (params.expectedGitCheckout) {
+    const installedRoot = await fs.realpath(params.packageRoot).catch(() => null);
+    if (installedRoot !== params.expectedGitCheckout.root) {
+      errors.push(
+        `expected checkout ${params.expectedGitCheckout.root}, found ${installedRoot ?? "<missing>"}`,
+      );
+    } else {
+      errors.push(...(await collectGitRuntimeErrors(params.expectedGitCheckout)));
+      if (!(await pathExists(path.join(installedRoot, "openclaw.mjs")))) {
+        errors.push(`missing ${path.join(installedRoot, "openclaw.mjs")}`);
+      }
+    }
+  } else {
+    errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
+  }
   const installedVersion = await readPackageVersion(params.packageRoot);
   const expectedComparable = normalizePackageVersionForComparison(params.expectedVersion);
   const installedComparable = normalizePackageVersionForComparison(installedVersion);
@@ -286,13 +301,15 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${expectedComparable}, found ${installedComparable ?? "<missing>"}`,
     );
   }
-  errors.push(
-    ...(await collectInstalledPackageDistErrors({
-      packageRoot: params.packageRoot,
-      installedVersion,
-      expectedVersion: params.expectedVersion,
-    })),
-  );
+  if (!params.expectedGitCheckout) {
+    errors.push(
+      ...(await collectInstalledPackageDistErrors({
+        packageRoot: params.packageRoot,
+        installedVersion,
+        expectedVersion: params.expectedVersion,
+      })),
+    );
+  }
   return errors;
 }
 
@@ -1280,17 +1297,7 @@ export function globalInstallArgs(
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
-    return [
-      resolved.command,
-      "add",
-      "-g",
-      ...(installPrefix ? ["--global-dir", installPrefix] : []),
-      ...(resolved.pnpmIsolated?.globalBinDir
-        ? ["--global-bin-dir", resolved.pnpmIsolated.globalBinDir]
-        : []),
-      PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG,
-      spec,
-    ];
+    return [resolved.command, "add", "-g", PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG, spec];
   }
   if (resolved.manager === "bun") {
     return [

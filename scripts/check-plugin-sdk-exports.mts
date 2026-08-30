@@ -48,7 +48,9 @@ const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
+  "diagnostic-flags": ["isDiagnosticFlagEnabled"],
   "secret-input-runtime": [
+    "assertPluginCapabilitySecretAvailable",
     "coerceSecretRef",
     "hasConfiguredSecretInput",
     "isSecretRef",
@@ -81,7 +83,28 @@ import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/
 // @ts-expect-error Plugins cannot register host evidence owners.
 import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { z } from "zod";
+
+// Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
+const legacyModelsData = {
+  byProvider: new Map<string, Set<string>>(),
+  providers: [],
+  resolvedDefault: { provider: "fixture-provider", model: "fixture-model" },
+  modelNames: new Map<string, string>(),
+};
+const modelsData: ModelsProviderData = legacyModelsData;
+const modelsAdapter: typeof buildModelsProviderData = async () => legacyModelsData;
+const commandAuthModelsAdapter: typeof buildCommandAuthModelsProviderData = modelsAdapter;
+void modelsData;
+void commandAuthModelsAdapter;
+declare const preparedModelsData: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
+const preparedCatalog: { id: string; provider: string; contextWindow?: number }[] = preparedModelsData.modelCatalog;
+void preparedCatalog;
+// @ts-expect-error Prepared selections require their typed catalog metadata.
+const incompletePrepared: typeof preparedModelsData = legacyModelsData;
+void incompletePrepared;
 
 const identifierAuthentication: IdentifierAuthentication = "verified";
 const meetsMinimum: boolean = meetsIdentifierAuthentication(identifierAuthentication, "asserted");

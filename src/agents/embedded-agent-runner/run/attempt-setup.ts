@@ -71,6 +71,7 @@ import {
   buildAfterTurnRuntimeContext,
   resolveAttemptFsWorkspaceOnly,
 } from "./attempt-prompt-helpers.js";
+import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -271,6 +272,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPrePromptMessageCount: () => number;
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
+  getCompactionReplayEnabled: () => boolean;
   getSystemPrompt: () => string;
   onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
@@ -304,6 +306,12 @@ export function installEmbeddedAttemptContextGuards(input: {
       ? {
           midTurnPrecheck: {
             enabled: true,
+            getReplay: () => ({
+              model: attempt.model,
+              sessionId: attempt.sessionId,
+              authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+              enabled: input.getCompactionReplayEnabled(),
+            }),
             contextTokenBudget,
             reserveTokens: () => settingsManager.getCompactionReserveTokens(),
             toolResultMaxChars,

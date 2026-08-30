@@ -506,7 +506,7 @@ describe("node worker tunnel manager", () => {
     expect(outputs).toEqual([]);
   });
 
-  it("keeps the process timeout inside the node transport deadline", async () => {
+  it("keeps node command deadlines and rechecks turn authority after discovery", async () => {
     const record = environment();
     const manifest = { version: 1 as const, baseCommit: null, entries: [] };
     const rawManifest = serializeWorkerWorkspaceManifest(manifest);
@@ -583,6 +583,28 @@ describe("node worker tunnel manager", () => {
     expect(transportTimeoutMs).toBeGreaterThan(60_000);
     expect(transportTimeoutMs).toBeLessThanOrEqual(65_000);
     expect(validationOutputs).toEqual([]);
+
+    const listCurrentNodes = nodeTransport.listCurrentNodes.bind(nodeTransport);
+    let current = true;
+    nodeTransport.listCurrentNodes = async () => {
+      const nodes = await listCurrentNodes();
+      current = false;
+      return nodes;
+    };
+    const invoke = vi.spyOn(nodeTransport, "invoke");
+    const sentCommands = invoke.mock.calls.length;
+    await expect(
+      handle.runWorkspaceCommand({
+        argv: ["slow-command"],
+        transportRetry: "never",
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("turn claim closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("turn claim closed");
+    expect(invoke).toHaveBeenCalledTimes(sentCommands);
   });
 
   it("preserves a typed workspace transfer cause from the node", async () => {

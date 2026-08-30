@@ -105,6 +105,7 @@ export function buildLocalUserMessage(input: LocalUserMessageInput): LocalUserMe
         : {}),
       ...(input.replyToId ? { replyToId: input.replyToId } : {}),
       ...(input.sender?.id ? { senderId: input.sender.id } : {}),
+      ...(input.sender?.identity ? { senderIdentity: input.sender.identity } : {}),
       ...(input.sender?.name ? { senderName: input.sender.name } : {}),
       ...(input.sender?.username ? { senderUsername: input.sender.username } : {}),
       ...(input.sender?.profileAvatarUrl

@@ -159,6 +159,12 @@ export function buildBaseHints(): ConfigUiHints {
       }
     }
   }
+  for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
+    const runtimePath = `${path}.agentRuntime`;
+    const codeModePath = `${path}.codeMode`;
+    hints[runtimePath] = { ...hints[runtimePath], order: -2 };
+    hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
+  }
   return applyDerivedTags(applyConfigTierHints(hints));
 }
 

@@ -160,8 +160,7 @@ export function createLsToolDefinition(
                 suffix = "/";
               }
             } catch {
-              // Skip entries we cannot stat.
-              continue;
+              // Directory metadata is optional; keep names even when a symlink target is missing.
             }
             results.push(entry + suffix);
           }

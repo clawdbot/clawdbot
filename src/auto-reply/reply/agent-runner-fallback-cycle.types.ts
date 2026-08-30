@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import type {
+  AgentTurnCompaction,
   AgentTurnInternalResult,
   AgentTurnParams,
   EmbeddedAgentRunResult,
@@ -56,7 +57,9 @@ export type AgentFallbackCandidateCommonParams = {
 export type AgentFallbackCycleState = {
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
-  autoCompactionCount: number;
+  compaction: AgentTurnCompaction;
+  /** Failure attribution only; model start does not prove current token freshness. */
+  postCompactionModelAttempted: boolean;
   attemptedRuntimeProvider: string;
   attemptedRuntimeModel: string;
   bootstrapPromptWarningSignaturesSeen: string[];
@@ -79,7 +82,7 @@ type CompletedFallbackCycle = {
 
 export type AgentFallbackCycleResult =
   | CompletedFallbackCycle
-  | Extract<AgentTurnInternalResult, { kind: "final" }>;
+  | Extract<AgentTurnInternalResult, { kind: "final" | "aborted" }>;
 
 type AgentFallbackModelPatch = {
   captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;

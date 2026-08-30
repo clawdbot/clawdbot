@@ -116,6 +116,7 @@ export async function runCodexSettledTurnFinalization(
     idempotencyScope: `codex-settled-finalizer:${attempt.runId}`,
     runId: attempt.runId,
     terminalAssistantOwner: { mirrorIdentity, runId: attempt.runId },
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     config: attempt.config,
     skipBeforeMessageWriteHooks: true,
   });

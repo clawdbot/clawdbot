@@ -3,7 +3,9 @@
 // Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import pMap from "p-map";
+import { waitForever } from "../src/cli/wait.ts";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
+import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   createExtensionTestProcessTargetChunks,
   listExtensionTestFilesForRoots,
@@ -21,6 +23,7 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mts";
 import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
 import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
+import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const PARALLEL_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_PARALLEL";
@@ -102,9 +105,7 @@ function createGroupEnv({
   return {
     ...baseEnv,
     [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-      process.cwd(),
-      "node_modules",
-      ".experimental-vitest-cache",
+      resolveVitestFsModuleCacheRoot(),
       "extension-batch",
       sanitizeCacheSegment(`${groupIndex}-${group.config}`),
     ),
@@ -194,8 +195,9 @@ function preparePlanGroup(
 
 async function runPlanGroup(
   { group, invocations }: ReturnType<typeof preparePlanGroup>,
-  runGroup: (params: VitestBatchRunParams) => Promise<number>,
+  runGroup: (params: ReturnType<typeof preparePlanGroup>["invocations"][number]) => Promise<number>,
   allowEmptyAfterExclude: boolean,
+  isCancelled: () => boolean,
 ) {
   if (invocations.length === 0) {
     console.error(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
@@ -203,6 +205,9 @@ async function runPlanGroup(
   }
   let finalExitCode = 0;
   for (const [index, invocation] of invocations.entries()) {
+    if (isCancelled()) {
+      break;
+    }
     console.log(
       `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${invocation.targets.length} targets${invocations.length > 1 ? `, chunk ${index + 1}/${invocations.length}` : ""})`,
     );
@@ -247,34 +252,130 @@ export async function runExtensionBatchPlan(
   const preparedGroups = orderedGroups.map((group, index) =>
     preparePlanGroup(group, index, env, vitestArgs, exactExcludePaths, useDedicatedCache),
   );
-  // No reader may start while a shared generation is being replaced. Select
-  // from the exact emitted chunks, including existing exact-exclude expansion.
-  const preparationCode = await prepareVitestRuntime(
-    preparedGroups.flatMap(({ invocations }) =>
-      invocations.map(({ config, args, targets }) => ({
-        configs: [config],
-        cli: { args: [...args, ...targets], dir: "extensions", env },
-      })),
-    ),
-    env,
+  const invocations = preparedGroups.flatMap((group) => group.invocations);
+  const reports = await createVitestReportOwner(
+    invocations.map((invocation) => ({
+      config: invocation.config,
+      args: ["run", "--config", invocation.config, ...invocation.args, ...invocation.targets],
+    })),
+    path.resolve(import.meta.dirname, ".."),
   );
-  if (preparationCode !== 0) {
-    return preparationCode;
+  const termination: { signal: NodeJS.Signals | null } = { signal: null };
+  const onSignal = (value: NodeJS.Signals) => {
+    termination.signal ??= value;
+  };
+  if (reports) {
+    process.on("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal);
   }
+  let reportFailure: string | undefined;
   let exitCode = 0;
-  await pMap(
-    preparedGroups,
-    async (group) => {
-      if (exitCode !== 0) {
-        return;
+  const started: Promise<unknown>[] = [];
+  const runInvocation = async (
+    invocation: ReturnType<typeof preparePlanGroup>["invocations"][number],
+  ) => {
+    const attempt = reports?.attempt(invocations.indexOf(invocation), invocation.args);
+    if (!attempt) {
+      return runGroup(invocation);
+    }
+    try {
+      let outcome: VitestReportOutcome | undefined;
+      const code = await runGroup({
+        ...invocation,
+        args: attempt.args,
+        onComplete(value) {
+          outcome = value;
+          termination.signal ??= value.signal;
+        },
+      });
+      attempt.complete(outcome ?? { code, signal: null });
+      return code;
+    } catch (error) {
+      attempt.fail(error);
+      throw error;
+    }
+  };
+  try {
+    // No reader may start while a shared generation is being replaced. Select
+    // from the exact emitted chunks, including existing exact-exclude expansion.
+    const preparationCode = await prepareVitestRuntime(
+      preparedGroups.flatMap((group) =>
+        group.invocations.map(({ config, args, targets }) => ({
+          configs: [config],
+          cli: { args: [...args, ...targets], dir: "extensions", env },
+        })),
+      ),
+      env,
+    );
+    if (preparationCode !== 0) {
+      exitCode = preparationCode;
+      reportFailure = "Runtime preparation failed; invocations unstarted";
+      return exitCode;
+    }
+    try {
+      await pMap(
+        preparedGroups,
+        async (group) => {
+          if (exitCode !== 0 || termination.signal) {
+            return;
+          }
+          const running = runPlanGroup(
+            group,
+            runInvocation,
+            allowEmptyAfterExclude,
+            () => termination.signal !== null,
+          ).then((groupExitCode) => {
+            if (groupExitCode !== 0 && exitCode === 0) {
+              exitCode = groupExitCode;
+            }
+          });
+          started.push(running);
+          await running;
+        },
+        { concurrency: parallelism, stopOnError: true },
+      );
+    } finally {
+      await Promise.allSettled(started);
+    }
+  } catch (error) {
+    reportFailure = String(error);
+    throw error;
+  } finally {
+    if (reports) {
+      try {
+        const reportCode = await reports.finish(
+          async (mergeArgs) => {
+            const args = mergeArgs.slice(1);
+            const configIndex = args.indexOf("--config");
+            const config = args.splice(configIndex, 2)[1]!;
+            let outcome: VitestReportOutcome | undefined;
+            const code = await runVitestBatch({
+              config,
+              args,
+              targets: [],
+              env,
+              onComplete(value) {
+                outcome = value;
+                termination.signal ??= value.signal;
+              },
+            });
+            return outcome ?? { code, signal: null };
+          },
+          termination.signal ? `Cancelled by ${termination.signal}` : reportFailure,
+        );
+        exitCode ||= reportCode;
+      } finally {
+        process.off("SIGTERM", onSignal);
+        process.off("SIGINT", onSignal);
+        if (termination.signal) {
+          process.kill(process.pid, termination.signal);
+          // Keep the loop alive for dependency signal handlers to finish cleanup
+          // and re-raise; a numeric return can win the race with signal delivery.
+          await waitForever();
+        }
       }
-      const groupExitCode = await runPlanGroup(group, runGroup, allowEmptyAfterExclude);
-      if (groupExitCode !== 0 && exitCode === 0) {
-        exitCode = groupExitCode;
-      }
-    },
-    { concurrency: parallelism, stopOnError: true },
-  );
+    }
+  }
   return exitCode;
 }
 

@@ -17,14 +17,20 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
+  setChatRunOwner,
   setChatSessionProjection,
 } from "./history-merge.ts";
-import { reconcileChatRunLifecycle, setChatRunError } from "./run-lifecycle.ts";
+import {
+  adoptStartedChatRun,
+  reconcileChatRunLifecycle,
+  setChatRunError,
+} from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
   latestStreamBoundaryRunId,
@@ -321,7 +327,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
-        setChatRunError(state, resolveGatewayErrorText(payload, null));
+        setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
       }
       if (payload.state === "error") {
         reconcileOwnedTerminalRun();
@@ -342,13 +348,19 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (
     !state.chatRunId &&
+    (!previousTerminalRun || previousTerminalRun.status === "streaming") &&
     sessionMatches &&
     typeof payload.runId === "string" &&
     (payload.state !== "status" || isPendingLocalChatRun(state, payload.runId))
   ) {
-    state.chatRunId = payload.runId;
-    state.chatRunError = null;
-    state.chatStreamStartedAt ??= Date.now();
+    if (payload.state === "status") {
+      adoptStartedChatRun(state, payload.runId, Date.now());
+    } else {
+      state.chatRunId = payload.runId;
+      setChatRunOwner(state, payload.runId);
+      state.chatRunError = null;
+      state.chatStreamStartedAt ??= Date.now();
+    }
   }
 
   // Terminal events for the active client run carry runId; missing-runId events are unowned.
@@ -377,18 +389,20 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (!payload.runId || payload.runId !== state.chatRunId) {
       return null;
     }
-    if (
-      payload.phase &&
-      !(state.chatRunStartup?.state === "activity" && state.chatRunStartup.runId === payload.runId)
-    ) {
-      state.chatRunStartup = { state: "status", runId: payload.runId, phase: payload.phase };
+    if (payload.phase) {
+      reconcileChatRunStartup(state, {
+        state: "status",
+        runId: payload.runId,
+        phase: payload.phase,
+        ...(payload.seq === undefined ? {} : { seq: payload.seq }),
+      });
     }
     return payload.state;
   }
 
   if (payload.state === "delta") {
     if (payload.runId && payload.runId === state.chatRunId) {
-      state.chatRunStartup = { state: "activity", runId: payload.runId };
+      reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
     const cumulativeText =
       state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
@@ -467,7 +481,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = materializeVisibleStream();
     }
     if (payload.errorMessage?.trim()) {
-      setChatRunError(state, resolveGatewayErrorText(payload, null));
+      setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
     }
     reconcileOwnedTerminalRun();
   } else if (payload.state === "error") {
@@ -522,6 +536,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatRunError(
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
+      payload.runId,
     );
   }
   if (payload.state !== "delta") {

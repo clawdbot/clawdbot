@@ -131,7 +131,7 @@ describe("sessions.patch", () => {
       const entry = loadSessionEntry({ agentId: "main", env: state.env, sessionKey });
       expect(entry).toMatchObject({
         createdVia: "operator",
-        createdActor: { type: "human", id: profileId },
+        createdActor: { type: "human", source: "profile", id: profileId },
         createdAt: expect.any(Number),
       });
       if (!entry) {
@@ -159,7 +159,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       const cfg = {
@@ -212,7 +212,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       const cfg = {
@@ -297,7 +297,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-private-handoff",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       const cfg = {
@@ -364,7 +364,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-private-handoff",
           updatedAt: 2,
           visibility: "shared",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       for (const owner of [

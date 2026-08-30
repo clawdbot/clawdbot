@@ -20,7 +20,7 @@ const proofDirectory = path.join(
 );
 
 suite.define(() => {
-  it("keeps active option subtext as legible as its label", async () => {
+  it("keeps option subtext legible and keyboard focus visible in forced colors", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -29,7 +29,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           featureMethods: ["channels.status", "channels.pairing.list", "wizard.start"],
           methodResponses: {
             "channels.status": {
@@ -114,6 +114,23 @@ suite.define(() => {
         }
 
         expect(colors.description).toBe(colors.label);
+
+        await page.emulateMedia({ forcedColors: "active" });
+        await page.keyboard.press("ArrowDown");
+        const nextOption = picker.getByRole("option", { name: "Add another iMessage account" });
+        await expect
+          .poll(() => nextOption.evaluate((option) => option.matches(":focus-visible")))
+          .toBe(true);
+        expect(
+          await nextOption.evaluate((option) => {
+            const style = getComputedStyle(option);
+            return style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) >= 2;
+          }),
+        ).toBe(true);
+        expect(await activeOption.getAttribute("aria-selected")).toBe("true");
+        await page.keyboard.press("Enter");
+        const answer = await gateway.waitForRequest("wizard.next");
+        expect(answer.params).toMatchObject({ answer: { value: "another" } });
       },
     );
   });

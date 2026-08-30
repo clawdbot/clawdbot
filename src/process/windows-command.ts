@@ -172,24 +172,24 @@ export function isWindowsBatchCommand(
   return ext === ".cmd" || ext === ".bat";
 }
 
-function escapeForWindowsCmdExe(arg: string): string {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(
-      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-        "Pass an explicit shell-wrapper argv at the call site instead.",
-    );
-  }
-  const escaped = arg.replace(/\^/g, "^^");
-  if (!escaped.includes(" ") && !escaped.includes('"')) {
-    return escaped;
-  }
-  return `"${escaped.replace(/"/g, '""')}"`;
-}
-
 export function buildWindowsCmdExeCommandLine(command: string, args: readonly string[]): string {
-  const escapedCommand = escapeForWindowsCmdExe(command);
-  const commandLine = [escapedCommand, ...args.map(escapeForWindowsCmdExe)].join(" ");
-  return escapedCommand.startsWith('"') ? `"${commandLine}"` : commandLine;
+  const escaped = [command, ...args].map((arg) => {
+    if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+      throw new Error(
+        `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
+          "Pass an explicit shell-wrapper argv at the call site instead.",
+      );
+    }
+    // Quote through cmd and the CRT; consume backslash runs once to avoid quadratic scans.
+    const quoted = arg
+      .replace(/\\+/g, (backslashes, offset) => {
+        const next = arg[offset + backslashes.length];
+        return next === '"' || next === undefined ? backslashes.repeat(2) : backslashes;
+      })
+      .replace(/"/g, '""');
+    return `"${quoted}"`;
+  });
+  return `"${escaped.join(" ")}"`;
 }
 
 export function resolveTrustedWindowsCmdExe(platform: NodeJS.Platform = process.platform): string {

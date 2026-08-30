@@ -101,6 +101,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   const payload = {
     sessionKey: "agent:main:main",
     reason: "patch",
+    ts: 2,
     updatedAt: 2,
     label: "Renamed",
   };
@@ -109,6 +110,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   expect(first.applied).toBe(true);
   expect(first.result).not.toBe(result);
   expect(first.result?.sessions[0]?.label).toBe("Renamed");
+  expect(first.result?.ts).toBe(2);
 
   // The capability handler and the chat page both drive the same event; the
   // second reconcile must return the identical result object so downstream
@@ -793,3 +795,30 @@ describe("reconcileSessionHistory", () => {
     expect(reconciled?.sessions[0]?.derivedTitle).toBeUndefined();
   });
 });
+
+test.each([undefined, "generation-a", "generation-b"])(
+  "delete reconciliation removes only the event generation (%s)",
+  (sessionId) => {
+    const row = {
+      key: "agent:main:recreated",
+      sessionId: "generation-b",
+      kind: "direct" as const,
+      updatedAt: 2,
+    };
+    const result = {
+      ts: 2,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [row],
+    };
+    const reconciled = reconcileSessionChanged(result, {
+      sessionKey: row.key,
+      agentId: "main",
+      reason: "delete",
+      sessionId,
+    });
+    expect(reconciled.result?.sessions).toEqual(sessionId === row.sessionId ? [] : [row]);
+    expect(reconciled.deletedKey).toBe(sessionId === row.sessionId ? row.key : undefined);
+  },
+);

@@ -199,12 +199,14 @@ export async function createCopilotToolBridge(
     abortSignal: input.abortSignal,
     agentId: input.agentId,
     config: attemptParams.config,
+    codeModeOverride: attemptParams.codeModeOverride,
     disableTools: attemptParams.disableTools,
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isRawCopilotModelRun(attemptParams),
     // Carries catalog compat so `tools.codeMode.enabled: "auto"` can resolve per model.
     model: attemptParams.model,
+    contextTokenBudget: attemptParams.contextTokenBudget,
     modelId: input.modelId,
     modelProvider: input.modelProvider,
     modelToolsEnabled: true,
@@ -437,7 +439,7 @@ function buildOpenClawCodingToolsOptions(
     toolConstructionPlan: toolPlan.codingToolConstructionPlan,
     modelCompat,
     modelApi: model?.api,
-    modelContextWindowTokens: model?.contextWindow,
+    modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
     modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
       workspaceDir,

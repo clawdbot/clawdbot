@@ -19,6 +19,8 @@ import {
   BrowserRelayAuthV2Authority,
   getBrowserRelayAuthV2Authority,
   invalidateBrowserRelayAuthV2Authority,
+  parseRelayAuthHello,
+  parseStrictJsonObject,
 } from "./auth-v2.js";
 import {
   authenticateExtensionWebSocket,
@@ -292,7 +294,6 @@ function maskedFrame(payload: Buffer, options: { fin: boolean; opcode: number })
 
 async function sendRawV2Frames(params: {
   port: number;
-  initialFrames?: Buffer[];
   subsequentFrames?: Buffer[];
 }): Promise<string> {
   const socket = net.createConnection({ host: "127.0.0.1", port: params.port });
@@ -315,10 +316,12 @@ async function sendRawV2Frames(params: {
       "",
     ].join("\r\n"),
   );
-  socket.write(Buffer.concat([request, ...(params.initialFrames ?? [])]));
+  socket.write(request);
   if (params.subsequentFrames?.length) {
     await vi.waitFor(() => {
-      expect(Buffer.concat(received).toString("utf8")).toContain("101 Switching Protocols");
+      expect(Buffer.concat(received).toString("utf8").includes("101 Switching Protocols")).toBe(
+        true,
+      );
     });
     socket.write(Buffer.concat(params.subsequentFrames));
   }
@@ -493,57 +496,57 @@ describe.sequential("extension relay HTTP auth v2", () => {
     connection.close();
   });
 
-  it("rejects oversized upgrade-head auth data before challenge or bridge promotion", async () => {
-    handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
-    const authority = getBrowserRelayAuthV2Authority(KEY);
-    const issueChallenge = vi.spyOn(authority, "issueChallenge");
-    const validHello = maskedFrame(
-      Buffer.from(
+  it.each([
+    {
+      name: "an oversized first auth message",
+      payloadBytes: 18 * 1024,
+      fragmentBytes: 18 * 1024,
+      wireBytes: 18_440,
+    },
+    {
+      name: "fragmented masked pre-auth wire overhead",
+      payloadBytes: 16 * 1024,
+      fragmentBytes: 91,
+      wireBytes: 17_470,
+    },
+  ])(
+    "rejects $name before challenge or bridge promotion",
+    async ({ payloadBytes, fragmentBytes, wireBytes }) => {
+      handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
+      const authority = getBrowserRelayAuthV2Authority(KEY);
+      const issueChallenge = vi.spyOn(authority, "issueChallenge");
+      const payload = Buffer.from(
         JSON.stringify({
           type: "auth.hello",
           v: 2,
           keyId: relayKeyIdFromHex(KEY),
           clientNonce: randomRelayNonce(),
-        }),
-      ),
-      { fin: true, opcode: 0x1 },
-    );
-    const response = await sendRawV2Frames({
-      port: handle.port,
-      initialFrames: [
-        validHello,
-        maskedFrame(Buffer.alloc(18 * 1024, 0x20), { fin: true, opcode: 0x1 }),
-      ],
-    });
-
-    expect(response).not.toContain("auth.challenge");
-    expect(response).not.toContain("auth.ok");
-    expect(issueChallenge).not.toHaveBeenCalled();
-    expect(handle.bridge.extensionConnected).toBe(false);
-  });
-
-  it("rejects fragmented masked pre-auth wire overhead before challenge or bridge promotion", async () => {
-    handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
-    const authority = getBrowserRelayAuthV2Authority(KEY);
-    const issueChallenge = vi.spyOn(authority, "issueChallenge");
-    const payload = Buffer.alloc(16 * 1024, 0x20);
-    const fragments: Buffer[] = [];
-    for (let offset = 0; offset < payload.length; offset += 91) {
-      const end = Math.min(offset + 91, payload.length);
-      fragments.push(
-        maskedFrame(payload.subarray(offset, end), {
-          fin: end === payload.length,
-          opcode: offset === 0 ? 0x1 : 0x0,
-        }),
+        }).padEnd(payloadBytes, " "),
       );
-    }
-    const response = await sendRawV2Frames({ port: handle.port, subsequentFrames: fragments });
+      // Valid JSON padding leaves the wire limit as the fragmented case's rejection owner.
+      expect(payload.byteLength).toBe(payloadBytes);
+      expect(parseRelayAuthHello(parseStrictJsonObject(payload.toString("utf8"))) !== null).toBe(
+        true,
+      );
+      const fragments: Buffer[] = [];
+      for (let offset = 0; offset < payload.length; offset += fragmentBytes) {
+        const end = Math.min(offset + fragmentBytes, payload.length);
+        fragments.push(
+          maskedFrame(payload.subarray(offset, end), {
+            fin: end === payload.length,
+            opcode: offset === 0 ? 0x1 : 0x0,
+          }),
+        );
+      }
+      expect(Buffer.concat(fragments).byteLength).toBe(wireBytes);
+      const response = await sendRawV2Frames({ port: handle.port, subsequentFrames: fragments });
 
-    expect(response).not.toContain("auth.challenge");
-    expect(response).not.toContain("auth.ok");
-    expect(issueChallenge).not.toHaveBeenCalled();
-    expect(handle.bridge.extensionConnected).toBe(false);
-  });
+      expect(response.includes("auth.challenge")).toBe(false);
+      expect(response.includes("auth.ok")).toBe(false);
+      expect(issueChallenge.mock.calls.length).toBe(0);
+      expect(handle.bridge.extensionConnected).toBe(false);
+    },
+  );
 
   it("keeps the 64 MiB application receiver after v2 authentication", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });

@@ -100,7 +100,13 @@ export class ShellGatewayOwner {
   reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): void {
     const snapshot = runtimeConfig.state.configSnapshot;
     const context = this.host.context;
-    if (!snapshot?.config || !context || context.runtimeConfig !== runtimeConfig) {
+    if (
+      !snapshot?.config ||
+      !context ||
+      context.runtimeConfig !== runtimeConfig ||
+      // selfUser is cleared on close; retained config must not reclassify that as an identity swap.
+      context.gateway.snapshot.phase !== "connected"
+    ) {
       return;
     }
     const scope = context.gateway.connection.gatewayUrl;

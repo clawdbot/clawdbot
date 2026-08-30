@@ -5,7 +5,12 @@ import path from "node:path";
 import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import {
+  booleanFlag,
+  classifyBoundedUnsignedDecimal,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhApiRead, plainGhEnv } from "./lib/plain-gh.mjs";
 
@@ -43,6 +48,7 @@ type ExecGit = (args: string[], options?: { input?: string }) => string;
 type PullRequestPathFilter = { paths?: string[]; "paths-ignore"?: string[] };
 type CollectHostedGateEvidenceParams = {
   sha: string;
+  mainSha: string;
   pr?: number;
   recentSha?: string;
   pullRequestCommitShas?: string[];
@@ -136,6 +142,7 @@ export function parseArgs(argv: readonly string[]) {
   const args = {
     repo: "",
     sha: "",
+    mainSha: "",
     pr: 0,
     recentSha: "",
     output: "",
@@ -149,6 +156,7 @@ export function parseArgs(argv: readonly string[]) {
         [
           ["--repo", "repo"],
           ["--sha", "sha"],
+          ["--main-sha", "mainSha"],
           ["--recent-sha", "recentSha"],
           ["--output", "output"],
         ] as const
@@ -164,11 +172,11 @@ export function parseArgs(argv: readonly string[]) {
         missingValueMessage: "Expected --pr <value>.",
         rejectShortOptions: true,
         transform(value: string) {
-          const parsed = Number(value);
-          if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+          const result = classifyBoundedUnsignedDecimal(value, 1, Number.MAX_SAFE_INTEGER);
+          if (result.kind !== "value") {
             throw new Error("Expected --pr <positive-integer>.");
           }
-          return parsed;
+          return result.value;
         },
       }),
       booleanFlag("--changelog-only", "changelogOnly"),
@@ -181,9 +189,15 @@ export function parseArgs(argv: readonly string[]) {
       },
     },
   );
-  if (!args.repo || !args.sha || !args.pr || !args.output) {
+  if (
+    !args.repo ||
+    !args.sha ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(args.mainSha) ||
+    !args.pr ||
+    !args.output
+  ) {
     throw new Error(
-      "Usage: node scripts/verify-pr-hosted-gates.mjs --repo <owner/repo> --sha <sha> --pr <number> [--recent-sha <sha>] --output <path>",
+      "Usage: node scripts/verify-pr-hosted-gates.mjs --repo <owner/repo> --sha <sha> --main-sha <sha> --pr <number> [--recent-sha <sha>] --output <path>",
     );
   }
   return args;
@@ -382,13 +396,13 @@ function findPatchIdenticalCiReuse({
   sha,
   candidateRuns,
   nowMs,
-  mainRef = "origin/main",
+  mainSha,
   execGit = runGit,
 }: {
   sha: string;
   candidateRuns: WorkflowRun[];
   nowMs: number;
-  mainRef?: string;
+  mainSha: string;
   execGit?: ExecGit;
 }) {
   if (!Array.isArray(candidateRuns)) {
@@ -410,7 +424,7 @@ function findPatchIdenticalCiReuse({
 
   let currentPatchId;
   try {
-    currentPatchId = computePatchId(sha, mainRef, execGit);
+    currentPatchId = computePatchId(sha, mainSha, execGit);
   } catch {
     return undefined;
   }
@@ -419,7 +433,7 @@ function findPatchIdenticalCiReuse({
       continue;
     }
     try {
-      if (computePatchId(run.head_sha, mainRef, execGit) === currentPatchId) {
+      if (computePatchId(run.head_sha, mainSha, execGit) === currentPatchId) {
         return {
           run,
           reusedFromSha: run.head_sha,
@@ -662,6 +676,7 @@ export function workflowRunPageCount(totalCount: number) {
 
 export function collectHostedGateEvidence({
   sha,
+  mainSha,
   pr = 0,
   recentSha = "",
   pullRequestCommitShas = [],
@@ -769,6 +784,7 @@ export function collectHostedGateEvidence({
       }
       ciReuse = findPatchIdenticalCiReuse({
         sha,
+        mainSha,
         candidateRuns,
         nowMs,
         execGit,
@@ -1065,25 +1081,25 @@ function main(argv = process.argv.slice(2)) {
     }),
   ) as unknown;
   const head = isRecord(pullRequest) && isRecord(pullRequest.head) ? pullRequest.head : undefined;
-  const base = isRecord(pullRequest) && isRecord(pullRequest.base) ? pullRequest.base : undefined;
   const headRepo = head && isRecord(head.repo) ? head.repo : undefined;
   const headBranch = head ? readStringField(head, "ref") : undefined;
   const headRepository = headRepo ? readStringField(headRepo, "full_name") : undefined;
-  const baseSha = base ? readStringField(base, "sha") : undefined;
   const headSha = head ? readStringField(head, "sha") : undefined;
-  if (!headBranch || !headRepository || !baseSha || !headSha) {
-    throw new Error(`PR #${args.pr} is missing head or base metadata.`);
+  if (!headBranch || !headRepository || !headSha) {
+    throw new Error(`PR #${args.pr} is missing head metadata.`);
   }
   if (headSha !== args.sha) {
     throw new Error(`PR #${args.pr} head changed from ${args.sha} to ${headSha}.`);
   }
-  const changedPaths = loadPullRequestChangedPaths(baseSha, headSha);
+  // Paths, membership and patch IDs share one snapshot; a newer API base may not exist locally.
+  const changedPaths = loadPullRequestChangedPaths(args.mainSha, headSha);
   const workflowRuns = loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch);
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
+    mainSha: args.mainSha,
     pr: args.pr,
     recentSha: args.recentSha,
-    pullRequestCommitShas: loadPullRequestCommitShas({ baseSha, headSha }),
+    pullRequestCommitShas: loadPullRequestCommitShas({ baseSha: args.mainSha, headSha }),
     pullRequestHeadBranch: headBranch,
     pullRequestHeadRepository: headRepository,
     workflowRuns,

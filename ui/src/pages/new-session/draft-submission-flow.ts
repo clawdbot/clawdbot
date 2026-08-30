@@ -229,6 +229,7 @@ export class DraftSubmissionFlow {
       model: this.place.modelControl.selected,
       contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
+      fastMode: this.place.modelControl.fastMode,
       toolOverrides: this.capabilities.toolOverrides,
       permissionMode: this.permission.value,
       visibility: options.visibility ?? this.visibilityValue,
@@ -590,7 +591,7 @@ export class DraftSubmissionFlow {
         context.placementStartup.start({
           recovery,
           persistRecovery: this.pendingPlacement.persistent,
-          recovering: pendingPlacement,
+          recovering: submissionPlacementRecovery.phase !== "creating",
           createdAt: submittedAt,
         });
         const ownsStartedPlacement = () =>

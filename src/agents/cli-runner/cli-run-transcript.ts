@@ -191,7 +191,11 @@ export async function persistCliAssistantTranscript(params: {
       storePath: runParams.storePath,
       idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (write) =>
+        runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        }),
       message: buildAssistantMessage({
         model: {
           api: "cli",
@@ -391,6 +395,7 @@ export async function finalizeCliContextEngineTurn(params: {
       yieldAborted: false,
       sessionIdUsed: runParams.sessionId,
       sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: transcript.messagesSnapshot,

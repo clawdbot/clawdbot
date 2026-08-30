@@ -16,7 +16,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
-import { startQaGatewayChild } from "../../gateway-child.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
@@ -1347,10 +1347,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   }
 }
 
-async function waitForDiscordChannelRunning(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  accountId: string,
-) {
+async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   let lastStatus:
     | {

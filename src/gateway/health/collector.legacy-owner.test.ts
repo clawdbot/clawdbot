@@ -1,4 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -39,13 +41,22 @@ function createHealthPlugin(): ChannelPlugin {
   };
 }
 
+const tempDirs = createTempDirTracker();
+
+afterAll(() => {
+  tempDirs.cleanup();
+});
+
 describe("collectGatewayHealthSnapshot legacy owner projection", () => {
   beforeAll(async () => {
     vi.doMock("../../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
     }));
+    // Store paths reach real SQLite target resolution, which inspects the agent
+    // database beside them; a shared /tmp path would read machine-wide state.
+    const storePath = path.join(tempDirs.make("openclaw-health-legacy-owner-"), "sessions.json");
     vi.doMock("../../config/sessions/paths.js", () => ({
-      resolveSessionStorePathCore: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => storePath,
     }));
     vi.doMock("../../config/sessions/session-accessor.js", () => ({
       listSessionEntriesReadOnly: () => [],

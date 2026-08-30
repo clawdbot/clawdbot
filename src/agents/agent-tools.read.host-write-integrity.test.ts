@@ -230,6 +230,18 @@ describe("unrestricted host tool writes", () => {
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("short\n");
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("writes %s content", async (_label, content) => {
+    const filePath = await createFile("replace me\n");
+
+    const tool = createHostWorkspaceWriteTool(tempDir);
+    await tool.execute("call-1", { path: filePath, content });
+
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
+  });
+
   it("truncates to empty when an edit removes all content", async () => {
     const filePath = await createFile("wipe me\n");
 

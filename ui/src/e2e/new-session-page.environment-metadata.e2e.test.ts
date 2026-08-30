@@ -244,7 +244,10 @@ suite.define(() => {
       expect(await row("alpha-device").isEnabled()).toBe(true);
       await expect
         .poll(() => row("alpha-device").locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["Worker slots 2/4", "macOS", "Camera", "Screen capture"]);
+        .toEqual(["macOS", "Camera", "Screen capture"]);
+      await expect
+        .poll(() => row("alpha-device").locator(".capacity-meter-pips").getAttribute("aria-label"))
+        .toBe("2 of 4 slots busy");
       expect(await row("alpha-device").locator(".session-menu__sub").textContent()).toBe(
         "alpha-de",
       );
@@ -253,10 +256,10 @@ suite.define(() => {
       expect(await row("saturated").isDisabled()).toBe(true);
       await expect
         .poll(() => row("saturated").locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual([
-          "Worker slots 0/2",
-          "No worker slots are available. Wait for a slot or pick another device.",
-        ]);
+        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+      await expect
+        .poll(() => row("saturated").locator(".capacity-meter-pips").getAttribute("aria-label"))
+        .toBe("Slot utilization unavailable");
       expect(await row("missing-capacity").isDisabled()).toBe(true);
       expect(await row("offline").isDisabled()).toBe(true);
       expect(await row("disabled").isDisabled()).toBe(true);

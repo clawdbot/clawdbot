@@ -45,6 +45,7 @@ function workerRecord(
   return {
     environmentId: "worker-1",
     providerId: "static-ssh",
+    profileId: "development",
     leaseId: "lease-1",
     sharedHost: false,
     state: "ready",

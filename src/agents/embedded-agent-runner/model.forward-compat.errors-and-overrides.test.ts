@@ -93,6 +93,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
   }) => {
     const config = input.config ?? {};
     return {
+      catalogOwner: undefined,
       agentDir: input.agentDir,
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       activeProjectKeys: [],

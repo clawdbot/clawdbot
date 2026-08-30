@@ -11,10 +11,16 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/lazy-custom-element-recovery");
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const nativeTitlebarChunk = /\/assets\/macos-titlebar-controls\.runtime-[^/?]+\.js(?:\?.*)?$/u;
 const viewport = { height: 900, width: 1280 };
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 
@@ -322,5 +328,141 @@ suite.define(() => {
         await video.saveAs(path.join(artifactDir, "recovery.webm"));
       }
     }
+  });
+
+  it("keeps native titlebar state and actions current while its chunk is loading", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(railProofDir ? { recordVideo: { dir: railProofDir, size: viewport } } : {}),
+      },
+      async ({ page }) => {
+        await installNativeWebChrome(page);
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        });
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        const held = await holdModuleResponse(page, nativeTitlebarChunk);
+        try {
+          const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
+          expect(response?.status()).toBe(200);
+          await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+          await held.request;
+          const element = page.locator("openclaw-macos-titlebar-controls");
+          expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+          await page.evaluate(() => {
+            window.dispatchEvent(
+              new CustomEvent("openclaw:native-history-state", {
+                detail: { canGoBack: true, canGoForward: false },
+              }),
+            );
+            window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
+          });
+          await expect
+            .poll(() => page.locator(".shell").getAttribute("class"))
+            .toContain("shell--nav-collapsed");
+          if (railProofDir) {
+            await mkdir(railProofDir, { recursive: true });
+            await page.screenshot({ path: path.join(railProofDir, "native-titlebar-loading.png") });
+          }
+
+          held.release();
+          const toolbar = page.locator(".macos-titlebar-controls");
+          await toolbar.waitFor({ state: "visible" });
+          await expect
+            .poll(() => toolbar.getByRole("button", { name: "Back" }).isDisabled())
+            .toBe(false);
+          await expect
+            .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
+            .toBe(true);
+          await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+          expect(held.requests()).toBe(1);
+          expect(errors).toEqual([]);
+          if (railProofDir) {
+            await page.screenshot({ path: path.join(railProofDir, "native-titlebar-loaded.png") });
+          }
+        } finally {
+          held.release();
+        }
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "native titlebar",
+      chunk: nativeTitlebarChunk,
+      label: "openclaw-macos-titlebar-controls",
+      webChrome: true,
+      pathname: "",
+      readySelector: ".sidebar-brand",
+      proofName: "native-titlebar",
+    },
+    {
+      name: "floating sidebar attention",
+      chunk: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+      label: "sidebar-attention",
+      webChrome: false,
+      pathname: "settings/appearance",
+      readySelector: ".shell--settings",
+      proofName: "sidebar-attention",
+    },
+  ])("recovers $name visibly after its chunk fails", async (testCase) => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(railProofDir ? { recordVideo: { dir: railProofDir, size: viewport } } : {}),
+      },
+      async ({ page }) => {
+        if (testCase.webChrome) {
+          await installNativeWebChrome(page);
+        }
+        const failure = await installChunkFailure(page, testCase.chunk);
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        });
+        const response = await page.goto(`${suite.server.baseUrl}${testCase.pathname}`, {
+          waitUntil: "domcontentloaded",
+        });
+        expect(response?.status()).toBe(200);
+        await page.locator(testCase.readySelector).waitFor({ state: "attached" });
+        const error = await expectRealChunkFailure(page, testCase.label);
+        await expect.poll(failure.headCount).toBe(1);
+        expect(failure.chunkRequestCount()).toBe(1);
+        if (railProofDir) {
+          await mkdir(railProofDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(railProofDir, `${testCase.proofName}-failed.png`),
+          });
+        }
+
+        await retryThroughReload(page, error);
+        if (testCase.webChrome) {
+          const toolbar = page.locator(".macos-titlebar-controls");
+          await toolbar.waitFor({ state: "visible" });
+          await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+          await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+        } else {
+          await page.locator(".sidebar-attention--floating .sidebar-issues-button").click();
+          await page.locator("#sidebar-issues-panel").waitFor({ state: "visible" });
+        }
+        expect(await error.count()).toBe(0);
+        expect(failure.chunkRequestCount()).toBe(2);
+        if (railProofDir) {
+          await page.screenshot({
+            path: path.join(railProofDir, `${testCase.proofName}-recovered.png`),
+          });
+        }
+      },
+    );
   });
 });

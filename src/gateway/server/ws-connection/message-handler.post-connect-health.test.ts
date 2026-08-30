@@ -817,6 +817,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         );
         expect(first.presence.user).toEqual({
           id: profileId,
+          identity: { type: "profile", id: profileId },
           email: "alice@example.com",
           name: "alice",
           avatarUrl: expect.stringMatching(
@@ -856,6 +857,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         const secondAvatarUrl = second.presence.user?.avatarUrl;
         expect(second.presence.user).toEqual({
           id: profileId,
+          identity: { type: "profile", id: profileId },
           email: "alice@example.com",
           name: "alice",
           avatarUrl: expect.stringMatching(

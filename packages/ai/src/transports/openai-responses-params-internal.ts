@@ -276,9 +276,6 @@ function convertOpenAIResponsesMessagesForRequest(
   replayMode: OpenAIResponsesReplayMode,
 ): ResponseInput {
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
-  const compat = getCompat(model as OpenAIModeModel);
-  const supportsDeveloperRole =
-    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
@@ -288,7 +285,6 @@ function convertOpenAIResponsesMessagesForRequest(
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    supportsDeveloperRole,
     replayReasoningItems: true,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,

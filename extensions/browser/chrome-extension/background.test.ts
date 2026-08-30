@@ -189,7 +189,9 @@ describe("native extension bootstrap", () => {
     expect(harness.debuggerAttach).not.toHaveBeenCalled();
 
     harness.releaseRetiredStatePreparation();
-    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 17 }));
+    await vi.waitFor(() =>
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-17" }),
+    );
     expect(harness.sendNativeMessage).not.toHaveBeenCalled();
     expect(harness.relaySockets).toHaveLength(0);
 
@@ -333,7 +335,9 @@ describe("native extension bootstrap", () => {
       },
     });
 
-    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 18 }));
+    await vi.waitFor(() =>
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-18" }),
+    );
     expect(harness.relaySockets).toHaveLength(0);
     expect(harness.sendNativeMessage).not.toHaveBeenCalled();
     expect(harness.debuggerAttach).not.toHaveBeenCalled();

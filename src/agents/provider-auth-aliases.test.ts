@@ -100,19 +100,21 @@ function createPluginMetadataSnapshot(params: {
   plugins: readonly PluginManifestRecord[];
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
+    diagnostics: [],
+  };
   return {
     policyHash,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [...params.plugins], diagnostics: [] },
     plugins: params.plugins,

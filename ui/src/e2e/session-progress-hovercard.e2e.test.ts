@@ -68,6 +68,7 @@ async function emitPullRequestSnapshot(
             state: "open",
             title: "Restore the session hovercard",
             url: "https://github.com/openclaw/openclaw/pull/417",
+            author: { login: "steipete" },
           },
           {
             additions: 72,
@@ -334,6 +335,14 @@ suite.define(() => {
           .poll(() => card.locator(".session-progress-card__heading").textContent())
           .toContain("1/3");
         await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(4);
+        const prRow = card.locator(".session-hovercard__pr-row").first();
+        await expect
+          .poll(() => prRow.locator(".session-hovercard__pr-author").textContent())
+          .toBe("steipete");
+        // The row is an anchor: a dropped text-decoration reset is invisible to jsdom.
+        await expect
+          .poll(() => prRow.evaluate((node) => getComputedStyle(node).textDecorationLine))
+          .toBe("none");
         await captureProof(page, "sidebar-row-hovercard-maximum.png");
         await expect
           .poll(() => card.locator(".session-hovercard__identity-row").textContent())

@@ -94,7 +94,7 @@ export function resolveOperatorRolePolicyForProfile(
   return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
 }
 
-/** Derives immutable session isolation only from its authenticated human creator. */
+/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
   creation: { actor?: SessionCreatedActor } | undefined,

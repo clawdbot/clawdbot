@@ -12,6 +12,7 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
@@ -428,6 +429,8 @@ function requiresDerivedRegistryValidation(
     params.discovery !== undefined ||
     params.diagnostics !== undefined ||
     params.installRecords !== undefined ||
+    // Persisted source selection cannot encode this process's development checkout preference.
+    resolveOpenClawDevSourceRoot(env) !== null ||
     normalizePluginsConfig(params.config?.plugins).loadPaths.length > 0 ||
     hasMissingConfigPathActivationMetadata(index) ||
     hasMissingInstalledPluginOwnerMetadata(index, env) ||

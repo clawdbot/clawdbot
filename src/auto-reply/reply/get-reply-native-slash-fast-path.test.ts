@@ -957,13 +957,15 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
       const persisted = loadSessionEntry({ sessionKey, storePath });
-      expect(params.sessionEntry).toMatchObject({
+      const initialized = {
         sessionId: "session-1",
+        sessionStartedAt: 100,
         updatedAt: 100,
         lastInteractionAt: 100,
         channel: "telegram",
-      });
-      expect(persisted).toMatchObject(params.sessionEntry as object);
+      };
+      expect(params.sessionEntry).toMatchObject(initialized);
+      expect(persisted).toMatchObject(initialized);
       return { shouldContinue: false, reply: { text: "ok" } };
     });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100);

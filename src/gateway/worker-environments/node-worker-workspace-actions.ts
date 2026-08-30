@@ -32,7 +32,11 @@ export type NodeWorkerWorkspaceBinding = {
 
 type NodeWorkerWorkspaceActions = Pick<
   WorkerWorkspaceTunnelHandle,
-  "runWorkspaceCommand" | "syncWorkspace" | "quiesceWorkspace" | "reconcileWorkspace"
+  | "runWorkspaceCommand"
+  | "syncWorkspace"
+  | "quiesceWorkspace"
+  | "reconcileWorkspace"
+  | "stageAttachments"
 > & { validateRestoredWorkspace: () => Promise<void> };
 
 export function createNodeWorkerWorkspaceActions(params: {
@@ -258,6 +262,39 @@ export function createNodeWorkerWorkspaceActions(params: {
   return {
     validateRestoredWorkspace,
     runWorkspaceCommand: exec,
+    stageAttachments: async (request) => {
+      const prepared = await params.workspaceTransfer.prepareAttachments({
+        ...request,
+        environmentId: params.environmentId,
+      });
+      try {
+        const result = await exec({
+          argv: ["openclaw-internal-workspace-transfer"],
+          transfer: {
+            direction: "download",
+            token: prepared.token,
+            manifestRef: prepared.snapshot.manifestRef,
+            attachments: true,
+          },
+          transportRetry: "never",
+          assertCurrent: () => {
+            if (!request.isAuthorized()) {
+              throw new Error("Worker attachment transfer authority closed");
+            }
+          },
+          signal: request.signal,
+        });
+        if (
+          result.termination !== "exit" ||
+          result.code !== 0 ||
+          result.stdout.trim() !== prepared.snapshot.manifestRef
+        ) {
+          throw new Error("Worker attachment transfer failed");
+        }
+      } finally {
+        params.workspaceTransfer.revoke(params.environmentId, prepared.token);
+      }
+    },
     syncWorkspace: async (request) => {
       workspaceReady = true;
       try {

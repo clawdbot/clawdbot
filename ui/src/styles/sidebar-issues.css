@@ -48,7 +48,8 @@
   padding-block-end: env(safe-area-inset-bottom, 0px);
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  animation: sidebar-issues-sheet-in 180ms var(--ease-out);
+  background: var(--secondary);
+  animation: sidebar-issues-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .shell--mobile-nav .sidebar-issues-panel__grabber {
@@ -81,7 +82,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 12px;
   background: var(--secondary);
 }
 
@@ -132,7 +133,17 @@
 
 .shell--mobile-nav .sidebar-issues-panel__mobile-close {
   display: inline-grid;
+  width: 36px;
+  height: 36px;
   place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  transition: transform 140ms var(--ease-out);
+}
+
+.shell--mobile-nav .sidebar-issues-panel__mobile-close:active {
+  transform: scale(0.97);
 }
 
 .shell--mobile-nav .sidebar-issues-panel__ask {
@@ -171,6 +182,10 @@
 /* Hub-tab strip (shared hub-tabs.css owns the tab look); this block only
    places it in the popover: the track hairline doubles as the header/list
    separator, so it must span the full panel width. */
+:root[data-theme-mode="dark"] .sidebar-issues-panel__tabs.hub-tabs {
+  --track-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
+}
+
 .sidebar-issues-panel__tabs {
   display: block;
   flex: none;
@@ -184,10 +199,25 @@
   padding-inline: 8px;
 }
 
+.shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+  gap: 0;
+  padding-inline: 0;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
+  width: 100%;
+  justify-content: center;
+}
+
 .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
   /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
      the page-hub sub tabs. */
-  padding-block: 6px 9px;
+  padding-block: 8px 11px;
 }
 
 .sidebar-issues-panel__list-wrap {
@@ -196,6 +226,7 @@
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
+  background: var(--bg-elevated);
 }
 
 .sidebar-issues-panel__list {

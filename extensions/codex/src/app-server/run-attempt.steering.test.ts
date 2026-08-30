@@ -99,6 +99,7 @@ function createSteeringParams() {
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
   params.toolAuthorityFingerprint = `authority-${sessionId}`;
+  params.model = { ...params.model, input: ["text", "image"] };
   return params;
 }
 
@@ -197,9 +198,26 @@ describe("runCodexAppServerAttempt steering", () => {
     await run;
   });
 
-  it.each(["none", "sleep", "dynamicToolCall", "commandExecution"])(
-    "persists every completed answer before Gateway steering across a %s barrier",
-    async (barrierType) => {
+  it.each([
+    ...["none", "sleep", "dynamicToolCall", "commandExecution"].map((barrierType) => ({
+      name: `Gateway steering across a ${barrierType} barrier`,
+      barrierType,
+      isInboundUserMessage: true,
+      provenance: undefined,
+    })),
+    {
+      name: "inter-session steering with provenance",
+      barrierType: "none",
+      isInboundUserMessage: false,
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+      },
+    },
+  ])(
+    "persists every completed answer before $name",
+    async ({ barrierType, isInboundUserMessage, provenance }) => {
       const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
       const params = createSteeringParams();
       const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
@@ -223,23 +241,38 @@ describe("runCodexAppServerAttempt steering", () => {
       });
       let steerPersisted = false;
       const userTurnTranscriptRecorder = {
+        message: { role: "user" as const, content: "steer this active turn", timestamp: 1 },
+        async resolveMessage() {
+          return this.message;
+        },
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
         persistApproved: vi.fn(async () => {
           if (steerPersisted) {
             return undefined;
           }
           steerPersisted = true;
-          return await appendSessionTranscriptMessageByIdentity({
+          await appendSessionTranscriptMessageByIdentity({
             ...sessionTarget,
             message: {
               role: "user",
               content: "steer this active turn",
               timestamp: Date.now(),
               idempotencyKey: `${params.runId}:steer:user`,
+              ...(provenance ? { provenance } : {}),
             },
           });
+          return undefined;
         }),
         hasPersisted: () => steerPersisted,
-      } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+      } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },
@@ -317,7 +350,7 @@ describe("runCodexAppServerAttempt steering", () => {
       // promise stays pending until the matching item/completed notification below.
       await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
         debounceMs: 0,
-        isInboundUserMessage: true,
+        isInboundUserMessage,
         toolAuthorityFingerprint: params.toolAuthorityFingerprint,
         taskSuggestionDeliveryMode: "gateway",
         waitForTranscriptCommit: true,
@@ -352,6 +385,7 @@ describe("runCodexAppServerAttempt steering", () => {
                 role: string;
                 content: string | Array<{ type: string; text?: string }>;
                 __openclaw?: { mirrorIdentity?: string };
+                provenance?: JsonObject;
               };
             }
           ).message;
@@ -365,7 +399,14 @@ describe("runCodexAppServerAttempt steering", () => {
                   .flatMap((part) => (part.type === "text" ? [part.text] : []))
                   .join("");
           return text
-            ? [{ role: message.role, text, mirrorIdentity: message["__openclaw"]?.mirrorIdentity }]
+            ? [
+                {
+                  role: message.role,
+                  text,
+                  mirrorIdentity: message["__openclaw"]?.mirrorIdentity,
+                  ...(message.provenance ? { provenance: message.provenance } : {}),
+                },
+              ]
             : [];
         });
       const prefix = await readTextRows();
@@ -399,7 +440,12 @@ describe("runCodexAppServerAttempt steering", () => {
         },
         { role: "assistant", text: "answer-a", mirrorIdentity: "turn-1:assistant:answer-a" },
         { role: "assistant", text: "answer-b", mirrorIdentity: "turn-1:assistant:answer-b" },
-        { role: "user", text: "steer this active turn", mirrorIdentity: undefined },
+        {
+          role: "user",
+          text: "steer this active turn",
+          mirrorIdentity: undefined,
+          ...(provenance ? { provenance } : {}),
+        },
       ]);
       expect(await readTextRows()).toEqual([
         ...prefix,

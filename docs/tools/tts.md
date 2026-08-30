@@ -97,6 +97,11 @@ preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
 fields shown below are canonical; each provider's own `voice`/`voiceId`/
 `voiceName` field names still work as legacy aliases.
 
+OpenRouter and DeepInfra use the first nonblank value from `speakerVoice`,
+`speakerVoiceId`, `voice`, and `voiceId`, in that order, before the provider default.
+Talk applies the same order to its provider block; when all four fields are absent
+or blank, it keeps the base TTS voice.
+
 <Tabs>
   <Tab title="Azure Speech">
 ```json5

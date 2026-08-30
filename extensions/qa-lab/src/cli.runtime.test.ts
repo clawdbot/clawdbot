@@ -2263,6 +2263,7 @@ describe("qa cli runtime", () => {
         "runtime-tool-tavily-extract",
         "runtime-tool-tavily-search",
         "runtime-tool-tts",
+        "internal-event-subagent-spawn-live",
       ],
     });
     expectWriteContains(

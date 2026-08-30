@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 const changes = resolveGlobalSingleton(Symbol.for("openclaw.userProfileChanges"), () => ({
   version: 0,
@@ -10,20 +11,11 @@ export function readUserProfileVersion(): number {
 }
 
 export function onUserProfilesChanged(listener: () => void): () => void {
-  changes.listeners.add(listener);
-  return () => {
-    changes.listeners.delete(listener);
-  };
+  return registerListener(changes.listeners, listener);
 }
 
 /** No profile data crosses this notification; readers reapply their own visibility policy. */
 export function emitUserProfilesChanged(): void {
   changes.version += 1;
-  for (const listener of changes.listeners) {
-    try {
-      listener();
-    } catch {
-      /* Persistence already committed. */
-    }
-  }
+  notifyListeners(changes.listeners, undefined);
 }

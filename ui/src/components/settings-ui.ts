@@ -231,7 +231,6 @@ export function renderSettingsToggleRow(props: {
   /** Runs synchronously during direct activation for effects gated on user activation. */
   onAct?: (checked: boolean) => void;
   disabled?: boolean;
-  actions?: TemplateResult | typeof nothing;
 }): TemplateResult {
   const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
     const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
@@ -266,7 +265,6 @@ export function renderSettingsToggleRow(props: {
           : nothing}
       </div>
       <div class="settings-row__control">
-        ${props.actions ?? nothing}
         <wa-switch
           class="settings-toggle"
           size="s"
@@ -290,37 +288,6 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
   return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
-}
-
-export function renderSettingsDefaultState(props: {
-  value: string;
-  overridden: boolean;
-  disabled?: boolean;
-  onReset: () => void;
-}): {
-  description: TemplateResult;
-  action: TemplateResult | typeof nothing;
-} {
-  return {
-    description: renderSettingsDefaultDescription(props.value, props.overridden),
-    action: props.overridden
-      ? html`
-          <button
-            type="button"
-            class="btn btn--icon"
-            title=${t("configForm.resetToDefault")}
-            aria-label=${t("configForm.resetToDefault")}
-            ?disabled=${props.disabled ?? false}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              props.onReset();
-            }}
-          >
-            ${icons.refresh}
-          </button>
-        `
-      : nothing,
-  };
 }
 
 export function renderSettingsSegmented<T extends string>(props: {

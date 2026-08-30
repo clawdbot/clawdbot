@@ -934,4 +934,59 @@ describe("resolveAuthProfileOrder", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    [{ type: "api_key", provider: "openai", key: "test-key" }, "oauth", "mode_mismatch"],
+    [{ type: "token", provider: "openai", token: "test-token" }, "oauth", "ok"],
+    [
+      {
+        type: "oauth",
+        provider: "openai",
+        access: "test-access",
+        refresh: "test-refresh",
+        expires: 2_000_000_000_000,
+      },
+      "api_key",
+      "mode_mismatch",
+    ],
+  ] as const)(
+    "keeps provider identity and configured mode distinct for %j",
+    (credential, configuredMode, expectedModeReason) => {
+      const authAliasLookupParams = { metadataSnapshot: { plugins: [] } };
+      const store: AuthProfileStore = { version: 1, profiles: { fixture: credential } };
+      const params = {
+        store,
+        profileId: "fixture",
+        provider: "openai",
+        authAliasLookupParams,
+        now: 1_700_000_000_000,
+      };
+
+      expect(
+        isStoredCredentialCompatibleWithAuthProvider({
+          provider: "other-provider",
+          credential,
+          authAliasLookupParams,
+        }),
+      ).toBe(false);
+      expect(
+        resolveAuthProfileEligibility({
+          ...params,
+          cfg: {
+            auth: {
+              profiles: { fixture: { provider: "other-provider", mode: credential.type } },
+            },
+          },
+        }),
+      ).toEqual({ eligible: false, reasonCode: "provider_mismatch" });
+      expect(
+        resolveAuthProfileEligibility({
+          ...params,
+          cfg: {
+            auth: { profiles: { fixture: { provider: "openai", mode: configuredMode } } },
+          },
+        }),
+      ).toEqual({ eligible: expectedModeReason === "ok", reasonCode: expectedModeReason });
+    },
+  );
 });

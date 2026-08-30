@@ -79,6 +79,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       getPrePromptMessageCount: () => 0,
       getPromptCache: () => undefined,
       getPromptCacheRetention: () => undefined,
+      getCompactionReplayEnabled: () => false,
       getSystemPrompt: () => "",
       isOpenAIResponsesApi: false,
       repairToolUseResultPairing: false,

@@ -7,7 +7,7 @@ export function renderImapPrompt(
   account: Pick<ImapAccountConfig, "includeBody" | "maxBytes">,
   sourceTruncated = false,
 ): string {
-  const body = account.includeBody ? (mail.text ?? mail.textAsHtml ?? "") : "";
+  const body = account.includeBody ? (mail.text ?? "") : "";
   const snippet = truncateUtf16Safe(body.replace(/\s+/gu, " "), 240);
   const attachments = mail.attachments.flatMap((attachment) =>
     attachment.filename ? [attachment.filename] : [],

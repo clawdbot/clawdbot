@@ -21,21 +21,26 @@ import {
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   commitCurrentChatHistorySnapshot,
+  fetchStagedOlderHistoryPage,
+  isStagedOlderHistoryPageCurrent,
   loadChatHistory,
   loadOlderChatHistoryPage,
   resolveChatHistoryPagination,
   rewindChatHistory,
   switchChatHistoryBranch,
+  type ChatHistoryResult,
+  type StagedOlderHistoryPage,
 } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
-  CHAT_HISTORY_INTENT_EDGE_PX,
+  CHAT_HISTORY_PREFETCH_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
   CHAT_HISTORY_TOUCH_INTENT_PX,
   CHAT_HISTORY_UPWARD_KEYS,
   clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
@@ -47,6 +52,16 @@ import {
 export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
+  // Staged prefetch: after a consumed older page, the next page is fetched in
+  // the background and parked here, so the following boundary crossing
+  // prepends without a visible round trip. One slot per pane; the claim is
+  // validated at consume time. Catalog sessions stay reactive: their opaque
+  // cursor loads apply directly to pane state and cannot be parked.
+  private stagedOlderPage: StagedOlderHistoryPage | null = null;
+  private stagedOlderLoad: Promise<void> | null = null;
+  // Bumped only by viewport resets: ordinary loads must not invalidate an
+  // in-flight prefetch or the join path could never consume it.
+  private stagedOlderGeneration = 0;
 
   protected hasOlderMessages(): boolean {
     const state = this.state;
@@ -62,6 +77,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   protected resetOlderMessagesViewport(): void {
     this.olderLoadGeneration += 1;
     this.activeOlderLoad = null;
+    this.stagedOlderGeneration += 1;
+    this.stagedOlderPage = null;
+    this.stagedOlderLoad = null;
     this.resetReplyNavigation();
     this.loadingOlder = false;
     this.historyObserverArmed = false;
@@ -142,7 +160,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           void this.loadOlderMessages();
         }
       },
-      { root, rootMargin: "300px 0px 0px", threshold: 0 },
+      // Fire well before the wall: a page fetch takes long enough that a short
+      // margin guarantees the user hits the top before the prepend lands. The
+      // arming gates above share this constant, so the trigger distance is real.
+      { root, rootMargin: `${CHAT_HISTORY_PREFETCH_EDGE_PX}px 0px 0px`, threshold: 0 },
     );
     this.historyObserverRoot = root;
     this.historyObserverSentinel = sentinel;
@@ -179,7 +200,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       root !== null &&
       previousScrollTop !== null &&
       root.scrollTop < previousScrollTop &&
-      root.scrollTop <= CHAT_HISTORY_INTENT_EDGE_PX;
+      root.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
     // A failed request or exhausted bootstrap stays disarmed until renewed
     // upward intent, preventing request loops without stranding older history.
@@ -237,7 +258,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     if (
       !root ||
       !upward ||
-      root.scrollTop > CHAT_HISTORY_INTENT_EDGE_PX ||
+      root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.loadingOlder ||
       !this.hasOlderMessages() ||
       !this.consumeHistoryIntent()
@@ -257,14 +278,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const state = this.state;
     const root = this.transcript.scrollElement;
     if (!state || !root) {
-      return;
-    }
-    if (root.scrollTop > CHAT_HISTORY_INTENT_EDGE_PX) {
-      const nextScrollTop = Math.max(0, root.scrollTop - root.clientHeight);
-      // Keep the observer's intent tracker aligned so this explicit page-up
-      // cannot masquerade as a user scroll and trigger an older-page load.
-      this.transcriptScrollTop = nextScrollTop;
-      root.scrollTop = nextScrollTop;
       return;
     }
     const sessionKey = state.sessionKey;
@@ -309,11 +322,18 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return false;
     }
     const generation = ++this.olderLoadGeneration;
-    this.loadingOlder = true;
-    state.requestUpdate();
+    // A staged page applies without ever entering the loading state, so the
+    // boundary shows no shimmer flash for an instant prepend.
+    const markLoading = () => {
+      if (!this.loadingOlder) {
+        this.loadingOlder = true;
+        state.requestUpdate();
+      }
+    };
     let prepended = false;
     try {
       if (catalogKey) {
+        markLoading();
         prepended = await this.loadCatalogSession(catalogKey, true);
       } else {
         const pagination = state.chatHistoryPagination;
@@ -323,7 +343,20 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         const requestedOffset = pagination.nextOffset;
         const expectedSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
-        const result = await loadOlderChatHistoryPage(state, requestedOffset);
+        let result = this.takeStagedOlderPage(state);
+        if (!result && this.stagedOlderLoad) {
+          // Join the in-flight prefetch instead of issuing a duplicate request.
+          markLoading();
+          await this.stagedOlderLoad;
+          if (generation !== this.olderLoadGeneration) {
+            return false;
+          }
+          result = this.takeStagedOlderPage(state);
+        }
+        if (!result) {
+          markLoading();
+          result = (await loadOlderChatHistoryPage(state, requestedOffset)) ?? null;
+        }
         if (!result || generation !== this.olderLoadGeneration) {
           return false;
         }
@@ -359,6 +392,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         commitCurrentChatHistorySnapshot(state);
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
+        if (!exhausted) {
+          this.stageNextOlderPage(state);
+        }
       }
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
@@ -379,6 +415,47 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       }
     }
     return prepended;
+  }
+
+  private stageNextOlderPage(state: ChatState): void {
+    if (this.stagedOlderPage || this.stagedOlderLoad) {
+      return;
+    }
+    const pagination = state.chatHistoryPagination;
+    if (!pagination.hasMore || parseCatalogSessionKey(state.sessionKey)) {
+      return;
+    }
+    const generation = this.stagedOlderGeneration;
+    // One async closure keeps the bookkeeping inside the awaited promise, so a
+    // joiner resuming from this load always observes the staged page and the
+    // cleared in-flight slot together. The generation guard keeps a stale
+    // finally (fetch outliving a viewport reset) off a successor's slot.
+    this.stagedOlderLoad = (async () => {
+      try {
+        const staged = await fetchStagedOlderHistoryPage(state, pagination.nextOffset);
+        if (staged && generation === this.stagedOlderGeneration && this.state === state) {
+          this.stagedOlderPage = staged;
+        }
+      } catch {
+        // Prefetch is best-effort: the reactive path owns retries, error
+        // surfacing, and the blocked-until-intent machinery.
+      } finally {
+        if (generation === this.stagedOlderGeneration) {
+          this.stagedOlderLoad = null;
+        }
+      }
+    })();
+  }
+
+  // Single-consume: an invalid staged page is discarded rather than retried so
+  // stale prefetches can never shadow the reactive path's fresh cursor.
+  private takeStagedOlderPage(state: ChatState): ChatHistoryResult | null {
+    const staged = this.stagedOlderPage;
+    if (!staged) {
+      return null;
+    }
+    this.stagedOlderPage = null;
+    return isStagedOlderHistoryPageCurrent(state, staged) ? staged.result : null;
   }
 
   protected async continueCatalogSession(key: CatalogSessionKey) {
@@ -498,7 +575,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       const result = await state.sessions.forkAtMessage(sourceKey, entryId, agentParams);
       const editorText = result.editorText ?? "";
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !visibleSessionMatches(state, sourceKey, agentParams.agentId)
       ) {
         return;
@@ -516,7 +593,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       });
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !visibleSessionMatches(state, sourceKey, agentParams.agentId)
       ) {
         return;

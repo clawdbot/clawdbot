@@ -91,7 +91,9 @@ function ownerHue(id: string): number {
   return Math.abs(hash) % 360;
 }
 
-export function renderSessionOwnerMenuAvatar(owner: SessionOwnerOption) {
+export function renderSessionOwnerAvatar(
+  owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">,
+) {
   return html`<openclaw-viewer-avatar
     .identity=${owner.identity}
     .user=${{
@@ -157,18 +159,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
         >${avatar?.kind === "profile"
-          ? html`<openclaw-viewer-avatar
-              .identity=${owner.identity}
-              .user=${{
-                id: owner.id,
-                name: owner.label,
-                avatarUrl: owner.avatarUrl,
-                watchedSessions: [],
-              }}
-              .markAsViewer=${false}
-              variant="session"
-              aria-hidden="true"
-            ></openclaw-viewer-avatar>`
+          ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
           : initials}</span
       >
     `;
@@ -184,17 +175,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
     return html`<span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
       <span class="session-owner-stack__back" aria-hidden="true">
         ${this.participantCount === 1 && participant
-          ? html`<openclaw-viewer-avatar
-              .user=${{
-                id: participant.identity.id,
-                name: participant.label,
-                avatarUrl: participant.avatarUrl,
-                watchedSessions: [],
-              }}
-              .markAsViewer=${false}
-              .identity=${participant.identity}
-              variant="session"
-            ></openclaw-viewer-avatar>`
+          ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
           : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
       </span>
       ${chip}

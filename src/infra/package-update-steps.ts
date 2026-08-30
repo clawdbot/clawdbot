@@ -9,13 +9,13 @@ import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
-import { parseSemver } from "./runtime-guard.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   type PackageUpdateStepAdvisory,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
+import type { GitRuntimeIdentity } from "./update-git-runtime.js";
 import {
   collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
@@ -288,30 +288,8 @@ async function validatePnpmIsolatedUpdate(params: {
     };
   }
 
-  const versionProbe = await runPnpmPreflightProbe({ ...params, args: ["--version"] });
-  if (versionProbe.failedStep || !versionProbe.result) {
-    return {
-      globalBinDir: null,
-      failedStep: versionProbe.failedStep,
-    };
-  }
-  const reportedVersion = readPackageManagerProbeValue(versionProbe.result.stdout);
-  const version = parseSemver(reportedVersion);
-  if (version?.major !== owner.layoutVersion) {
-    return {
-      globalBinDir: null,
-      failedStep: {
-        name: "pnpm isolated install preflight",
-        command: `${params.installTarget.command} --version`,
-        cwd: expectedGlobalRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stdoutTail: versionProbe.result.stdout || null,
-        stderrTail: `OpenClaw belongs to pnpm isolated layout v${owner.layoutVersion}, but the update command reports pnpm ${reportedVersion || "unknown"}. Use pnpm ${owner.layoutVersion} for this install or update it manually.`,
-      },
-    };
-  }
-
+  // The CLI major is independent of the global layout (pnpm 12 still uses v11).
+  // Ownership is established by the active project, reported root, and bin above.
   return {
     globalBinDir,
     failedStep: null,
@@ -488,10 +466,8 @@ function resolvePnpmInstallSpecFromCwd(
   const aliasPrefix = `${packageName.trim()}@`;
   const hasAlias = trimmed.toLowerCase().startsWith(aliasPrefix.toLowerCase());
   const targetSpec = hasAlias ? trimmed.slice(aliasPrefix.length).trim() : trimmed;
-  const restoreAlias = (target: string) => (hasAlias ? `${aliasPrefix}${target}` : target);
-  if (/^~[\\/]/u.test(targetSpec)) {
-    return spec;
-  }
+  const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || sourceCwd.startsWith("\\\\");
+  const paths = windowsPath ? path.win32 : path;
   const localProtocol = /^(file:|git\+file:|link:)(.*)$/iu.exec(targetSpec);
   if (localProtocol) {
     const protocol = localProtocol[1] ?? "";
@@ -499,27 +475,37 @@ function resolvePnpmInstallSpecFromCwd(
     const fragmentIndex = protocol.toLowerCase() === "git+file:" ? target.indexOf("#") : -1;
     const targetPath = fragmentIndex >= 0 ? target.slice(0, fragmentIndex) : target;
     const fragment = fragmentIndex >= 0 ? target.slice(fragmentIndex) : "";
-    if (
+    const resolvedTarget =
       targetPath &&
       !/^~[\\/]/u.test(targetPath) &&
       !path.isAbsolute(targetPath) &&
       !path.win32.isAbsolute(targetPath)
-    ) {
-      const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || sourceCwd.startsWith("\\\\");
-      const resolvedTarget = (windowsPath ? path.win32 : path).resolve(sourceCwd, targetPath);
-      if (protocol.toLowerCase() === "git+file:") {
-        return restoreAlias(
-          `git+${pathToFileURL(resolvedTarget, { windows: windowsPath }).href}${fragment}`,
-        );
-      }
-      return restoreAlias(`${protocol}${resolvedTarget}`);
+        ? paths.resolve(sourceCwd, targetPath)
+        : targetPath;
+    if (protocol.toLowerCase() === "git+file:") {
+      return resolvedTarget === targetPath
+        ? spec
+        : `${hasAlias ? aliasPrefix : ""}git+${pathToFileURL(resolvedTarget, { windows: windowsPath }).href}${fragment}`;
     }
+    return `${aliasPrefix}${protocol}${resolvedTarget}`;
+  }
+  const isPath =
+    /^(?:\.{1,2}|~)(?:[\\/]|$)/u.test(targetSpec) ||
+    path.isAbsolute(targetSpec) ||
+    path.win32.isAbsolute(targetSpec);
+  // Match the updater's explicit archive targets; bare .tar remains a registry name.
+  if (
+    !isPath &&
+    (hasAlias || /[:@]/u.test(targetSpec) || !/\.(?:tgz|tar\.gz)$/iu.test(targetSpec))
+  ) {
     return spec;
   }
-  // pnpm treats scheme-less tar-like values as registry names or tags. Only
-  // explicit dot paths are caller-relative and must move with the command cwd.
-  const isRelativePath = /^\.{1,2}(?:[\\/]|$)/u.test(targetSpec);
-  return isRelativePath ? restoreAlias(path.resolve(sourceCwd, targetSpec)) : spec;
+  const target =
+    isPath && !/^\.{1,2}(?:[\\/]|$)/u.test(targetSpec)
+      ? targetSpec
+      : paths.resolve(sourceCwd, targetSpec);
+  // Native pnpm needs a package name; source links must follow atomic file replacements.
+  return `${aliasPrefix}${/\.(?:tgz|tar\.gz|tar)$/iu.test(target) ? "file" : "link"}:${target}`;
 }
 
 async function createStagedNpmInstall(
@@ -876,6 +862,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
+  expectedGitCheckout?: GitRuntimeIdentity;
 }): Promise<PackageUpdateStepsResult> {
   let stagedInstall: StagedNpmInstall | null = null;
   let packedInstallDir: string | null = null;
@@ -920,7 +907,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         : null;
     // Bun's global project follows its environment, not the selected binary.
     // Bind the mutation to the verified owner even when service settings drift.
-    const effectiveInstallEnv =
+    let effectiveInstallEnv =
       params.installTarget.manager === "bun" && params.installTarget.globalRoot
         ? {
             ...(params.env ?? process.env),
@@ -928,31 +915,40 @@ export async function runGlobalPackageUpdateSteps(params: {
             ...(bunOwner?.bunInstall ? { BUN_INSTALL: bunOwner.bunInstall } : {}),
           }
         : params.env;
-    // Keep pnpm preflight and mutation on its verified executable without
-    // rewriting PATH; `pnpm bin -g` already checks the owning binary directory.
+    if (params.installTarget.manager === "pnpm" && params.installTarget.globalRoot) {
+      const globalDir = resolvePnpmGlobalDirFromGlobalRoot(params.installTarget.globalRoot);
+      // Bind verified paths through both pnpm configuration dialects, in both
+      // cases, after original-env probes so inherited aliases cannot redirect it.
+      // pnpm 11 keeps its already-probed config and cwd.
+      effectiveInstallEnv = {
+        ...(params.env ?? process.env),
+        ...(globalDir
+          ? {
+              pnpm_config_global_dir: globalDir,
+              PNPM_CONFIG_GLOBAL_DIR: globalDir,
+              npm_config_global_dir: globalDir,
+              NPM_CONFIG_GLOBAL_DIR: globalDir,
+            }
+          : {}),
+        ...(pnpmPreflight.globalBinDir
+          ? {
+              pnpm_config_global_bin_dir: pnpmPreflight.globalBinDir,
+              PNPM_CONFIG_GLOBAL_BIN_DIR: pnpmPreflight.globalBinDir,
+              npm_config_global_bin_dir: pnpmPreflight.globalBinDir,
+              NPM_CONFIG_GLOBAL_BIN_DIR: pnpmPreflight.globalBinDir,
+            }
+          : {}),
+      };
+    }
     const installEnv = effectiveInstallEnv === undefined ? {} : { env: effectiveInstallEnv };
-    const resolvedInstallTarget =
-      params.installTarget.pnpmIsolated && pnpmPreflight.globalBinDir
-        ? {
-            ...params.installTarget,
-            pnpmIsolated: {
-              ...params.installTarget.pnpmIsolated,
-              globalBinDir: pnpmPreflight.globalBinDir,
-            },
-          }
-        : params.installTarget;
-
-    const preparedInstall = await prepareStagedNpmInstall(
-      resolvedInstallTarget,
-      params.packageName,
-    );
+    const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
       return packageUpdateFailure(preparedInstall.failedStep, params.packageRoot ?? null);
     }
 
     const steps: PackageUpdateStepResult[] = [];
-    const installCommandTarget = stagedInstall?.installTarget ?? resolvedInstallTarget;
+    const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
       installSpec: params.installSpec,
@@ -968,30 +964,26 @@ export async function runGlobalPackageUpdateSteps(params: {
       return packageUpdateFailure(preparedSpec.failedStep, params.packageRoot ?? null, steps);
     }
 
-    const installLocation =
-      stagedInstall?.prefix ??
-      (installCommandTarget.manager === "pnpm"
-        ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot)
-        : null);
     // pnpm selects its version from cwd. Keep every pnpm mutation beside its
     // detected global root, after preserving caller-relative package specs.
     const pnpmMutationCwd =
       installCommandTarget.manager === "pnpm" ? installCommandTarget.globalRoot : null;
     const updateCwd = pnpmMutationCwd ?? preparedSpec.installCwd;
-    const updateInstallSpec = pnpmMutationCwd
-      ? resolvePnpmInstallSpecFromCwd(
-          preparedSpec.installSpec,
-          params.packageName,
-          preparedSpec.installCwd ?? process.cwd(),
-        )
-      : preparedSpec.installSpec;
+    const updateInstallSpec =
+      installCommandTarget.manager === "pnpm"
+        ? resolvePnpmInstallSpecFromCwd(
+            preparedSpec.installSpec,
+            params.packageName,
+            preparedSpec.installCwd ?? process.cwd(),
+          )
+        : preparedSpec.installSpec;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
         installCommandTarget,
         updateInstallSpec,
         undefined,
-        installLocation,
+        stagedInstall?.prefix,
         preparedSpec.installCwd,
         npmPreflight.policy ?? undefined,
       ),
@@ -1105,6 +1097,17 @@ export async function runGlobalPackageUpdateSteps(params: {
       null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
     let verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
+    if (finalInstallStep.exitCode === 0 && !verificationPackageRoot && params.expectedGitCheckout) {
+      const failedStep: PackageUpdateStepResult = {
+        name: "global install verify",
+        command: "resolve installed checkout",
+        cwd: updateCwd ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: "could not identify the installed checkout root",
+      };
+      return packageUpdateFailure(failedStep, null, [...steps, failedStep]);
+    }
 
     // Some pnpm releases accept --allow-build for global local-tar installs
     // but still skip lifecycle scripts. Keep a marker outside dist because
@@ -1190,6 +1193,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       const verificationErrors = await collectInstalledGlobalPackageErrors({
         packageRoot: verificationPackageRoot,
         expectedVersion,
+        expectedGitCheckout: params.expectedGitCheckout,
       });
       if (verificationErrors.length > 0) {
         steps.push({

@@ -161,28 +161,38 @@ describe("gateway concurrency benchmark script", () => {
     expect(testing.summarizeNumbers([])).toBeNull();
   });
 
-  it("bounds an accepted turn wait by the benchmark deadline", async () => {
-    const calls: Array<{ method: string; params: unknown; timeoutMs?: number }> = [];
-    const rpc = async <T>(method: string, params: unknown, timeoutMs?: number): Promise<T> => {
-      calls.push({ method, params, timeoutMs });
-      return (
-        method === "agent" ? { runId: "run-1", status: "accepted" } : { status: "timeout" }
-      ) as T;
-    };
+  it.each([
+    { budgetMs: 2_000, minimumWaitMs: 0 },
+    { budgetMs: 120_000, minimumWaitMs: 110_000 },
+  ])(
+    "bounds an accepted turn wait by its $budgetMs ms benchmark budget",
+    async ({ budgetMs, minimumWaitMs }) => {
+      const calls: Array<{ method: string; params: unknown; timeoutMs?: number }> = [];
+      const rpc = async <T>(method: string, params: unknown, timeoutMs?: number): Promise<T> => {
+        calls.push({ method, params, timeoutMs });
+        return (
+          method === "agent" ? { runId: "run-1", status: "accepted" } : { status: "timeout" }
+        ) as T;
+      };
 
-    await expect(testing.runTurn(rpc, 0, performance.now() + 2_000)).rejects.toThrow(
-      "agent 1 did not complete",
-    );
+      await expect(testing.runTurn(rpc, 0, performance.now() + budgetMs)).rejects.toThrow(
+        "agent 1 did not complete",
+      );
 
-    const wait = calls.find((call) => call.method === "agent.wait");
-    expect(wait?.params).toMatchObject({ runId: "run-1" });
-    const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown } | undefined)?.timeoutMs;
-    expect(serverTimeoutMs).toBe(0);
-    expect(wait?.timeoutMs).toEqual(expect.any(Number));
-    expect(Number.isInteger(wait?.timeoutMs)).toBe(true);
-    expect(wait?.timeoutMs).toBeGreaterThan(serverTimeoutMs as number);
-    expect(wait?.timeoutMs).toBeLessThanOrEqual(2_000);
-  });
+      const wait = calls.find((call) => call.method === "agent.wait");
+      expect(wait?.params).toMatchObject({ runId: "run-1" });
+      const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown } | undefined)?.timeoutMs;
+      if (minimumWaitMs === 0) {
+        expect(serverTimeoutMs).toBe(0);
+      } else {
+        expect(serverTimeoutMs).toBeGreaterThanOrEqual(minimumWaitMs);
+      }
+      expect(wait?.timeoutMs).toEqual(expect.any(Number));
+      expect(Number.isInteger(wait?.timeoutMs)).toBe(true);
+      expect(wait?.timeoutMs).toBeGreaterThan(serverTimeoutMs as number);
+      expect(wait?.timeoutMs).toBeLessThanOrEqual(budgetMs);
+    },
+  );
 
   it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
     const deadlines: number[] = [];

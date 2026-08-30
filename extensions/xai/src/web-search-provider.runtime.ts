@@ -1,5 +1,4 @@
 // Xai provider module implements model/runtime integration.
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   coerceSecretRef,
@@ -136,7 +135,7 @@ function runXaiWebSearch(params: {
   const cacheKey = normalizeCacheKey(
     `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
-  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey);
+  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return Promise.resolve({ ...cached.value, cached: true });
   }
@@ -217,12 +216,10 @@ async function resolveXaiProviderAuthCredential(params: {
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   try {
     const config = params.config as OpenClawConfig | undefined;
-    const agentDir =
-      params.agentDir?.trim() || (config ? resolveDefaultAgentDir(config) : undefined);
     const resolved = await resolveApiKeyForProvider({
       provider: XAI_PROVIDER_ID,
       cfg: config,
-      ...(agentDir ? { agentDir } : {}),
+      agentDir: params.agentDir,
       ...(params.profileId
         ? {
             profileId: params.profileId,

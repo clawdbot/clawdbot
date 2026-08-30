@@ -9,6 +9,8 @@ import {
   errorShape,
   validatePushTestParams,
   validateWebPushSubscribeParams,
+  validateWebPushPreferencesGetParams,
+  validateWebPushPreferencesSetParams,
   validateWebPushTestParams,
   validateWebPushUnsubscribeParams,
   validateWebPushVapidPublicKeyParams,
@@ -23,14 +25,75 @@ import {
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
 import {
+  WEB_PUSH_USER_PREFERENCES_KEY,
+  normalizeWebPushDevicePreferences,
+  normalizeWebPushNotificationPreferences,
+  resolveEffectiveWebPushPreferences,
+} from "../../infra/push-web-preferences.js";
+import {
+  WebPushSubscriptionBindingError,
   broadcastWebPush,
-  clearWebPushSubscriptionByEndpoint,
+  clearBoundWebPushSubscription,
+  findBoundWebPushSubscriptionByEndpoint,
   registerWebPushSubscription,
   resolveVapidKeys,
+  setWebPushSubscriptionPreferences,
 } from "../../infra/push-web.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { respondUnavailableOnThrow } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+function hasValidWebPushQuietHoursTimeZone(preferences: {
+  quietHours?: { timeZone: string };
+}): boolean {
+  const timeZone = preferences.quietHours?.timeZone;
+  if (!timeZone) {
+    return true;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function authorizeWebPushSubscription(
+  endpoint: string,
+  { client, respond }: Pick<GatewayRequestHandlerOptions, "client" | "respond">,
+) {
+  const deviceId = normalizeOptionalString(client?.connect.device?.id);
+  const subscription = findBoundWebPushSubscriptionByEndpoint({ endpoint });
+  if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
+    );
+    return undefined;
+  }
+  const currentProfileId = client?.authenticatedUserProfile?.profileId
+    ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
+    : undefined;
+  const subscriptionProfileId = subscription.userProfileId
+    ? resolveUserProfileId(subscription.userProfileId)
+    : undefined;
+  if (
+    (subscription.userProfileId && !subscriptionProfileId) ||
+    (client?.authenticatedUserProfile?.profileId && !currentProfileId) ||
+    (subscriptionProfileId ?? null) !== (currentProfileId ?? null)
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
+    );
+    return undefined;
+  }
+  return { subscription, currentProfileId };
+}
 
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond, context }) => {
@@ -142,21 +205,51 @@ export const pushHandlers: GatewayRequestHandlers = {
     });
   },
 
-  "push.web.subscribe": async ({ params, respond }) => {
+  "push.web.subscribe": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateWebPushSubscribeParams, "push.web.subscribe", respond)) {
       return;
     }
 
+    const deviceId = normalizeOptionalString(client?.connect.device?.id);
+    if (!deviceId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "paired browser device identity required"),
+      );
+      return;
+    }
+    const userProfileId = normalizeOptionalString(client?.authenticatedUserProfile?.profileId);
+    if (context.getRuntimeConfig().gateway?.roles && !userProfileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Web Push requires an authenticated user profile when Gateway roles are enabled",
+        ),
+      );
+      return;
+    }
+
     await respondUnavailableOnThrow(respond, async () => {
-      const subscription = await registerWebPushSubscription({
-        endpoint: params.endpoint,
-        keys: params.keys,
-      });
-      respond(true, { subscriptionId: subscription.subscriptionId }, undefined);
+      try {
+        const subscription = await registerWebPushSubscription({
+          endpoint: params.endpoint,
+          keys: params.keys,
+          binding: { deviceId, userProfileId: userProfileId ?? null },
+        });
+        respond(true, { subscriptionId: subscription.subscriptionId }, undefined);
+      } catch (error) {
+        if (!(error instanceof WebPushSubscriptionBindingError)) {
+          throw error;
+        }
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+      }
     });
   },
 
-  "push.web.unsubscribe": async ({ params, respond }) => {
+  "push.web.unsubscribe": async ({ params, respond, client }) => {
     if (
       !assertValidParams(params, validateWebPushUnsubscribeParams, "push.web.unsubscribe", respond)
     ) {
@@ -164,9 +257,137 @@ export const pushHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      const removed = await clearWebPushSubscriptionByEndpoint(params.endpoint);
+      const authorized = authorizeWebPushSubscription(params.endpoint, { client, respond });
+      if (!authorized) {
+        return;
+      }
+      const { subscription } = authorized;
+      const removed = await clearBoundWebPushSubscription({
+        endpoint: params.endpoint,
+        expectedDeviceId: subscription.deviceId,
+        expectedUserProfileId: subscription.userProfileId,
+      });
+      if (!removed) {
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"));
+        return;
+      }
       respond(true, { removed }, undefined);
     });
+  },
+
+  "push.web.preferences.get": async ({ params, respond, client }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateWebPushPreferencesGetParams,
+        "push.web.preferences.get",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const authorized = authorizeWebPushSubscription(params.endpoint, { client, respond });
+    if (!authorized) {
+      return;
+    }
+    const { subscription, currentProfileId } = authorized;
+    const storedUser = currentProfileId
+      ? getUserPreferences(currentProfileId, [WEB_PUSH_USER_PREFERENCES_KEY])[
+          WEB_PUSH_USER_PREFERENCES_KEY
+        ]
+      : undefined;
+    const user = normalizeWebPushNotificationPreferences(storedUser);
+    respond(
+      true,
+      {
+        durableIdentity: Boolean(currentProfileId),
+        user,
+        device: subscription.devicePreferences,
+        effective: resolveEffectiveWebPushPreferences({
+          user,
+          device: subscription.devicePreferences,
+        }),
+      },
+      undefined,
+    );
+  },
+
+  "push.web.preferences.set": async ({ params, respond, client, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateWebPushPreferencesSetParams,
+        "push.web.preferences.set",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const authorized = authorizeWebPushSubscription(params.endpoint, { client, respond });
+    if (!authorized) {
+      return;
+    }
+    const { subscription, currentProfileId } = authorized;
+    if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid notification quiet-hours time zone"),
+      );
+      return;
+    }
+    if (params.scope === "user") {
+      if (!currentProfileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "user defaults require a durable authenticated profile",
+          ),
+        );
+        return;
+      }
+      const preferences = normalizeWebPushNotificationPreferences(params.preferences);
+      const result = setUserPreferences(currentProfileId, {
+        [WEB_PUSH_USER_PREFERENCES_KEY]: preferences,
+      });
+      if (!result.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "could not save notification preferences"),
+        );
+        return;
+      }
+      respond(true, { scope: "user", preferences }, undefined);
+      const connIds = context.getClientConnIds?.((connectedClient) => {
+        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
+        return Boolean(
+          connectedProfileId && resolveUserProfileId(connectedProfileId) === currentProfileId,
+        );
+      });
+      if (connIds?.size) {
+        context.broadcastToConnIds(
+          "users.prefs.changed",
+          { profileId: currentProfileId, keys: [WEB_PUSH_USER_PREFERENCES_KEY] },
+          connIds,
+        );
+      }
+      return;
+    }
+    const preferences = normalizeWebPushDevicePreferences(params.preferences);
+    const updated = setWebPushSubscriptionPreferences({
+      endpoint: params.endpoint,
+      preferences,
+      expectedDeviceId: subscription.deviceId,
+      expectedUserProfileId: subscription.userProfileId,
+    });
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"));
+      return;
+    }
+    respond(true, { scope: "device", preferences }, undefined);
   },
 
   "push.web.test": async ({ params, respond }) => {

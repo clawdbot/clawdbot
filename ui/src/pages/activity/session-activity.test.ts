@@ -3,8 +3,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   parseSessionActivityFilters,
   projectSessionActivity,
-  resolveActivityIdentity,
-  resolveViewingNow,
   sessionActivitySearch,
 } from "./session-activity.ts";
 
@@ -73,55 +71,5 @@ describe("session activity projection", () => {
     const search = sessionActivitySearch(filters);
     expect(search).toBe("?time=30d&person=profile%2Fa&q=release+notes");
     expect(parseSessionActivityFilters(search)).toEqual(filters);
-  });
-});
-
-describe("per-person activity projection", () => {
-  const rows: GatewaySessionRow[] = [
-    { key: "agent:main:first", kind: "direct", updatedAt: 10 },
-    { key: "agent:main:second", kind: "direct", updatedAt: 20 },
-  ];
-  it("keeps presence details and resolves only known watched sessions", () => {
-    const identity = resolveActivityIdentity(
-      "alice",
-      {
-        presence: [
-          {
-            instanceId: "alice-laptop",
-            host: "Alice's Mac",
-            lastInputSeconds: 30,
-            ts: 10,
-            user: { id: "alice", name: "Alice", email: "alice@example.test" },
-            watchedSessions: ["agent:main:first", "missing"],
-          },
-          {
-            instanceId: "alice-phone",
-            host: "Alice's phone",
-            ts: 20,
-            user: { id: "alice", name: "Alice" },
-            watchedSessions: ["agent:main:second"],
-          },
-        ],
-      },
-      people,
-    );
-    expect(identity).toMatchObject({
-      id: "alice",
-      email: "alice@example.test",
-      watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
-    });
-    expect(identity?.entries?.map((entry) => entry.host)).toEqual(["Alice's Mac", "Alice's phone"]);
-    expect(resolveViewingNow(identity!, rows).map((row) => row.key)).toEqual([
-      "agent:main:second",
-      "agent:main:first",
-    ]);
-  });
-  it("uses the server profile facet for offline identities", () => {
-    expect(resolveActivityIdentity("alice", { presence: [] }, people)).toMatchObject({
-      id: "alice",
-      name: "Alice",
-      watchedSessions: [],
-    });
-    expect(resolveActivityIdentity("unknown", { presence: [] }, people)).toBeNull();
   });
 });

@@ -33,7 +33,8 @@ openclaw gateway run   # equivalent, explicit form
 <AccordionGroup>
   <Accordion title="Startup behavior">
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
-    - When startup finds a repairable invalid config, an interactive terminal offers to run `openclaw doctor --fix` and retries startup once after consent. Non-interactive runs never repair automatically; they print the command instead. If the repaired config is still invalid, startup remains stopped.
+    - Startup automatically applies deterministic, prompt-free legacy-key migrations to eligible invalid single-file configs, including in non-interactive service runs. It writes only after full validation, including plugins, and keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer version are excluded. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
+    - If automatic migration cannot make the config valid, an interactive terminal can offer to run `openclaw doctor --fix` and retry startup once after consent. Non-interactive runs print the command instead. If the repaired config is still invalid, startup remains stopped.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths today; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
@@ -153,7 +154,28 @@ Named profiles must also use the native service identity derived from `OPENCLAW_
 
 On Linux, `openclaw gateway install --force` refuses a sealed systemd service
 definition, or one whose write authority cannot be verified, before changing
-configuration, authentication tokens, or service files. Ask the privileged deployment owner to repair or replace the definition.
+configuration, authentication tokens, or service files. The error keeps its
+`SERVICE_DEFINITION_SEALED` or `SERVICE_DEFINITION_UNKNOWN` prefix and adds a
+reason tag and next action, without printing private paths, config, environment values,
+or underlying inspection errors.
+
+For `[unsafe-permissions]`, inspect the named artifact category locally. The
+service directory is `~/.config/systemd/user`; on a fresh install, its nearest
+existing ancestor may be `~/.config`. The service state directory belongs to the
+selected profile. Check directory metadata, not file contents:
+
+```bash
+ls -ld ~/.config ~/.config/systemd ~/.config/systemd/user
+```
+
+Missing directories are normal on a fresh install. After confirming the affected
+path is yours and is not intentionally shared, remove group/other write access
+with `chmod go-w <path>` and retry the same command. Mode `0700` is appropriate
+for private directories. Do not recursively chmod, take ownership of system
+paths, or use `sudo`/`--force` to bypass the check. Foreign-owned files and sealed
+mounts require the deployment owner; inspection failures require restoring
+filesystem or native service-manager access first.
+
 Type-wide `service.d` defaults are inspected as shared read-only inputs and do
 not require write access. Root-owned selected units and unit-specific drop-ins
 remain protected.

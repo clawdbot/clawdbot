@@ -16,6 +16,15 @@ export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("full"),
 ]);
 
+export const SessionRunStatusSchema = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("running"),
+  Type.Literal("done"),
+  Type.Literal("failed"),
+  Type.Literal("killed"),
+  Type.Literal("timeout"),
+]);
+
 export const SessionToolOverridesSchema = closedObject({
   mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
   mcpToolsDeny: Type.Optional(
@@ -57,6 +66,8 @@ export const SessionRowSchema = Type.Object(
     ]),
     label: Type.Optional(Type.String()),
     icon: Type.Optional(Type.String()),
+    /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
+    color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
@@ -84,16 +95,7 @@ export const SessionRowSchema = Type.Object(
     markedUnreadAt: Type.Optional(Type.Number()),
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("queued"),
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("failed"),
-        Type.Literal("killed"),
-        Type.Literal("timeout"),
-      ]),
-    ),
+    status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
@@ -170,6 +172,6 @@ export const SessionRowSchema = Type.Object(
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
+export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
-export type SessionRunStatus = NonNullable<SessionRow["status"]>;

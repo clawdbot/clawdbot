@@ -1,6 +1,6 @@
 // Markdown Core module implements frontmatter behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMap, isNode, isScalar, parseDocument } from "yaml";
+import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
 
@@ -80,28 +80,48 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
-function normalizeFreeformDescription(block: string): string {
+const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
+
+function normalizeFreeformFieldAtError(block: string): string {
   const doc = parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
     return block;
   }
-  const descriptionPair = doc.contents.items.find(
-    (pair) => isScalar(pair.key) && pair.key.value === "description",
+  const error = doc.errors.find((candidate) => candidate.pos?.[0] !== undefined);
+  // Aliases fail during toJS without adding a document error position.
+  const descriptionAlias = doc.contents.items.find(
+    (candidate) =>
+      isScalar(candidate.key) && candidate.key.value === "description" && isAlias(candidate.value),
   );
-  const keyStart = isNode(descriptionPair?.key) ? descriptionPair.key.range?.[0] : undefined;
-  if (keyStart === undefined) {
+  const pos =
+    error?.pos?.[0] ??
+    (isNode(descriptionAlias?.key) ? descriptionAlias.key.range?.[0] : undefined);
+  if (pos === undefined) {
     return block;
   }
-  const lineStart = block.lastIndexOf("\n", keyStart - 1) + 1;
-  const lineEnd = block.indexOf("\n", keyStart);
+  const lineStart = block.lastIndexOf("\n", pos) + 1;
+  const lineEnd = block.indexOf("\n", pos);
   const end = lineEnd === -1 ? block.length : lineEnd;
   const line = block.slice(lineStart, end);
-  const match = line.match(/^(?:description|"description"|'description'):\s*(.*)$/);
-  const rawValue = match?.[1]?.trim();
-  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)) {
+  const match = line.match(/^(?:([\w-]+)|"([\w-]+)"|'([\w-]+)'):\s*(.*)$/);
+  const keyName = match?.[1] ?? match?.[2] ?? match?.[3];
+  const rawValue = match?.[4]?.trim();
+  const isTopLevelField = doc.contents.items.some(
+    (pair) => isScalar(pair.key) && pair.key.value === keyName && pair.key.range?.[0] === lineStart,
+  );
+  // Keep shipped description recovery; other text fields only recover colon-rich parser errors.
+  const recoverColonRichText = error?.code === "BLOCK_AS_IMPLICIT_KEY" && rawValue?.includes(": ");
+  if (
+    !keyName ||
+    !rawValue ||
+    !FREEFORM_TEXT_FIELDS.has(keyName) ||
+    !isTopLevelField ||
+    (keyName !== "description" && !recoverColonRichText) ||
+    /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)
+  ) {
     return block;
   }
-  const replacement = `description: ${JSON.stringify(stripQuotes(rawValue))}`;
+  const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
 }
 
@@ -184,7 +204,20 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   if (parsed.issues.length === 0) {
     return parsed;
   }
-  const recoveredBlock = normalizeFreeformDescription(block);
+  // Recover one error-located field per iteration, retrying parse each time,
+  // so multiple colon-rich fields are fixed without rewriting valid siblings.
+  let recoveredBlock = block;
+  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size; i += 1) {
+    const next = normalizeFreeformFieldAtError(recoveredBlock);
+    if (next === recoveredBlock) {
+      break;
+    }
+    recoveredBlock = next;
+    const reparsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
+    if (reparsed.issues.length === 0) {
+      return reparsed;
+    }
+  }
   return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
 }
 

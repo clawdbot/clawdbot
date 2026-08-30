@@ -380,6 +380,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     assignOwner,
     patchMany,
+    deletionState: () => undefined,
     delete: deleteSession,
     deleteMany,
     list,
@@ -536,6 +537,7 @@ export function createContext(
   return {
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
     agents: {
       state: {
         client: gateway.snapshot.client,
@@ -607,7 +609,7 @@ export const manyAgents = (count: number) =>
   }) as AgentsListResult;
 
 export const catalogPage = (
-  sessions: Array<{ threadId: string; name: string; sessionKey?: string }>,
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,
   nextCursor?: string,
   catalogId = "codex",
 ): SessionsCatalogListResult => ({
@@ -673,9 +675,15 @@ export function setupSidebarTest() {
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 
-  afterEach(() => {
-    document.body.replaceChildren();
+  afterEach(async () => {
     vi.useRealTimers();
+    await vi.dynamicImportSettled();
+    // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
+    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
+      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    }
+    await vi.dynamicImportSettled();
+    document.body.replaceChildren();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
     } else {

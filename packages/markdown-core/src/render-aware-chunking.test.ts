@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { MarkdownIR } from "./ir.js";
 import { markdownToIR } from "./ir.js";
+import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
 import { renderMarkdownIRChunksWithinLimit } from "./render-aware-chunking.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
@@ -96,6 +97,36 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
     expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
+  });
+
+  it("drops temporary boundary annotations when whitespace is coalesced", () => {
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: {
+        text: `alpha${" ".repeat(19)}\nuser[t] ok`,
+        styles: [],
+        links: [{ start: 25, end: 32, href: "https://example.test" }],
+      },
+      limit: 20,
+      assistantTranscriptRoleMessageBoundaries: true,
+      renderChunk: (source) => ({
+        source,
+        ...renderMarkdownWithAttributedRanges(source, {
+          styleMap: {},
+          annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },
+        }),
+      }),
+      measureRendered: (rendered) => rendered.text.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.rendered.text)).toEqual([
+      `alpha${" ".repeat(15)}`,
+      "    \nuser[t] ok",
+    ]);
+    const final = chunks[1];
+    expect(final?.source.annotations).toBeUndefined();
+    expect(final?.source.links).toEqual([{ start: 5, end: 12, href: "https://example.test" }]);
+    expect(final?.rendered.ranges).toEqual([]);
+    expect(final?.rendered.source).toBe(final?.source);
   });
 
   it("keeps astral characters whole when a positive limit reaches their pair", () => {

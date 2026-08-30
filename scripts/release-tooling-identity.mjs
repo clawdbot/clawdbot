@@ -291,7 +291,7 @@ function parseJson(raw, label) {
   }
 }
 
-function runReleaseToolingGh(args) {
+export function runReleaseToolingGh(args) {
   return execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -366,6 +366,9 @@ export function verifyReleaseToolingIdentity({
           `repos/${normalizedRepository}/compare/${identity.sha}...main`,
           "--method",
           "GET",
+          // Full comparison patches can exceed the subprocess buffer; only ancestry status is used.
+          "--jq",
+          "{status}",
         ]),
         "main release tooling comparison",
       );

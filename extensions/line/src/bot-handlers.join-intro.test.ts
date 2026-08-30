@@ -139,7 +139,12 @@ describe("LINE group join introductions", () => {
 
   it("keeps an honest thin snapshot when the group summary request fails", async () => {
     getGroupSummary.mockRejectedValue(new Error("LINE unavailable"));
-    await handleLineWebhookEvents([joinEvent(sources[0])], createContext());
+    // A group nothing has resolved before, so the answer comes from this failed
+    // request rather than a name the name cache still remembers.
+    await handleLineWebhookEvents(
+      [joinEvent({ type: "group", groupId: `C${"d".repeat(32)}` })],
+      createContext(),
+    );
 
     const params = reportJoin.mock.calls[0]?.[0];
     if (!params) {

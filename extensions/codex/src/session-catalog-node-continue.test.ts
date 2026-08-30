@@ -225,9 +225,10 @@ describe("Codex supervision actions", () => {
       conversationBinding: { data: { agentId: "alpha" } },
     });
     expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Remote task",
+        displayName: "Remote task",
         spawnedCwd: "/remote/repo",
         initialEntry: expect.objectContaining({
           agentHarnessId: "codex",

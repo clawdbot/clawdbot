@@ -1202,22 +1202,21 @@ jobs:
           EXPECTED_SHA="$(git rev-parse HEAD)"
           MANIFEST_FILE="full-release-validation/full-release-validation-manifest.json"
           export EXPECTED_SHA MANIFEST_FILE
-          trusted_workflow_commit_ref="refs/remotes/origin/main"
+          trusted_main_ref="refs/remotes/origin/main"
           if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
-            trusted_workflow_commit_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
             timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
-              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_workflow_commit_ref}"
-            if [[ "$(git rev-parse "${trusted_workflow_commit_ref}^{commit}")" != "${WORKFLOW_SHA}" ]]; then
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
+            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${WORKFLOW_SHA}" ]]; then
               echo "Trusted release-publish tag moved after workflow dispatch." >&2
               exit 1
             fi
-          else
-            timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
-              +refs/heads/main:refs/remotes/origin/main
           fi
-          TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
+          timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
+            "+refs/heads/main:${trusted_main_ref}"
+          TRUSTED_MAIN_REF="${trusted_main_ref}" \
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" | \
-            TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
+            TRUSTED_MAIN_REF="${trusted_main_ref}" \
             node trusted-workflow/scripts/validate-full-release-validation-evidence.mjs
           node "$STRICT_VALIDATOR_FILE" \
             --validate-run "$FULL_RELEASE_VALIDATION_RUN_ID" \

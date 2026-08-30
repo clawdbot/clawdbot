@@ -3,6 +3,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
   getCachedLiveProviderModelRows,
@@ -91,7 +92,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.150.1";
+const OPENAI_CODEX_CLIENT_VERSION = "0.151.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -155,6 +156,7 @@ type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
   baseUrl?: string;
   discoveryApiKey?: string;
+  rejectionScope?: "catalog";
   env?: Record<string, string | undefined>;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
@@ -308,7 +310,11 @@ async function buildOpenAILiveProviderConfig(
     ) {
       return {
         provider: { ...fallback, models: [] },
-        outcome: { provider: PROVIDER_ID, status: "auth-rejected" },
+        outcome: {
+          provider: PROVIDER_ID,
+          ...(params.rejectionScope ? { rejectionScope: "catalog" } : {}),
+          status: "auth-rejected",
+        },
       };
     }
     return { provider: fallback, outcome: { provider: PROVIDER_ID, status: "unavailable" } };
@@ -596,6 +602,15 @@ async function buildOpenAICodexLiveProviderConfig(params: {
 
 function isCodexCatalogAuthMode(mode: string): boolean {
   return mode === "oauth" || mode === "token";
+}
+
+function resolveOpenAICatalogRejectionScope(auth: {
+  apiKey?: string;
+  discoveryApiKey?: string;
+}): "catalog" | undefined {
+  return auth.apiKey && !auth.discoveryApiKey && isNonSecretApiKeyMarker(auth.apiKey)
+    ? "catalog"
+    : undefined;
 }
 
 function resolveOpenAICatalogBaseUrl(ctx: {
@@ -953,6 +968,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
               discoveryApiKey: auth.discoveryApiKey,
+              rejectionScope: resolveOpenAICatalogRejectionScope(auth),
             }),
             auth.profileId,
           );
@@ -969,6 +985,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           apiKey: apiKey.apiKey,
           baseUrl: resolveOpenAICatalogBaseUrl(ctx),
           discoveryApiKey: apiKey.discoveryApiKey,
+          rejectionScope: resolveOpenAICatalogRejectionScope(apiKey),
         });
         return {
           providers: { [PROVIDER_ID]: catalog.provider },

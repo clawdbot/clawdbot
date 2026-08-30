@@ -256,7 +256,7 @@ describe("sandbox/tool-policy", () => {
       sessionId: "guest-session",
       updatedAt: 1,
       sandbox: "required" as const,
-      createdActor: { type: "human" as const, id: "guest-principal" },
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
     };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const cfg: OpenClawConfig = {
@@ -269,7 +269,7 @@ describe("sandbox/tool-policy", () => {
 
     expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
       sandboxRequired: true,
-      sandboxPrincipalId: "guest-principal",
+      isolationSubject: { kind: "session", sessionKey },
       sandboxed: true,
       workspaceAccess: "ro",
     });
@@ -296,7 +296,7 @@ describe("sandbox/tool-policy", () => {
       {
         sessionId: "maintainer-session",
         updatedAt: 1,
-        createdActor: { type: "human", id: "maintainer-principal" },
+        createdActor: { type: "human", source: "profile", id: "maintainer-principal" },
       },
     );
     const cfg: OpenClawConfig = {
@@ -310,7 +310,7 @@ describe("sandbox/tool-policy", () => {
     const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
 
     expect(runtime).toMatchObject({ sandboxRequired: false, sandboxed: true });
-    expect(runtime.sandboxPrincipalId).toBeUndefined();
+    expect(runtime.isolationSubject).toBeUndefined();
     expect(runtime.workspaceAccess).toBeUndefined();
   });
 

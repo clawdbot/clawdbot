@@ -1,5 +1,8 @@
 import { html, nothing, type ReactiveControllerHost } from "lit";
-import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import {
+  normalizeSessionColorValue,
+  normalizeSessionIconValue,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { icons } from "./icons.ts";
@@ -11,7 +14,11 @@ import {
   renderCompactSessionMenuView,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
+import {
+  renderSessionColorOptions,
+  renderSessionEditorOptions,
+  renderSessionGroupOptions,
+} from "./session-menu-options.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import {
   renderSessionOwnerAssignmentMenu,
@@ -27,6 +34,7 @@ export type SessionMenuData = {
   archived: boolean;
   category: string | null;
   icon: string | null;
+  color: string | null;
   categoryClearReturnsToGroups: boolean;
 };
 
@@ -37,6 +45,7 @@ export type SessionManagementAction =
   | { kind: "toggle-unread" }
   | { kind: "rename" }
   | { kind: "set-icon"; icon: string | null }
+  | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
   | { kind: "fork" }
   | { kind: "move-to-group"; category: string | null }
@@ -54,6 +63,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   archived: false,
   category: null,
   icon: null,
+  color: null,
   categoryClearReturnsToGroups: false,
 };
 
@@ -113,6 +123,7 @@ export class SessionMenuActions {
         return batch || session.isChild === true || session.archived;
       case "rename":
       case "set-icon":
+      case "set-color":
       case "assign-owner":
         return batch;
       case "fork":
@@ -175,6 +186,14 @@ export class SessionMenuActions {
         kind: "set-icon",
         icon: encodedIcon ? decodeURIComponent(encodedIcon) : null,
       });
+      return true;
+    }
+    if (value.startsWith("set-color:")) {
+      const name = value.slice("set-color:".length);
+      const color = normalizeSessionColorValue(name);
+      if (!name || color) {
+        this.runAction({ kind: "set-color", color });
+      }
       return true;
     }
     const owner = sessionOwnerAssignmentFromMenuValue(value);
@@ -320,27 +339,40 @@ export class SessionMenuActions {
                   disabledReason: state.actionDisabledReasons["assign-owner"],
                 })}
             ${state.compact
-              ? renderCompactSessionMenuNavigationItem({
+              ? // One drill-down row for icon + color keeps the mobile More menu inside
+                // its viewport height budget (mobile-chat-session-menu e2e).
+                renderCompactSessionMenuNavigationItem({
                   view: "icon",
-                  label: t("sessionsView.setIconMenu"),
+                  label: t("sessionsView.setIconColorMenu"),
                   icon: icons.star,
                   disabled: this.actionDisabled("set-icon"),
                   title: state.actionDisabledReasons["set-icon"],
                 })
               : html`<wa-dropdown-item
-                  class="session-menu__item"
-                  data-shortcut="i"
-                  aria-keyshortcuts="I"
-                  ?disabled=${this.actionDisabled("set-icon")}
-                  title=${this.actionTitle("set-icon")}
-                  @submenu-opening=${this.focusIconGridOnOpen}
-                >
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                    >${icons.star}</span
+                    class="session-menu__item"
+                    data-shortcut="i"
+                    aria-keyshortcuts="I"
+                    ?disabled=${this.actionDisabled("set-icon")}
+                    title=${this.actionTitle("set-icon")}
+                    @submenu-opening=${this.focusIconGridOnOpen}
                   >
-                  <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
-                  ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
-                </wa-dropdown-item>`}
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.star}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
+                    ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
+                  </wa-dropdown-item>
+                  <wa-dropdown-item
+                    class="session-menu__item"
+                    ?disabled=${this.actionDisabled("set-color")}
+                    title=${this.actionTitle("set-color")}
+                  >
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.palette}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.setColorMenu")}</span>
+                    ${this.renderColorSubmenu()}
+                  </wa-dropdown-item>`}
             <wa-dropdown-item
               class="session-menu__item"
               value="fork"
@@ -467,7 +499,10 @@ export class SessionMenuActions {
       assignOwnerDisabled: this.actionDisabled("assign-owner"),
       assignOwnerDisabledReason: state.actionDisabledReasons["assign-owner"],
       renderOpenIn: () => this.renderEditorSubmenu(true),
-      renderIcon: () => this.renderIconSubmenu(true),
+      renderIcon: () =>
+        html`${this.renderIconSubmenu(true)}
+          <div class="session-menu__separator" role="separator"></div>
+          ${this.renderColorSubmenu(true)}`,
       renderGroup: () => this.renderGroupSubmenu(true),
     });
   }
@@ -485,6 +520,15 @@ export class SessionMenuActions {
       groups: state.groups,
       actionDisabled: (kind) => this.actionDisabled(kind),
       actionTitle: (kind) => this.actionTitle(kind),
+    });
+  }
+
+  private renderColorSubmenu(inline = false) {
+    return renderSessionColorOptions({
+      inline,
+      color: this.readState().session.color,
+      disabled: this.actionDisabled("set-color"),
+      disabledReason: this.readState().actionDisabledReasons["set-color"],
     });
   }
 

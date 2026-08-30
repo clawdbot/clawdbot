@@ -589,7 +589,7 @@ class AgentsPage
       return;
     }
     if (!options.refresh) {
-      const cached = peekChatMetadata(client, agentId);
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
         this.chatModelCatalogAgentId = agentId;
@@ -615,8 +615,8 @@ class AgentsPage
     // Chat metadata carries the selected agent's already-prepared startup models
     // without initiating the live discovery reserved for explicit picker use.
     const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, agentId)
-      : loadChatMetadata(client, agentId);
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
     void metadataRequest
       .then((result) => {
         if (this.isCurrentRequest(client, generation, agentId)) {

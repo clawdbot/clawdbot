@@ -9,6 +9,12 @@ import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 import {
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../src/process/gateway-work-admission.js";
+import { drainGlobalSingletonLifecycleState } from "../src/shared/global-singleton.js";
+import {
   type CustomElementTracking,
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
@@ -104,6 +110,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   delete process.env.OPENCLAW_CONFIG_PATH;
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
   process.env.XDG_CONFIG_HOME = path.join(testHome, ".config");
   process.env.XDG_DATA_HOME = path.join(testHome, ".local", "share");
   process.env.XDG_STATE_HOME = path.join(testHome, ".local", "state");
@@ -480,15 +487,26 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.unstubAllEnvs();
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
+    // Reject suspended admission waiters before async cleanup. The final reset
+    // reopens admission only after those old waiters have observed this fence.
+    if (isGatewayWorkAdmissionClosed()) {
+      markGatewayRestartDraining();
+    }
     resetOpenClawGlobalRunState();
     resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
     resetOpenClawSessionSuspensionState();
+    // Lifecycle-owned singletons survive module resets; close them before the next file
+    // can observe a previous file's sessions, caches, or registered resources.
+    await drainGlobalSingletonLifecycleState();
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();
     dropTrackedRepoOwnedCustomElements();
     resetSharedDocumentBody();
+    // Gateway admission survives production close. Retire file-owned roots after
+    // runtime cleanup, before another file can inherit their leases or drain fence.
+    resetGatewayWorkAdmission();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
     resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);

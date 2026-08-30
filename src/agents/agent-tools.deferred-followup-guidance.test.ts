@@ -1,7 +1,7 @@
 /** Tests model-facing descriptions selected from the final authorized tool set. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -231,6 +231,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
       { name: "sessions_history", description: "history" },
     ] as AnyAgentTool[]);
 
+    expect(tool?.description).toContain("Search visible past sessions");
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).toContain(`${sessionLinkBase}/chat/<agentId>`);
     expect(tool?.description.indexOf("Follow up with sessions_history")).toBeLessThan(

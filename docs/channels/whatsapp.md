@@ -398,6 +398,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
+    - Markdown is converted before chunks are sent, preserving styles across message boundaries and counting WhatsApp formatting markers toward the limit
     - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
@@ -410,6 +411,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
     - `gifPlayback: true` on video sends enables animated GIF playback
     - `forceDocument`/`asDocument` routes outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp's media compression, preserving the resolved filename and MIME type
     - captions apply to the first media item in a multi-media reply, except PTT voice notes: the audio sends first with no caption, then the caption sends as a separate text message (WhatsApp clients do not render voice-note captions consistently)
+    - when a later captioned reply repeats pending attachments, only attachments accepted by WhatsApp replace their pending copies; unmatched attachments remain queued for delivery
     - media source can be HTTP(S), `file://`, or a local path
 
   </Accordion>

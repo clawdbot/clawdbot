@@ -132,20 +132,6 @@ describe("SystemAgentChatEngine operations", () => {
     );
   });
 
-  it("handles the exact agent handoff without consulting a usable model", async () => {
-    const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("talk to agent");
-
-    expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff).toEqual({ kind: "open-tui" });
-  });
-
   it("retires an agent proposal before a reusable Gateway handoff", async () => {
     const armed: boolean[] = [];
     let turn = 0;

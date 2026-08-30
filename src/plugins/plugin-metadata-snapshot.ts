@@ -249,10 +249,10 @@ function buildPluginMetadataOwnerMaps(
       appendOwner(modelCatalogProviders, providerId, plugin.id);
     }
     for (const cliBackendId of plugin.cliBackends ?? []) {
-      appendOwner(cliBackends, cliBackendId, plugin.id);
+      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
     }
     for (const cliBackendId of plugin.setup?.cliBackends ?? []) {
-      appendOwner(cliBackends, cliBackendId, plugin.id);
+      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
     }
     for (const setupProvider of plugin.setup?.providers ?? []) {
       appendOwner(setupProviders, setupProvider.id, plugin.id);
@@ -292,7 +292,7 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
   const plugins = manifestRegistry.plugins;
-  return {
+  const rebased = {
     ...snapshot,
     manifestRegistry,
     plugins,
@@ -306,6 +306,9 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
       ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
       : {}),
   };
+  // Rebuilt views retain the original generation even when consumed in another scope.
+  bindPluginMetadataSnapshotCache(rebased, getPluginMetadataSnapshotCache(snapshot));
+  return rebased;
 }
 
 export function projectPluginMetadataSnapshot(
@@ -628,6 +631,7 @@ function loadPluginMetadataSnapshotImpl(
     }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
+    registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
     manifestRegistry,
     plugins: manifestRegistry.plugins,

@@ -119,25 +119,24 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
   } as TestWorkerRecord;
 }
 
-function workerService(overrides: Partial<TestWorkerService> = {}) {
-  return {
-    list: vi.fn(() => []),
-    get: vi.fn(() => undefined),
-    supportsExecutionMode: vi.fn(() => false),
-    listMachineOptions: vi.fn(async () => undefined),
-    create: vi.fn(async () => workerRecord()),
-    destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
-    destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
-    observeDesktop: vi.fn(async ({ control }) => ({
-      transport: "rfb" as const,
-      wsPath: "/desktop/observe?token=abc",
-      expiresAtMs: 70_000,
-      control,
-    })),
-    launchDesktopApp: vi.fn(async ({ app }) => ({ app, status: "ready" as const })),
-    ...overrides,
-  };
-}
+const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
+  list: vi.fn(() => []),
+  get: vi.fn(() => undefined),
+  inventoryVersion: vi.fn(() => 0),
+  supportsExecutionMode: vi.fn(() => false),
+  listMachineOptions: vi.fn(async () => undefined),
+  create: vi.fn(async () => workerRecord()),
+  destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
+  destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
+  observeDesktop: vi.fn(async ({ control }) => ({
+    transport: "rfb" as const,
+    wsPath: "/desktop/observe?token=abc",
+    expiresAtMs: 70_000,
+    control,
+  })),
+  launchDesktopApp: vi.fn(async ({ app }) => ({ app, status: "ready" as const })),
+  ...overrides,
+});
 
 async function callEnvironmentMethod(
   method:

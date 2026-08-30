@@ -28,12 +28,20 @@ import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 import { formatErrorMessage } from "./infra/errors.js";
 
-type BrowserExternalJsonKind = "snapshot" | "console" | "requests" | "tabs" | "act" | "download";
+type BrowserExternalJsonKind =
+  | "snapshot"
+  | "console"
+  | "requests"
+  | "errors"
+  | "tabs"
+  | "act"
+  | "download";
 
 const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
   console: "\n[truncated — retry with a stricter level or targetId]",
   requests: "\n[truncated — retry with a narrower filter or smaller limit]",
+  errors: "\n[truncated — retry with a smaller limit]",
   tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
   act: "\n[truncated — inspect the affected targetId with action=snapshot]",
   download: "\n[truncated — retry with a specific targetId and download ref]",
@@ -118,6 +126,46 @@ export function wrapBrowserExternalJson(params: {
         kind: params.kind,
         wrapped: true,
       },
+    },
+  };
+}
+
+/** Keep debug log counts aligned with complete records inside the output budget. */
+export function formatBrowserDebugLogResult(
+  kind: "requests" | "errors",
+  result: { ok: true; targetId: string; url?: string },
+  entries: unknown[],
+  limit: number,
+): AgentToolResult<unknown> {
+  const total = entries.length;
+  const records = entries.slice(-limit);
+  const details = () => ({
+    ok: result.ok,
+    targetId: result.targetId,
+    url: result.url,
+    total,
+    returned: records.length,
+    truncated: records.length < total,
+  });
+  const wrap = () =>
+    wrapBrowserExternalJson({
+      kind,
+      payload: { ...details(), [kind]: records },
+      includeWarning: false,
+    });
+  let wrapped = wrap();
+  // Drop whole records so large URLs or stacks cannot leave partial JSON or
+  // report more returned entries than the model actually receives.
+  while (wrapped.truncated && records.length > 0) {
+    records.shift();
+    wrapped = wrap();
+  }
+  return {
+    content: [{ type: "text", text: wrapped.wrappedText }],
+    details: {
+      ...wrapped.safeDetails,
+      ...details(),
+      truncated: records.length < total || wrapped.truncated,
     },
   };
 }
@@ -449,7 +497,6 @@ export async function appendNavigatedPageState(params: {
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const hostFallbackWasActive = params.proxyRequest?.isHostFallbackActive?.() ?? false;
   let snapshot: AgentToolResult<unknown>;
   try {
     snapshot = await executeSnapshotAction({
@@ -474,12 +521,6 @@ export async function appendNavigatedPageState(params: {
         includeWarning: false,
       }),
     );
-  }
-  if (!hostFallbackWasActive && params.proxyRequest?.isHostFallbackActive?.()) {
-    // The node became unreachable between the action and this snapshot and the
-    // proxy fell back to the Gateway host browser: that snapshot describes a
-    // different browser, so presenting it as the navigated page misleads the model.
-    return withPageStateUnavailableHint(params.result, "the browser node became unreachable");
   }
   const baseDetails =
     params.result.details && typeof params.result.details === "object"

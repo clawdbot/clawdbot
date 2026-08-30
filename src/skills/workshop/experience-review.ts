@@ -25,6 +25,7 @@ import {
   countSkillModelIterations,
   selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
+import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
@@ -499,6 +500,9 @@ async function runSkillExperienceReviewInner(
     } finally {
       preparedRunAdmission.close();
     }
+
+    // A failed review can leave a pending proposal; never auto-apply it.
+    assertSkillReviewRunSucceeded(embeddedResult);
 
     const proposalIds = [...(proposalMutationBudget.mutatedProposalIds ?? [])];
     proposalId = proposalIds[0];

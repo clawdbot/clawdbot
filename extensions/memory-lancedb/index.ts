@@ -580,6 +580,10 @@ export default definePluginEntry({
         let capturableSeen = 0;
         for (let index = startIndex; index < event.messages.length; index++) {
           const message = event.messages[index];
+          const fingerprint = messageFingerprint(message);
+          if (fingerprint === undefined) {
+            continue;
+          }
           let messageProcessed = false;
 
           try {
@@ -621,7 +625,7 @@ export default definePluginEntry({
             if (messageProcessed && cursorKey) {
               autoCaptureCursors.set(cursorKey, {
                 nextIndex: index + 1,
-                lastMessageFingerprint: messageFingerprint(message),
+                lastMessageFingerprint: fingerprint,
               });
             }
           }

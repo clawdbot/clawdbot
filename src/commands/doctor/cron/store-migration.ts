@@ -114,6 +114,7 @@ type NormalizeCronStoreJobsResult = {
   unsupportedLegacyTriggerScriptJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
+  legacyGatewayExecJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -169,6 +170,7 @@ export function normalizeStoredCronJobs(
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
   const legacyTriggerScriptJobs: string[] = [];
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
+  const legacyGatewayExecJobs: string[] = [];
   const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
@@ -354,6 +356,18 @@ export function normalizeStoredCronJobs(
     }
 
     if (payloadRecord) {
+      const hasLegacyGatewayExec =
+        Array.isArray(payloadRecord.toolsAllow) &&
+        payloadRecord.toolsAllow.some(
+          (tool) =>
+            typeof tool === "string" && normalizeOptionalLowercaseString(tool) === "gateway_exec",
+        );
+      if (hasLegacyGatewayExec) {
+        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+        if (name) {
+          legacyGatewayExecJobs.push(name);
+        }
+      }
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
       const hadLegacyTaskSuggestionToolName = hasLegacyToolNameList(
@@ -635,6 +649,7 @@ export function normalizeStoredCronJobs(
     unsupportedLegacyTriggerScriptJobs,
     legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
     invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
+    legacyGatewayExecJobs,
     jobs,
     mutated,
     removedJobs,

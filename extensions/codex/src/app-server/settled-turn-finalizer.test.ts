@@ -152,8 +152,10 @@ describe("runCodexSettledTurnFinalization", () => {
   });
 
   it("runs an isolated history-backed final turn and returns only its visible answer", async () => {
+    const attempt = createAttempt();
+    attempt.prepareAssistantTranscriptMessage = (message) => message;
     const result = await runCodexSettledTurnFinalization(
-      { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+      { attempt, settledAttempt: createSettledAttempt() },
       { pluginConfig: {} },
     );
 
@@ -180,6 +182,7 @@ describe("runCodexSettledTurnFinalization", () => {
         sessionId: "session-1",
         idempotencyScope: "codex-settled-finalizer:run-1",
         skipBeforeMessageWriteHooks: true,
+        prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
         messages: [expect.objectContaining({ role: "assistant" })],
       }),
     );

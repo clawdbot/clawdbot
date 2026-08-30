@@ -82,6 +82,7 @@ function createRunContext(params: {
       config: backend,
       bundleMcp: false,
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},
@@ -244,15 +245,33 @@ describe("local CLI pending process cancellation", () => {
     context.preparedBackend.backend.systemPromptArg = "--append-system-prompt";
     let executionArgs: readonly string[] | undefined;
     let executionPrompt: string | undefined;
-    context.preparedBackend.execute = async function* (execution) {
-      executionArgs = execution.args;
-      executionPrompt = execution.systemPrompt;
-      yield { type: "result", subtype: "success", result: "completed" };
+    let executionContext: unknown;
+    context.promptContext = {
+      prependContext: "private red prefix",
+      appendContext: "private red suffix",
+    };
+    context.backendResolved.textTransforms = { input: [{ from: "red", to: "blue" }] };
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute(execution) {
+        executionContext = execution;
+        executionArgs = execution.args;
+        executionPrompt = execution.systemPrompt;
+        yield { type: "result", subtype: "success", result: "completed" };
+      },
     };
 
     await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "completed" });
 
     expect(executionPrompt).toBe("system");
+    expect(executionContext).toEqual(
+      expect.objectContaining({
+        promptContext: {
+          prependContext: "private blue prefix",
+          appendContext: "private blue suffix",
+        },
+      }),
+    );
     expect(executionArgs).not.toContain("--append-system-prompt-file");
     expect(executionArgs).not.toContain("--append-system-prompt");
     expect(writeCliSystemPromptFile).not.toHaveBeenCalled();

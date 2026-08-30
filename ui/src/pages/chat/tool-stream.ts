@@ -24,8 +24,11 @@ import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
-import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import {
+  uiSessionEventMatches,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
+import { reconcileChatRunStartup, type ChatRunStartupState } from "./chat-run-startup.ts";
 import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -78,7 +81,7 @@ export type ToolStreamEntry = {
 export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
   chatMessages?: unknown[];
@@ -868,6 +871,9 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
     return true;
   }
+  if (progress.text) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
+  }
   const persisted =
     progress.itemId &&
     host.chatMessages?.some((message) => {
@@ -1124,7 +1130,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ? entry.name
       : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
-    host.chatRunStartup = { state: "activity", runId: payload.runId };
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
   }
   const args = phase === "start" ? data.args : undefined;
   const output =

@@ -295,6 +295,60 @@ describe("xai x_search tool", () => {
     expect((recovered.details as { content?: string }).content).toContain("Recovered X answer");
   });
 
+  it.each([false, true])(
+    "bypasses X search cache reads and writes at zero TTL (populated: %s)",
+    async (populated) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const mockFetch = installXSearchFetch({ output_text: "Fresh X answer" });
+      const query = `X search zero TTL cache policy ${populated}`;
+      const search = async (cacheTtlMinutes: number) => {
+        const result = await createConfiguredXSearchTool({
+          xSearch: { cacheTtlMinutes },
+        }).execute("x-search:cache-policy", { query });
+        return result.details as Record<string, unknown>;
+      };
+      if (populated) {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ output_text: "Original X answer" }));
+        await search(15);
+      }
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const uncached = await search(0);
+        expect(uncached.cached).toBeUndefined();
+        expect(uncached.content).toContain("Fresh X answer");
+      }
+      const enabled = await search(15);
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(enabled.cached).toBe(populated ? true : undefined);
+      expect(enabled.content).toContain(populated ? "Original X answer" : "Fresh X answer");
+    },
+  );
+
+  it("applies a shortened X search cache TTL to an existing result", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const mockFetch = installXSearchFetch({ output_text: "Fresh X answer" });
+    mockFetch.mockResolvedValueOnce(jsonResponse({ output_text: "Original X answer" }));
+    const query = "X search shortened TTL cache policy";
+    const search = async (cacheTtlMinutes: number) => {
+      const result = await createConfiguredXSearchTool({
+        xSearch: { cacheTtlMinutes },
+      }).execute("x-search:shortened-ttl", { query });
+      return result.details as Record<string, unknown>;
+    };
+    await search(15);
+    now.mockReturnValue(1_060_000);
+
+    const refreshed = await search(1);
+    const cached = await search(1);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(refreshed.cached).toBeUndefined();
+    expect(refreshed.content).toContain("Fresh X answer");
+    expect(cached.cached).toBe(true);
+    expect(cached.content).toBe(refreshed.content);
+  });
+
   it("uses the xAI Responses x_search tool with structured filters", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });

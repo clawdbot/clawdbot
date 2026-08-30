@@ -88,10 +88,11 @@ function makeAuthorizeCtx(params?: {
     },
     isChannelAllowed: vi.fn(params?.isChannelAllowed ?? (() => true)),
     resolveUserName: vi.fn(
-      params?.resolveUserName ?? ((_) => Promise.resolve({ name: undefined })),
+      params?.resolveUserName ?? ((_userId) => Promise.resolve({ name: undefined })),
     ),
     resolveChannelName: vi.fn(
-      params?.resolveChannelName ?? ((_) => Promise.resolve({ name: "general", type: "channel" })),
+      params?.resolveChannelName ??
+        ((_channelId) => Promise.resolve({ name: "general", type: "channel" })),
     ),
   } as unknown as SlackMonitorContext;
 }

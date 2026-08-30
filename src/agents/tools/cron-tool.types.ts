@@ -8,8 +8,13 @@ import type { callGatewayTool } from "./gateway.js";
 export type CronCreatorToolAllowlistEntry =
   | string
   | {
+      /** Canonical policy name persisted into toolsAllow caps. */
       name: string;
       pluginId?: string;
+      /** Runtime-specific alias the creator surface presented for this tool. */
+      aliasName?: string;
+      /** Restrict-only execution policy carried by a host-created alias projection. */
+      execTarget?: { host: "gateway"; ask?: "always" };
     };
 
 type CronToolsAllowCaptureProvenance = {

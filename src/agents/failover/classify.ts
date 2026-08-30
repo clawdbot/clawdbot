@@ -60,6 +60,7 @@ export {
 export {
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
   isReasoningConstraintErrorMessage,
 } from "./context-overflow.js";
 export {

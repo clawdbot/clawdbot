@@ -24,10 +24,8 @@ import {
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import {
-  resolvePluginRuntimeLoadContext,
-  type PluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import type { PluginRuntimeLoadContext } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 
 type LegacySurfaceManifestRecord = NonNullable<
   PluginRuntimeLoadContext["manifestRegistry"]

@@ -8,7 +8,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { onDecodedOutput } from "../decoded-output.js";
-import { addSecretInputStdio, writeSecretInputToChild } from "../spawn-secret-input.js";
+import { prepareSecretInputStdio } from "../spawn-secret-input.js";
 import { createManagedChildStdin } from "./adapters/child-stdin.js";
 import { toStringEnv } from "./adapters/env.js";
 import {
@@ -148,10 +148,10 @@ export async function createServiceChildRelayAdapter(params: {
   const stdio: StdioEntry[] = useWindowsJobAnchor
     ? ["ignore", "ignore", "ignore"]
     : [params.stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  if (!useWindowsJobAnchor) {
-    // SAFETY: stdio contains only SpawnStdioEntry values until lifecycle descriptors are reserved.
-    addSecretInputStdio(stdio as Parameters<typeof addSecretInputStdio>[0], params.secretInput);
-  }
+  using secretDelivery = prepareSecretInputStdio(
+    stdio,
+    useWindowsJobAnchor ? undefined : params.secretInput,
+  );
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
@@ -440,7 +440,7 @@ export async function createServiceChildRelayAdapter(params: {
 
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
-    writeSecretInputToChild(child, params.secretInput),
+    secretDelivery?.deliverTo(child),
   ]);
   const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
   const secretDeliveryError =

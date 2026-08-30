@@ -19,15 +19,67 @@ const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 let page: Page | undefined;
 suite.define(() => {
   afterEach(async () => {
-    await page
-      ?.context()
-      .close()
-      .catch(() => {});
+    if (page) {
+      await suite.closeBrowserContext(page.context());
+    }
     page = undefined;
   });
 
+  it("retires failed history released after clicking Send", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessionKey = "agent:main:main";
+    const diagnostic = "Earlier preparation failed before model output";
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey,
+      // Account recovery can replace startup with a scoped history request.
+      heldMethods: ["chat.startup", "chat.history", "chat.send"],
+      sessionInfo: {
+        key: sessionKey,
+        status: "failed",
+        hasActiveRun: false,
+        lastRunId: "failed-run",
+        lastRunError: diagnostic,
+      },
+    });
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const startup = await gateway.waitForRequest("chat.startup");
+    expect(startup.params).toMatchObject({ sessionKey });
+    await currentPage.locator(".agent-chat__input textarea").fill("Try again");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+    // Fault injection controls only WebSocket delivery, never application state.
+    await gateway.resolveDeferred("chat.startup");
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests()).some(
+          ({ method }) => method === "chat.history" || method === "chat.send",
+        ),
+      )
+      .toBe(true);
+    if ((await gateway.getRequests("chat.history")).length > 0) {
+      await gateway.resolveDeferred("chat.history");
+    }
+    const send = await gateway.waitForRequest("chat.send");
+    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+    expect(runId).toEqual(expect.any(String));
+    const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
+    await alert.waitFor();
+    await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+    await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });
+    await currentPage
+      .locator(".chat-group.assistant")
+      .getByText("Recovery completed.", { exact: true })
+      .waitFor();
+    await expect.poll(() => alert.count()).toBe(0);
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+  });
+
   it("excludes a reply-less failed turn's idle time from the next successful turn", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const sessionKey = "agent:main:dashboard:failed-turn-elapsed";
@@ -119,11 +171,14 @@ suite.define(() => {
     // the live terminal projection or its retained local timestamps.
     await gateway.setMethodResponse("chat.history", {
       messages,
-      sessionId: "control-ui-e2e-session",
+      sessionId: `session:${sessionKey}`,
       sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
     });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
-    await currentPage.getByText(reply.content, { exact: true }).waitFor();
+    const replyBody = currentPage
+      .locator(".chat-group.assistant")
+      .getByText(reply.content, { exact: true });
+    await replyBody.waitFor();
     const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     await elapsedLabel.waitFor();
     expect.soft(await elapsedLabel.textContent()).toBe("Worked for 13s");
@@ -131,14 +186,14 @@ suite.define(() => {
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
-    await currentPage.getByText(reply.content, { exact: true }).waitFor();
+    await replyBody.waitFor();
     await elapsedLabel.waitFor();
     expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });
 
   it("keeps a continuing run inside its latest assistant reply", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
@@ -153,7 +208,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["run-continuing"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -175,7 +230,7 @@ suite.define(() => {
   });
 
   it("keeps a different active run in its own status row", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
@@ -191,7 +246,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["newer-run"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -214,7 +269,7 @@ suite.define(() => {
     if (captureProof) {
       await mkdir(artifactDir, { recursive: true });
     }
-    const context = await suite.browser.newContext({
+    const context = await suite.newBrowserContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
         ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1200 } } }
@@ -234,7 +289,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["run-reconnected"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -257,7 +312,7 @@ suite.define(() => {
   });
 
   it("shows compaction savings and live working time", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await currentPage.clock.install();
@@ -299,7 +354,7 @@ suite.define(() => {
   });
 
   it("clears shared session activity when chat final arrives first", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await currentPage.clock.install();
@@ -339,7 +394,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: activeStartedAt,
@@ -364,7 +419,7 @@ suite.define(() => {
           activeRunIds: [runId],
           displayName: staleActiveLabel,
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           label: staleActiveLabel,
           model: "gpt-5.5",
@@ -385,7 +440,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: Date.now() - 1_000,
@@ -431,7 +486,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: lateStaleActiveUpdatedAt - 11_000,
@@ -447,7 +502,7 @@ suite.define(() => {
   });
 
   it("does not announce Done when a yielded parent is waiting for continuation", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -484,7 +539,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: Date.now() - 1_000,
@@ -504,7 +559,7 @@ suite.define(() => {
         timestamp: Date.now(),
       },
       runId,
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
       stopReason: "end_turn",
       yielded: true,
@@ -525,7 +580,7 @@ suite.define(() => {
     if (captureProof) {
       await mkdir(artifactDir, { recursive: true });
     }
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage);
@@ -542,7 +597,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("chat", {
       errorMessage: diagnostic,
       runId,
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "aborted",
     });
 
