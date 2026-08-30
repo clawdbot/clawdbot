@@ -66,7 +66,10 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  resolveUpdatedInstallCommandEnv,
+} from "./update-command-service-env.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
@@ -785,7 +788,7 @@ export function resolvePostUpdateServiceStateReadEnv(params: {
 // Use the candidate's version guards for both refresh and activation. The parsed
 // preservation option makes older targets reject before repair, without a retry.
 async function runUpdatedInstallGatewayCommand(
-  params: Parameters<typeof maybeRestartService>[0],
+  params: Parameters<typeof maybeRestartService>[0] & { invocationEnv: NodeJS.ProcessEnv },
   action: "install" | "restart",
   preserveDefinition = false,
 ): Promise<boolean> {
@@ -814,7 +817,9 @@ async function runUpdatedInstallGatewayCommand(
     {
       cwd: params.result.root,
       env: resolveUpdatedInstallCommandEnv({
-        processEnv: installing ? (params.serviceInstallEnv ?? process.env) : process.env,
+        processEnv: installing
+          ? (params.serviceInstallEnv ?? params.invocationEnv)
+          : params.invocationEnv,
         serviceEnv: installing ? undefined : params.serviceEnv,
         invocationCwd: params.invocationCwd,
       }),
@@ -1060,20 +1065,21 @@ export async function maybeRestartService(params: {
   serviceMutationSkipMessage?: string;
   timeoutMs: number;
 }): Promise<boolean> {
-  if (
-    params.shouldRestart &&
-    (!isGatewayServiceManagementAllowedForUpdate(process.env) ||
-      !isGatewayServiceManagementAllowedForUpdate(params.serviceEnv ?? process.env))
-  ) {
+  const invocationEnv = resolveServiceRefreshEnv(process.env, params.invocationCwd);
+  const serviceEnv = resolveServiceRefreshEnv(
+    params.serviceEnv ?? invocationEnv,
+    params.invocationCwd,
+  );
+  if (params.shouldRestart) {
     const message =
-      resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
-      resolveGatewayServiceManagementBlockMessageForUpdate(params.serviceEnv ?? process.env);
+      resolveGatewayServiceManagementBlockMessageForUpdate(invocationEnv) ??
+      resolveGatewayServiceManagementBlockMessageForUpdate(serviceEnv);
     if (message) {
       defaultRuntime.error(message);
+      return false;
     }
-    return false;
   }
-  let activation = params;
+  let activation = { ...params, invocationEnv, serviceEnv };
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);

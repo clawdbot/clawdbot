@@ -22,13 +22,13 @@ export function prepareEmbeddedRunPermissionChange(sessionId: string) {
   }
   const applyPermissionMode = handle.applyPermissionMode;
   const generation = getAgentEventLifecycleGeneration();
-  const owner = handle.permissionChange?.owner;
+  const owner = handle.permissionChangeOwner;
   const authority = handle.runId ? getAgentRunContext(handle.runId)?.delegatedAuthority : undefined;
   const ownsRuntime = () => {
     const current = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     return (
       isAgentEventLifecycleGenerationCurrent(generation) &&
-      (current === handle || (owner !== undefined && current?.permissionChange?.owner === owner))
+      (current === handle || (owner !== undefined && current?.permissionChangeOwner === owner))
     );
   };
   return {

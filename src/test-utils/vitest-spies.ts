@@ -1,4 +1,5 @@
 // Shared Vitest spy helpers for repeated mock assertions.
+import os from "node:os";
 import { vi } from "vitest";
 
 /** Minimal mock contract for helpers that restore spies after a scoped run. */
@@ -41,6 +42,15 @@ export function withRestoredMocks<T>(
     restoreMocks(mocks);
     throw error;
   }
+}
+
+/** Keep service policy real while giving isolated HOME scopes an OS account identity. */
+export function mockSystemAccountHome(): void {
+  const account = os.userInfo();
+  // Native OS home APIs read the parent environment in Node worker threads.
+  const homedir = () => process.env.HOME ?? account.homedir;
+  vi.spyOn(os, "homedir").mockImplementation(homedir);
+  vi.spyOn(os, "userInfo").mockImplementation(() => ({ ...account, homedir: homedir() }));
 }
 
 export function mockProcessPlatform(platform: NodeJS.Platform): RestorableMock {

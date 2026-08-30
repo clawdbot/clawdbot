@@ -390,7 +390,7 @@ export async function activateCodexAttemptTurn(
     runId: params.runId,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    permissionChange: params.permissionChange,
+    permissionChangeOwner: params.permissionChange?.owner,
     applyPermissionMode: async (
       mode: NonNullable<typeof params.permissionMode> | null,
       revokeApprovals: () => void,

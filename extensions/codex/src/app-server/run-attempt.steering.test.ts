@@ -145,6 +145,7 @@ describe("runCodexAppServerAttempt steering", () => {
           terminalRunning = false;
           return { terminated: true };
         }
+        return undefined;
       });
       const params = createSteeringParams();
       if (incognito) {

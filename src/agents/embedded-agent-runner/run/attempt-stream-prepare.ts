@@ -534,7 +534,7 @@ export function prepareEmbeddedAttemptStream(input: {
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
-    permissionChange: attempt.permissionChange,
+    permissionChangeOwner: attempt.permissionChange?.owner,
     diagnosticOwner: input.diagnosticOwner,
     closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     startedAtMs: attempt.startedAtMs,

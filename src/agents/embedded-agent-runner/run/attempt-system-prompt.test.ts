@@ -171,43 +171,48 @@ describe("buildAttemptSystemPrompt", () => {
     expect(markStage).toHaveBeenCalledWith("system-prompt");
   });
 
-  it("injects workspace identity context", () => {
-    // Workspace identity files are part of the base system prompt and must
-    // survive provider transformation.
-    const result = buildAttemptSystemPrompt({
-      isRawModelRun: false,
-      transformProviderSystemPrompt,
-      embeddedSystemPrompt: {
-        workspaceDir: "/tmp/openclaw",
-        reasoningTagHint: false,
-        runtimeInfo: {
-          host: "test-host",
-          os: "Darwin",
-          arch: "arm64",
-          node: "v22.0.0",
-          model: "openai/gpt-5.5",
+  it.each(["/tmp/openclaw", "/tmp/open\u202eclaw\n"])(
+    "injects workspace identity context from %j",
+    (workspaceDir) => {
+      // Workspace identity files are part of the base system prompt and must
+      // survive provider transformation.
+      const result = buildAttemptSystemPrompt({
+        isRawModelRun: false,
+        transformProviderSystemPrompt,
+        embeddedSystemPrompt: {
+          workspaceDir,
+          reasoningTagHint: false,
+          runtimeInfo: {
+            host: "test-host",
+            os: "Darwin",
+            arch: "arm64",
+            node: "v22.0.0",
+            model: "openai/gpt-5.5",
+          },
+          tools: [],
+          modelAliasLines: [],
+          userTimezone: "UTC",
+          userDate: "2026-01-05",
+          contextFiles: [
+            { path: "/tmp/openclaw/SOUL.md", content: "SOUL_CONTEXT_MARKER" },
+            { path: "/tmp/openclaw/IDENTITY.md", content: "IDENTITY_CONTEXT_MARKER" },
+            { path: "/tmp/openclaw/USER.md", content: "USER_CONTEXT_MARKER" },
+          ],
         },
-        tools: [],
-        modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
-        contextFiles: [
-          { path: "/tmp/openclaw/SOUL.md", content: "SOUL_CONTEXT_MARKER" },
-          { path: "/tmp/openclaw/IDENTITY.md", content: "IDENTITY_CONTEXT_MARKER" },
-          { path: "/tmp/openclaw/USER.md", content: "USER_CONTEXT_MARKER" },
-        ],
-      },
-      providerTransform: baseProviderTransform,
-    });
+        providerTransform: { ...baseProviderTransform, workspaceDir },
+      });
 
-    expect(result.systemPrompt).toContain("# Project Context");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
-    expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
-    expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
-    expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
-  });
+      expect(result.systemPrompt).toContain("\nWorking directory: /tmp/openclaw\n");
+      expect(result.systemPrompt).not.toContain("\u202e");
+      expect(result.systemPrompt).toContain("# Project Context");
+      expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
+      expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
+      expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
+      expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
+      expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
+      expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
+    },
+  );
 
   it("filters first-turn curated context to global and active-project entries", () => {
     const result = buildAttemptSystemPrompt({

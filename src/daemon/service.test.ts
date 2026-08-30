@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { mockProcessPlatform, mockSystemAccountHome } from "../test-utils/vitest-spies.js";
 import type { GatewayService } from "./service.js";
 import {
   describeGatewayServiceRestart,
@@ -16,9 +16,8 @@ import {
 } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
-vi.mock("../config/paths.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
-  return { ...actual, isDefaultInstallIdentity: () => true };
+beforeEach(() => {
+  mockSystemAccountHome();
 });
 
 function setPlatform(value: NodeJS.Platform) {

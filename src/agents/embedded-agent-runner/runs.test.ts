@@ -47,17 +47,16 @@ describe("embedded-agent runner run registry", () => {
       const completed = createDeferredCore<boolean>();
       const coordinator = createEmbeddedRunPermissionChanges({});
       const replacementCoordinator = createEmbeddedRunPermissionChanges({});
-      const permissionChange = coordinator.forAttempt();
       const original = {
         ...createEmbeddedRunHandle({ runId: "same-run-id" }),
-        permissionChange,
+        permissionChangeOwner: coordinator.forAttempt().owner,
         applyPermissionMode: () => completed.promise,
       };
       const replacement = {
         ...createEmbeddedRunHandle({ runId: "same-run-id" }),
-        permissionChange: sameOwner
-          ? coordinator.forAttempt()
-          : replacementCoordinator.forAttempt(),
+        permissionChangeOwner: sameOwner
+          ? coordinator.forAttempt().owner
+          : replacementCoordinator.forAttempt().owner,
       };
       setActiveEmbeddedRun(sessionId, original);
       const change = prepareEmbeddedRunPermissionChange(sessionId);

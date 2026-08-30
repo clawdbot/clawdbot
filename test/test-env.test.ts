@@ -542,6 +542,10 @@ describe("installTestEnv", () => {
         JOURNAL_STREAM: "8:1234",
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway",
         OPENCLAW_SUPERVISOR_MODE: "external",
+        OPENCLAW_WRAPPER: "/fixture/operator-wrapper",
+        OPENCLAW_GATEWAY_SERVICE_PID: "4321",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "FIXTURE_AUTH_REF",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       };
       for (const [key, value] of Object.entries(supervisorEnv)) {
         setTestEnvValue(key, value);

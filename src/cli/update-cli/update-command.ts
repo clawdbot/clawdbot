@@ -79,6 +79,7 @@ import {
 } from "./update-command-post-core.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveManagedServiceNodeRunnerOverride,
@@ -105,23 +106,40 @@ function readDevUpdateTargetOrExit(): { ok: true; target?: DevUpdateTarget } | {
   return parsed.status === "valid" ? { ok: true, target: parsed.target } : { ok: true };
 }
 
-async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  return run().finally(() => {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+async function withUpdateInProgressEnv<T>(
+  invocationCwd: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
+  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  const scopedKeys = Object.keys(env).filter(
+    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
+  );
+  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
+  // Package replacement can remove cwd. All phase owners, including native
+  // service guards, must share the invocation's already-resolved path selectors.
+  for (const key of scopedKeys) {
+    process.env[key] = env[key];
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
-  });
+  }
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const recoveryState: UpdateCommandRecoveryState = {};
-  return await withUpdateInProgressEnv(async () => {
+  const invocationCwd = tryResolveInvocationCwd();
+  return await withUpdateInProgressEnv(invocationCwd, async () => {
     try {
-      await updateCommandInternal(opts, recoveryState);
+      await updateCommandInternal(opts, recoveryState, invocationCwd);
     } finally {
       try {
         await recoveryState.windowsTaskAutoStartRecovery?.restore();
@@ -135,10 +153,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 async function updateCommandInternal(
   opts: UpdateCommandOptions,
   recoveryState: UpdateCommandRecoveryState,
+  invocationCwd: string | undefined,
 ): Promise<void> {
   const startedAt = Date.now();
   suppressDeprecations();
-  const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
 
@@ -375,7 +393,7 @@ async function updateCommandInternal(
 
   if (updateInstallKind !== "git") {
     packageInstallEnv = await createGlobalInstallEnv();
-    packageInstallCwd = tryResolveInvocationCwd();
+    packageInstallCwd = invocationCwd;
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({

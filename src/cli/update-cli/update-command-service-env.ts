@@ -28,7 +28,7 @@ function applyManagedServiceSelectorEnv(params: {
   return resolved;
 }
 
-function resolveServiceRefreshEnv(
+export function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
 ): NodeJS.ProcessEnv {

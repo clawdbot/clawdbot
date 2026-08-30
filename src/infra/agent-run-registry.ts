@@ -8,7 +8,10 @@ import {
   AgentRunApprovalLeases,
   type AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
+import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
+
+export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 type AgentRunContext = {
@@ -45,12 +48,6 @@ type AgentRunContext = {
   delegatedAuthority?: AgentRunDelegatedAuthority;
   approvalLeases?: AgentRunApprovalLeases;
 };
-
-export type AgentRunDelegatedAuthority = Readonly<{
-  operationalRunInstance: Readonly<{ instanceId: string; runId: string }>;
-  lifecycleGeneration: string;
-  claimId: string;
-}>;
 
 type AgentRunContextOwnership = {
   lifecycleGeneration: string;

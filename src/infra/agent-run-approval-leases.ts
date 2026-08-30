@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentRunDelegatedAuthority } from "./agent-run-registry.js";
+import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 
 export type AgentRunApprovalClosureReason = "approval-scope-closed" | "run-aborted";
 

@@ -76,7 +76,7 @@ export function buildAttemptSystemPrompt(
   const systemPrompt = params.isRawModelRun
     ? ""
     : splitPrompt
-      ? `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicPrompt}`
+      ? `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicPrompt}` // nosemgrep: security.opengrep.ghsa-2qj5-gwg2-xwc4.openclaw.prompt-unsanitized-literal-interpolation -- These are complete prompts from trusted builders/transforms; path literals are sanitized at their producers, not by flattening prompt newlines here.
       : stablePrompt;
 
   return {
