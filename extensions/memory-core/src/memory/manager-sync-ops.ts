@@ -305,6 +305,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        if (targetedSessionSync.failure) {
+          this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
+        }
         return;
       }
     }

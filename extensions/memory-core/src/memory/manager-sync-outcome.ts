@@ -1,53 +1,47 @@
-// Memory Core owns admission-ordered sync outcome reporting.
+// Memory Core owns process-local sync outcome reporting.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 
 export class MemorySyncOutcomeLedger {
-  private nextGeneration = 0;
-  private latestSuccessfulGeneration = 0;
-  private latestFailure?: { generation: number; reason: string };
-  private activeGeneration?: number;
+  private failureRevision = 0;
+  private latestFailure?: { revision: number; reason: string };
+  private active = false;
 
   async track(operation: () => Promise<string | undefined | void>, active = false): Promise<void> {
-    const generation = ++this.nextGeneration;
+    const failureAtStart = this.latestFailure?.revision;
     if (active) {
-      this.activeGeneration = generation;
+      this.active = true;
     }
     try {
       const incompleteReason = await operation();
       if (incompleteReason) {
-        this.recordFailure(generation, incompleteReason);
-      } else if (this.latestFailure?.generation !== generation) {
-        this.latestSuccessfulGeneration = Math.max(this.latestSuccessfulGeneration, generation);
+        this.recordFailure(incompleteReason);
+      } else if (failureAtStart !== undefined && this.latestFailure?.revision === failureAtStart) {
+        this.latestFailure = undefined;
       }
     } catch (error) {
-      this.recordFailure(generation, error);
+      this.recordFailure(error);
       throw error;
     } finally {
-      if (this.activeGeneration === generation) {
-        this.activeGeneration = undefined;
+      if (active) {
+        this.active = false;
       }
     }
   }
 
   recordActiveFailure(error: unknown): void {
-    if (this.activeGeneration !== undefined) {
-      this.recordFailure(this.activeGeneration, error);
+    if (this.active) {
+      this.recordFailure(error);
     }
   }
 
   get lastError(): string | undefined {
-    return this.latestFailure && this.latestFailure.generation > this.latestSuccessfulGeneration
-      ? this.latestFailure.reason
-      : undefined;
+    return this.latestFailure?.reason;
   }
 
-  private recordFailure(generation: number, error: unknown): void {
-    if (generation <= (this.latestFailure?.generation ?? 0)) {
-      return;
-    }
+  private recordFailure(error: unknown): void {
     this.latestFailure = {
-      generation,
+      revision: ++this.failureRevision,
       reason: redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
     };
   }

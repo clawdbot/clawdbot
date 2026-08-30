@@ -135,8 +135,8 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
-  // Direct and detached syncs can settle out of order. Keep their shared
-  // outcome owner beside the dirty state that consumes those results.
+  // A success clears only the failure visible when it started. This keeps a
+  // concurrent failure visible even when older or no-op work settles later.
   protected readonly syncOutcomes = new MemorySyncOutcomeLedger();
   protected memorySourceProvenanceRepairPending = false;
   // Failed full memory reindexes must retry as full rebuilds, not incremental

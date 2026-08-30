@@ -784,7 +784,7 @@ describe("memory index", () => {
     expect(manager.status().lastSyncError).toBeUndefined();
   });
 
-  it("does not let an older detached failure replace a newer sync success", async () => {
+  it("does not let a no-op sync hide a later detached failure", async () => {
     const manager = await getPersistentManager(
       createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
     );
@@ -809,12 +809,15 @@ describe("memory index", () => {
 
     try {
       await maintenanceStarted.promise;
-      Reflect.set(manager, "dirty", true);
-      await manager.sync({ reason: "newer", force: true });
+      expect(manager.status().dirty).toBe(false);
+      await manager.sync({ reason: "interval" });
       releaseMaintenance.resolve();
       await expect(detachedSync).rejects.toThrow("older maintenance failed");
 
       expect(manager.status().dirty).toBe(true);
+      expect(manager.status().lastSyncError).toContain("older maintenance failed");
+
+      await manager.sync({ reason: "retry" });
       expect(manager.status().lastSyncError).toBeUndefined();
     } finally {
       releaseMaintenance.resolve();
