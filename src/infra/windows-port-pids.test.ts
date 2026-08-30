@@ -24,6 +24,23 @@ describe("readWindowsProcessStartTimeSync", () => {
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 
+  it("treats timezone-less PowerShell ISO creation time as UTC", () => {
+    const originalTimeZone = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      spawnSyncMock.mockReturnValueOnce({
+        status: 0,
+        stdout: "2026-07-06T12:34:56.1234567",
+      } as never);
+
+      expect(readWindowsProcessStartTimeSync(456, 1000)).toBe(
+        Date.parse("2026-07-06T12:34:56.123Z"),
+      );
+    } finally {
+      process.env.TZ = originalTimeZone;
+    }
+  });
+
   it("falls back to WMIC DMTF creation time output", () => {
     spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "" } as never).mockReturnValueOnce({
       status: 0,
