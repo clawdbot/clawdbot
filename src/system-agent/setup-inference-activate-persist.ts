@@ -198,6 +198,7 @@ export async function persistActivatedSetupInference(input: {
       profiles: plan.manualAuth.profiles,
       agentDir: resolvedRoute.agentDir,
       deps,
+      secretStorage: { config: initialCandidate, env: process.env },
     });
     if (persistedManualAuth.status === "unknown") {
       const rolledBack = await rollbackManualAuthProfiles(persistedManualAuth.receipt, deps);
