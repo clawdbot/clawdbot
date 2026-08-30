@@ -3728,104 +3728,113 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
-  it("uses adapter-provided formatted senders and scoped media roots when available", async () => {
-    const sendText = vi.fn(async ({ text }: { text: string }) => ({
-      channel: "line" as const,
-      messageId: `fallback:${text}`,
-    }));
-    const sendMedia = vi.fn(async ({ text }: { text: string }) => ({
-      channel: "line" as const,
-      messageId: `media:${text}`,
-    }));
-    const sendFormattedText = vi.fn(async ({ text }: { text: string }) => [
-      { channel: "line" as const, messageId: `fmt:${text}:1` },
-      { channel: "line" as const, messageId: `fmt:${text}:2` },
-    ]);
-    const sendFormattedMedia = vi.fn(
-      async ({ text }: { text: string; mediaLocalRoots?: readonly string[] }) => ({
+  it.each([
+    { ordinaryMedia: true, caption: "photo", mediaUrls: ["file:///tmp/f.png"] },
+    { ordinaryMedia: false, caption: "photo", mediaUrls: ["file:///tmp/f.png"] },
+    { ordinaryMedia: false, caption: "", mediaUrls: ["file:///tmp/f.png"] },
+    {
+      ordinaryMedia: false,
+      caption: "album",
+      mediaUrls: ["file:///tmp/f.png", "file:///tmp/g.png"],
+    },
+  ])(
+    "uses formatted senders and scoped roots ($ordinaryMedia, $caption)",
+    async ({ ordinaryMedia, caption, mediaUrls }) => {
+      const sendText = vi.fn(async ({ text }: { text: string }) => ({
         channel: "line" as const,
-        messageId: `fmt-media:${text}`,
-      }),
-    );
-    setTestOutbound({ sendText, sendMedia, sendFormattedText, sendFormattedMedia }, "line");
+        messageId: `fallback:${text}`,
+      }));
+      const sendMedia = vi.fn(async ({ text }: { text: string }) => ({
+        channel: "line" as const,
+        messageId: `media:${text}`,
+      }));
+      const sendFormattedText = vi.fn(async ({ text }: { text: string }) => [
+        { channel: "line" as const, messageId: `fmt:${text}:1` },
+        { channel: "line" as const, messageId: `fmt:${text}:2` },
+      ]);
+      const sendFormattedMedia = vi.fn(
+        async ({
+          text,
+          mediaUrl,
+        }: {
+          text: string;
+          mediaUrl: string;
+          mediaLocalRoots?: readonly string[];
+        }) => ({
+          channel: "line" as const,
+          messageId: `fmt-media:${mediaUrl}:${text}`,
+        }),
+      );
+      setTestOutbound(
+        {
+          sendText,
+          ...(ordinaryMedia ? { sendMedia } : {}),
+          sendFormattedText,
+          sendFormattedMedia,
+        },
+        "line",
+      );
 
-    const textResults = await deliverOutboundPayloads({
-      cfg: { channels: { line: {} } } as OpenClawConfig,
-      channel: "line",
-      to: "U123",
-      accountId: "default",
-      payloads: [{ text: "hello **boss**" }],
-    });
+      const textResults = await deliverOutboundPayloads({
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+        channel: "line",
+        to: "U123",
+        accountId: "default",
+        payloads: [{ text: "hello **boss**" }],
+      });
 
-    expect(sendFormattedText).toHaveBeenCalledTimes(1);
-    const formattedTextOptions = requireMockCallArg(sendFormattedText, "sendFormattedText") as
-      | { accountId?: unknown; text?: unknown; to?: unknown }
-      | undefined;
-    expect(formattedTextOptions?.to).toBe("U123");
-    expect(formattedTextOptions?.text).toBe("hello **boss**");
-    expect(formattedTextOptions?.accountId).toBe("default");
-    expect(sendText).not.toHaveBeenCalled();
-    expect(textResults.map((entry) => entry.messageId)).toEqual([
-      "fmt:hello **boss**:1",
-      "fmt:hello **boss**:2",
-    ]);
+      expect(sendFormattedText).toHaveBeenCalledTimes(1);
+      const formattedTextOptions = requireMockCallArg(sendFormattedText, "sendFormattedText") as
+        | { accountId?: unknown; text?: unknown; to?: unknown }
+        | undefined;
+      expect(formattedTextOptions?.to).toBe("U123");
+      expect(formattedTextOptions?.text).toBe("hello **boss**");
+      expect(formattedTextOptions?.accountId).toBe("default");
+      expect(sendText).not.toHaveBeenCalled();
+      expect(textResults.map((entry) => entry.messageId)).toEqual([
+        "fmt:hello **boss**:1",
+        "fmt:hello **boss**:2",
+      ]);
 
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-    await deliverOutboundPayloads({
-      cfg,
-      channel: "line",
-      to: "U123",
-      payloads: [{ text: "photo", mediaUrl: "file:///tmp/f.png" }],
-      session: { agentId: "work" },
-    });
+      const cfg = { channels: { line: {} } } as OpenClawConfig;
+      const onDeliveredPayload = vi.fn();
+      const mediaResults = await deliverOutboundPayloads({
+        cfg,
+        channel: "line",
+        to: "U123",
+        payloads: [{ text: caption, mediaUrls }],
+        session: { agentId: "work" },
+        onDeliveredPayload,
+      });
 
-    expect(sendFormattedMedia).toHaveBeenCalledTimes(1);
-    const sendFormattedMediaCall = requireMockCallArg(sendFormattedMedia, "sendFormattedMedia") as
-      | { mediaLocalRoots?: string[]; mediaUrl?: unknown; text?: unknown; to?: unknown }
-      | undefined;
-    expect(sendFormattedMediaCall?.to).toBe("U123");
-    expect(sendFormattedMediaCall?.text).toBe("photo");
-    expect(sendFormattedMediaCall?.mediaUrl).toBe("file:///tmp/f.png");
-    expect(sendFormattedMediaCall?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
-    expect(
-      sendFormattedMediaCall?.mediaLocalRoots?.some((root) =>
-        root.endsWith(path.join(".openclaw", "workspace-work")),
-      ),
-    ).toBe(true);
-    expect(sendMedia).not.toHaveBeenCalled();
-  });
-
-  it("keeps media delivery when the adapter implements only sendFormattedMedia", async () => {
-    const sendText = vi.fn(async ({ text }: { text: string }) => ({
-      channel: "matrix" as const,
-      messageId: `fallback:${text}`,
-    }));
-    const sendFormattedMedia = vi.fn(
-      async ({ text, mediaUrl }: { text: string; mediaUrl: string }) => ({
-        channel: "matrix" as const,
-        messageId: `fmt-media:${mediaUrl}:${text}`,
-      }),
-    );
-    setTestOutbound({ sendText, sendFormattedMedia });
-
-    const results = await deliverMatrix({
-      payloads: [{ text: "caption", mediaUrl: "https://example.com/file.png" }],
-    });
-
-    expect(sendFormattedMedia).toHaveBeenCalledTimes(1);
-    const mediaCall = requireMockCallArg(sendFormattedMedia, "sendFormattedMedia") as {
-      text?: unknown;
-      mediaUrl?: unknown;
-      to?: unknown;
-    };
-    expect(mediaCall.text).toBe("caption");
-    expect(mediaCall.mediaUrl).toBe("https://example.com/file.png");
-    expect(mediaCall.to).toBe("!room:example");
-    expect(sendText).not.toHaveBeenCalled();
-    expect(results.map((entry) => entry.messageId)).toEqual([
-      "fmt-media:https://example.com/file.png:caption",
-    ]);
-  });
+      expect(sendFormattedMedia).toHaveBeenCalledTimes(mediaUrls.length);
+      const sendFormattedMediaCall = requireMockCallArg(
+        sendFormattedMedia,
+        "sendFormattedMedia",
+      ) as
+        | { mediaLocalRoots?: string[]; mediaUrl?: unknown; text?: unknown; to?: unknown }
+        | undefined;
+      expect(sendFormattedMediaCall?.to).toBe("U123");
+      expect(sendFormattedMediaCall?.text).toBe(caption);
+      expect(sendFormattedMediaCall?.mediaUrl).toBe(mediaUrls[0]);
+      expect(sendFormattedMedia.mock.calls.map(([call]) => [call.text, call.mediaUrl])).toEqual(
+        mediaUrls.map((mediaUrl, index) => [index === 0 ? caption : "", mediaUrl]),
+      );
+      expect(mediaResults.map((entry) => entry.messageId)).toEqual(
+        mediaUrls.map((mediaUrl, index) => `fmt-media:${mediaUrl}:${index === 0 ? caption : ""}`),
+      );
+      expect(onDeliveredPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ text: caption, mediaUrls }),
+      );
+      expect(sendFormattedMediaCall?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
+      expect(
+        sendFormattedMediaCall?.mediaLocalRoots?.some((root) =>
+          root.endsWith(path.join(".openclaw", "workspace-work")),
+        ),
+      ).toBe(true);
+      expect(sendMedia).not.toHaveBeenCalled();
+    },
+  );
 
   it("persists formatted sub-send results before a later adapter chunk fails", async () => {
     const firstResult = { channel: "line" as const, messageId: "fmt-1" };
