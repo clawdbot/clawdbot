@@ -1066,7 +1066,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   border-radius: var(--radius-sm);
 }
 
-
 .skeleton-line--medium {
   width: 65%;
 }
