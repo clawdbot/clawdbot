@@ -139,17 +139,15 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         const newCdpSession = context.newCDPSession.bind(context);
         const newCdpSessionSpy = vi
           .spyOn(context, "newCDPSession")
-          .mockImplementation(async (target) => {
-            const markerSession = await newCdpSession(target);
+          .mockImplementation(async (pageOrFrame) => {
+            const markerSession = await newCdpSession(pageOrFrame);
             const send = markerSession.send.bind(markerSession);
             vi.spyOn(markerSession, "send").mockImplementation((async (
               method: string,
               params?: Record<string, unknown>,
             ) => {
-              if (
-                method === "DOM.setAttributeValue" &&
-                nativeRefSet.has(String(params?.value ?? ""))
-              ) {
+              const markerValue = typeof params?.value === "string" ? params.value : "";
+              if (method === "DOM.setAttributeValue" && nativeRefSet.has(markerValue)) {
                 throw new Error("marker write blocked");
               }
               return await (
