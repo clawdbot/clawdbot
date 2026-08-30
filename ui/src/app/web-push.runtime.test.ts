@@ -122,7 +122,8 @@ describe("web push service worker readiness", () => {
 
   it("unsubscribes an existing registration without waiting for activation", async () => {
     const subscription = existingSubscription([4, 1, 2, 3]);
-    subscription.unsubscribe = vi.fn().mockResolvedValue(true);
+    const unsubscribe = vi.fn().mockResolvedValue(true);
+    subscription.unsubscribe = unsubscribe;
     Object.defineProperty(navigator, "serviceWorker", {
       configurable: true,
       value: {
@@ -139,7 +140,7 @@ describe("web push service worker readiness", () => {
     expect(request).toHaveBeenCalledWith("push.web.unsubscribe", {
       endpoint: subscription.endpoint,
     });
-    expect(subscription.unsubscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });
 
