@@ -93,6 +93,23 @@ dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from
 `channel-outbound` instead.
 
+## Internal turn sources
+
+`MsgContext.InternalTurnSource` identifies an internal wake: `"heartbeat"`,
+`"cron"`, or `"exec"`. Leave it unset for ordinary channel messages. It keeps
+internal turns from resetting sessions or replacing the conversation binding;
+it does not grant execution authority or replace `InputProvenance`.
+
+Keep `Provider` and `Surface` for transport identity, and keep the reply route in
+`OriginatingChannel` and `OriginatingTo`. An internal wake may have no transport
+or explicit reply target. Do not put a wake label in those channel fields.
+
+For existing SDK callers, inbound finalization and session-recording entrypoints
+translate legacy `Provider` values `"heartbeat"`, `"cron-event"`, and
+`"exec-event"` into `InternalTurnSource`. They remove those labels from channel
+fields while preserving a real reply route. New callers should set the typed
+source directly.
+
 ## Delivery settlement contract
 
 `ChannelInboundTurnPlan.delivery` owns the native send for each logical reply

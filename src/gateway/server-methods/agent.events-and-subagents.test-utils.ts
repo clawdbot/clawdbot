@@ -746,7 +746,7 @@ describe("gateway agent handler", () => {
 
   it.each(
     (["channel", "replyChannel"] as const).flatMap((field) =>
-      (["heartbeat", "cron", "cron-event", "exec-event", "webhook", "voice"] as const).map(
+      (["heartbeat", "cron", "webhook", "voice"] as const).map(
         (channel) => [field, channel] as const,
       ),
     ),
@@ -775,7 +775,13 @@ describe("gateway agent handler", () => {
     expect(rejection).toBeUndefined();
   });
 
-  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      ["not-a-real-channel", "cron-event", "exec-event"].map(
+        (channel) => [field, channel] as const,
+      ),
+    ),
+  )("rejects unknown %s hint %s", async (field, channel) => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
@@ -785,14 +791,14 @@ describe("gateway agent handler", () => {
         message: "bogus channel",
         agentId: "main",
         sessionKey: "agent:main:main",
-        [field]: "not-a-real-channel",
+        [field]: channel,
         idempotencyKey: `unknown-${field}`,
       } as AgentParams,
       { reqId: `unknown-${field}-1`, respond },
     );
 
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "unknown channel: not-a-real-channel");
+    expectStringFieldContains(error, "message", `unknown channel: ${channel}`);
   });
 
   it("keeps voice-originated followups on the voice message channel without delivery", async () => {

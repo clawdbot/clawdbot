@@ -886,6 +886,48 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
+  it.each(["heartbeat", "cron-event", "exec-event"])(
+    "preserves the conversation route when public metadata callers supply legacy %s context",
+    async (provider) => {
+      const scope = { sessionKey: "agent:main:main", storePath };
+      const delivery: SessionEntry["delivery"] = {
+        kind: "external",
+        route: {
+          channel: "slack",
+          accountId: "work",
+          target: { to: "C123" },
+          thread: { id: "thread-1" },
+        },
+        context: { channel: "slack", accountId: "work", to: "C123", threadId: "thread-1" },
+        origin: {
+          provider: "slack",
+          surface: "slack",
+          to: "C123",
+          accountId: "work",
+          threadId: "thread-1",
+          nativeChannelId: "C123",
+        },
+      };
+      await replaceSessionEntry(scope, {
+        sessionId: "session-legacy-wake",
+        updatedAt: 10,
+        delivery,
+      });
+
+      await recordInboundSessionMeta({
+        ...scope,
+        ctx: { Provider: provider, Surface: provider, OriginatingChannel: provider },
+      });
+      expect(loadSessionEntry(scope)?.delivery).toEqual(delivery);
+
+      await updateSessionLastRoute({
+        ...scope,
+        ctx: { Provider: provider, Surface: provider, OriginatingChannel: provider },
+      });
+      expect(loadSessionEntry(scope)?.delivery).toEqual(delivery);
+    },
+  );
+
   it("runs the last-route ownership guard at the SQLite commit edge", async () => {
     const sessionKey = "agent:main:webchat:dm:revoked-route";
 

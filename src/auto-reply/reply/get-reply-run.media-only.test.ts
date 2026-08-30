@@ -3530,9 +3530,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
-  it.each(["heartbeat", "cron-event", "exec-event"] as const)(
+  it.each(["heartbeat", "cron", "exec"] as const)(
     "keeps %s heartbeat metadata out of the model prompt",
-    async (provider) => {
+    async (source) => {
       const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
       const syntheticConversationInfo =
         'Conversation info:\n```json\n{"chat_id":"discord:channel-123"}\n```';
@@ -3544,7 +3544,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: heartbeatPrompt,
           RawBody: heartbeatPrompt,
           CommandBody: heartbeatPrompt,
-          ...createProviderSurface(provider),
+          InternalTurnSource: source,
           ChatType: "direct",
           OriginatingChannel: "discord",
           OriginatingTo: "discord:channel-123",
@@ -3552,7 +3552,7 @@ describe("runPreparedReply media-only handling", () => {
         sessionCtx: {
           Body: heartbeatPrompt,
           BodyStripped: heartbeatPrompt,
-          ...createProviderSurface(provider),
+          InternalTurnSource: source,
           ChatType: "direct",
           OriginatingChannel: "discord",
           OriginatingTo: "discord:channel-123",
@@ -3613,12 +3613,12 @@ describe("runPreparedReply media-only handling", () => {
       systemSent: true,
       ctx: {
         ...createInboundBody("scheduled wake"),
-        Provider: "cron-event",
+        InternalTurnSource: "cron",
         SessionKey: "agent:main:discord:guild-1:channel-1",
       },
       sessionCtx: {
         ...createSessionBody("scheduled wake"),
-        Provider: "cron-event",
+        InternalTurnSource: "cron",
       },
       sessionEntry: {
         sessionId: "session-1",
@@ -3658,6 +3658,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
     expect(call?.followupRun.run.chatType).toBe("channel");
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
+    expect(call?.followupRun.originatingChannel).toBe("discord");
+    expect(call?.followupRun.originatingTo).toBe("channel-1");
   });
 
   it.each([
@@ -3758,12 +3760,12 @@ describe("runPreparedReply media-only handling", () => {
         sessionEntry,
         ctx: {
           ...createInboundBody("scheduled wake"),
-          Provider: "cron-event",
+          InternalTurnSource: "cron",
           SessionKey: "agent:main:telegram:-100123",
         },
         sessionCtx: {
           ...createSessionBody("scheduled wake"),
-          Provider: "cron-event",
+          InternalTurnSource: "cron",
         },
       });
       // Production heartbeat wakes call the reply resolver directly, without
@@ -3777,12 +3779,12 @@ describe("runPreparedReply media-only handling", () => {
         sessionEntry,
         ctx: {
           ...createInboundBody("scheduled wake"),
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
           SessionKey: "agent:main:telegram:-100123",
         },
         sessionCtx: {
           ...createSessionBody("scheduled wake"),
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
         },
       });
       // Response-tool heartbeats carry an effective message_tool_only turn
@@ -3796,12 +3798,12 @@ describe("runPreparedReply media-only handling", () => {
         sessionEntry,
         ctx: {
           ...createInboundBody("scheduled wake"),
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
           SessionKey: "agent:main:telegram:-100123",
         },
         sessionCtx: {
           ...createSessionBody("scheduled wake"),
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
         },
       });
 
@@ -3843,7 +3845,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
     selectAgentHarnessMock.mockClear();
     // An entry with no persisted delivery origin has only ever been driven
-    // internally; the wake provider ("heartbeat") must not leak into the
+    // internally; its wake source must not leak into the
     // stable context as a non-internal surface or the fact diverges from
     // dispatch's live webchat turns.
     const sessionEntry: SessionEntry = {
@@ -3861,12 +3863,12 @@ describe("runPreparedReply media-only handling", () => {
       sessionEntry,
       ctx: {
         ...createInboundBody("scheduled wake"),
-        Provider: "heartbeat",
+        InternalTurnSource: "heartbeat",
         SessionKey: "agent:main:main",
       },
       sessionCtx: {
         ...createSessionBody("scheduled wake"),
-        Provider: "heartbeat",
+        InternalTurnSource: "heartbeat",
         ChatType: "direct",
       },
     });
@@ -3878,10 +3880,7 @@ describe("runPreparedReply media-only handling", () => {
         provider: params.provider,
         modelId: params.modelId,
       })),
-    ).toEqual([
-      { provider: "heartbeat", modelId: undefined },
-      { provider: "anthropic", modelId: "claude-opus-4-1" },
-    ]);
+    ).toEqual([{ provider: "anthropic", modelId: "claude-opus-4-1" }]);
   });
 
   it("downgrades the synthetic stable mode when the message tool is policy-denied", async () => {
@@ -3921,12 +3920,12 @@ describe("runPreparedReply media-only handling", () => {
       sessionEntry,
       ctx: {
         ...createInboundBody("scheduled wake"),
-        Provider: "heartbeat",
+        InternalTurnSource: "heartbeat",
         SessionKey: "agent:main:telegram:-100123",
       },
       sessionCtx: {
         ...createSessionBody("scheduled wake"),
-        Provider: "heartbeat",
+        InternalTurnSource: "heartbeat",
       },
     });
 
@@ -4290,14 +4289,14 @@ describe("runPreparedReply media-only handling", () => {
       opts: { isHeartbeat: true },
       ctx: {
         ...createInboundBody("scheduled wake"),
-        Provider: "cron-event",
+        InternalTurnSource: "cron",
         SessionKey: "agent:main:slack:direct:U1",
         OriginatingChannel: "slack",
         OriginatingTo: "user:U1",
       },
       sessionCtx: {
         ...createSessionBody("scheduled wake"),
-        Provider: "cron-event",
+        InternalTurnSource: "cron",
         OriginatingChannel: "slack",
         OriginatingTo: "user:U1",
       },

@@ -2,7 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -81,12 +81,6 @@ function buildCliMcpChannelContext(
   };
 }
 
-function resolveCliMcpMessageProvider(
-  run: Pick<RunCliAgentParams, "messageProvider" | "messageChannel">,
-): string | undefined {
-  return normalizeMessageChannel(run.messageProvider ?? run.messageChannel) ?? undefined;
-}
-
 function resolveCliMcpSessionKey(
   run: Pick<RunCliAgentParams, "sessionKey">,
   config: OpenClawConfig,
@@ -129,7 +123,9 @@ export function buildCliMcpGrantContext(params: {
   const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
   const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
   const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
-  const messageProvider = resolveCliMcpMessageProvider(params.run);
+  const messageProvider = resolveGatewayMessageChannel(
+    params.run.messageChannel ?? params.run.messageProvider,
+  );
   const currentChannelId = normalizeOptionalMcpContextValue(params.run.currentChannelId);
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
   // Trusted message-only completions stay restricted even when source routing

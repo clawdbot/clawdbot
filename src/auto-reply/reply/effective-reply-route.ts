@@ -20,6 +20,7 @@ type EffectiveReplyRouteContext = Pick<
   | "OriginatingTo"
   | "AccountId"
   | "InputProvenance"
+  | "InternalTurnSource"
   | "ChatType"
 >;
 
@@ -35,11 +36,6 @@ type EffectiveReplyRoute = {
   chatType?: ChatType;
   inheritedExternalRoute?: boolean;
 };
-
-/** Returns true for synthetic providers that should not define a user channel route. */
-export function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
-}
 
 function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {
   return (
@@ -103,7 +99,7 @@ export function resolveEffectiveReplyRoute(params: {
       inheritedExternalRoute: true,
     };
   }
-  if (!isSystemEventProvider(params.ctx.Provider)) {
+  if (params.ctx.InternalTurnSource === undefined) {
     return {
       channel: params.ctx.OriginatingChannel,
       to: params.ctx.OriginatingTo,
