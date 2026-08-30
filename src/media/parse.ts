@@ -587,9 +587,16 @@ export function splitMediaFromOutput(
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
+  // Line offsets and scanner spans advance in source order.
+  let fenceIndex = 0;
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
-    if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
+    let fence = fenceSpans[fenceIndex];
+    while (fence && lineOffset >= fence.end) {
+      fenceIndex += 1;
+      fence = fenceSpans[fenceIndex];
+    }
+    if (fence && lineOffset >= fence.start) {
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
