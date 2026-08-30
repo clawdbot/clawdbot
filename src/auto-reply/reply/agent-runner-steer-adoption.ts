@@ -7,12 +7,14 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
+import { withRecentHistoryImageNotes } from "./history-media.js";
 import {
   admitFollowupRunLifecycle,
   parkSteerCandidate,
   resolveFollowupAbortSignal,
   scheduleFollowupDrain,
   type FollowupRun,
+  type InternalFollowupRun,
 } from "./queue.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
@@ -140,7 +142,13 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     if (!injectionTarget) {
       return await fallback("no injectable reply operation");
     }
-    const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
+    // Provenance travels with the images it explains. Steering forwards the image
+    // payload but injects the prompt separately, so inherited-image notes have to
+    // be appended here or the steered run cannot place the attachments. The notes
+    // ride on the admission-owned shape rather than the plugin-facing one.
+    const admittedRun: InternalFollowupRun = followupRun;
+    const steeredPrompt = withRecentHistoryImageNotes(followupRun.prompt, admittedRun);
+    const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, steeredPrompt, {
       steeringMode: "all",
       isInboundUserMessage: true,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,

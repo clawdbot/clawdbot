@@ -141,9 +141,12 @@ export async function resolveCurrentTurnImages(params: {
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
   // A room that kept media on a gated message answers the turn that finally asks
-  // about it. The resolver only reaches those images when this turn resolved none
-  // of its own, so asking for them costs nothing when it did.
-  const includeRecentHistoryImages = hasInboundHistoryMedia(params.ctx);
+  // about it - but only a turn carrying no images of its own. Passed-in images
+  // and file-extracted pages are already in `entries`, and this turn's own
+  // attachments are resolved below; either one outranks retained history, so
+  // history is requested only in their absence.
+  const hasCurrentTurnImages = entries.length > 0 || undescribedImageAttachments.length > 0;
+  const includeRecentHistoryImages = !hasCurrentTurnImages && hasInboundHistoryMedia(params.ctx);
   if (undescribedImageAttachments.length === 0 && !includeRecentHistoryImages) {
     return resolveMergedTurnImages(entries);
   }

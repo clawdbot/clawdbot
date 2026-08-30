@@ -13,7 +13,7 @@ import {
 } from "../../channels/message-access/admission-evidence.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import type { FollowupRun, InternalFollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
@@ -92,6 +92,68 @@ afterEach(() => {
 });
 
 describe("followup prompt metadata carrier", () => {
+  it("carries inherited-image provenance into an accepted steer", async () => {
+    // `steer` is the default queue mode, so this is the ordinary path an active
+    // run takes. Images ride in the payload while the prompt is injected
+    // separately; without the notes the run gets bytes it cannot attribute.
+    const key = "agent:main:steer-history-notes";
+    queueKeys.add(key);
+    const run: InternalFollowupRun = {
+      ...createQueueTestRun({ prompt: "what was in that photo?", messageId: "steer-notes" }),
+      images: [{ type: "image", data: "kept-png", mimeType: "image/png" }],
+      imageOrder: ["inline"],
+      historyImageNotes: "[Recent image 1 from Ada, message m-kept, attached as media.]",
+    };
+    const operation = createReplyOperation({
+      sessionKey: key,
+      sessionId: run.run.sessionId,
+      resetTriggered: false,
+    });
+    operation.bindToolAuthorityFingerprint("steer-authority");
+    const injected: string[] = [];
+    operation.attachBackend({
+      kind: "embedded",
+      supportsQueueMessageImages: true,
+      toolAuthorityFingerprint: "steer-authority",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async (text: string) => {
+          injected.push(text);
+        }),
+      },
+    });
+    operation.setPhase("running");
+    const typing = createMockTypingController();
+    try {
+      await expect(
+        runActiveReplySteer({
+          followupRun: run,
+          opts: undefined,
+          providedReplyOperation: operation,
+          queueKey: key,
+          releaseAdmissionTicket: vi.fn(),
+          replyOperationRunState: undefined,
+          resolvedQueue: { mode: "steer", debounceMs: 0 },
+          restartRecoverySourceTurnId: "steer-notes",
+          runFollowup: vi.fn(),
+          sessionCtx: {},
+          sessionKey: key,
+          touchActiveSessionEntry: async () => {},
+          typing,
+          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          toolAuthorityFingerprint: "steer-authority",
+        }),
+      ).resolves.toBe("handled");
+
+      expect(injected).toEqual([
+        "what was in that photo?\n\n[Recent image 1 from Ada, message m-kept, attached as media.]",
+      ]);
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("drains the complete parked image turn after active steering rejects it", async () => {
     const key = "agent:main:parked-media-fallback";
     queueKeys.add(key);
