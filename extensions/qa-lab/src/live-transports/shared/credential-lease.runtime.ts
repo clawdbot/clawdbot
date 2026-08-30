@@ -601,7 +601,7 @@ export function startQaCredentialLeaseHeartbeat(
       getFailure: () => null,
       async stop() {},
       throwIfFailed() {},
-      whenFailed: new Promise<Error>(() => undefined),
+      whenFailed: new Promise<Error>(() => {}),
     };
   }
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
@@ -610,7 +610,7 @@ export function startQaCredentialLeaseHeartbeat(
       getFailure: () => null,
       async stop() {},
       throwIfFailed() {},
-      whenFailed: new Promise<Error>(() => undefined),
+      whenFailed: new Promise<Error>(() => {}),
     };
   }
 

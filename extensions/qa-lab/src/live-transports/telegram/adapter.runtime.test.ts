@@ -28,7 +28,7 @@ vi.mock("../shared/credential-lease.runtime.js", () => ({
   startQaCredentialLeaseHeartbeat: () => ({
     stop: mocks.heartbeatStop,
     throwIfFailed: mocks.heartbeatThrowIfFailed,
-    whenFailed: new Promise<Error>(() => undefined),
+    whenFailed: new Promise<Error>(() => {}),
   }),
 }));
 
