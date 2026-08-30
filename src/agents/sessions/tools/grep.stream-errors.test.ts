@@ -51,12 +51,12 @@ function grepRow(
   lineNumber: number,
   lines: { text: string } | { bytes: string } = { text: "foo\n" },
   type: "match" | "context" = "match",
-  filePath = "/tmp/match.txt",
+  filePath: string | { text: string } | { bytes: string } = "/tmp/match.txt",
 ): string {
   return `${JSON.stringify({
     type,
     data: {
-      path: { text: filePath },
+      path: typeof filePath === "string" ? { text: filePath } : filePath,
       line_number: lineNumber,
       lines,
     },
@@ -71,6 +71,64 @@ function textContent(
 }
 
 describe("grep tool streaming", () => {
+  it("renders matches whose ripgrep path uses byte-form JSON", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const cwd = process.cwd();
+    const tool = createGrepToolDefinition(cwd);
+    const execution = tool.execute(
+      "byte-path",
+      { pattern: "needle" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.stdout.end(
+      grepRow(1, { text: "needle\n" }, "match", {
+        bytes: Buffer.from(path.join(cwd, "report-\xff.txt"), "latin1").toString("base64"),
+      }),
+    );
+    child.stderr.end();
+    child.emit("close", 0);
+
+    expect(textContent(await execution)).toBe("report-�.txt:1: needle");
+  });
+
+  it("keeps distinct byte-form paths separate when their display paths collide", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const cwd = process.cwd();
+    const tool = createGrepToolDefinition(cwd);
+    const execution = tool.execute(
+      "colliding-byte-paths",
+      { pattern: "needle" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    const bytePath = (invalidByte: number) => ({
+      bytes: Buffer.concat([
+        Buffer.from(path.join(cwd, "report-")),
+        Buffer.from([invalidByte]),
+        Buffer.from(".txt"),
+      ]).toString("base64"),
+    });
+    child.stdout.end(
+      grepRow(1, { text: "first needle\n" }, "match", bytePath(0x80)) +
+        grepRow(1, { text: "second needle\n" }, "match", bytePath(0x81)),
+    );
+    child.stderr.end();
+    child.emit("close", 0);
+
+    expect(textContent(await execution)).toBe(
+      "report-�.txt:1: first needle\nreport-�.txt:1: second needle",
+    );
+  });
+
   it.each(["..notes/sub/sample.txt", ...(path.sep === "/" ? ["literal\\name.txt"] : [])])(
     "preserves readable result path %s",
     async (relativePath) => {
