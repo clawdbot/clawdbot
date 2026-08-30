@@ -222,6 +222,437 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(prepared.queueHandle.isStopped?.()).toBe(true);
   });
 
+  it("carries source-local tool isolation and cleanup without running cleanup before rewind", async () => {
+    const onAccepted = vi.fn();
+    const onBeforeAgentFinalize = vi.fn(async () => ({
+      action: "revise" as const,
+      instruction: "Rewrite with fresh room context",
+      disableTools: true as const,
+      onAccepted,
+    }));
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-local-finalize",
+        sessionId: "session-local-finalize",
+        sessionKey: "agent:main:main",
+        provider: "full-provider",
+        modelId: "full-model",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+        onBeforeAgentFinalize,
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: null,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
+      clientToolCallSlots: [],
+      nestedToolActivities: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "persisted-local-draft",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "Draft answer" }],
+          stopReason: "stop",
+        },
+        assistantTexts: ["Draft answer"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: false,
+      }),
+    ).resolves.toEqual({ suppressTerminalDelivery: true });
+    expect(prepared.getBeforeAgentFinalizeRevisionDisableTools()).toBe(true);
+    expect(prepared.getBeforeAgentFinalizeRevisionAccepted()).toBe(onAccepted);
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(onBeforeAgentFinalize).toHaveBeenCalledWith({
+      runId: "run-local-finalize",
+      sessionId: "session-local-finalize",
+      sessionKey: "agent:main:main",
+      provider: "full-provider",
+      model: "full-model",
+      lastAssistantMessage: "Draft answer",
+      revisionAttempt: 0,
+    });
+  });
+
+  it("gates the retained host-final payload instead of empty or NO_REPLY assistant text", async () => {
+    const onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
+    prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-host-final-candidate",
+        sessionId: "session-host-final-candidate",
+        sessionKey: "agent:main:main",
+        provider: "full-provider",
+        modelId: "full-model",
+        maxBeforeAgentFinalizeRevisions: 2,
+        onBeforeAgentFinalize,
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: null,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
+      clientToolCallSlots: [],
+      nestedToolActivities: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "persisted-tool-only-final",
+        assistantTexts: ["NO_REPLY"],
+        hostFinalDeferredCandidate: "Actual answer prepared by message.send",
+        hasAssistantVisibleText: false,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: false,
+      }),
+    ).resolves.toBeUndefined();
+    expect(onBeforeAgentFinalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastAssistantMessage: "Actual answer prepared by message.send",
+      }),
+    );
+  });
+
+  it("accepts a tools-disabled source-local revision after deterministic side effects", async () => {
+    const onBeforeAgentFinalize = vi.fn(async () => ({
+      action: "revise" as const,
+      instruction: "rewrite without repeating the completed action",
+      disableTools: true as const,
+    }));
+    prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-side-effect-finalize",
+        sessionId: "session-side-effect-finalize",
+        sessionKey: "agent:main:main",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+        onBeforeAgentFinalize,
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: null,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
+      clientToolCallSlots: [],
+      nestedToolActivities: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "persisted-side-effect-answer",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "Already sent a side effect" }],
+          stopReason: "stop",
+        },
+        assistantTexts: ["Already sent a side effect"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: true,
+      }),
+    ).resolves.toEqual({ suppressTerminalDelivery: true });
+    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
+  });
+
+  it("keeps arbitrary global revisions blocked after deterministic side effects", async () => {
+    mocks.runBeforeFinalizeHook.mockResolvedValue({
+      action: "revise",
+      reason: "unsafe generic retry",
+    });
+    prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-global-side-effect-finalize",
+        sessionId: "session-global-side-effect-finalize",
+        sessionKey: "agent:main:main",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
+      clientToolCallSlots: [],
+      nestedToolActivities: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "persisted-side-effect-answer",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "Already sent a side effect" }],
+          stopReason: "stop",
+        },
+        assistantTexts: ["Already sent a side effect"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(mocks.runBeforeFinalizeHook).toHaveBeenCalledOnce();
+  });
+
+  it("runs only the tools-disabled source-local gate for a completed client tool call", async () => {
+    const onBeforeAgentFinalize = vi.fn(async () => ({
+      action: "revise" as const,
+      instruction: "replace the pending client action with an answer",
+      disableTools: true as const,
+    }));
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-client-tool-finalize",
+        sessionId: "session-client-tool-finalize",
+        sessionKey: "agent:main:main",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+        onBeforeAgentFinalize,
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
+      clientToolCallSlots: [
+        { toolCallId: "client-1", name: "computer_use", params: {}, completed: true },
+      ],
+      nestedToolActivities: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "persisted-client-tool-answer",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "Run client tool" }],
+          stopReason: "tool_calls",
+        },
+        assistantTexts: ["Run client tool"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: false,
+      }),
+    ).resolves.toEqual({ suppressTerminalDelivery: true });
+    expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
+    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
+    expect(prepared.getBeforeAgentFinalizeRevisionDisableTools()).toBe(true);
+  });
+
+  it("records deterministic source-local discard without running its cleanup early", async () => {
+    const onAccepted = vi.fn();
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-local-discard",
+        sessionId: "session-local-discard",
+        sessionKey: "agent:main:main",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+        onBeforeAgentFinalize: vi.fn(async () => ({
+          action: "discard" as const,
+          onAccepted,
+        })),
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: null,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
+      clientToolCallSlots: [],
+      nestedToolActivities: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "persisted-discarded-answer",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "obsolete answer" }],
+          stopReason: "stop",
+        },
+        assistantTexts: ["obsolete answer"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: false,
+      }),
+    ).resolves.toEqual({ suppressTerminalDelivery: true });
+    expect(prepared.getBeforeAgentFinalizeDiscarded()).toBe(true);
+    expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBe("persisted-discarded-answer");
+    expect(prepared.getBeforeAgentFinalizeRevisionReason()).toBeUndefined();
+    expect(prepared.getBeforeAgentFinalizeRevisionAccepted()).toBe(onAccepted);
+    expect(onAccepted).not.toHaveBeenCalled();
+  });
+
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {

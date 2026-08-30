@@ -172,11 +172,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "test", "vitest", "zod-runtime.ts"),
       },
       {
-        // Bun substitutes its built-in fetch shim for bare `undici`, whose
-        // MockAgent is a non-functional stub; pin the real package so
-        // mock-http interception works. Node resolves to this file anyway.
+        // Bypass Bun's bare-undici builtin (MockAgent is a stub) while keeping
+        // package resolution relative to the importer and its installed version.
         find: /^undici$/u,
-        replacement: path.join(repoRoot, "node_modules", "undici", "index.js"),
+        replacement: "undici/index.js",
       },
       {
         find: "discord-api-types/v10",
@@ -584,6 +583,6 @@ export const sharedVitestConfig = {
         "src/infra/tailscale.ts",
       ],
     },
-    ...loadVitestExperimentalConfig(),
+    ...loadVitestExperimentalConfig(process.env, process.platform, repoRoot),
   },
 };

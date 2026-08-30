@@ -1,6 +1,6 @@
 // Fetches the gateway signals behind the Models settings page.
-// Each source degrades independently: a missing usage hook or an older
-// gateway must not blank the provider list.
+// Each source degrades independently: unavailable usage data must not blank
+// the provider list.
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -76,12 +76,6 @@ export async function loadModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
-  const request = <T>(method: string, params?: unknown): Promise<T> =>
-    opts?.signal
-      ? client.request<T>(method, params, { signal: opts.signal })
-      : params === undefined
-        ? client.request<T>(method)
-        : client.request<T>(method, params);
   const loadConfiguredCatalog = (loadOpts: { preparedOnly?: true; refresh?: true }) =>
     settleRequest(
       loadModelCatalog(client, {
@@ -101,7 +95,8 @@ export async function loadModelProvidersData(
     settleRequest(loadModelAuthStatus(client, opts)),
     catalogLoad,
     catalogRefresh ?? Promise.resolve(undefined),
-    request<ConfigSnapshot>("config.get", {})
+    client
+      .request<ConfigSnapshot>("config.get", {}, { signal: opts.signal })
       .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
       .catch(() => null),
   ]);

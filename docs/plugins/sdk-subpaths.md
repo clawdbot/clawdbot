@@ -25,9 +25,14 @@ inventory of every internal runtime helper. Four files define the boundary:
 
 After changing the entrypoint inventories, run `pnpm plugin-sdk:sync-exports`,
 then `pnpm plugin-sdk:check-exports`. The same registration command maintains
-package exports and private workspace declaration aliases in
+package exports, private artifact exclusions in `package.json`'s `files`, and
+private workspace declaration aliases in
 `extensions/tsconfig.package-boundary.paths.json` and `extensions/xai/tsconfig.json`.
-It preserves unrelated mappings and XAI's intentional private-alias omissions.
+It owns literal flat `!dist/plugin-sdk/<name>.js` and `.d.ts` exclusions, including
+names with underscores, uppercase letters, dots, or Unicode, and removes obsolete
+exclusions when entries become public or are removed. Nested paths, glob or escape
+syntax, non-entrypoint metadata, and other file rules retain their order; unrelated
+mappings and XAI's intentional private-alias omissions are preserved.
 These local declaration aliases do not add types to JavaScript-only published
 SDK exports; test-only entries remain unexported.
 
@@ -64,10 +69,11 @@ subpaths.
 OpenClaw's Vitest-backed test-helper subpaths are repo-local only and are no
 longer package exports: `agent-runtime-test-contracts`,
 `channel-contract-testing`, `channel-target-testing`, `channel-test-helpers`,
-`plugin-state-test-runtime`, `plugin-test-api`, `plugin-test-contracts`,
-`plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
-`reply-payload-testing`, `sqlite-runtime-testing`, `test-env`, `test-fixtures`,
-`test-live`, `test-live-auth`, `test-media-generation`,
+`matrix-source-finalization-test-fixtures`, `plugin-state-test-runtime`,
+`plugin-test-api`, `plugin-test-contracts`, `plugin-test-runtime`,
+`provider-http-test-mocks`, `provider-test-contracts`, `reply-payload-testing`,
+`sqlite-runtime-testing`, `test-env`, `test-fixtures`, `test-live`,
+`test-live-auth`, `test-media-generation`,
 `test-media-understanding`, `test-node-mocks`, and `testing`.
 `ssrf-runtime-internal` is a JavaScript-only host runtime reserved for exact
 trusted local-service plugins; it is not a public plugin authoring API.
@@ -332,6 +338,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use injected runtime APIs or documented typed-public subpaths |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
+    | `plugin-sdk/diagnostic-flags` | `isDiagnosticFlagEnabled` for flag-only consumers without event, trace, or redaction initialization |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
@@ -395,6 +402,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/channel-test-helpers` | Repo-local channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
     | `plugin-sdk/channel-target-testing` | Repo-local shared target-resolution error-case suite for channel tests |
     | `plugin-sdk/channel-contract-testing` | Repo-local narrow channel contract test helpers without the broad testing barrel |
+    | `plugin-sdk/matrix-source-finalization-test-fixtures` | Private-local, unexported Matrix source-finalization fixtures for repository tests only |
     | `plugin-sdk/plugin-test-contracts` | Repo-local plugin package, registration, public artifact, runtime API, and import side-effect contract helpers |
     | `plugin-sdk/plugin-state-test-runtime` | Repo-local plugin state store, ingress queue, and state DB test helpers |
     | `plugin-sdk/provider-test-contracts` | Repo-local provider runtime, auth, discovery, onboard, catalog, wizard, media capability, replay policy, realtime STT live-audio, web-search/fetch, and stream contract helpers |

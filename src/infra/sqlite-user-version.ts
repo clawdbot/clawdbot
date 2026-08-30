@@ -9,8 +9,15 @@ type SqliteUserVersionReader = {
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
 
+export class SqliteSchemaVersionError extends Error {
+  override name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
+}
+
 export function isSqliteSchemaVersionError(error: unknown): error is Error {
-  return error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME;
+  return (
+    error instanceof SqliteSchemaVersionError ||
+    (error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME)
+  );
 }
 
 export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
@@ -38,13 +45,11 @@ export function createNewerSqliteSchemaVersionError(
   schemaVersion: number,
   supportedVersion: number,
 ): Error {
-  const error = new Error(
+  return new SqliteSchemaVersionError(
     `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}. ` +
       `Refused by ${describeRunningOpenClawBuild()}. ` +
       "Identify installs by that path: one version string spans many builds, and a linked source checkout reports its git HEAD even when its built output is older. " +
       `Run a build that supports schema ${schemaVersion} or newer against this state directory — rebuild or update the install above — or point this build at a different OPENCLAW_STATE_DIR. ` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
-  error.name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
-  return error;
 }

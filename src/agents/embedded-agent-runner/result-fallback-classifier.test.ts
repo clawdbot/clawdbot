@@ -425,6 +425,10 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       label: "an exact terminal tool batch intentionally completes the turn",
       meta: { intentionalTerminalCompletion: "tool-batch" as const },
     },
+    {
+      label: "a source-finalization gate intentionally discards the final",
+      meta: { intentionalTerminalCompletion: "source-finalization-discard" as const },
+    },
   ])("does not fallback after $label", ({ meta }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",

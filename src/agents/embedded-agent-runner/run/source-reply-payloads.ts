@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
+import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -25,6 +26,7 @@ type EmbeddedRunReplyItem = {
   interactive?: ReplyPayload["interactive"];
   channelData?: Record<string, unknown>;
   nonTerminalToolErrorWarning?: boolean;
+  hostFinalDeferredPayload?: ReplyPayload;
   sourceReplyMirror?: { idempotencyKey?: string; transcriptOwner?: true };
 };
 
@@ -41,9 +43,22 @@ export function buildSourceReplyPayloadState(params: {
   deliveredSourceReplyViaMessageTool: boolean;
   explicitFinalSourceReply: boolean | undefined;
   completedSourceReplyViaMessageTool: boolean;
+  hasDeferredHostFinalPayload: boolean;
 } {
   const sourceReplyPayloads = params.payloads ?? [];
   const replyItems = sourceReplyPayloads.flatMap((payload, index): EmbeddedRunReplyItem[] => {
+    if (payload.hostFinalDeferred === true) {
+      const {
+        hostFinalDeferred: _hostFinalDeferred,
+        idempotencyKey: _idempotencyKey,
+        sourceReplyFinal: _sourceReplyFinal,
+        transcriptOwner: _transcriptOwner,
+        ...hostFinalPayload
+      } = payload;
+      return hasReplyPayloadContent(hostFinalPayload)
+        ? [{ text: "", hostFinalDeferredPayload: hostFinalPayload }]
+        : [];
+    }
     const text = normalizeOptionalString(payload.text) ?? "";
     const media = (
       payload.mediaUrls?.length ? payload.mediaUrls : payload.mediaUrl ? [payload.mediaUrl] : []
@@ -82,6 +97,12 @@ export function buildSourceReplyPayloadState(params: {
     ];
   });
   const hasSourceReplyPayload = replyItems.length > 0;
+  const hasDeferredHostFinalPayload = replyItems.some(
+    (payload) => payload.hostFinalDeferredPayload !== undefined,
+  );
+  const hasDeliveredSourceReplyPayload = replyItems.some(
+    (payload) => payload.hostFinalDeferredPayload === undefined,
+  );
   const deliveredSourceReplyViaMessageTool =
     params.sourceReplyDeliveryMode === "message_tool_only" &&
     params.didDeliverSourceReplyViaMessageTool === true;
@@ -95,6 +116,8 @@ export function buildSourceReplyPayloadState(params: {
     deliveredSourceReplyViaMessageTool,
     explicitFinalSourceReply,
     completedSourceReplyViaMessageTool:
-      explicitFinalSourceReply ?? (hasSourceReplyPayload || deliveredSourceReplyViaMessageTool),
+      explicitFinalSourceReply ??
+      (hasDeliveredSourceReplyPayload || deliveredSourceReplyViaMessageTool),
+    hasDeferredHostFinalPayload,
   };
 }

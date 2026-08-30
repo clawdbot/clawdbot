@@ -44,5 +44,29 @@ export const matrixChannelConfigUiHints = {
     label: "Matrix Display Name Matching",
     help: "Compatibility opt-in for resolving Matrix display names and joined room names in allowlists. Prefer full @user:server IDs and room IDs or aliases because names are mutable.",
   },
+  turnTaking: {
+    label: "Matrix Intelligent Turn-Taking",
+    help: "Enable one shared AI-guided participation decision in Matrix rooms containing at least two joined local OpenClaw agent accounts. For plugin agent runtimes, fresh-message finalization at redraft depth 1 or 2 requires OpenClaw's registry-attested bundled Codex harness. This identifies the harness, not one exact Codex version. Off by default.",
+  },
+  "turnTaking.enabled": {
+    label: "Matrix Intelligent Turn-Taking Enabled",
+    help: "Apply intelligent participation channel-wide to eligible Matrix rooms. Fresh-message checks are added only when redraft depth is 1 or 2. True one-human/one-agent rooms are excluded.",
+  },
+  "turnTaking.redraftDepth": {
+    label: "Matrix Fresh-Message Redraft Depth",
+    help: "0 keeps participation classification but disables pre-send freshness and works with other agent runtimes. 1 or 2 uses a supported embedded or CLI finalizer; among plugin harnesses, OpenClaw's registry-attested bundled Codex harness is required. Normal minimum-version compatibility still applies.",
+  },
+  "turnTaking.nextStep": {
+    label: "Matrix Fresh-Message Next Step",
+    help: "With redraft depth 1 or 2, choose AI selection or a fixed action when newer room activity arrives before delivery.",
+  },
+  "turnTaking.nextStep.decider": {
+    label: "Matrix Next-Step Decider",
+    help: "AI dynamically chooses redraft, discard, or send-as-is. User uses the configured fixed action.",
+  },
+  "turnTaking.nextStep.action": {
+    label: "Matrix Fixed Next-Step Action",
+    help: "Required only when decider is user: redraft, discard, or send-as-is.",
+  },
   ...createChannelConfigUiHints({ channelLabel: "Matrix", progress: {} }),
 } satisfies Record<string, ChannelConfigUiHint>;

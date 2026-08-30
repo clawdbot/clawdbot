@@ -49,6 +49,14 @@ import {
   retainBeforeToolCallForNativeHookRelay,
 } from "./host-capability.js";
 
+const agentToolsMocks = vi.hoisted(() => ({
+  createOpenClawCodingTools: vi.fn(() => []),
+}));
+
+vi.mock("../agent-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent-tools.js")>()),
+  createOpenClawCodingTools: agentToolsMocks.createOpenClawCodingTools,
+}));
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-tools.before-tool-call.js")>()),
   rewrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
@@ -136,6 +144,7 @@ afterEach(() => {
 
 describe("agent harness host capability", () => {
   beforeEach(() => {
+    agentToolsMocks.createOpenClawCodingTools.mockClear();
     mockRewrap.mockClear();
     mockRunBefore.mockClear();
     mockCallGatewayTool.mockReset();
@@ -343,6 +352,42 @@ describe("agent harness host capability", () => {
 
     admission.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBeUndefined();
+  });
+
+  it("forces host-required source delivery deferral into a created tool surface", async () => {
+    const deferred = await admittedAttempt("run-deferred-tools", {
+      deferSourceMessageToolDelivery: true,
+    });
+    const deferredHost = createAgentHarnessHostCapabilities({
+      attempt: deferred.attempt,
+      pluginId: "codex",
+    });
+    deferredHost.capabilities.createToolSurface?.({
+      deferSourceMessageToolDelivery: false,
+    } as never);
+
+    expect(agentToolsMocks.createOpenClawCodingTools).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deferSourceMessageToolDelivery: true,
+        operationalRunInstance: deferred.attempt.admittedRunContext.operationalRunInstance,
+      }),
+    );
+
+    const ordinary = await admittedAttempt("run-ordinary-tools");
+    const ordinaryHost = createAgentHarnessHostCapabilities({
+      attempt: ordinary.attempt,
+      pluginId: "codex",
+    });
+    ordinaryHost.capabilities.createToolSurface?.({
+      deferSourceMessageToolDelivery: false,
+    } as never);
+
+    expect(agentToolsMocks.createOpenClawCodingTools).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deferSourceMessageToolDelivery: false,
+        operationalRunInstance: ordinary.attempt.admittedRunContext.operationalRunInstance,
+      }),
+    );
   });
 
   it("keeps policy snapshots independent from later attempt mutation", async () => {

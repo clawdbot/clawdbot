@@ -75,6 +75,19 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
+  it("ignores the former structural host-owned marker for external room-event finals", () => {
+    const legacyCallerParams = {
+      cfg: emptyConfig,
+      ctx: { ChatType: "group", InboundEventKind: "room_event" as const },
+      requested: "automatic" as const,
+      roomEventSourceReplyDeliveryAuthority: "host_owned" as const,
+    } satisfies Parameters<typeof resolveSourceReplyDeliveryMode>[0] & {
+      roomEventSourceReplyDeliveryAuthority: "host_owned";
+    };
+
+    expect(resolveSourceReplyDeliveryMode(legacyCallerParams)).toBe("message_tool_only");
+  });
+
   it("keeps internal WebChat room events on automatic delivery", () => {
     expect(
       resolveSourceReplyDeliveryMode({

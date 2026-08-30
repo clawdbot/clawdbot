@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
@@ -18,6 +17,7 @@ import {
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
@@ -38,6 +38,7 @@ import {
   type NodeWorkerBundleStatusObservation,
   type NodeWorkerSupervisorNodeProof,
 } from "./node-runner-inventory-runtime.js";
+import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 
 export type {
   NodeRunnerStateChange,
@@ -327,16 +328,25 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: params.params,
   });
-  const payload = {
+  const payload = buildNodeInvokeRequest({
     id: requestId,
     nodeId: params.nodeId,
     command: params.command,
-    paramsJSON:
-      "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
+    params: "params" in params ? invokeParams : undefined,
     timeoutMs,
     idempotencyKey: params.idempotencyKey,
-    sessionKey: normalizeOptionalString(params.sessionKey),
-  };
+    sessionKey: params.sessionKey,
+  });
+  if (
+    params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
+    Buffer.byteLength(serializeNodeEvent("node.invoke.request", payload), "utf8") >
+      MAX_PAYLOAD_BYTES
+  ) {
+    return {
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "worker launch exceeds the node payload limit" },
+    };
+  }
   const systemRunEvent = resolvePendingSystemRunEvent({
     command: params.command,
     params: invokeParams,
@@ -374,6 +384,8 @@ async function invokeNodeRegistryCore(
       progressChunks: new Map(),
       nextInputSeq: 0,
       ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      // Private transport retains its exact lifecycle owner through reply settlement.
+      ...(allowPrivateCommand ? { isCompletionAuthorized: params.isDispatchAuthorized } : {}),
     };
     const generationController = params.expectedPairingGeneration
       ? new AbortController()

@@ -146,6 +146,8 @@ export type ConfigProps = {
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
+  chatCollapseTaskProgress: boolean;
+  setChatCollapseTaskProgress: (enabled: boolean) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (enabled: boolean) => void;
   forceShowAdvanced?: boolean;

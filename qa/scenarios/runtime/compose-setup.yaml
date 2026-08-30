@@ -38,6 +38,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    dockerLane: compose-setup
     summary: Builds the package-backed functional image, launches the documented Compose services, validates endpoint and authenticated CLI health, forces and recovers Docker health state, captures diagnostics, and records artifact identities.
     timeoutMs: 1800000
     args:

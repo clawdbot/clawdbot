@@ -9,13 +9,19 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import {
+  loadChatHistory,
+  resetChatHistoryProjection,
+  type ChatHistoryResult,
+} from "./chat-history.ts";
 import {
   appendChatThread,
   createNativeShowEarlierPane,
+  createStagedPrefetchPane,
   createTestChatPane,
   nativeHistoryMessage,
   nativeHistorySeq,
+  stagedPagesRequest,
 } from "./chat-pane-history.test-support.ts";
 import { ChatPane } from "./chat-pane-render.ts";
 import { nativeHistoryMessageIdentity } from "./chat-pane-shared.ts";
@@ -451,6 +457,167 @@ describe("chat pane native history pagination", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("stages the next older page and consumes it without entering the loading state", async () => {
+    const request = stagedPagesRequest();
+    const { pane, state } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([5, 6, 7, 8]);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 400,
+      offset: 4,
+    });
+    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+
+    const loadingDuringRender: boolean[] = [];
+    (state.requestUpdate as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      loadingDuringRender.push(pane.loadingOlder);
+    });
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
+    // The staged page applies without a round trip or a loading-state render.
+    expect(loadingDuringRender).not.toContain(true);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(3, "chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 400,
+      offset: 6,
+    });
+  });
+
+  it("joins an in-flight prefetch instead of duplicating the request", async () => {
+    const deferred = createDeferred<unknown>();
+    const request = stagedPagesRequest({ 4: () => deferred.promise });
+    const { pane, state } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    const joined = pane.loadOlderMessages();
+    deferred.resolve({
+      messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
+      hasMore: false,
+      totalMessages: 8,
+    });
+    await expect(joined).resolves.toBe(true);
+
+    const offsetFourCalls = request.mock.calls.filter(
+      ([, params]) => (params as { offset?: number }).offset === 4,
+    );
+    expect(offsetFourCalls).toHaveLength(1);
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
+  });
+
+  it("discards a staged page when the pagination cursor moves", async () => {
+    const request = stagedPagesRequest({
+      5: () => ({
+        messages: [nativeHistoryMessage(31), nativeHistoryMessage(32)],
+        hasMore: false,
+        totalMessages: 9,
+      }),
+    });
+    const { pane, state } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+
+    // A tail reload rebased the cursor beneath the staged page.
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 5, totalMessages: 9 };
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+
+    expect(request).toHaveBeenLastCalledWith("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 400,
+      offset: 5,
+    });
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([31, 32, 5, 6, 7, 8]);
+  });
+
+  // Rewind and branch switch share resetChatHistoryProjection as their reset
+  // owner: the projection fence must void a staged page even when the
+  // replacement projection lands on the same pagination cursor.
+  it("discards a staged page after a same-cursor projection reset", async () => {
+    let offsetFourCalls = 0;
+    const request = stagedPagesRequest({
+      4: () => {
+        offsetFourCalls += 1;
+        return {
+          messages:
+            offsetFourCalls === 1
+              ? [nativeHistoryMessage(3, "pre-rewind branch"), nativeHistoryMessage(4)]
+              : [nativeHistoryMessage(41, "post-rewind branch"), nativeHistoryMessage(42)],
+          hasMore: false,
+          totalMessages: 8,
+        };
+      },
+    });
+    const { pane, state } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+
+    resetChatHistoryProjection(state);
+    // The replacement branch happens to resume at the identical cursor.
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 4, totalMessages: 8 };
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+
+    expect(offsetFourCalls).toBe(2);
+    const texts = state.chatMessages.map((message) =>
+      extractText(message as Parameters<typeof extractText>[0]),
+    );
+    expect(texts.some((text) => text?.includes("post-rewind branch"))).toBe(true);
+    expect(texts.some((text) => text?.includes("pre-rewind branch"))).toBe(false);
+  });
+
+  it("clears the staged page on viewport reset", async () => {
+    const request = stagedPagesRequest();
+    const { pane } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+    await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
+
+    pane.resetOlderMessagesViewport();
+    expect(pane.stagedOlderPage).toBeNull();
+    expect(pane.stagedOlderLoad).toBeNull();
+
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+    const offsetFourCalls = request.mock.calls.filter(
+      ([, params]) => (params as { offset?: number }).offset === 4,
+    );
+    expect(offsetFourCalls).toHaveLength(2);
+  });
+
+  it("keeps prefetch failures silent and retries reactively", async () => {
+    let offsetFourCalls = 0;
+    const request = stagedPagesRequest({
+      4: () => {
+        offsetFourCalls += 1;
+        if (offsetFourCalls === 1) {
+          throw new Error("prefetch boom");
+        }
+        return {
+          messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
+          hasMore: false,
+          totalMessages: 8,
+        };
+      },
+    });
+    const { pane, state } = createStagedPrefetchPane(request);
+
+    await pane.loadOlderMessages();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(pane.stagedOlderLoad).toBeNull());
+
+    expect(state.lastError).toBeNull();
+    await expect(pane.loadOlderMessages()).resolves.toBe(true);
+    expect(offsetFourCalls).toBe(2);
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
   });
 
   it("does not consume bootstrap history while disconnected", () => {

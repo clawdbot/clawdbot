@@ -2,12 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRegistrationContext } from "../../plugins/runtime.js";
+import {
+  requireActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
   getRegisteredAgentHarness,
+  hasBundledCodexAgentHarnessSourceFinalization,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
   resolveCodexAgentHarnessNativeCompaction,
@@ -125,6 +129,24 @@ describe("agent harness registry", () => {
     );
     expect(() => resolveCodexAgentHarnessNativeCompaction(makeHarness("codex"))).toThrow(
       "Agent harness codex changed during native compaction resolution",
+    );
+  });
+
+  it("resolves source finalization only from the exact privately marked Codex harness", () => {
+    const registered = { ...makeHarness("codex"), pluginId: "codex" };
+    requireActivePluginRegistry().agentHarnesses.push({
+      pluginId: "codex",
+      source: "test:bundled-codex-loader",
+      harness: registered,
+      bundledCodexSourceFinalization: true,
+    });
+
+    expect(hasBundledCodexAgentHarnessSourceFinalization(registered)).toBe(true);
+    expect(listRegisteredAgentHarnesses()).toEqual([
+      { harness: registered, ownerPluginId: "codex" },
+    ]);
+    expect(() => hasBundledCodexAgentHarnessSourceFinalization(makeHarness("codex"))).toThrow(
+      "Agent harness codex changed during source finalization resolution",
     );
   });
 

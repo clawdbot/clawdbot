@@ -2606,6 +2606,78 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionKey).toBe(boundSessionKey);
   });
 
+  it.each([
+    { name: "opaque plugin target", targetSessionKey: "plugin-binding:fixture-runtime:thread-17" },
+    { name: "adopted agent target", targetSessionKey: "agent:main:external-runtime:thread-17" },
+  ])("keeps escaped commands on the core session for $name", async ({ targetSessionKey }) => {
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({ channel: "slack", accountId: "default" });
+    const storePath = await createStorePath("openclaw-plugin-command-session-");
+    const sourceSessionKey = "agent:main:slack:source";
+    const sourceSessionId = "source-command-session";
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+    };
+    await writeSessionStoreFast(storePath, {
+      [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
+    });
+    if (targetSessionKey.startsWith("agent:")) {
+      await writeSessionStoreFast(storePath, {
+        [targetSessionKey]: {
+          sessionId: "plugin-owned-session",
+          updatedAt: Date.now(),
+          label: "Plugin-owned state must remain untouched",
+        },
+      });
+    }
+    const targetBefore = { ...readSessionStoreFast(storePath) }[targetSessionKey];
+    const binding = await getSessionBindingService().bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "fixture-runtime",
+        pluginRoot: "/plugins/fixture-runtime",
+      },
+    });
+    const ctx = {
+      Body: "/fixture status",
+      RawBody: "/fixture status",
+      CommandBody: "/fixture status",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      SessionKey: sourceSessionKey,
+      Provider: "slack",
+      Surface: "slack",
+      AccountId: "default",
+      From: "slack:user:U123",
+      To: "user:U123",
+      OriginatingTo: "user:U123",
+      SenderId: "U123",
+      ChatType: "direct",
+    };
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      expectedExistingSessionId: sourceSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.sessionKey).toBe(sourceSessionKey);
+    expect(result.sessionId).toBe(sourceSessionId);
+    expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
+    expect(
+      resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
+    ).toMatchObject({ sessionKey: sourceSessionKey, sessionEntry: { sessionId: sourceSessionId } });
+    expect({ ...readSessionStoreFast(storePath) }[targetSessionKey]).toEqual(targetBefore);
+    expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(binding);
+  });
+
   it("does not apply a source admission id to a bound conversation target", async () => {
     setMinimalCurrentConversationBindingRegistryForTests();
     registerCurrentConversationBindingAdapterForTest({

@@ -15,6 +15,7 @@ import {
   renderPersonName,
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
+import { renderSessionColorDot } from "./session-color.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import "./viewer-facepile.ts";
@@ -176,7 +177,7 @@ function renderHeader(row: SidebarSessionHovercardRow) {
   const updated = formatSessionAge(row.updatedAt, true);
   return html`<header class="session-hovercard__header">
     <span class="session-hovercard__heading">
-      <span class="session-hovercard__title">${row.label}</span>
+      <span class="session-hovercard__title">${renderSessionColorDot(row.color)}${row.label}</span>
       ${updated
         ? html`<span class="session-hovercard__meta"
             >${t("channels.hub.updatedAgo", { ago: updated })}</span
@@ -513,7 +514,6 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
   if (!branch) {
     return nothing;
   }
-  const noPullRequest = t("sessionHovercard.noPrYet");
   const createPullRequest = t("chat.pullRequests.createPr");
   return html`
     <div class="session-hovercard__branch-row">
@@ -523,13 +523,13 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
       >
       ${renderDiffStats(branch)}
     </div>
-    <div class="session-hovercard__no-pr">
-      ${branch.createUrl
-        ? html`<a href=${branch.createUrl} target="_blank" rel="noopener noreferrer"
+    ${branch.createUrl
+      ? html`<div class="session-hovercard__no-pr">
+          <a href=${branch.createUrl} target="_blank" rel="noopener noreferrer"
             >${createPullRequest}</a
-          >`
-        : noPullRequest}
-    </div>
+          >
+        </div>`
+      : nothing}
   `;
 }
 

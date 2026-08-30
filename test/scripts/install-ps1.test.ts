@@ -994,7 +994,7 @@ try {
         $env:USERPROFILE = $caseRoot
         $env:PATH = $bin
         $env:PATHEXT = '.COM;.EXE;.BAT;.CMD'
-        [Environment]::SetEnvironmentVariable('PNPM_CONFIG_PREFER_OFFLINE', $null, 'Process')
+        $env:PNPM_CONFIG_PREFER_OFFLINE = $null
         [IO.File]::WriteAllText((Join-Path $caseRoot 'command.cjs'), $commandSource)
         $caseSpec = @{ mode = $scenario.Mode; failure = $scenario.Failure; version = $scenario.Version }
         [IO.File]::WriteAllText((Join-Path $caseRoot 'case.json'), ($caseSpec | ConvertTo-Json -Compress))
@@ -1010,7 +1010,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $bin 'node.cmd'), ('@"' + $nodeExe + '" %*' + [Environment]::NewLine + '@exit /b %errorlevel%'))
         foreach ($name in $contextNames) {
             $value = if (-not $scenario.Present) { $null } elseif ($name -eq 'COREPACK_ENABLE_DOWNLOAD_PROMPT') { '1' } elseif ($name -eq 'NODE_OPTIONS') { '--no-warnings' } elseif ($name -match '_DIR$') { $foreign } else { '7' }
-            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+            Set-Item -LiteralPath "Env:$name" -Value $value
         }
         $caller = @{}
         foreach ($name in (@('PATH') + $contextNames)) { $caller[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -1049,7 +1049,7 @@ try {
     }
 } finally {
     Set-Location -LiteralPath $previousLocation
-    foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+    foreach ($name in $saved.Keys) { Set-Item -LiteralPath "Env:$name" -Value $saved[$name] }
     $script:InstallerTempDirectory = $previousTemp
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }
@@ -1074,11 +1074,13 @@ try {
         .join(",\n"),
       ")",
       "$results = foreach ($case in $cases) {",
+      "  $caseOutput = New-Object System.Collections.Generic.List[string]",
       "  try {",
-      "    $null = & ([scriptblock]::Create((Get-Content -LiteralPath $case.Path -Raw))) *>&1",
+      "    & ([scriptblock]::Create((Get-Content -LiteralPath $case.Path -Raw))) *>&1 | ForEach-Object { $caseOutput.Add([string]$_) }",
       "    [pscustomobject]@{ name = $case.Name; ok = $true; error = '' }",
       "  } catch {",
-      "    [pscustomobject]@{ name = $case.Name; ok = $false; error = $_.Exception.Message }",
+      '    $details = ($caseOutput | Select-Object -Last 80) -join "`n"',
+      '    [pscustomobject]@{ name = $case.Name; ok = $false; error = "$( $_.Exception.Message )`nNative exit: $LASTEXITCODE`n$details" }',
       "  }",
       "}",
       "$results | ConvertTo-Json -Compress",

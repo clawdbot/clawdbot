@@ -600,30 +600,6 @@ export function isSourceCheckoutRoot(params) {
   );
 }
 
-export function pruneBundledPluginSourceNodeModules(params = {}) {
-  const extensionsDir = params.extensionsDir ?? join(DEFAULT_PACKAGE_ROOT, "extensions");
-  const pathExists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
-  const removePath = params.rmSync ?? rmSync;
-
-  if (!pathExists(extensionsDir)) {
-    return;
-  }
-
-  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.isSymbolicLink()) {
-      continue;
-    }
-
-    const pluginDir = join(extensionsDir, entry.name);
-    if (!pathExists(join(pluginDir, "package.json"))) {
-      continue;
-    }
-
-    removePath(join(pluginDir, "node_modules"), { recursive: true, force: true });
-  }
-}
-
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -633,16 +609,8 @@ export function runBundledPluginPostinstall(params = {}) {
     return;
   }
   if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
-    try {
-      pruneBundledPluginSourceNodeModules({
-        extensionsDir: join(packageRoot, "extensions"),
-        existsSync: pathExists,
-        readdirSync: params.readdirSync,
-        rmSync: params.rmSync,
-      });
-    } catch (e) {
-      log.warn(`[postinstall] could not prune bundled plugin source node_modules: ${String(e)}`);
-    }
+    // pnpm owns source dependency versions and workspace links. Packaged cleanup
+    // must not alter that install or the operator state from a development checkout.
     return;
   }
   pruneLegacyPluginRuntimeDepsState({

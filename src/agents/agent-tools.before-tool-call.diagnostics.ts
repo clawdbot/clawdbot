@@ -46,7 +46,7 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
-import { getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {

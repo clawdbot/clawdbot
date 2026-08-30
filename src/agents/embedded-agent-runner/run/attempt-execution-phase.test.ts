@@ -67,6 +67,10 @@ function createFixture(
     queueHandle,
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: vi.fn(),
+    getBeforeAgentFinalizeRevisionEntryId: vi.fn(),
+    getBeforeAgentFinalizeRevisionDisableTools: vi.fn(() => false),
+    getBeforeAgentFinalizeRevisionAccepted: vi.fn(),
+    getBeforeAgentFinalizeDiscarded: vi.fn(() => false),
     stopAcceptingSteerMessages: vi.fn(),
   };
   const timeoutResult = {

@@ -4,6 +4,7 @@
 import path from "node:path";
 import pMap from "p-map";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
+import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   createExtensionTestProcessTargetChunks,
   listExtensionTestFilesForRoots,
@@ -102,9 +103,7 @@ function createGroupEnv({
   return {
     ...baseEnv,
     [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-      process.cwd(),
-      "node_modules",
-      ".experimental-vitest-cache",
+      resolveVitestFsModuleCacheRoot(),
       "extension-batch",
       sanitizeCacheSegment(`${groupIndex}-${group.config}`),
     ),

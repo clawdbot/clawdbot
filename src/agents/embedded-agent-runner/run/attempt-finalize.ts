@@ -211,6 +211,7 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
     lastCallUsage?: NormalizedUsage;
     promptCache?: PromptCacheInfo;
     beforeAgentFinalizeRevisionReason?: string;
+    beforeAgentFinalizeDiscarded?: true;
     compactionOccurredThisAttempt: boolean;
   };
   readLifecycleState: () => {
@@ -243,6 +244,10 @@ export async function completeEmbeddedAttemptAfterTurn(
 
   // Context-engine hooks may call runtime LLM capabilities. Only the transcript
   // rewrite callback reacquires the synchronous session write boundary.
+  // A hidden revision has not reached a terminal turn yet. A deterministic
+  // discard has: settlement already rewound the rejected assistant branch, so
+  // finalize the remaining admitted user/tool-result boundary instead of
+  // stranding its durable context-engine intent.
   if (activeContextEngine && !state.beforeAgentFinalizeRevisionReason) {
     const lifecycleState = input.readLifecycleState();
     const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
@@ -342,7 +347,7 @@ export async function completeEmbeddedAttemptAfterTurn(
     }
   }
 
-  if (!state.beforeAgentFinalizeRevisionReason) {
+  if (!state.beforeAgentFinalizeRevisionReason && !state.beforeAgentFinalizeDiscarded) {
     await input.withOwnedTranscriptWrite(async () => {
       const lifecycleState = input.readLifecycleState();
       if (
@@ -383,7 +388,8 @@ export async function completeEmbeddedAttemptAfterTurn(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
-    !state.beforeAgentFinalizeRevisionReason
+    !state.beforeAgentFinalizeRevisionReason &&
+    !state.beforeAgentFinalizeDiscarded
   ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
     // Abort outranks failure in terminal-outcome precedence: teardown races can

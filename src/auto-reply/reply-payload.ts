@@ -72,6 +72,8 @@ export type ReplyPayload = {
     question: string;
   };
   replyToId?: string;
+  /** Internal provenance for an explicitly requested message-tool reply relation. */
+  replyToIdSource?: "explicit";
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
   replyToCurrent?: boolean;
@@ -277,6 +279,8 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
+  /** The model failed after a committed recovery compaction in the same turn. */
+  postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;

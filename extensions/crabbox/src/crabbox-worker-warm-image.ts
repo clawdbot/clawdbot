@@ -2,11 +2,7 @@ import { createHash } from "node:crypto";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import {
-  provisionProfileError,
-  runCrabboxCommand,
-  type CrabboxCommandRunner,
-} from "./crabbox-worker-command.js";
+import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxWarmupArgs,
   nonEmptyString,
@@ -445,7 +441,8 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (result.termination === "exit" && result.code === 0) {
         return;
       }
-      throw provisionProfileError(result) ?? crabboxCommandError("warmup", result);
+      // Current CLI/backend refusals cannot rule out allocation by an earlier fixed-ID attempt.
+      throw crabboxCommandError("warmup", result);
     },
   };
 }

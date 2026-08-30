@@ -360,62 +360,88 @@ describe("Codex ring-zero thread config", () => {
     ).rejects.toThrow(failure);
   });
 
-  it("applies the restriction to both thread start and resume", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.toolsAllow = ["openclaw"];
-    params.pluginHarnessToolPolicyRestricted = true;
-    const appServer = createAppServerOptions() as never;
-    const developerInstructions = "Host-authored ring-zero instructions.";
-    const start = buildThreadStartParams(params, {
-      appServer,
-      cwd: "/repo",
-      dynamicTools: [],
-      developerInstructions,
-      hostSystemAgentActive: true,
-      nativeCodeModeEnabled: false,
-      config: { project_doc_max_bytes: 64_000 },
-    });
-    const resume = buildThreadResumeParams(params, {
-      appServer,
-      dynamicTools: [],
-      developerInstructions,
-      hostSystemAgentActive: true,
-      nativeCodeModeEnabled: false,
-      threadId: "thread-1",
-      config: { project_doc_max_bytes: 64_000 },
-    });
-
-    expect(start.environments).toEqual([]);
-    expect(start.baseInstructions).toBe("");
-    expect(start.developerInstructions).toBe(developerInstructions);
-    expect(resume.developerInstructions).toBe(developerInstructions);
-    for (const config of [start.config, resume.config]) {
-      expect(config?.["agents.enabled"]).toBe(false);
-      expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
-      expect(config?.["features.multi_agent"]).toBe(false);
-      expect(config?.["features.multi_agent_v2"]).toBe(false);
-      expect(config?.["features.goals"]).toBe(false);
-      expect(config?.["orchestrator.mcp.enabled"]).toBe(false);
-      expect(config?.["orchestrator.skills.enabled"]).toBe(false);
-      expect(config?.project_doc_max_bytes).toBe(0);
-      expect(config?.hooks).toMatchObject({
-        PreToolUse: [],
-        SessionStart: [],
-        UserPromptSubmit: [],
-        Stop: [],
+  it.each(["ring-zero", "host-policy", "tools-disabled"] as const)(
+    "applies %s restriction to both thread start and resume",
+    (mode) => {
+      const params = createAttemptParams({ provider: "openai" });
+      params.toolsAllow = mode === "ring-zero" ? ["openclaw"] : undefined;
+      params.pluginHarnessToolPolicyRestricted = mode === "host-policy" ? true : undefined;
+      params.disableTools = mode === "tools-disabled";
+      const appServer = createAppServerOptions() as never;
+      const developerInstructions = "Host-authored ring-zero instructions.";
+      const hookConfig = {
+        "features.hooks": true,
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "host-stop", async: false }] }] },
+        notify: ["notify-completion"],
+      };
+      const inputConfig = {
+        ...hookConfig,
+        project_doc_max_bytes: 64_000,
+        "features.skill_search": true,
+        "tools.experimental_request_user_input.enabled": true,
+        mcp_servers: { inherited: { command: "example-mcp" } },
+      };
+      const start = buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+        developerInstructions,
+        hostSystemAgentActive: true,
+        nativeCodeModeEnabled: false,
+        config: inputConfig,
       });
-    }
+      const resume = buildThreadResumeParams(params, {
+        appServer,
+        dynamicTools: [],
+        developerInstructions,
+        hostSystemAgentActive: true,
+        nativeCodeModeEnabled: false,
+        threadId: "thread-1",
+        config: inputConfig,
+      });
 
-    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-      appServer,
-      cwd: "/repo",
-      dynamicTools: [],
-      hostSystemAgentActive: false,
-      config: { "features.goals": true },
-    });
-    expect(normal.baseInstructions).toBeUndefined();
-    expect(normal.config?.["features.goals"]).toBe(false);
-  });
+      expect(start.environments).toEqual([]);
+      expect(start.baseInstructions).toBe(mode === "ring-zero" ? "" : undefined);
+      expect(start.developerInstructions).toBe(developerInstructions);
+      expect(resume.developerInstructions).toBe(developerInstructions);
+      for (const config of [start.config, resume.config]) {
+        expect(config?.["agents.enabled"]).toBe(false);
+        expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
+        expect(config?.["features.multi_agent"]).toBe(false);
+        expect(config?.["features.multi_agent_v2"]).toBe(false);
+        expect(config?.["features.goals"]).toBe(false);
+        expect(config?.["orchestrator.mcp.enabled"]).toBe(false);
+        expect(config?.["orchestrator.skills.enabled"]).toBe(false);
+        expect(config?.["features.skill_search"]).toBe(false);
+        expect(config?.mcp_servers).toEqual({
+          inherited: { command: "example-mcp", enabled: false },
+        });
+        expect(config?.project_doc_max_bytes).toBe(mode === "ring-zero" ? 0 : 64_000);
+        if (mode === "tools-disabled") {
+          expect(config).toMatchObject(hookConfig);
+        } else {
+          expect(config?.["features.hooks"]).toBe(false);
+          expect(config?.notify).toEqual([]);
+          expect(config?.hooks).toMatchObject({
+            PreToolUse: [],
+            SessionStart: [],
+            UserPromptSubmit: [],
+            Stop: [],
+          });
+        }
+      }
+
+      const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+        hostSystemAgentActive: false,
+        config: { "features.goals": true },
+      });
+      expect(normal.baseInstructions).toBeUndefined();
+      expect(normal.config?.["features.goals"]).toBe(false);
+    },
+  );
 
   it("preserves project documents for ordinary policy-restricted turns", () => {
     const params = createAttemptParams({ provider: "openai" });
@@ -763,7 +789,7 @@ function createThreadLifecycleParams(
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
-    disableTools: true,
+    disableTools: false,
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -3785,6 +3811,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       config: { mcp_servers: { "request-only": { command: "request-mcp" } } },
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
+      nativeProviderWebSearchSupport: "unsupported" as const,
       userMcpServersEnabled: false,
       hostSystemAgentActive: true,
     };

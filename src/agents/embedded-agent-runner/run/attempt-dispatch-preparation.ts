@@ -25,6 +25,27 @@ type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
 type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
 type TerminalRetryState = ReturnType<typeof createEmbeddedRunTerminalRetryState>;
 
+export function resolveEmbeddedAttemptRetryParams(params: {
+  runParams: PreparedEmbeddedRunInput["runParams"];
+  terminalRetryState: TerminalRetryState;
+}): PreparedEmbeddedRunInput["runParams"] {
+  if (
+    !params.terminalRetryState.forceCodeModeReconciliationTools &&
+    !params.terminalRetryState.disableToolsForBeforeFinalizeRevision
+  ) {
+    return params.runParams;
+  }
+  return {
+    ...params.runParams,
+    ...(params.terminalRetryState.forceCodeModeReconciliationTools
+      ? { forceCodeModeReconciliationTools: true }
+      : {}),
+    ...(params.terminalRetryState.disableToolsForBeforeFinalizeRevision
+      ? { disableTools: true }
+      : {}),
+  };
+}
+
 export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
@@ -55,9 +76,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = input.terminalRetryState.forceCodeModeReconciliationTools
-    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
-    : runInput.runParams;
+  const params = resolveEmbeddedAttemptRetryParams({
+    runParams: runInput.runParams,
+    terminalRetryState: input.terminalRetryState,
+  });
   const {
     workspaceResolution,
     workspaceDir,

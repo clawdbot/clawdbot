@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 14,
+      "state": 15,
       "agent": 19
     }
   },
@@ -37,7 +37,7 @@
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
-    "!dist/OpenClaw.app/**",
+    "!dist/**/*.app",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/plugin-sdk/access-groups.d.ts",
@@ -116,6 +116,8 @@
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
     "!dist/plugin-sdk/meeting-page-script-runtime.d.ts",
+    "!dist/plugin-sdk/matrix-source-finalization-test-fixtures.js",
+    "!dist/plugin-sdk/matrix-source-finalization-test-fixtures.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
@@ -973,6 +975,10 @@
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
     },
+    "./plugin-sdk/diagnostic-flags": {
+      "types": "./dist/plugin-sdk/diagnostic-flags.d.ts",
+      "default": "./dist/plugin-sdk/diagnostic-flags.js"
+    },
     "./plugin-sdk/diagnostic-runtime": {
       "types": "./dist/plugin-sdk/diagnostic-runtime.d.ts",
       "default": "./dist/plugin-sdk/diagnostic-runtime.js"
@@ -1579,6 +1585,8 @@
     "check:timed:architecture": "node --import ./scripts/tsx.mjs scripts/check-timed.mts --include-architecture",
     "check:workflows": "node --import ./scripts/tsx.mjs scripts/check-workflows.mts",
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
+    "ci:git-owner:check": "node scripts/generate-ci-git-owner.mts --check",
+    "ci:git-owner:gen": "node scripts/generate-ci-git-owner.mts",
     "frv": "node scripts/frv.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:refit": "node --import ./scripts/tsx.mjs scripts/ci-refit-test-timings.mts",
@@ -1944,7 +1952,7 @@
     "test:live:media:music": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts music",
     "test:live:media:video": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts video",
     "test:live:models-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-host.test.ts",
+    "test:macos:ci": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-node-worker.test.ts test/scripts/verify-mac-node-worker-fs.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-host.test.ts",
     "test:max": "node --import ./scripts/tsx.mjs scripts/test-projects-max.mts",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
@@ -2145,7 +2153,7 @@
     "markdown-it": "15.0.0",
     "marked": "18.0.10",
     "oxfmt": "0.60.0",
-    "oxlint": "1.78.0",
+    "oxlint": "1.79.0",
     "oxlint-tsgolint": "7.0.2001",
     "playwright": "1.62.1",
     "postcss": "8.5.26",

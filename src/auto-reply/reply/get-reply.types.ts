@@ -9,10 +9,12 @@ import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/works
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import type { AutomaticRoomEventFinalCapability } from "./automatic-room-event-final-capability.js";
 import type { FollowupQueueDisposition, QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import type { QueuedSourceReplyDelivery } from "./source-finalization.types.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -22,6 +24,8 @@ export type ReplySessionBinding = {
 
 type InternalReplySessionOptions = {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  /** Host-minted authority for this exact admitted external room-event context. */
+  automaticRoomEventFinalCapability?: AutomaticRoomEventFinalCapability;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   expectedExistingSessionId?: string;
@@ -39,6 +43,8 @@ type InternalReplySessionOptions = {
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Delivers queued replies only through their originating Gateway admission. */
   onQueuedFollowupReplyBatch?: (batch: QueuedFollowupReplyBatch) => Promise<void> | void;
+  /** Exact source owner captured by dispatch for an opted-in queued turn. */
+  queuedSourceReplyDelivery?: QueuedSourceReplyDelivery;
   /** Overrides persisted queue mode for this reply only. */
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */

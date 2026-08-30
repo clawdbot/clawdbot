@@ -49,6 +49,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { resolveMatrixHostInboundRuntime } from "./host-inbound-runtime.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -57,6 +58,8 @@ import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner } from "./task-runner.js";
+import { matrixTurnTakingCoordinator } from "./turn-taking-coordinator.js";
+import { EventType } from "./types.js";
 
 type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -143,6 +146,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     accountId: effectiveAccountId,
   });
 
+  // Turn-taking is intentionally channel-wide. Preserve the raw top-level
+  // config before the existing account-scoped room merge below.
+  const turnTaking = cfg.channels?.matrix?.turnTaking;
+  const turnTakingRoomsConfig = cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms;
+  const needsRoomAliasesForTurnTakingConfig = Boolean(
+    turnTakingRoomsConfig &&
+    Object.entries(turnTakingRoomsConfig).some(
+      ([key, entry]) => key.trim().startsWith("#") && entry?.turnTaking === false,
+    ),
+  );
+
   const allowlistOnly = accountConfig.allowlistOnly === true;
   const accountAllowBots = accountConfig.allowBots;
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
@@ -213,6 +227,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   });
   let disposeAutoJoin = () => {};
   let disposeMonitorEvents = () => {};
+  let disposeTurnTakingMonitor = () => {};
   let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
   let monitorSetupClosed = false;
   const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
@@ -222,6 +237,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     cleanedUp = true;
     cleanupPromise = (async () => {
       try {
+        disposeTurnTakingMonitor();
         await clientLease?.release({
           mode,
         });
@@ -318,6 +334,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       role: "monitor",
     });
     client = clientLease.client;
+    disposeTurnTakingMonitor = matrixTurnTakingCoordinator.registerMonitor({
+      accountId: effectiveAccountId,
+      userId: auth.userId,
+      homeserver: auth.homeserver,
+      client,
+      core,
+      log: logVerboseMessage,
+    });
     monitorLifecycleSignal = opts.abortSignal
       ? AbortSignal.any([opts.abortSignal, clientLease.abortSignal])
       : clientLease.abortSignal;
@@ -396,6 +420,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       runtime,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
+    const turnTakingWireEventTypeCache = new Map<string, "m.room.message" | "m.room.encrypted">();
     const handleRoomMessage = createMatrixRoomMessageHandler({
       client,
       core,
@@ -432,6 +457,15 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getRoomInfo,
       getMemberDisplayName,
       needsRoomAliasesForConfig,
+      turnTaking,
+      turnTakingRoomsConfig,
+      needsRoomAliasesForTurnTakingConfig,
+      turnTakingCoordinator: matrixTurnTakingCoordinator,
+      turnTakingWireEventTypeCache,
+      channelInbound: resolveMatrixHostInboundRuntime({
+        channelRuntime: opts.channelRuntime,
+        fallback: core.channel.inbound,
+      }),
     });
     const createdThreadBindingManager = await createMatrixThreadBindingManager({
       cfg,
@@ -473,6 +507,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       roomsConfig,
       needsRoomAliasesForConfig,
       getRoomInfo,
+      invalidateTurnTakingMembership: (roomId) =>
+        matrixTurnTakingCoordinator.invalidateMembership(roomId),
+      markTurnTakingRoomEncrypted: (roomId) =>
+        turnTakingWireEventTypeCache.set(roomId, EventType.RoomMessageEncrypted),
       invalidateMemberDisplayName,
       logVerboseMessage,
       warnedEncryptedRooms,

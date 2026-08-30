@@ -20,8 +20,24 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onBlockReplyQueued"
   | "onCompactionStart"
   | "onCompactionEnd"];
+type PublicAutomaticRoomEventAuthorityKeys = Extract<
+  keyof GetReplyOptions,
+  "roomEventSourceReplyDeliveryAuthority" | "automaticRoomEventFinalCapability"
+>;
+type PublicSourceFinalizationKeys = Extract<
+  keyof GetReplyOptions,
+  "onBeforeAgentFinalize" | "deferSourceMessageToolDelivery" | "retainQueuedSourceReplyDelivery"
+>;
 
 describe("reply runtime public progress contracts", () => {
+  it("does not expose automatic room-event authority through public reply options", () => {
+    expectTypeOf<PublicAutomaticRoomEventAuthorityKeys>().toEqualTypeOf<never>();
+  });
+
+  it("keeps source-local finalization controls out of public reply options", () => {
+    expectTypeOf<PublicSourceFinalizationKeys>().toEqualTypeOf<never>();
+  });
+
   it("exports acceptance-aware progress callback results", () => {
     expectTypeOf<Exclude<ProgressCallback, undefined>>().returns.toEqualTypeOf<
       Promise<ProgressResult> | ProgressResult

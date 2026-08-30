@@ -69,8 +69,14 @@ type ChannelIngressResolutionBinding = Readonly<{
   handoff: { consumed: boolean };
 }>;
 
+export type HostChannelContextOwner = ChannelIngressHostOwner;
 type PreparedChannelAdmissionEvidence = Readonly<{
   kind: "prepared-channel-admission-evidence";
+}>;
+
+type HostChannelContextOwnerBinding = Readonly<{
+  owner: HostChannelContextOwner;
+  scopeKey: string;
 }>;
 
 const CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS = 16;
@@ -82,8 +88,10 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   payloadByEvidence: new WeakMap<object, ChannelAdmissionEvidencePayload>(),
   resolutionByIngress: new WeakMap<object, ChannelIngressResolutionBinding>(),
   evidenceByPreparation: new WeakMap<object, ChannelAdmissionEvidence | undefined>(),
+  hostOwnerByPreparation: new WeakMap<object, HostChannelContextOwner>(),
   gatewayResolverByPreparation: new WeakMap<object, GatewayContextResolver>(),
   evidenceByContext: new WeakMap<object, ChannelAdmissionEvidence>(),
+  hostOwnerByContext: new WeakMap<object, HostChannelContextOwnerBinding>(),
   gatewayResolverByContext: new WeakMap<object, GatewayContextResolver>(),
   gatewayResolverConflictsByContext: new WeakSet<object>(),
   scopeByContext: new WeakMap<object, string>(),
@@ -434,6 +442,9 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
     preparation,
     valid ? combineChannelAdmissionEvidence(sources) : unknownChannelAdmissionEvidence(),
   );
+  if (valid && params.owner) {
+    state.hostOwnerByPreparation.set(preparation, params.owner);
+  }
   if (valid && params.owner?.resolveGatewayContext) {
     state.gatewayResolverByPreparation.set(preparation, params.owner.resolveGatewayContext);
   }
@@ -446,13 +457,21 @@ export function bindHostChannelContextAdmissionEvidence(params: {
   preparation: PreparedChannelAdmissionEvidence;
 }): void {
   const preparedEvidence = state.evidenceByPreparation.get(params.preparation);
+  const preparedHostOwner = state.hostOwnerByPreparation.get(params.preparation);
   const gatewayContextResolver = state.gatewayResolverByPreparation.get(params.preparation);
   state.evidenceByPreparation.delete(params.preparation);
+  state.hostOwnerByPreparation.delete(params.preparation);
   state.gatewayResolverByPreparation.delete(params.preparation);
   const scopeKey = finalizedContextScopeKey(params.context);
   if (gatewayContextResolver && scopeKey !== undefined) {
     state.gatewayResolverByContext.set(params.context, gatewayContextResolver);
     state.scopeByContext.set(params.context, scopeKey);
+  }
+  if (preparedHostOwner && scopeKey !== undefined) {
+    state.hostOwnerByContext.set(
+      params.context,
+      Object.freeze({ owner: preparedHostOwner, scopeKey }),
+    );
   }
   if (!state.collectionEnabled) {
     return;
@@ -481,11 +500,29 @@ export function readChannelContextGatewayContextResolver(
   return state.gatewayResolverByContext.get(context);
 }
 
+/** Validate the exact audit-independent host owner bound by the ingress handoff. */
+export function readCurrentHostChannelContextOwner(
+  context: object,
+): HostChannelContextOwner | undefined {
+  const binding = state.hostOwnerByContext.get(context);
+  return binding &&
+    readChannelIngressHostOwner(binding.owner.channelId) === binding.owner &&
+    binding.owner.isLive() &&
+    finalizedContextScopeKey(context) === binding.scopeKey
+    ? binding.owner
+    : undefined;
+}
+
+export function hasCurrentHostChannelContextOwner(context: object, owner: object): boolean {
+  return readCurrentHostChannelContextOwner(context) === owner;
+}
+
 /** Preserve private evidence when an owner intentionally replaces a finalized context object. */
 export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
+  const hostOwnerBinding = state.hostOwnerByContext.get(source);
   const gatewayContextResolver = state.gatewayResolverByContext.get(source);
-  if (!evidence && !gatewayContextResolver) {
+  if (!evidence && !gatewayContextResolver && !hostOwnerBinding) {
     return;
   }
   const sourceScope = state.scopeByContext.get(source);
@@ -505,6 +542,15 @@ export function copyChannelParticipantAdmissionEvidence(source: object, target: 
       state.gatewayResolverByContext.set(target, gatewayContextResolver);
       state.scopeByContext.set(target, sourceScope);
     }
+  }
+  if (
+    hostOwnerBinding &&
+    finalizedContextScopeKey(source) === hostOwnerBinding.scopeKey &&
+    targetScope === hostOwnerBinding.scopeKey &&
+    readChannelIngressHostOwner(hostOwnerBinding.owner.channelId) === hostOwnerBinding.owner &&
+    hostOwnerBinding.owner.isLive()
+  ) {
+    state.hostOwnerByContext.set(target, hostOwnerBinding);
   }
   if (safeEvidence) {
     state.evidenceByContext.set(target, safeEvidence);

@@ -24,6 +24,7 @@ import {
   normalizeWorkerMachineOptions,
   requireInheritedWorkerProfileAuthorization,
   requireProviderProvisionTimeoutMs,
+  requireWorkerAllocation,
   requireWorkerLease,
   requireWorkerLeaseStatus,
   resolveWorkerLeaseTransportError,
@@ -104,10 +105,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   };
 
   const finishProvenDestroy = async (record: WorkerEnvironmentRecord) => {
-    const destroying = beginDestroy(record);
+    const destroying = beginDestroy(requireCurrentOwner(record));
     if (destroying.nodeSetupId) {
       await options.retireNodeEnrollment?.(destroying);
     }
+    requireCurrentOwner(destroying);
     if (destroying.teardownTerminalState !== "failed") {
       return move(destroying, "destroyed");
     }
@@ -237,7 +239,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       }
       executionMode = requestedExecutionMode;
       if (executionMode && !provider.supportedExecutionModes?.includes(executionMode)) {
-        throw new WorkerProviderError(
+        // Current provider metadata cannot disprove allocation by an earlier attempt.
+        throw new Error(
           `Worker provider ${provider.id} does not support ${executionMode} placement`,
         );
       }
@@ -309,10 +312,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         patch,
       );
     }
-    if (record.destroyRequestedAtMs !== null) {
-      // Replay must recover its exact lease, but teardown intent forbids transport bootstrap.
-      return move(record, "draining", patch);
-    }
     if (lease.node) {
       return await finishNodeProvisioning(record, lease, provider, patch);
     }
@@ -381,25 +380,48 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("invalid_state", `Cannot destroy worker in state: ${record.state}`);
   };
 
-  const finishDestroy = async (r: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
-    if (!r.leaseId) {
-      throw serviceError("invalid_state", "Worker environment has no lease");
+  const finishDestroy = async (record: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
+    let r = record;
+    if (r.state === "requested") {
+      return cancelRequested(requireCurrentOwner(r));
     }
-    const leaseId = r.leaseId;
+    // Fence local authority even when the provider is unavailable. stopOwner preserves
+    // shared/unknown-host stop acknowledgements before releasing their attachments.
+    r = await stopOwner(r, "provider-destroying");
+    r = r.nodeDeviceId !== null && r.sharedHost === false ? r : beginDrain(r);
+    const owningProvider = provider ?? providerFor(r.providerId);
+    let leaseId = r.leaseId;
+    if (!leaseId) {
+      let allocation: Awaited<ReturnType<WorkerProvider["resolveAllocation"]>>;
+      try {
+        allocation = requireWorkerAllocation(
+          await callProvider(r.environmentId, () => {
+            requireCurrentOwner(r);
+            return owningProvider.resolveAllocation(
+              requireWorkerProfile(r.profileSnapshot.settings),
+              r.provisionOperationId,
+            );
+          }),
+        );
+      } catch (error) {
+        saveError(requireCurrentOwner(r), error);
+        throw serviceError("provider_failure", "Worker allocation resolution failed");
+      }
+      // Publish only the cleanup identity, never a fabricated transport or admission receipt.
+      r = move(requireCurrentOwner(r), "draining", { ...allocation, lastError: r.lastError });
+      leaseId = allocation.leaseId;
+    }
     // A dedicated provider's destroy result proves physical teardown even if its node is
     // offline. Shared hosts retain the machine, so they still require the exact worker stop.
     const providerOwnsMachine = r.nodeDeviceId !== null && r.sharedHost === false;
-    const stopped = await stopOwner(r, providerOwnsMachine ? "provider-destroying" : undefined);
-    const draining = providerOwnsMachine ? stopped : beginDrain(stopped);
-    const owningProvider = provider ?? providerFor(r.providerId);
-    const destroying = providerOwnsMachine ? draining : beginDestroy(draining);
+    const destroying = providerOwnsMachine ? r : beginDestroy(r);
     try {
       await callProvider(r.environmentId, () => {
         requireCurrentOwner(destroying);
         return owningProvider.destroy(lifecycleLease(r, leaseId));
       });
     } catch (error) {
-      saveError(destroying, error);
+      saveError(requireCurrentOwner(destroying), error);
       throw serviceError("provider_failure", "Worker provider operation failed");
     }
     return await finishProvenDestroy(
@@ -410,7 +432,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
-      return void cancelRequested(record);
+      return void (await finishDestroy(record));
     }
     let currentBundle: WorkerInstallationArtifact | undefined;
     if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
@@ -438,10 +460,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     const leaseId = record.leaseId;
     if (!leaseId) {
-      const provisioned = await resumeProvision(record, provider).catch(() => undefined);
-      if (provisioned?.leaseId && provisioned.destroyRequestedAtMs !== null) {
-        await finishDestroy(provisioned, provider).catch(() => undefined);
-      }
+      await (
+        record.destroyRequestedAtMs !== null
+          ? finishDestroy(record, provider)
+          : resumeProvision(record, provider)
+      ).catch(() => undefined);
       return;
     }
     if (await retireMismatchedWorkerLease(record, provider, store, finishDestroy)) {
@@ -710,14 +733,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         );
       }
       record = store.requestDestroy({ environmentId, state: record.state });
-      if (record.state === "requested") {
-        return cancelRequested(record);
-      }
-      if (!record.leaseId) {
-        const provider = providerFor(record.providerId);
-        record = await resumeProvision(record, provider);
-        return finishDestroy(record, provider);
-      }
       return finishDestroy(record);
     });
   };

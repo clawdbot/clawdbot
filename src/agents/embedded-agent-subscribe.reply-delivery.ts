@@ -28,6 +28,28 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const pendingPartialReplyTasks = new Set<Promise<void>>();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
+  const emitPartialReplySafely = (
+    delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
+  ) => {
+    if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
+      try {
+        const maybeTask = params.onPartialReply(delivery.data);
+        if (isPromiseLike(maybeTask)) {
+          const task = Promise.resolve(maybeTask)
+            .then(() => undefined)
+            .catch((error: unknown) => {
+              log.warn(`assistant partial reply callback failed: ${String(error)}`);
+            });
+          pendingPartialReplyTasks.add(task);
+          void task.finally(() => {
+            pendingPartialReplyTasks.delete(task);
+          });
+        }
+      } catch (error) {
+        log.warn(`assistant partial reply callback failed: ${String(error)}`);
+      }
+    }
+  };
   const emitAssistantStreamDataSafely = (
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
@@ -67,24 +89,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         });
       }
     }
-    if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      try {
-        const maybeTask = params.onPartialReply(data);
-        if (isPromiseLike(maybeTask)) {
-          const task = Promise.resolve(maybeTask)
-            .then(() => undefined)
-            .catch((error: unknown) => {
-              log.warn(`assistant partial reply callback failed: ${String(error)}`);
-            });
-          pendingPartialReplyTasks.add(task);
-          void task.finally(() => {
-            pendingPartialReplyTasks.delete(task);
-          });
-        }
-      } catch (error) {
-        log.warn(`assistant partial reply callback failed: ${String(error)}`);
-      }
-    }
+    emitPartialReplySafely(delivery);
   };
   const emitAssistantStreamData = (
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
@@ -92,7 +97,15 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   ) => {
     const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
     if (state.deferBlockReplyDelivery) {
-      state.deferredAssistantEvents.push(delivery);
+      state.deferredAssistantEvents.push({
+        ...delivery,
+        emitPartialReply: delivery.emitPartialReply && !params.partialReplyIsProvisional,
+      });
+      if (params.partialReplyIsProvisional) {
+        // Source previews remain provisional; never release assistant events or
+        // replay these callbacks when terminal acceptance drains the queue.
+        emitPartialReplySafely(delivery);
+      }
       return;
     }
     emitAssistantStreamDataSafely(delivery);

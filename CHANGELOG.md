@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Session memory:** capture the departing conversation before manual, daily, or idle resets close its transcript window, preserving recent messages and their trust provenance in memory artifacts.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
@@ -69,6 +70,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Browser extension relay:** route Runtime binding callbacks only to registered clients and preserve shared bindings during client cleanup, preventing raw callback payloads from reaching unrelated Playwright sessions.
+- **Control UI media playback:** restore inline audio and video rendition loading so readiness checks reach the Gateway instead of silently falling back to download cards. (#132832)
 - **Grok web search startup:** avoid loading the full agent runtime before the first search, while preserving agent-scoped credentials and OAuth fallback behavior.
 - Gateway/subagents: keep plugin completion turns bound to the owning Gateway runtime so successful native subagents can finish delivery without losing the published reply runtime.
 - **Upgrade config repair:** retain plugin-owned channel configuration migrations alongside core schemas so `doctor --fix` can repair older settings before an external plugin is installed or granted capabilities, while preserving installed-plugin ownership and state-migration boundaries.

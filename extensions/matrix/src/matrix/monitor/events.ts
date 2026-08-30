@@ -190,6 +190,8 @@ export function registerMatrixMonitorEvents(params: {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   needsRoomAliasesForConfig: boolean;
   getRoomInfo: ReturnType<typeof createMatrixRoomInfoResolver>["getRoomInfo"];
+  invalidateTurnTakingMembership?: (roomId: string) => void;
+  markTurnTakingRoomEncrypted?: (roomId: string) => void;
   invalidateMemberDisplayName?: (roomId: string, userId: string) => void;
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
@@ -211,6 +213,8 @@ export function registerMatrixMonitorEvents(params: {
     dmPolicy,
     readStoreAllowFrom,
     directTracker,
+    invalidateTurnTakingMembership,
+    markTurnTakingRoomEncrypted,
     invalidateMemberDisplayName,
     logVerboseMessage,
     warnedEncryptedRooms,
@@ -262,6 +266,7 @@ export function registerMatrixMonitorEvents(params: {
   };
 
   const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
+    markTurnTakingRoomEncrypted?.(roomId);
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`);
@@ -351,6 +356,7 @@ export function registerMatrixMonitorEvents(params: {
 
   const onInvite = (roomId: string, event: MatrixRawEvent) => {
     directTracker?.invalidateRoom(roomId);
+    invalidateTurnTakingMembership?.(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
     const invitee = normalizeOptionalString(event?.state_key) ?? "";
@@ -368,6 +374,7 @@ export function registerMatrixMonitorEvents(params: {
 
   const onJoin = (roomId: string, event: MatrixRawEvent) => {
     directTracker?.invalidateRoom(roomId);
+    invalidateTurnTakingMembership?.(roomId);
     const eventId = event?.event_id ?? "unknown";
     logVerboseMessage(`matrix: join room=${roomId} id=${eventId}`);
     if (event.membershipProvenance !== "transition" || event.state_key !== auth.userId) {
@@ -443,6 +450,7 @@ export function registerMatrixMonitorEvents(params: {
   const onRoomEvent = (roomId: string, event: MatrixRawEvent) => {
     const eventType = event?.type ?? "unknown";
     if (eventType === EventType.RoomMessageEncrypted) {
+      markTurnTakingRoomEncrypted?.(roomId);
       logVerboseMessage(
         `matrix: encrypted raw event room=${roomId} id=${event?.event_id ?? "unknown"}`,
       );
@@ -463,8 +471,13 @@ export function registerMatrixMonitorEvents(params: {
       }
       return;
     }
+    if (eventType === EventType.RoomEncryption) {
+      markTurnTakingRoomEncrypted?.(roomId);
+      return;
+    }
     if (eventType === EventType.RoomMember) {
       directTracker?.invalidateRoom(roomId);
+      invalidateTurnTakingMembership?.(roomId);
       const membership = (event?.content as { membership?: string } | undefined)?.membership;
       const stateKey = (event as { state_key?: string }).state_key ?? "";
       if (stateKey) {
@@ -473,6 +486,15 @@ export function registerMatrixMonitorEvents(params: {
       logVerboseMessage(
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
       );
+    }
+    if (eventType === EventType.RoomRedaction) {
+      void runMonitorTask(
+        `redaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+        async () => {
+          await onRoomMessage(roomId, event);
+        },
+      );
+      return;
     }
     if (eventType === EventType.Reaction) {
       void runMonitorTask(

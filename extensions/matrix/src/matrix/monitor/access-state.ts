@@ -5,7 +5,41 @@ import {
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
+
+export function createMatrixContextVisibility(input: {
+  isRoom: boolean;
+  groupPolicy: "open" | "allowlist" | "disabled";
+  effectiveGroupAllowFrom: readonly string[];
+  effectiveRoomUsers: readonly string[];
+  mode: Parameters<typeof evaluateSupplementalContextVisibility>[0]["mode"];
+}) {
+  const senderAllowed = (senderId?: string): boolean => {
+    if (!input.isRoom || !senderId) {
+      return true;
+    }
+    const allowList =
+      input.effectiveRoomUsers.length > 0
+        ? input.effectiveRoomUsers
+        : input.groupPolicy === "allowlist"
+          ? input.effectiveGroupAllowFrom
+          : [];
+    return (
+      allowList.length === 0 ||
+      resolveMatrixAllowListMatch({ allowList: [...allowList], userId: senderId }).allowed
+    );
+  };
+  return {
+    senderAllowed,
+    include: (kind: "thread" | "quote" | "history", senderId?: string) =>
+      evaluateSupplementalContextVisibility({
+        mode: input.mode,
+        kind,
+        senderAllowed: senderAllowed(senderId),
+      }).include,
+  };
+}
 
 type MatrixMonitorAccessState = {
   effectiveGroupAllowFrom: string[];

@@ -173,6 +173,8 @@ function createInboundTextContext(params?: {
   const address = isGroup ? `line:group:${conversation.id}` : `line:${conversation.id}`;
   return {
     accountId,
+    // No group skill scope configured, which is what `groupConfig?.skills` yields.
+    skillFilter: undefined,
     ctxPayload: buildChannelInboundEventContext({
       channel: "line",
       accountId,
@@ -433,7 +435,7 @@ describe("monitorLineProvider lifecycle", () => {
     }
 
     try {
-      await onMessage(createInboundTextContext({ accountId: "work" }), {});
+      await onMessage(createInboundTextContext({ accountId: "work" }), { cfg: {} });
 
       expect(deliverMock.mock.calls[0]?.[0]?.textLimit).toBe(900);
     } finally {
@@ -508,7 +510,9 @@ describe("monitorLineProvider lifecycle", () => {
     }
 
     try {
-      await onMessage(createInboundTextContext({ conversation: { kind: "group", id: "C1" } }), {});
+      await onMessage(createInboundTextContext({ conversation: { kind: "group", id: "C1" } }), {
+        cfg: {},
+      });
 
       const prepared = resolvedTurn?.delivery.preparePayload?.({
         text: "Approve this run?",
@@ -525,6 +529,52 @@ describe("monitorLineProvider lifecycle", () => {
 
       expect(prepared?.presentation).toBeUndefined();
       expect(line?.flexMessage).toBeDefined();
+    } finally {
+      // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
+  });
+
+  it("carries a group's skill scope into the turn that answers it", async () => {
+    // The scope is configured per group but enforced per turn: it only applies
+    // if the reply options reaching the agent carry it.
+    const { setLineRuntime } = await import("./runtime.js");
+    type SkillFilterTurn = { replyOptions?: { skillFilter?: string[] } };
+    let resolvedTurn: SkillFilterTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => SkillFilterTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "hi" },
+          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+          isGroup: true,
+          accountId: "default",
+          skillFilter: ["triage"],
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {} as Parameters<typeof onMessage>[1],
+      );
+
+      expect(resolvedTurn?.replyOptions?.skillFilter).toEqual(["triage"]);
     } finally {
       // A leaked registration makes later shared-path signature tests ambiguous.
       await monitor.stop();

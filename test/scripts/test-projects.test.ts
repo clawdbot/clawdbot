@@ -507,6 +507,25 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/check.mts"], ["test/scripts/check.test.ts"]);
   });
 
+  it("routes the Vitest fork patch and its fixture to lifecycle proof", () => {
+    expectChangedTargets(
+      ["patches/vitest@4.1.11.patch"],
+      [
+        "test/scripts/run-vitest-profile.test.ts",
+        "test/scripts/run-vitest-state-cleanup.test.ts",
+        "test/scripts/vitest-fork-shutdown.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      ["test/fixtures/vitest-fork-shutdown.mjs"],
+      ["test/scripts/vitest-fork-shutdown.test.ts"],
+    );
+    expectSingleVitestRunPlan(buildVitestRunPlans(["test/scripts/vitest-fork-shutdown.test.ts"]), {
+      config: "test/vitest/vitest.tooling-isolated.config.ts",
+      includePatterns: ["test/scripts/vitest-fork-shutdown.test.ts"],
+    });
+  });
+
   it("keeps build runner edits on build runner tests", () => {
     expectChangedTargets(["scripts/build-all.mts"], ["test/scripts/build-all.test.ts"]);
   });
@@ -642,12 +661,27 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each([
+    ".github/actions/git-owner/owner.py",
+    ".github/actions/git-owner/action.yml",
+    ".github/actions/ensure-base-commit/policy.py",
+    ".github/actions/ensure-base-commit/action.yml",
+    "scripts/generate-ci-git-owner.mts",
+    ".github/workflows/workflow-sanity.yml",
+  ])("selects executable Git boundary proof for %s", (source) => {
+    expect(resolveChangedTestTargetPlan([source])).toEqual({
+      mode: "targets",
+      targets: expect.arrayContaining(["test/scripts/ci-git-owner.test.ts"]),
+    });
+  });
+
   it("keeps CI workflow edits on workflow guard tests", () => {
     expectChangedTargets(
       [".github/workflows/ci.yml"],
       [
         "test/scripts/ci-platform-checkout.test.ts",
         "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
@@ -1868,6 +1902,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
           "test/scripts/test-projects-build-admission.test.ts",
+          "test/scripts/vitest-fork-shutdown.test.ts",
         ],
         watchMode: false,
       },
@@ -2057,6 +2092,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
           "test/scripts/test-projects-build-admission.test.ts",
+          "test/scripts/vitest-fork-shutdown.test.ts",
         ],
         watchMode: false,
       },
@@ -4294,18 +4330,8 @@ describe("scripts/test-projects Vitest cache isolation", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join(
-        "/repo",
-        "node_modules",
-        ".experimental-vitest-cache",
-        "0-test-vitest-vitest.unit-fast.config.ts",
-      ),
-      path.join(
-        "/repo",
-        "node_modules",
-        ".experimental-vitest-cache",
-        "1-test-vitest-vitest.extension-memory.config.ts",
-      ),
+      path.join("/repo", ".cache", "vitest", "0-test-vitest-vitest.unit-fast.config.ts"),
+      path.join("/repo", ".cache", "vitest", "1-test-vitest-vitest.extension-memory.config.ts"),
     ]);
   });
 

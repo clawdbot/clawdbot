@@ -232,6 +232,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
+      color: normalizeOptionalString(row.color),
       channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
       boardFace: row.boardFace,
       channel: channelInfo.channel,

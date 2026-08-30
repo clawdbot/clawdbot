@@ -29,6 +29,15 @@ export function createFollowupRunner(
   defaults: FollowupRunnerParams,
 ): (queued: FollowupRun) => Promise<void> {
   const runFollowup = async (queued: FollowupRun): Promise<void> => {
+    const turnDefaults = queued.queuedSourceReplyDelivery
+      ? {
+          ...defaults,
+          opts: {
+            ...defaults.opts,
+            ...queued.queuedSourceReplyDelivery.presentationOptions,
+          },
+        }
+      : defaults;
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedRunId: string | undefined;
@@ -47,12 +56,12 @@ export function createFollowupRunner(
       }
       const admission = await admitFollowupTurn({
         queued,
-        defaults,
+        defaults: turnDefaults,
         onCompactionNoticePayload: async (payload, turn) => {
           await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
             turn,
-            defaults,
+            defaults: turnDefaults,
             runId: turn.runId,
             runFollowup,
             kind: "block",
@@ -77,12 +86,12 @@ export function createFollowupRunner(
       queuedFollowupAdmitted = true;
       const execution = await executeFollowupTurn({
         turn,
-        defaults,
+        defaults: turnDefaults,
         onToolResult: async (payload, identity) => {
           await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
             turn,
-            defaults,
+            defaults: turnDefaults,
             runId: identity.runId,
             runFollowup,
             kind: "tool",
@@ -92,7 +101,7 @@ export function createFollowupRunner(
           await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
             turn,
-            defaults,
+            defaults: turnDefaults,
             runId: identity.runId,
             runFollowup,
             kind: "block",
@@ -115,11 +124,11 @@ export function createFollowupRunner(
         execution.execution.outcome.kind === "settled" &&
         hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
       ) {
-        await defaults.opts?.onObservedReplyDelivery?.();
+        await turnDefaults.opts?.onObservedReplyDelivery?.();
       }
-      const accounting = await accountFollowupTurn({ turn, defaults, execution });
+      const accounting = await accountFollowupTurn({ turn, defaults: turnDefaults, execution });
       const deliveryOpts = {
-        ...defaults.opts,
+        ...turnDefaults.opts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
       const decision = resolveFollowupDeliveryDecision({
@@ -131,7 +140,7 @@ export function createFollowupRunner(
       await deliverFollowupDecision({
         decision,
         turn,
-        defaults,
+        defaults: turnDefaults,
         runId: execution.execution.runId,
         runFollowup,
       });
@@ -153,7 +162,7 @@ export function createFollowupRunner(
       }
     } finally {
       if (queuedFollowupAdmitted) {
-        await settleQueuedFollowupPresentation(defaults);
+        await settleQueuedFollowupPresentation(turnDefaults);
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

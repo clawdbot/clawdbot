@@ -87,7 +87,10 @@ interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (
     ctx: LineInboundContext,
-    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      cfg: OpenClawConfig;
+      turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
+    },
   ) => Promise<void>;
   turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
   groupHistories?: Map<string, HistoryEntry[]>;
@@ -490,10 +493,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       return;
     }
 
-    await processMessage(
-      messageContext,
-      context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
-    );
+    await processMessage(messageContext, {
+      cfg,
+      ...(context.turnAdoptionLifecycle
+        ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+        : {}),
+    });
     historyReservation.commit();
   } finally {
     historyReservation.release();
@@ -584,10 +589,12 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(
-    postbackContext,
-    context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
-  );
+  await context.processMessage(postbackContext, {
+    cfg: context.cfg,
+    ...(context.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+      : {}),
+  });
 }
 
 export async function handleLineWebhookEvents(

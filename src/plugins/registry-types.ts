@@ -286,6 +286,8 @@ type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
   harness: AgentHarness;
+  /** Loader-owned private ABI marker; never projected into the Plugin SDK. */
+  bundledCodexSourceFinalization?: true;
   nativeCompaction?: AgentHarnessNativeCompaction;
   source: string;
   rootDir?: string;

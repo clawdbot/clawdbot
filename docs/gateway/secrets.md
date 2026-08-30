@@ -214,6 +214,8 @@ Define providers under `secrets.providers`:
 
 Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
 
+Read-only inspection recognizes valid `store` bindings without opening the database. That is configuration evidence, not proof that the value exists: credential availability stays unknown until runtime resolution.
+
 <Accordion title="Env provider">
 - Optional exact-name allowlist via `allowlist`. A matching explicit env provider enforces this list even when it is the selected default. Omit the list to allow any name; use `[]` to deny every name.
 - Missing or empty env values fail resolution. An explicit env SecretRef remains authoritative and does not fall through to another credential or auth profile.

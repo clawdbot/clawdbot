@@ -16,7 +16,7 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -51,6 +51,10 @@ import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import {
+  PluginHarnessSourceFinalizationUnsupportedError,
+  resolveAgentHarnessPreflightOwner,
+} from "./errors.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -685,6 +689,167 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
+  it("strips source-finalization authority from an arbitrary plugin harness", async () => {
+    const runAttempt = vi.fn(async (...args: unknown[]) => {
+      const attempt = args[0] as Record<string, unknown>;
+      expect(Reflect.ownKeys(attempt)).not.toEqual(
+        expect.arrayContaining(["onBeforeAgentFinalize", "deferSourceMessageToolDelivery"]),
+      );
+      return createAttemptResult("foreign");
+    });
+    registerAgentHarness(
+      {
+        id: "foreign",
+        label: "Foreign",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: runAttempt as AgentHarness["runAttempt"],
+      },
+      { ownerPluginId: "foreign" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "foreign"));
+    params.onBeforeAgentFinalize = undefined;
+    params.deferSourceMessageToolDelivery = true;
+    expect(Object.hasOwn(params, "onBeforeAgentFinalize")).toBe(true);
+
+    await runAgentHarnessAttempt(params);
+
+    expect(runAttempt).toHaveBeenCalledOnce();
+    expect(runAttempt.mock.calls[0]).toHaveLength(1);
+  });
+
+  it.each([
+    { id: "copilot", ownerPluginId: "copilot" },
+    { id: "codex", ownerPluginId: "codex" },
+  ])(
+    "fails closed when a non-finalizing $id harness receives a freshness gate",
+    async (fixture) => {
+      const runAttempt = vi.fn(async (...args: unknown[]) => {
+        const attempt = args[0] as Record<string, unknown>;
+        expect(Reflect.ownKeys(attempt)).not.toEqual(
+          expect.arrayContaining(["onBeforeAgentFinalize", "deferSourceMessageToolDelivery"]),
+        );
+        return createAttemptResult("ordinary");
+      });
+      registerAgentHarness(
+        {
+          id: fixture.id,
+          label: `Unmarked ${fixture.id}`,
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: runAttempt as AgentHarness["runAttempt"],
+        },
+        { ownerPluginId: fixture.ownerPluginId },
+      );
+      const params = createAttemptParams(providerRuntimeConfig("codex", fixture.id));
+      params.onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
+      params.deferSourceMessageToolDelivery = true;
+
+      const error = await runAgentHarnessAttempt(params).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(PluginHarnessSourceFinalizationUnsupportedError);
+      expect(error).toMatchObject({ harnessId: fixture.id, scope: "harness" });
+      expect(resolveAgentHarnessPreflightOwner(error)).toBe(fixture.id);
+      expect(runAttempt).not.toHaveBeenCalled();
+      expect(params.onBeforeAgentFinalize).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the internal freshness callback for the built-in OpenClaw harness", async () => {
+    const onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
+    agentRunAttempt.mockImplementationOnce(async (attempt) => {
+      const internalAttempt = attempt as typeof attempt &
+        Pick<EmbeddedRunAttemptParams, "deferSourceMessageToolDelivery" | "onBeforeAgentFinalize">;
+      expect(internalAttempt.deferSourceMessageToolDelivery).toBe(true);
+      expect(internalAttempt.onBeforeAgentFinalize).toBe(onBeforeAgentFinalize);
+      await internalAttempt.onBeforeAgentFinalize?.({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        lastAssistantMessage: "candidate",
+        revisionAttempt: 0,
+      });
+      return createAttemptResult("openclaw-freshness");
+    });
+    const params = createAttemptParams(providerRuntimeConfig("openai", "openclaw"));
+    params.onBeforeAgentFinalize = onBeforeAgentFinalize;
+    params.deferSourceMessageToolDelivery = true;
+
+    await expect(runAgentHarnessAttempt(params)).resolves.toMatchObject({
+      sessionIdUsed: "openclaw-freshness",
+    });
+    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
+  });
+
+  it("hands the callback privately to the exact registry-attested Codex harness", async () => {
+    type PrivateFinalizer = NonNullable<EmbeddedRunAttemptParams["onBeforeAgentFinalize"]>;
+    let retainedFinalizer: PrivateFinalizer | undefined;
+    let retainedOnAccepted: (() => Promise<void> | void) | undefined;
+    const runAttempt = vi.fn(async (...args: unknown[]) => {
+      const attempt = args[0] as Record<string, unknown>;
+      const onBeforeAgentFinalize = args[1] as PrivateFinalizer | undefined;
+      expect(attempt).not.toHaveProperty("onBeforeAgentFinalize");
+      expect(attempt).not.toHaveProperty("deferSourceMessageToolDelivery");
+      expect(onBeforeAgentFinalize).toBeTypeOf("function");
+      retainedFinalizer = onBeforeAgentFinalize;
+      const decision = await onBeforeAgentFinalize!({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        lastAssistantMessage: "candidate",
+        revisionAttempt: 0,
+      });
+      if (decision.action !== "continue") {
+        retainedOnAccepted = decision.onAccepted;
+        await decision.onAccepted?.();
+      }
+      return createAttemptResult("codex-private");
+    });
+    const registeredHarness: AgentHarness = {
+      id: "codex",
+      pluginId: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: runAttempt as AgentHarness["runAttempt"],
+    };
+    requireActivePluginRegistry().agentHarnesses.push({
+      pluginId: "codex",
+      source: "test:bundled-codex-loader",
+      harness: registeredHarness,
+      bundledCodexSourceFinalization: true,
+      nativeCompaction: vi.fn(async () => ({ ok: true, compacted: false })),
+    });
+    const onAccepted = vi.fn();
+    const onBeforeAgentFinalize = vi.fn(async () => ({
+      action: "discard" as const,
+      onAccepted,
+    }));
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.onBeforeAgentFinalize = onBeforeAgentFinalize;
+    params.deferSourceMessageToolDelivery = true;
+
+    await runAgentHarnessAttempt(params);
+
+    expect(runAttempt.mock.calls[0]).toHaveLength(2);
+    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
+    expect(onAccepted).toHaveBeenCalledOnce();
+    await expect(
+      retainedFinalizer!({
+        runId: "late-run",
+        sessionId: "late-session",
+        provider: "openai",
+        model: "gpt-5.4",
+        lastAssistantMessage: "late candidate",
+        revisionAttempt: 0,
+      }),
+    ).rejects.toThrow("agent harness host capability is no longer active");
+    await expect(retainedOnAccepted!()).rejects.toThrow(
+      "agent harness host capability is no longer active",
+    );
+    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
+    expect(onAccepted).toHaveBeenCalledOnce();
+  });
+
   it("routes settled turns only through an explicit harness finalizer", async () => {
     const internalKey = "__openclawSourceReplyDeliveryRuntime";
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
@@ -695,6 +860,8 @@ describe("runAgentHarnessAttempt", () => {
         expect(attempt.operation).toBe("settled-tool-finalization");
         expect(attempt).not.toHaveProperty("hostCapabilities");
         expect(attempt).not.toHaveProperty(internalKey);
+        expect(attempt).not.toHaveProperty("onBeforeAgentFinalize");
+        expect(attempt).not.toHaveProperty("deferSourceMessageToolDelivery");
         return {
           assistant: createFinalAssistant(),
         };
@@ -710,6 +877,8 @@ describe("runAgentHarnessAttempt", () => {
     registerAgentHarness(harness, { ownerPluginId: "codex" });
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
     (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+    params.onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
+    params.deferSourceMessageToolDelivery = true;
     const settledAttempt = createAttemptResult("settled");
 
     await expect(

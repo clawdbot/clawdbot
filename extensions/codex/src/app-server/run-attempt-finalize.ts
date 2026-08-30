@@ -38,6 +38,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
   createCodexUsageLimitPromptError,
   isCodexUsageLimitPromptError,
@@ -152,9 +153,33 @@ export async function finalizeCodexAttempt(
       timeoutMs: state.turnWatchTimeoutMs,
     });
   }
-  const result = activeProjector.buildResult(toolBridge.telemetry, {
+  let result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,
   });
+  const turnLocalFinalizationDisposition =
+    resourceState.nativeHookRelay?.sealTurnLocalFinalization(activeTurnId);
+  if (turnLocalFinalizationDisposition) {
+    const messagesSnapshot = result.messagesSnapshot.filter(
+      (message) => readMirrorIdentity(message) !== `${activeTurnId}:assistant`,
+    );
+    result = {
+      ...result,
+      messagesSnapshot,
+      ...(turnLocalFinalizationDisposition.action === "revise"
+        ? {
+            beforeAgentFinalizeRevisionReason: turnLocalFinalizationDisposition.instruction,
+            beforeAgentFinalizeRevisionDisableTools: true as const,
+          }
+        : {
+            assistantTexts: [],
+            lastAssistant: undefined,
+            currentAttemptAssistant: undefined,
+            currentAttemptCompletedAssistant: undefined,
+            lastAssistantTextMessageIndex: undefined,
+            beforeAgentFinalizeDiscarded: true as const,
+          }),
+    };
+  }
   const projectedTerminal = attemptTerminal.project(result.terminal);
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
@@ -354,7 +379,18 @@ export async function finalizeCodexAttempt(
   });
   const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
     mirrorOutcome;
+  if (turnLocalFinalizationDisposition) {
+    try {
+      await resourceState.nativeHookRelay?.acceptTurnLocalFinalization(activeTurnId);
+    } catch (error) {
+      embeddedAgentLog.warn(
+        `turn-local revision acceptance cleanup failed after Codex transcript suppression; ` +
+          `continuing runId=${params.runId} sessionId=${params.sessionId}: ${String(error)}`,
+      );
+    }
+  }
   const shouldCaptureSettledTurnFinalizationContext =
+    !turnLocalFinalizationDisposition &&
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult") &&
     (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
@@ -374,55 +410,58 @@ export async function finalizeCodexAttempt(
       turnId: activeTurnId,
     });
   }
-  runAgentHarnessLlmOutputHook({
-    event: {
-      runId: params.runId,
-      sessionId: params.sessionId,
-      provider: usesSupervisionConnection
-        ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-        : params.provider,
-      model: usesSupervisionConnection
-        ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-        : params.modelId,
-      ...hookContextWindowFields,
-      resolvedRef: usesSupervisionConnection
-        ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
-        : (params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`),
-      ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
-        ? { harnessId: params.runtimePlan.observability.harnessId }
-        : {}),
-      assistantTexts: result.assistantTexts,
-      ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
-      ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
-    },
-    ctx: hookContext,
-    hookRunner,
-  });
-  await runCodexAgentEndHook(params, {
-    event: {
-      messages: result.messagesSnapshot,
-      success: !finalAborted && !finalPromptError,
-      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
-      durationMs: Date.now() - attemptStartedAt,
-    },
-    ctx: {
-      ...hookContext,
-      modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
-      modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
-      authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
-      modelIterations: result.modelIterations ?? 0,
-      skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
-        attemptTools.toolBridge.availableSpecs,
-      ).some((tool) => tool.name === "skill_workshop"),
-      compacted: (result.compactionCount ?? 0) > 0,
-      senderId: params.senderId ?? undefined,
-      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
-        { ...params, agentId: sessionAgentId },
-        agentDir,
-      ),
-    },
-    hookRunner,
-  });
+  if (!turnLocalFinalizationDisposition) {
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: usesSupervisionConnection
+          ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
+          : params.provider,
+        model: usesSupervisionConnection
+          ? (resourceState.thread.model ?? effectiveRuntimeModelId)
+          : params.modelId,
+        ...hookContextWindowFields,
+        resolvedRef: usesSupervisionConnection
+          ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
+          : (params.runtimePlan?.observability.resolvedRef ??
+            `${params.provider}/${params.modelId}`),
+        ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
+          ? { harnessId: params.runtimePlan.observability.harnessId }
+          : {}),
+        assistantTexts: result.assistantTexts,
+        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      },
+      ctx: hookContext,
+      hookRunner,
+    });
+    await runCodexAgentEndHook(params, {
+      event: {
+        messages: result.messagesSnapshot,
+        success: !finalAborted && !finalPromptError,
+        ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: {
+        ...hookContext,
+        modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
+        modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
+        authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
+        modelIterations: result.modelIterations ?? 0,
+        skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
+          attemptTools.toolBridge.availableSpecs,
+        ).some((tool) => tool.name === "skill_workshop"),
+        compacted: (result.compactionCount ?? 0) > 0,
+        senderId: params.senderId ?? undefined,
+        foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+          { ...params, agentId: sessionAgentId },
+          agentDir,
+        ),
+      },
+      hookRunner,
+    });
+  }
   state.shouldDelayNativeHookRelayUnregister =
     completedTurnStatus === "completed" &&
     !effectiveTimedOut &&
@@ -491,6 +530,7 @@ export async function finalizeCodexAttempt(
   markTrajectoryEndRecorded();
   const terminalAssistantText = collectTerminalAssistantText(result);
   if (
+    !turnLocalFinalizationDisposition &&
     terminalAssistantText &&
     (!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
     !finalAborted &&
@@ -532,7 +572,9 @@ export async function finalizeCodexAttempt(
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
     ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
-    ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
+    ...(terminalAnchor && turnLocalFinalizationDisposition?.action !== "revise"
+      ? { contextEngineTerminalAnchor: terminalAnchor }
+      : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),

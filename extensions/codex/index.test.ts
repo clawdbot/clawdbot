@@ -154,7 +154,13 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerService).toHaveBeenCalledTimes(2);
+    expect(registerService).toHaveBeenCalledTimes(3);
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
+      }),
+    );
     expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
       expect.objectContaining({
         id: "codex-app-server-connection-health",
@@ -180,11 +186,15 @@ describe("codex plugin", () => {
         }),
       );
 
-      expect(registerService).toHaveBeenCalledOnce();
+      expect(registerService).toHaveBeenCalledTimes(2);
       expect(mockCallArg(registerService)).toMatchObject({
         id: "codex-desktop-generation",
         start: expect.any(Function),
         stop: expect.any(Function),
+      });
+      expect(mockCallArg(registerService, 1)).toMatchObject({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
       });
     }
   });
@@ -930,6 +940,33 @@ describe("codex plugin", () => {
 
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
+      {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: {} },
+        nativeHookRelay: { enabled: true },
+      },
+    );
+  });
+
+  it("accepts source finalization only through the private second-argument handoff", async () => {
+    const harness = createCodexAppServerAgentHarness({
+      pluginConfig: { appServer: {} },
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const params = { prompt: "hello" };
+    const onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
+    runCodexAppServerAttemptMock.mockResolvedValueOnce({ success: true });
+
+    await (
+      harness.runAttempt as unknown as (
+        attempt: typeof params,
+        finalizer: typeof onBeforeAgentFinalize,
+      ) => Promise<unknown>
+    ).call(harness, params, onBeforeAgentFinalize);
+
+    expect(params).not.toHaveProperty("onBeforeAgentFinalize");
+    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
+      { prompt: "hello", onBeforeAgentFinalize },
       {
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },

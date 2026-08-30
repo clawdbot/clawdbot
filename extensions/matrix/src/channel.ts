@@ -478,6 +478,21 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             return trimmed.includes(":");
           },
           hint: "<room|alias|user>",
+          resolveTarget: async ({ cfg, accountId, input, normalized }) => {
+            const target = normalizeMatrixMessagingTarget(normalized ?? input);
+            if (!target?.startsWith("#")) {
+              return null;
+            }
+            const roomId = await (
+              await loadMatrixChannelRuntime()
+            ).resolveMatrixRoomAliasTarget({ cfg, accountId, alias: target });
+            return {
+              to: roomId,
+              kind: "channel" as const,
+              display: input,
+              source: "normalized" as const,
+            };
+          },
         },
       },
       directory: createChannelDirectoryAdapter({

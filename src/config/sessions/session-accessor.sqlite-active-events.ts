@@ -63,6 +63,9 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
 };
 
 export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+  // `events` may remain sparse for salvage callers; this count marks the
+  // authoritative newest suffix before the first byte-budget omission.
+  newestContiguousEventCount: number;
   scannedMessages: number;
   serializedBytes: number;
   snapshot: {
@@ -458,6 +461,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
       return {
         activeLeafEntryId: projection.state.leafEventId,
         events: [],
+        newestContiguousEventCount: 0,
         scannedMessages: positions.length,
         serializedBytes: 0,
         snapshot,
@@ -483,10 +487,15 @@ export function readSessionTranscriptBoundedMessageTailPage(
         .where("active.message_position", "in", positions)
         .orderBy("active.message_position", "desc"),
     ).rows;
+    if (metadata.length !== positions.length) {
+      throw new Error("Active transcript bounded message page is incomplete");
+    }
     const selectedPositions: number[] = [];
+    let newestContiguousEventCount: number | undefined;
     let serializedBytes = 0;
     for (const row of metadata) {
       if (row.message_position === null || serializedBytes + row.serialized_bytes > maxBytes) {
+        newestContiguousEventCount ??= selectedPositions.length;
         continue;
       }
       selectedPositions.push(row.message_position);
@@ -512,6 +521,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
     return {
       activeLeafEntryId: projection.state.leafEventId,
       events,
+      newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,
       scannedMessages: positions.length,
       serializedBytes,
       snapshot,

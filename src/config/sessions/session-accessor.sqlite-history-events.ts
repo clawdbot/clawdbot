@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -14,10 +15,15 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-active-projection.js";
 import type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { createTranscriptRawDeltaCursor } from "./session-accessor.sqlite-delta.js";
+import {
+  createTranscriptRawDeltaCursor,
+  readTranscriptRawDelta,
+} from "./session-accessor.sqlite-delta.js";
 import {
   positionTranscriptDisplayEvents,
   readTranscriptDisplaySource,
@@ -273,6 +279,7 @@ function resolveRecentHistoryStart(
 function readVisibleMessageById(
   projection: CurrentTranscriptProjection,
   eventId: string,
+  history: VisibleHistoryProjection,
 ): SessionTranscriptMessageEvent | undefined {
   const db = getActiveTranscriptKysely(projection.database);
   const row = executeSqliteQueryTakeFirstSync(
@@ -297,18 +304,36 @@ function readVisibleMessageById(
   if (!row || row.message_position === null) {
     return undefined;
   }
-  const visible = resolveVisibleMessagePositions(projection);
-  const logicalPosition =
-    row.message_position >= visible.postStart
-      ? visible.kept.length + row.message_position - visible.postStart
-      : visible.kept.indexOf(row.message_position);
-  return logicalPosition < 0
+  const seq = resolveHistoryMessageSequence(
+    resolveVisibleMessagePositions(projection),
+    history,
+    row.message_position,
+  );
+  return seq === undefined
     ? undefined
     : {
         event: JSON.parse(row.event_json) as TranscriptEvent,
         eventSeq: row.event_seq,
-        seq: logicalPosition + 1,
+        seq,
       };
+}
+
+function resolveHistoryMessageSequence(
+  visible: ReturnType<typeof resolveVisibleMessagePositions>,
+  history: VisibleHistoryProjection,
+  messagePosition: number,
+): number | undefined {
+  const logicalPosition =
+    messagePosition >= visible.postStart
+      ? visible.kept.length + messagePosition - visible.postStart
+      : visible.kept.indexOf(messagePosition);
+  if (logicalPosition < 0) {
+    return undefined;
+  }
+  const precedingBoundaries = history.boundaries.filter(
+    (candidate) => candidate.messagePosition <= logicalPosition,
+  ).length;
+  return logicalPosition + 1 + precedingBoundaries;
 }
 
 function resolveHistoryEventById(
@@ -323,18 +348,70 @@ function resolveHistoryEventById(
       ? { event, eventSeq: boundary.eventSeq, seq: boundary.displayPosition + 1 }
       : undefined;
   }
-  const message = readVisibleMessageById(projection, eventId);
-  if (!message) {
-    return undefined;
-  }
-  const messagePosition = message.seq - 1;
-  const precedingBoundaries = history.boundaries.filter(
-    (candidate) => candidate.messagePosition <= messagePosition,
-  ).length;
-  return {
-    ...message,
-    seq: message.seq + precedingBoundaries,
-  };
+  return readVisibleMessageById(projection, eventId, history);
+}
+
+type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
+export type SessionTranscriptDisplayDeltaResult =
+  | (Omit<SessionTranscriptRawDeltaPage, "events"> & {
+      activeLeafEntryId: string | null;
+      events: Array<
+        SessionTranscriptRawDeltaPage["events"][number] & {
+          messageSeq?: number;
+          displayPosition?: TranscriptDisplayPosition;
+        }
+      >;
+    })
+  | Exclude<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
+/** Raw cursor progress carries the same reset-relative ordinals as pages and live messages. */
+export function readTranscriptDisplayDelta(
+  scope: SessionTranscriptReadScope,
+  limits: SessionTranscriptRawDeltaLimits = {},
+): SessionTranscriptDisplayDeltaResult {
+  const readLimits = { ...limits };
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    // The nested raw read shares this deferred transaction; cursor progress and
+    // display placement must describe the same active branch and generation.
+    const result = readTranscriptRawDelta(scope, readLimits);
+    if (result.kind !== "page") {
+      return result;
+    }
+    const history = resolveVisibleHistoryProjection(projection);
+    const visible = resolveVisibleMessagePositions(projection);
+    const firstSeq = result.events[0]?.seq;
+    const lastSeq = result.events.at(-1)?.seq;
+    const db = getActiveTranscriptKysely(projection.database);
+    const sequences = new Map(
+      firstSeq === undefined || lastSeq === undefined
+        ? []
+        : executeSqliteQuerySync(
+            projection.database.db,
+            db
+              .selectFrom("session_transcript_active_events")
+              .select(["event_seq", "message_position"])
+              .where("session_id", "=", projection.resolved.sessionId)
+              .where("event_seq", ">=", firstSeq)
+              .where("event_seq", "<=", lastSeq)
+              .where("message_position", "is not", null),
+          ).rows.map((row) => [
+            row.event_seq,
+            row.message_position === null
+              ? undefined
+              : resolveHistoryMessageSequence(visible, history, row.message_position),
+          ]),
+    );
+    const events = positionTranscriptDisplayEvents(
+      projection,
+      history.displaySource,
+      result.events.map((row) => {
+        const messageSeq = sequences.get(row.seq);
+        return { ...row, eventSeq: row.seq, ...(messageSeq === undefined ? {} : { messageSeq }) };
+      }),
+    );
+    return { ...result, activeLeafEntryId: projection.state.leafEventId, events };
+  });
 }
 
 export function readSessionTranscriptHistoryEvents(

@@ -7,10 +7,16 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { CoreConfig, MatrixConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import type { MatrixOpenClawPreviewMarker } from "../preview-protocol.js";
 import type { MatrixClient } from "../sdk.js";
 import { formatMatrixToolProgressMarkdownCode } from "./handler-helpers.js";
-import { loadMatrixDraftStream, type MatrixDraftStreamHandle } from "./handler-runtime.js";
+import {
+  loadMatrixDraftStream,
+  redactMatrixDraftEvent,
+  type MatrixDraftStreamHandle,
+} from "./handler-runtime.js";
 import type { BlockReplyContext, ReplyPayload } from "./runtime-api.js";
+import type { MatrixSourceCleanupCapability } from "./source-finalization-request.js";
 
 export async function createMatrixDraftController(params: {
   streaming: MatrixStreamingMode;
@@ -24,6 +30,14 @@ export async function createMatrixDraftController(params: {
   roomId: string;
   client: MatrixClient;
   logVerboseMessage: (message: string) => void;
+  previewProtocol?: {
+    onUpdate: (update: {
+      originalEventId: string;
+      sourceEventId: string;
+      marker: MatrixOpenClawPreviewMarker;
+      body: string;
+    }) => Promise<void> | void;
+  };
 }) {
   const {
     streaming,
@@ -57,12 +71,23 @@ export async function createMatrixDraftController(params: {
           preserveReplyId: replyToMode === "all",
           accountId,
           log: logVerboseMessage,
+          ...(params.previewProtocol
+            ? {
+                protocol: {
+                  triggerEventId: messageId,
+                  ...(threadTarget ? { threadId: threadTarget } : {}),
+                  ...(draftReplyToId ? { replyToId: draftReplyToId } : {}),
+                  onUpdate: params.previewProtocol.onUpdate,
+                },
+              }
+            : {}),
         }),
       )
     : undefined;
   const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
   const shouldSuppressDefaultToolProgressMessages =
-    Boolean(draftStream) && (shouldStreamPreviewToolProgress || params.streaming === "progress");
+    Boolean(params.previewProtocol) ||
+    (Boolean(draftStream) && (shouldStreamPreviewToolProgress || params.streaming === "progress"));
   type PendingDraftBoundary = {
     messageGeneration: number;
     endOffset: number;
@@ -109,6 +134,7 @@ export async function createMatrixDraftController(params: {
       if (!draftStream) {
         return false;
       }
+      draftStream.setKind("progress");
       draftStream.update(previewText);
       if (options?.flush) {
         await draftStream.flush();
@@ -190,6 +216,7 @@ export async function createMatrixDraftController(params: {
   const updateDraftFromLatestFullText = () => {
     const blockText = getDisplayableDraftText();
     if (blockText) {
+      draftStream?.setKind("answer");
       draftStream?.update(blockText);
     }
   };
@@ -250,6 +277,24 @@ export async function createMatrixDraftController(params: {
     resetPreviewToolProgress();
   };
 
+  const handleAcceptedDiscard = async (capability: MatrixSourceCleanupCapability) => {
+    if (!capability.isSourceLive()) {
+      draftDisposition = "consumed";
+      return;
+    }
+    const draftEventId = draftStream?.eventId();
+    await draftStream?.abandon({ isSourceLive: capability.isSourceLive });
+    if (!capability.isSourceLive()) {
+      // A replacement owner must not inherit this stale cleanup.
+      draftDisposition = "consumed";
+      return;
+    }
+    // A failed redaction remains active so the owning settlement path can retry it.
+    if (!draftEventId || (await redactMatrixDraftEvent(client, roomId, draftEventId))) {
+      draftDisposition = "consumed";
+    }
+  };
+
   return {
     draftStream,
     cancelProgressDraft: () => progressDraft.cancel(),
@@ -259,6 +304,7 @@ export async function createMatrixDraftController(params: {
     resetDraftBlockOffsets,
     resetPreviewToolProgress,
     resetDraftDeliveryState,
+    handleAcceptedDiscard,
     updateDraftFromLatestFullText,
     draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {
@@ -288,6 +334,7 @@ export async function createMatrixDraftController(params: {
         previewPlanExplanation = undefined;
         progressDraft.suppress();
       }
+      draftStream?.setKind("answer");
       updateDraftFromLatestFullText();
       return false;
     },

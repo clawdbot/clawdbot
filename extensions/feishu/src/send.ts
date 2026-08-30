@@ -204,6 +204,7 @@ export async function sendReplyOrFallbackDirect(
     params.directParams.receiveId,
     resolveFeishuReceiptKind(params.msgType),
     params.replyErrorPrefix,
+    params.replyToMessageId,
   );
 }
 

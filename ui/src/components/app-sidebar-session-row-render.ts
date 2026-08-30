@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
@@ -251,9 +252,11 @@ export function renderRecentSession(params: {
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =
     host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
+  const color = normalizeSessionColorValue(session.color ?? "");
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
+    color ? "sidebar-recent-session--colored" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
     !subtitle ? "sidebar-recent-session--single-line" : "",
     session.archived ? "sidebar-session--archived" : "",
@@ -319,6 +322,7 @@ export function renderRecentSession(params: {
     <div
       ${display?.rowRef ? ref(display.rowRef) : nothing}
       class=${rowClass}
+      style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${session.key}
       data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}

@@ -52,8 +52,6 @@ function createParams(
   sessionKey = "agent:main:session-1",
 ): EmbeddedRunAttemptParams {
   const params = createSharedParams(sessionFile, workspaceDir, { sessionKey });
-  params.disableTools = true;
-  params.config = undefined;
   delete params.contextTokenBudget;
   delete params.contextWindowInfo;
   delete params.observeToolTerminal;
@@ -175,7 +173,7 @@ describe("Codex app-server main thread cleanup", () => {
       connectionScope: undefined,
       ringZeroConfigFingerprint: undefined,
       contextEngine: undefined,
-      pluginAppsFingerprint: expect.any(String),
+      pluginAppsFingerprint: undefined,
     });
 
     expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);

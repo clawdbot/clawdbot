@@ -1081,8 +1081,27 @@ export async function runCli(
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
     () => {
-      const run = () =>
-        runCliWithPreparedOutputMode(originalArgv, { ...options, builtInMachineOutput });
+      const run = async () => {
+        try {
+          return await runCliWithPreparedOutputMode(originalArgv, {
+            ...options,
+            builtInMachineOutput,
+          });
+        } catch (error) {
+          // Selection and Commander preactions run before the Gateway action's failure boundary.
+          if (
+            isGatewayRunInvocationArgv(originalArgv) &&
+            !resolveCliArgvInvocation(originalArgv).hasHelpOrVersion
+          ) {
+            const { handleGatewayStartupMaintenance } =
+              await import("./gateway-cli/startup-maintenance.js");
+            if (await handleGatewayStartupMaintenance(error)) {
+              return;
+            }
+          }
+          throw error;
+        }
+      };
       // Nested registrars and late actions share this lightweight owner, even when no
       // top-level plugin preparation is needed. Gateway retains its boot/process owner.
       return isGatewayRunInvocationArgv(originalArgv)
@@ -1256,13 +1275,15 @@ async function runCliWithPreparedOutputMode(
         if (useSourceOnlyBestEffortConfig) {
           return configIo.readSourceConfigBestEffort();
         }
-        const readOptions = {
+        const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
           ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
           ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
           bestEffortConfigStartupPolicy.validateConfigOnly
             ? { observe: false }
             : {}),
-          skipPluginValidation: true,
+          ...(bestEffortConfigStartupPolicy.validateConfigOnly
+            ? { pluginValidation: "core-only" }
+            : { skipPluginValidation: true }),
         };
         if (!resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
           return configIo.readBestEffortConfig(readOptions);

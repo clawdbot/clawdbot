@@ -3,6 +3,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 import { escapeRegExp } from "../utils.js";
+import { removeDirectiveSpan } from "./reply/directive-parsing.js";
 
 export type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 
@@ -14,11 +15,11 @@ const MODEL_RUNTIME_OPTION_PATTERN = String.raw`(?:--runtime|runtime=|harness=)\
 // Captures 2/3 are runtime-first; 4/5 are scope-first so duplicates stay unconsumed.
 const MODEL_TRAILING_OPTIONS_PATTERN = String.raw`(?:(?:\s+(?:--runtime|runtime=|harness=)\s*((?!${MODEL_OPTION_PATTERN})${MODEL_RUNTIME_VALUE_PATTERN}))(\s+${MODEL_SCOPE_OPTION_PATTERN})?|(\s+${MODEL_SCOPE_OPTION_PATTERN})(?:\s+(?:--runtime|runtime=|harness=)\s*((?!${MODEL_OPTION_PATTERN})${MODEL_RUNTIME_VALUE_PATTERN}))?)?`;
 const MODEL_OPTIONS_ONLY_DIRECTIVE_PATTERN = new RegExp(
-  String.raw`(?:^|\s)\/model(?=$|\s|:)\s*:?\s*(?:${MODEL_RUNTIME_OPTION_PATTERN}(\s+${MODEL_SCOPE_OPTION_PATTERN})?|(${MODEL_SCOPE_OPTION_PATTERN})(?:\s+${MODEL_RUNTIME_OPTION_PATTERN})?)`,
+  String.raw`(?<!\S)\/model(?=$|\s|:)\s*:?\s*(?:${MODEL_RUNTIME_OPTION_PATTERN}(\s+${MODEL_SCOPE_OPTION_PATTERN})?|(${MODEL_SCOPE_OPTION_PATTERN})(?:\s+${MODEL_RUNTIME_OPTION_PATTERN})?)`,
   "i",
 );
 const MODEL_DIRECTIVE_PATTERN = new RegExp(
-  String.raw`(?:^|\s)\/model(?=$|\s|:)\s*:?\s*((?!${MODEL_OPTION_PATTERN})${MODEL_REF_PATTERN})?${MODEL_TRAILING_OPTIONS_PATTERN}`,
+  String.raw`(?<!\S)\/model(?=$|\s|:)(?:\s*:)?(?:\s*((?!${MODEL_OPTION_PATTERN})${MODEL_REF_PATTERN}))?${MODEL_TRAILING_OPTIONS_PATTERN}`,
   "i",
 );
 
@@ -72,19 +73,17 @@ export function extractModelDirective(
     return { cleaned: "", scopeConflict: false, hasDirective: false };
   }
 
-  const modelOptionsOnlyMatch = body.match(MODEL_OPTIONS_ONLY_DIRECTIVE_PATTERN);
-  const modelMatch = modelOptionsOnlyMatch ?? body.match(MODEL_DIRECTIVE_PATTERN);
+  const modelOptionsOnlyMatch = MODEL_OPTIONS_ONLY_DIRECTIVE_PATTERN.exec(body);
+  const modelMatch = modelOptionsOnlyMatch ?? MODEL_DIRECTIVE_PATTERN.exec(body);
 
   const aliases = normalizeStringEntries(options?.aliases);
   const aliasMatch =
     modelMatch || aliases.length === 0
       ? null
-      : body.match(
-          new RegExp(
-            String.raw`(?:^|\s)\/(${aliases.map(escapeRegExp).join("|")})(?=$|\s|:)(?:\s*:)?${MODEL_TRAILING_OPTIONS_PATTERN}`,
-            "i",
-          ),
-        );
+      : new RegExp(
+          String.raw`(?<!\S)\/(${aliases.map(escapeRegExp).join("|")})(?=$|\s|:)(?:\s*:)?${MODEL_TRAILING_OPTIONS_PATTERN}`,
+          "i",
+        ).exec(body);
 
   const match = modelMatch ?? aliasMatch;
   const parsed = modelOptionsOnlyMatch
@@ -104,7 +103,9 @@ export function extractModelDirective(
     rawProfile = split.profile;
   }
 
-  const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
+  const cleaned = match
+    ? removeDirectiveSpan(body, match.index, match.index + match[0].length)
+    : body;
 
   return {
     cleaned,

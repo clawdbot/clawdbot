@@ -117,6 +117,10 @@ export type MessageActionInput = {
   sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Prepare an exact current-source send for automatic host delivery instead of platform I/O. */
+  deferSourceMessageToolDelivery?: boolean;
+  /** @internal Preserves the app-server final/progress intent across canonical target resolution. */
+  deferredSourceReplyFinalIntent?: boolean;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
   inboundEventKind?: InboundEventKind;
@@ -135,7 +139,7 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
-      handledBy: "plugin" | "core" | "internal-source";
+      handledBy: "plugin" | "core" | "internal-source" | "host-final";
       payload: unknown;
       normalization?: MessageActionNormalization;
       /** Exact text handed to the direct transport after core normalization and hooks. */

@@ -1,113 +1,204 @@
-import { once } from "node:events";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type RuntimeSubscription = {
+type Subscription = {
   send: (method: string, params: unknown) => void;
-  contexts: Set<number>;
+  pending: number;
+  delivered?: Set<number>;
 };
 
-/** One physical debugger Runtime, shared by connection + logical-session subscriptions. */
+type BindingOwner = {
+  send: Subscription["send"];
+  names: Set<string>;
+  retired: boolean;
+};
+
+/** One physical Runtime, subscribed by the same exact logical owners as Fetch. */
 export class RelayRuntime {
   private readonly contexts = new Map<number, unknown>();
-  private readonly subscribers = new Map<object, Map<string, RuntimeSubscription>>();
-  private readonly retirement = new AbortController();
-  private readonly retired = once(this.retirement.signal, "abort").then(() => undefined);
+  private readonly subscribers = new Map<object, Subscription>();
+  // Context selectors still share the native Runtime; callback ownership is by
+  // registered name and does not depend on Runtime.enable subscriptions.
+  private readonly bindings = new Map<object, BindingOwner>();
+  private bindingQueue: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    private readonly active: AbortSignal,
+    private readonly sendBinding: (
+      method: string,
+      params: Record<string, unknown>,
+    ) => Promise<unknown>,
+  ) {}
+
+  binding(
+    owner: object,
+    send: Subscription["send"],
+    method: "Runtime.addBinding" | "Runtime.removeBinding",
+    params: Record<string, unknown> | undefined,
+  ): Promise<unknown> {
+    if (!params || typeof params.name !== "string") {
+      return Promise.reject(new Error("Binding name must be a string"));
+    }
+    const name = params.name;
+    let state = this.bindings.get(owner);
+    if (!state) {
+      state = { send, names: new Set(), retired: false };
+      this.bindings.set(owner, state);
+    }
+    const binding = state;
+    return this.enqueueBinding(async () => {
+      if (binding.retired) {
+        throw new Error("Runtime session detached");
+      }
+      if (method === "Runtime.removeBinding") {
+        return this.removeBinding(binding, name);
+      }
+      const result = await this.sendBinding(method, params);
+      this.active.throwIfAborted();
+      // A successful native add must remain owned until queued detach cleanup,
+      // even when the logical session closes while worker admission awaits.
+      binding.names.add(name);
+      if (binding.retired) {
+        throw new Error("Runtime session detached");
+      }
+      return result;
+    });
+  }
+
+  private enqueueBinding<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.bindingQueue.then(() => {
+      this.active.throwIfAborted();
+      return operation();
+    });
+    this.bindingQueue = result.catch(() => {});
+    return result;
+  }
+
+  private async removeBinding(binding: BindingOwner, name: string): Promise<unknown> {
+    if (!binding.names.has(name)) {
+      return {};
+    }
+    let result: unknown = {};
+    // Native removal affects every logical session on the physical debugger.
+    // Retired peers still own their native registrations until their cleanup runs.
+    if (![...this.bindings.values()].some((peer) => peer !== binding && peer.names.has(name))) {
+      result = await this.sendBinding("Runtime.removeBinding", { name });
+      this.active.throwIfAborted();
+    }
+    binding.names.delete(name);
+    return result;
+  }
+
+  retire(owner: object): void {
+    this.disable(owner);
+    const binding = this.bindings.get(owner);
+    if (binding) {
+      binding.retired = true;
+    }
+  }
+
+  close(owner: object): Promise<void> {
+    const binding = this.bindings.get(owner);
+    if (!binding) {
+      return Promise.resolve();
+    }
+    return this.enqueueBinding(async () => {
+      for (const name of binding.names) {
+        await this.removeBinding(binding, name);
+      }
+      this.bindings.delete(owner);
+    });
+  }
 
   async enable(
-    client: object,
-    sessionId: string,
-    send: (method: string, params: unknown) => void,
+    owner: object,
+    send: Subscription["send"],
     admit: () => Promise<unknown>,
   ): Promise<void> {
-    if (this.retirement.signal.aborted) {
-      throw new Error("Runtime session detached");
-    }
-    let sessions = this.subscribers.get(client);
-    if (!sessions) {
-      sessions = new Map();
-      this.subscribers.set(client, sessions);
-    }
-    let subscription = sessions.get(sessionId);
+    this.active.throwIfAborted();
+    let subscription = this.subscribers.get(owner);
     if (!subscription) {
-      subscription = { send, contexts: new Set() };
-      sessions.set(sessionId, subscription);
+      subscription = { send, pending: 0, delivered: new Set() };
+      this.subscribers.set(owner, subscription);
     }
+    subscription.pending++;
     try {
-      // Repeated native enable is idempotent (V8RuntimeAgentImpl::enable), but
-      // every call still validates current worker policy before cached replay.
-      await Promise.race([admit(), this.retired]);
-    } catch (error) {
-      if (sessions.get(sessionId) === subscription) {
-        this.disable(client, sessionId);
+      // Each enable must pass the worker's current access gate, even when native
+      // Runtime is already enabled and no longer emits its existing contexts.
+      await admit();
+      this.active.throwIfAborted();
+      if (this.subscribers.get(owner) !== subscription) {
+        throw new Error("Runtime session detached or disabled");
       }
-      throw error;
-    }
-    if (
-      this.retirement.signal.aborted ||
-      this.subscribers.get(client)?.get(sessionId) !== subscription
-    ) {
-      throw new Error("Runtime session detached or disabled");
-    }
-    // Native events may arrive during admission. Replay only contexts this
-    // logical subscriber has not seen, before its enable response.
-    for (const [id, params] of this.contexts) {
-      if (!subscription.contexts.has(id)) {
-        subscription.contexts.add(id);
-        subscription.send("Runtime.executionContextCreated", params);
+      if (subscription.delivered) {
+        for (const [id, params] of this.contexts) {
+          if (!subscription.delivered.has(id)) {
+            subscription.send("Runtime.executionContextCreated", params);
+          }
+        }
+        subscription.delivered = undefined;
+      }
+    } finally {
+      subscription.pending--;
+      if (
+        subscription.delivered &&
+        subscription.pending === 0 &&
+        this.subscribers.get(owner) === subscription
+      ) {
+        this.subscribers.delete(owner);
       }
     }
   }
 
-  disable(client: object, sessionId?: string): void {
-    const sessions = this.subscribers.get(client);
-    if (sessionId !== undefined) {
-      sessions?.delete(sessionId);
-    }
-    if (sessionId === undefined || sessions?.size === 0) {
-      this.subscribers.delete(client);
-    }
+  disable(owner: object): void {
+    this.subscribers.delete(owner);
     // Keep the physical subscription until debugger detach: disabling it can
     // lose context destruction events and reset another subscriber's Runtime.
   }
 
   event(method: string, params: unknown): void {
-    if (this.retirement.signal.aborted) {
+    if (this.active.aborted) {
       return;
     }
-    const id =
-      method === "Runtime.executionContextCreated"
-        ? asOptionalRecord(asOptionalRecord(params)?.context)?.id
-        : method === "Runtime.executionContextDestroyed"
-          ? asOptionalRecord(params)?.executionContextId
-          : undefined;
-    if (method === "Runtime.executionContextsCleared") {
-      this.contexts.clear();
-    } else if (typeof id === "number") {
-      if (method === "Runtime.executionContextCreated") {
-        this.contexts.set(id, params);
-      } else {
-        this.contexts.delete(id);
-      }
-    }
-    for (const sessions of this.subscribers.values()) {
-      for (const subscription of sessions.values()) {
-        if (method === "Runtime.executionContextsCleared") {
-          subscription.contexts.clear();
-        } else if (typeof id === "number") {
-          if (method === "Runtime.executionContextCreated") {
-            subscription.contexts.add(id);
-          } else {
-            subscription.contexts.delete(id);
+    if (method === "Runtime.bindingCalled") {
+      const name = asOptionalRecord(params)?.name;
+      if (typeof name === "string") {
+        for (const binding of this.bindings.values()) {
+          if (!binding.retired && binding.names.has(name)) {
+            binding.send(method, params);
           }
         }
-        subscription.send(method, params);
       }
+      return;
+    }
+    const createdId = asOptionalRecord(asOptionalRecord(params)?.context)?.id;
+    const destroyedId = asOptionalRecord(params)?.executionContextId;
+    if (method === "Runtime.executionContextCreated" && typeof createdId === "number") {
+      this.contexts.set(createdId, params);
+    } else if (method === "Runtime.executionContextDestroyed" && typeof destroyedId === "number") {
+      this.contexts.delete(destroyedId);
+    } else if (method === "Runtime.executionContextsCleared") {
+      this.contexts.clear();
+    }
+    for (const subscription of this.subscribers.values()) {
+      // Producer-authorized events stay live while admission awaits. Remember
+      // only current context IDs until initial replay, so that replay cannot duplicate them.
+      if (method === "Runtime.executionContextCreated" && typeof createdId === "number") {
+        subscription.delivered?.add(createdId);
+      } else if (
+        method === "Runtime.executionContextDestroyed" &&
+        typeof destroyedId === "number"
+      ) {
+        subscription.delivered?.delete(destroyedId);
+      } else if (method === "Runtime.executionContextsCleared") {
+        subscription.delivered?.clear();
+      }
+      subscription.send(method, params);
     }
   }
 
   dispose(): void {
-    this.retirement.abort();
     this.contexts.clear();
     this.subscribers.clear();
+    this.bindings.clear();
   }
 }

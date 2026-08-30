@@ -49,6 +49,21 @@ function progressCard(): ProgressCard {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each(["purple", undefined, "default"])(
+    "reflects the session color %s without unset chrome",
+    (color) => {
+      const container = document.createElement("div");
+      render(renderSessionHovercard({ row: row({ color }) }), container);
+      const dot = container.querySelector(".session-color-dot");
+      if (color === "purple") {
+        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
+        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+      } else {
+        expect(dot).toBeNull();
+      }
+    },
+  );
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-17T12:00:00Z"));
@@ -356,6 +371,30 @@ describe("renderSessionHovercard", () => {
     const createLink = container.querySelector<HTMLAnchorElement>(".session-hovercard__no-pr a");
     expect(createLink?.textContent).toBe("Create PR");
     expect(createLink?.href).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
+  });
+
+  it("omits the no-PR placeholder when the branch has no create URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        pullRequests: snapshot({
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "local-only",
+            changedFiles: 2,
+            additions: 18,
+            deletions: 1,
+          },
+        }),
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".session-hovercard__branch-name")?.textContent).toBe(
+      "openclaw/openclaw · local-only",
+    );
+    expect(container.querySelector(".session-hovercard__no-pr")).toBeNull();
   });
 
   it("renders the latest turn as plain text when progress is absent", () => {

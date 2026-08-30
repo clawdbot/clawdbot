@@ -287,8 +287,10 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               if (!text) {
                 return false;
               }
+              const progressId = payload.channelData?.openclawToolProgressId;
               const updatedDraft = await pushToolProgress(turn, text, {
                 startImmediately: true,
+                id: typeof progressId === "string" ? progressId : undefined,
               });
               if (updatedDraft) {
                 return true;

@@ -50,38 +50,22 @@ import {
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import {
+  copyAttemptDeliveryState,
+  createTerminalToolPresentationTracker,
+} from "./terminal-resolution-state.js";
+import {
   MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
   type EmbeddedRunTerminalRetryState,
 } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
+
+export { copyAttemptDeliveryState, createTerminalToolPresentationTracker };
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
-
-type TerminalPresentationObservation = {
-  terminalPresentation?: string;
-  toolCallOrdinal?: number;
-};
-
-export function createTerminalToolPresentationTracker() {
-  let latestOrdinal = -1;
-  let nextOrdinal = 0;
-  let value: string | undefined;
-  return {
-    allocateOrdinal: () => nextOrdinal++,
-    observe: (observation: TerminalPresentationObservation): void => {
-      const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
-      if (ordinal >= latestOrdinal) {
-        latestOrdinal = ordinal;
-        value = observation.terminalPresentation;
-      }
-    },
-    read: () => value,
-  };
-}
 
 type TerminalResolution =
   | { action: "retry" }
@@ -196,6 +180,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   replayState: EmbeddedRunReplayState;
   activePromptPersisted: boolean;
   activateInternalPrompt: (prompt: string) => void;
+  markOwnedTranscriptRetry: () => void;
   setSuppressNextUserMessagePersistence: (value: boolean) => void;
   armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
@@ -241,6 +226,15 @@ export async function resolveEmbeddedRunTerminal(input: {
     timedOut: terminalTimedOut,
     attempt,
   });
+  if (attempt.beforeAgentFinalizeDiscarded === true) {
+    return completeEmbeddedRun({
+      ...input,
+      payloadCount: 0,
+      payloadsForTerminalPath: undefined,
+      emptyAssistantReplyIsSilent: false,
+      intentionalTerminalCompletion: true,
+    });
+  }
   const payloadsForTerminalPath = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
     ? input.recoveredFinalAssistantPayloadsAfterPromptTimeout
     : input.payloadsWithToolMedia?.length
@@ -449,14 +443,20 @@ export async function resolveEmbeddedRunTerminal(input: {
     !settledTurnFinalizationAttempted &&
     !terminalInterrupted &&
     !promptError &&
-    !attempt.clientToolCalls &&
+    (!attempt.clientToolCalls || attempt.beforeAgentFinalizeRevisionDisableTools === true) &&
     !attempt.yieldDetected &&
     !emptyAssistantReplyIsSilent
   ) {
     retryState.beforeFinalizeRevisionAttempts += 1;
+    if (attempt.beforeAgentFinalizeRevisionDisableTools === true) {
+      retryState.disableToolsForBeforeFinalizeRevision = true;
+    }
     input.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
     );
+    // Rewinding the rejected candidate dirties the active transcript projection.
+    // Let the existing owned-retry barrier settle it before the next durable reopen.
+    input.markOwnedTranscriptRetry();
     retryState.compactionContinuationInstruction = null;
     log.warn(
       `before_agent_finalize requested one more pass: ` +
@@ -486,6 +486,7 @@ async function completeEmbeddedRun(
     terminalToolPresentation?: string;
   },
 ): Promise<TerminalResolution> {
+  const beforeAgentFinalizeDiscarded = input.attempt.beforeAgentFinalizeDiscarded === true;
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   // Warning suppression is presentation only: an unrecovered terminal failure
@@ -518,13 +519,14 @@ async function completeEmbeddedRun(
           attempt: input.attempt,
           incompleteTurnText,
         });
-  const stopReason = error
-    ? undefined
-    : input.attempt.clientToolCalls
-      ? "tool_calls"
-      : input.attempt.yieldDetected
-        ? "end_turn"
-        : (input.attemptAssistant?.stopReason as string | undefined);
+  const stopReason =
+    error || beforeAgentFinalizeDiscarded
+      ? undefined
+      : input.attempt.clientToolCalls
+        ? "tool_calls"
+        : input.attempt.yieldDetected
+          ? "end_turn"
+          : (input.attemptAssistant?.stopReason as string | undefined);
   if (error) {
     input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
     if (input.authProfileId) {
@@ -630,8 +632,12 @@ async function completeEmbeddedRun(
         aborted: terminalAborted,
         systemPromptReport: input.attempt.systemPromptReport,
         finalPromptText: input.attempt.finalPromptText,
-        finalAssistantVisibleText: input.finalAssistantVisibleText,
-        finalAssistantRawText: input.finalAssistantRawText,
+        finalAssistantVisibleText: beforeAgentFinalizeDiscarded
+          ? undefined
+          : input.finalAssistantVisibleText,
+        finalAssistantRawText: beforeAgentFinalizeDiscarded
+          ? undefined
+          : input.finalAssistantRawText,
         replayInvalid,
         livenessState,
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
@@ -646,14 +652,20 @@ async function completeEmbeddedRun(
                 ? { terminalReplyKind: "silent-empty" as const }
                 : {}),
               ...(input.intentionalTerminalCompletion
-                ? { intentionalTerminalCompletion: "tool-batch" as const }
+                ? {
+                    intentionalTerminalCompletion: beforeAgentFinalizeDiscarded
+                      ? ("source-finalization-discard" as const)
+                      : ("tool-batch" as const),
+                  }
                 : {}),
               stopReason,
-              pendingToolCalls: input.attempt.clientToolCalls?.map((call) => ({
-                id: randomBytes(5).toString("hex").slice(0, 9),
-                name: call.name,
-                arguments: JSON.stringify(call.params),
-              })),
+              pendingToolCalls: beforeAgentFinalizeDiscarded
+                ? undefined
+                : input.attempt.clientToolCalls?.map((call) => ({
+                    id: randomBytes(5).toString("hex").slice(0, 9),
+                    name: call.name,
+                    arguments: JSON.stringify(call.params),
+                  })),
               executionTrace: {
                 winnerProvider: input.reportedModelRef.provider,
                 winnerModel: input.reportedModelRef.model,
@@ -701,22 +713,5 @@ async function completeEmbeddedRun(
       },
       ...copyAttemptDeliveryState(input.attempt),
     },
-  };
-}
-
-export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
-  return {
-    latestMcpAppChannelView: attempt.latestMcpAppChannelView,
-    latestMcpConnectAction: attempt.latestMcpConnectAction,
-    didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-    didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
-    didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-    messagingToolSentTexts: attempt.messagingToolSentTexts,
-    messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-    messagingToolSentTargets: attempt.messagingToolSentTargets,
-    messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-    heartbeatToolResponse: attempt.heartbeatToolResponse,
-    successfulCronAdds: attempt.successfulCronAdds,
-    acceptedSessionSpawns: attempt.acceptedSessionSpawns,
   };
 }

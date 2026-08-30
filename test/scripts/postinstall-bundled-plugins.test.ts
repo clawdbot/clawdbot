@@ -13,10 +13,10 @@ import {
   MAX_INSTALLED_DIST_SCAN_ENTRIES,
   pruneInstalledPackageDist,
   pruneLegacyPluginRuntimeDepsState,
-  pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
@@ -26,30 +26,6 @@ async function expectPathExists(filePath: string) {
 
 async function expectPathMissing(filePath: string) {
   await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
-}
-
-async function writePluginPackage(
-  extensionsDir: string,
-  pluginId: string,
-  packageJson: Record<string, unknown>,
-) {
-  const pluginDir = path.join(extensionsDir, pluginId);
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    `${JSON.stringify(packageJson, null, 2)}\n`,
-  );
-  const packageRoot =
-    path.basename(path.dirname(extensionsDir)) === "dist"
-      ? path.dirname(path.dirname(extensionsDir))
-      : path.dirname(extensionsDir);
-  try {
-    await writePackageDistInventory(packageRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
 }
 
 describe("bundled plugin postinstall", () => {
@@ -148,55 +124,40 @@ describe("bundled plugin postinstall", () => {
     ).toBe(false);
   });
 
-  it("prunes source-checkout bundled plugin node_modules", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-source-checkout-");
-    const extensionsDir = path.join(packageRoot, "extensions");
-    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
-    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
-    await fs.mkdir(extensionsDir, { recursive: true });
-    await writePluginPackage(extensionsDir, "acpx", {
-      dependencies: {
-        acpx: "0.5.2",
-      },
-    });
-    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules", "acpx"), { recursive: true });
-    await fs.writeFile(
-      path.join(extensionsDir, "acpx", "node_modules", "acpx", "package.json"),
-      JSON.stringify({ name: "acpx", version: "0.4.1" }),
-    );
-    runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home" },
-      packageRoot,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    await expectPathMissing(path.join(extensionsDir, "acpx", "node_modules"));
-  });
-
-  it("keeps source-checkout prune non-fatal", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-source-checkout-prune-error-");
-    const extensionsDir = path.join(packageRoot, "extensions");
-    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
-    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
-    await fs.mkdir(path.join(extensionsDir, "acpx"), { recursive: true });
-    await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
-    const warn = vi.fn();
-
-    expect(
-      runBundledPluginPostinstall({
-        env: { HOME: "/tmp/home" },
-        packageRoot,
-        rmSync: vi.fn(() => {
-          throw new Error("locked");
-        }),
-        log: { log: vi.fn(), warn },
-      }),
-    ).toBeUndefined();
-
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] could not prune bundled plugin source node_modules: Error: locked",
-    );
-  });
+  it.each(["git checkout", "workspace snapshot"])(
+    "preserves importer dependency resolution during %s postinstall",
+    async (sourceKind) => {
+      const packageRoot = await createTempDirAsync("openclaw-source-resolution-");
+      const fixture = await createSourcePluginDependenciesFixture(packageRoot);
+      const scriptPath = path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs");
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url)),
+        scriptPath,
+      );
+      if (sourceKind === "git checkout") {
+        await fs.writeFile(path.join(packageRoot, ".git"), "gitdir: /fixture/worktree\n");
+        await fs.mkdir(path.join(packageRoot, "dist"));
+        await fs.writeFile(path.join(packageRoot, "dist", "postinstall-inventory.json"), "[]\n");
+      }
+      fixture.assertResolution();
+      const result = spawnSync(process.execPath, [scriptPath], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: path.join(packageRoot, "home"),
+          OPENCLAW_HOME: path.join(packageRoot, "home"),
+          OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
+          OPENCLAW_CONFIG_PATH: undefined,
+          STATE_DIRECTORY: undefined,
+          OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      fixture.assertResolution();
+    },
+  );
 
   it("does not prune user-state legacy runtime deps during source-checkout postinstall", async () => {
     const packageRoot = await createTempDirAsync("openclaw-source-checkout-state-skip-");
@@ -217,21 +178,19 @@ describe("bundled plugin postinstall", () => {
     await expectPathExists(legacyRuntimeRoot);
   });
 
-  it("honors disable env before source-checkout pruning", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-source-checkout-disabled-");
-    const extensionsDir = path.join(packageRoot, "extensions");
-    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
-    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
-    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules"), { recursive: true });
-    await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
+  it("honors the disable env before packaged cleanup", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-disabled-");
+    const staleFile = path.join(packageRoot, "dist", "stale.js");
+    await fs.mkdir(path.dirname(staleFile), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, "dist", "postinstall-inventory.json"), "[]\n");
+    await fs.writeFile(staleFile, "export {};\n");
 
     runBundledPluginPostinstall({
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
       packageRoot,
-      log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expectPathExists(path.join(extensionsDir, "acpx", "node_modules"));
+    await expectPathExists(staleFile);
   });
 
   it("migrates the plugin registry during postinstall from built dist contracts", async () => {
@@ -940,40 +899,5 @@ describe("bundled plugin postinstall", () => {
     ).toEqual(["dist/stale.js"]);
 
     expect(unlinkSync).toHaveBeenCalledWith("/pkg/dist/stale.js");
-  });
-
-  it("prunes only bundled plugin package node_modules in source checkouts", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-source-prune-");
-    const extensionsDir = path.join(packageRoot, "extensions");
-    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules"), { recursive: true });
-    await fs.mkdir(path.join(extensionsDir, "fixtures", "node_modules"), { recursive: true });
-    await fs.writeFile(
-      path.join(extensionsDir, "acpx", "package.json"),
-      JSON.stringify({ name: "@openclaw/acpx" }),
-    );
-
-    pruneBundledPluginSourceNodeModules({ extensionsDir });
-
-    await expectPathMissing(path.join(extensionsDir, "acpx", "node_modules"));
-    await expectPathExists(path.join(extensionsDir, "fixtures", "node_modules"));
-  });
-
-  it("skips symlink entries when pruning source-checkout bundled plugin node_modules", () => {
-    const removePath = vi.fn();
-
-    pruneBundledPluginSourceNodeModules({
-      extensionsDir: "/repo/extensions",
-      existsSync: vi.fn((value) => value === "/repo/extensions"),
-      readdirSync: vi.fn(() => [
-        {
-          name: "acpx",
-          isDirectory: () => true,
-          isSymbolicLink: () => true,
-        },
-      ]),
-      rmSync: removePath,
-    });
-
-    expect(removePath).not.toHaveBeenCalled();
   });
 });

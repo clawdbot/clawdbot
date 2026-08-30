@@ -1,10 +1,20 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { promisify } from "node:util";
 
 const ruleSetting = "hooks.blockedLiteralsFile";
-const decoder = new TextDecoder("utf-8", { fatal: true });
+// A leading BOM is a filename character in Git output, not an encoding marker.
+const pathDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const maxBuffer = 16 * 1024 * 1024;
+// Enumerated paths stay literal in both scans and restaging; retain the commit's index/context.
+const gitEnv = {
+  ...process.env,
+  GIT_LITERAL_PATHSPECS: "1",
+  GIT_GLOB_PATHSPECS: "0",
+  GIT_NOGLOB_PATHSPECS: "0",
+  GIT_ICASE_PATHSPECS: "0",
+};
 let rules = [];
 
 function redact(text) {
@@ -27,9 +37,15 @@ function redact(text) {
   return redacted + text.slice(cursor);
 }
 
+class GuardFailure extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+  }
+}
+
 function fail(message, code = 1) {
-  process.stderr.write(redact(`[pre-commit] ${message}\n[pre-commit] FAILED (exit ${code})\n`));
-  process.exit(code);
+  throw new GuardFailure(message, code);
 }
 
 function nulPaths(bytes) {
@@ -39,11 +55,12 @@ function nulPaths(bytes) {
   if (bytes.at(-1) !== 0) {
     throw new Error("Invalid path list");
   }
-  return decoder.decode(bytes.subarray(0, -1)).split("\0");
+  return pathDecoder.decode(bytes.subarray(0, -1)).split("\0");
 }
 
 function git(args, input) {
-  const result = spawnSync("git", ["--no-pager", "--literal-pathspecs", ...args], {
+  const result = spawnSync("git", ["--no-pager", ...args], {
+    env: gitEnv,
     input,
     maxBuffer,
     stdio: ["pipe", "pipe", "pipe"],
@@ -132,8 +149,8 @@ try {
   }
   if (configured.status === 0) {
     try {
-      const rulePath = decoder.decode(configured.stdout).replace(/\n$/, "");
-      rules = decoder
+      const rulePath = pathDecoder.decode(configured.stdout).replace(/\n$/, "");
+      rules = new TextDecoder("utf-8", { fatal: true })
         .decode(readFileSync(rulePath))
         .split(/\r?\n/)
         .filter((line) => line.length > 0);
@@ -152,21 +169,35 @@ try {
   // Check before the formatter's sequencer early return or any working-tree restaging.
   scan();
   const formatted = spawnSync("bash", ["scripts/pre-commit/format-staged.sh"], {
+    env: gitEnv,
     maxBuffer,
     stdio: ["inherit", "pipe", "pipe"],
   });
-  process.stdout.write(redact(formatted.stdout?.toString("utf8") ?? ""));
-  process.stderr.write(redact(formatted.stderr?.toString("utf8") ?? ""));
+  // An incomplete capture can cut through a literal, making safe redaction impossible.
   if (formatted.error || formatted.signal || formatted.status === null) {
     fail("Formatter could not complete. Check the formatting helpers and retry.");
   }
+  // Git merges hook stdout/stderr: finish stdout before the terminal stderr diagnostics.
+  await promisify(process.stdout.write.bind(process.stdout))(
+    redact(formatted.stdout.toString("utf8")),
+  );
+  process.stderr.write(redact(formatted.stderr.toString("utf8")));
   if (formatted.status !== 0) {
     fail("Formatter failed. Fix the reported error and retry.", formatted.status);
   }
   // Formatting may change bytes or stage entirely new paths; enumerate the index again.
   scan();
-} catch {
-  fail(
-    `The staged scan could not complete. Check ${ruleSetting} and repository state, then retry.`,
+} catch (error) {
+  const failure =
+    error instanceof GuardFailure
+      ? error
+      : new GuardFailure(
+          `The staged scan could not complete. Check ${ruleSetting} and repository state, then retry.`,
+          1,
+        );
+  process.stderr.write(
+    redact(`[pre-commit] ${failure.message}\n[pre-commit] FAILED (exit ${failure.code})\n`),
   );
+  // Abort the main flow, then let queued pipe writes drain before terminating.
+  process.exitCode = failure.code;
 }

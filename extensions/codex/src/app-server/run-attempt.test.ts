@@ -1799,8 +1799,8 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "start",
-        hideFromChannelProgress: true,
         name: "python",
+        itemId: "call-1",
         toolCallId: "call-1",
         args: { code: "print('hi')" },
       },
@@ -1809,8 +1809,8 @@ describe("runCodexAppServerAttempt", () => {
       stream: "tool",
       data: {
         phase: "result",
-        hideFromChannelProgress: true,
         name: "python",
+        itemId: "call-1",
         toolCallId: "call-1",
         isError: true,
         result: {
@@ -6486,7 +6486,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("retains the prepared execution model across native resume without exposing it in lifecycle events", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const runtimeModelId = "umbreon-latest";
+    const runtimeModelId = "test-runtime-model";
     const freshHarness = createStartedThreadHarness(async (method) =>
       method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
     );

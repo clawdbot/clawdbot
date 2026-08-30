@@ -82,7 +82,7 @@ const HOST_BUILDERS = [
     "extensions/line/src/bot-message-context.ts",
     "params.buildContext ?? buildChannelInboundEventContext",
   ],
-  ["extensions/matrix/src/matrix/monitor/handler-context.ts", "core.channel.inbound.buildContext"],
+  ["extensions/matrix/src/matrix/monitor/handler-context.ts", "buildInboundContext({"],
   [
     "extensions/msteams/src/monitor-handler/inbound-dispatch.ts",
     "core.channel.inbound.buildContext",
@@ -167,6 +167,11 @@ const SCOPED_BUILDER_HANDOFFS = [
   ],
   ["line", "extensions/line/src/bot.ts", "buildContext: opts.buildContext"],
   ["line", "extensions/line/src/bot-handlers.ts", "buildContext: context.buildContext"],
+  [
+    "matrix",
+    "extensions/matrix/src/matrix/monitor/index.ts",
+    "channelInbound: resolveMatrixHostInboundRuntime({",
+  ],
   ["nostr", "extensions/nostr/src/gateway.ts", "channelRuntime,"],
   [
     "qa-channel",

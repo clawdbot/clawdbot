@@ -79,7 +79,10 @@ export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult)
 }
 
 export function hasIntentionalTerminalCompletion(result: EmbeddedAgentRunResult): boolean {
-  return result.meta.intentionalTerminalCompletion === "tool-batch";
+  return (
+    result.meta.intentionalTerminalCompletion === "tool-batch" ||
+    result.meta.intentionalTerminalCompletion === "source-finalization-discard"
+  );
 }
 
 function hasDeliverableAssistantPayload(result: {

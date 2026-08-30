@@ -1,5 +1,5 @@
 // Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -11,6 +11,8 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -19,6 +21,9 @@ import {
   resolveFollowupDeliveryContextKey,
 } from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
+import { createReplyOperation } from "./reply-run-registry.js";
+import { createMockTypingController } from "./test-helpers.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 const queueKeys = new Set<string>();
 const evidenceCleanups = new Set<() => void>();
@@ -87,6 +92,88 @@ afterEach(() => {
 });
 
 describe("followup prompt metadata carrier", () => {
+  it("drains the complete parked image turn after active steering rejects it", async () => {
+    const key = "agent:main:parked-media-fallback";
+    queueKeys.add(key);
+    const run = createQueueTestRun({
+      prompt: "  preserve this caption\n",
+      messageId: "media-fallback",
+    });
+    run.images = [{ type: "image", data: "inline-png", mimeType: "image/png" }];
+    run.imageOrder = ["offloaded", "inline"];
+    run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: run.prompt, media: run.media },
+      target: () => undefined,
+    });
+    run.userTurnTranscriptRecorder = recorder;
+    const persist = vi.spyOn(recorder, "persistApproved");
+    const operation = createReplyOperation({
+      sessionKey: key,
+      sessionId: run.run.sessionId,
+      resetTriggered: false,
+    });
+    operation.bindToolAuthorityFingerprint("media-authority");
+    const reject = vi.fn(async () => {
+      throw new Error("no active turn to steer");
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      supportsQueueMessageImages: true,
+      toolAuthorityFingerprint: "media-authority",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: reject },
+    });
+    operation.setPhase("running");
+    const delivered = createDeferred<FollowupRun>();
+    const runFollowup = vi.fn(async (queued: FollowupRun) => {
+      delivered.resolve(queued);
+    });
+    const typing = createMockTypingController();
+    try {
+      await expect(
+        runActiveReplySteer({
+          followupRun: run,
+          opts: undefined,
+          providedReplyOperation: operation,
+          queueKey: key,
+          releaseAdmissionTicket: vi.fn(),
+          replyOperationRunState: undefined,
+          resolvedQueue: { mode: "steer", debounceMs: 0 },
+          restartRecoverySourceTurnId: "media-fallback",
+          runFollowup,
+          sessionCtx: {},
+          sessionKey: key,
+          touchActiveSessionEntry: async () => {},
+          typing,
+          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          toolAuthorityFingerprint: "media-authority",
+        }),
+      ).resolves.toBe("handled");
+      expect(reject).toHaveBeenCalledOnce();
+      expect(persist).not.toHaveBeenCalled();
+      operation.complete();
+      await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledOnce());
+      const fallback = await delivered.promise;
+      expect({
+        text: fallback.prompt,
+        images: fallback.images,
+        imageOrder: fallback.imageOrder,
+        media: fallback.media,
+      }).toEqual({
+        text: "  preserve this caption\n",
+        images: [{ type: "image", data: "inline-png", mimeType: "image/png" }],
+        imageOrder: ["offloaded", "inline"],
+        media: [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }],
+      });
+      expect(fallback.userTurnTranscriptRecorder).toBe(recorder);
+      expect(recorder.hasPersisted()).toBe(false);
+    } finally {
+      operation.complete();
+      persist.mockRestore();
+    }
+  });
+
   it("keeps participant evidence out of sender-scoped collect routing", () => {
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     evidenceCleanups.add(clearCollection);
@@ -295,6 +382,11 @@ describe("followup prompt metadata carrier", () => {
       channelId: "test",
       participantId: "person-1",
     });
+    source.queuedSourceReplyDelivery = {
+      deliver: async () => "delivered",
+      presentationOptions: {},
+    } as never;
+    source.onBeforeAgentFinalize = async () => ({ action: "continue" });
 
     const retry = createOverflowSummaryRetrySource(source);
 
@@ -304,6 +396,8 @@ describe("followup prompt metadata carrier", () => {
     expect(retry.media).toEqual(source.media);
     expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
     expect(retry.channelAdmissionEvidence).toBe(source.channelAdmissionEvidence);
+    expect(retry.queuedSourceReplyDelivery).toBe(source.queuedSourceReplyDelivery);
+    expect(retry.onBeforeAgentFinalize).toBe(source.onBeforeAgentFinalize);
     expectCombinedCarrierFacts(retry);
   });
 });

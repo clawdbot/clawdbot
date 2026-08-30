@@ -9,6 +9,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as workerUrls from "../infra/runtime-worker-url.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { CodeModeOutputState, EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
@@ -23,11 +24,11 @@ import {
 import { runCodeModeWorker } from "./code-mode-worker.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import { createCodeModeHarness, resultDetails } from "./code-mode.test-support.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
   clearToolSearchCatalog,
   registerHeadlessToolSearchCatalog,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 
 function parkExpiringRun(method: "callValue" | "agentWait") {
@@ -62,7 +63,7 @@ function parkExpiringRun(method: "callValue" | "agentWait") {
     runtime,
     catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
-    output: [],
+    output: new CodeModeOutputState(config.maxOutputBytes),
     bridgeDispatch: createCodeModeBridgeDispatchState(),
   });
   return { cancel, runId: owner.runId };
@@ -231,7 +232,7 @@ describe("Code Mode worker lifecycle", () => {
         const result = await runCodeModeWorker(input, 5_000, pathToFileURL(workerPath));
         expect(result, JSON.stringify(result)).toMatchObject(
           clockDirection > 0
-            ? { status: "completed", value: 4_999_950_000 }
+            ? { status: "completed", value: { kind: "complete", json: "4999950000" } }
             : { status: "failed", code: "timeout", failurePhase: "guest" },
         );
       } finally {
@@ -270,7 +271,7 @@ describe("Code Mode worker lifecycle", () => {
       status: "failed",
       code: "aborted",
       error: "code mode execution aborted",
-      output: [],
+      output: EMPTY_CODE_MODE_OUTPUT,
     });
   });
 
@@ -281,8 +282,8 @@ describe("Code Mode worker lifecycle", () => {
         import { parentPort, workerData } from "node:worker_threads";
         parentPort.postMessage({
           status: "completed",
-          value: workerData.wasmModule instanceof WebAssembly.Module,
-          output: [],
+          value: { kind: "complete", json: JSON.stringify(workerData.wasmModule instanceof WebAssembly.Module) },
+          output: { count: 0, source: { kind: "complete", json: "[]" } },
         });
       `)}`,
     );
@@ -305,8 +306,8 @@ describe("Code Mode worker lifecycle", () => {
     expect(results).toEqual(
       Array.from({ length: 4 }, () => ({
         status: "completed",
-        value: true,
-        output: [],
+        value: { kind: "complete", json: "true" },
+        output: EMPTY_CODE_MODE_OUTPUT,
       })),
     );
   });
@@ -351,16 +352,28 @@ describe("Code Mode worker lifecycle", () => {
       );
 
       expect(result.status).toBe(status);
-      expect(JSON.stringify(result)).toContain("rerun with narrower args");
+
       if (result.status === "failed") {
         expect(result.code).toBe("internal_error");
         expect(result.error).toContain("boom");
       }
-      const outputBytes =
-        result.output.length > 0 ? Buffer.byteLength(JSON.stringify(result.output), "utf8") : 0;
-      const valueBytes =
-        result.status === "completed" ? Buffer.byteLength(JSON.stringify(result.value), "utf8") : 0;
-      expect(outputBytes + valueBytes).toBeLessThanOrEqual(1_024);
+      const outputBytes = Buffer.byteLength(result.output.source.json);
+      const valueBytes = result.status === "completed" ? Buffer.byteLength(result.value.json) : 0;
+      const errorBytes =
+        result.status === "failed" ? Buffer.byteLength(JSON.stringify(result.error)) : 0;
+      expect(outputBytes).toBeLessThanOrEqual(1_024);
+      expect(valueBytes).toBeLessThanOrEqual(1_024);
+      expect(outputBytes + valueBytes + errorBytes).toBeLessThanOrEqual(2 * 1_024);
+      const state = new CodeModeOutputState(1_024);
+      state.append(result.output);
+      const projected = state.take(
+        result.status === "completed"
+          ? { value: result.value }
+          : result.status === "failed"
+            ? { error: result.error }
+            : {},
+      );
+      expect(JSON.stringify(projected)).toContain("rerun with narrower args");
     },
   );
 

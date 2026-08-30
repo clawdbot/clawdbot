@@ -10,7 +10,7 @@ import {
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
-import { deliverFollowupDecision } from "./followup-delivery.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const channelState = vi.hoisted(() => ({
@@ -139,6 +139,30 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it("renders post-compaction model failures after queued payload selection", () => {
+    const decision = resolveFollowupDeliveryDecision({
+      turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
+      execution: {
+        runId: "run-1",
+        outcome: {
+          kind: "rejected",
+          payload: { text: "⚠️ Provider billing failed.", isError: true },
+          postCompactionModelFailure: true,
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: "⚠️ Context compaction succeeded, but the later model request still failed. Provider billing failed.",
+          isError: true,
+        },
+      ],
+    });
+  });
+
   it.each([
     { mode: "first", duplicate: "media" },
     { mode: "batched", duplicate: "media" },
@@ -208,6 +232,31 @@ describe("follow-up delivery channel boundary", () => {
         ],
       }),
     ).toEqual([{ text: "first answer", replyToId: "111.000" }]);
+  });
+
+  it("prefers the queued turn's retained source dispatcher over generic routing or a later callback", async () => {
+    const turn = createTurn({ messageProvider: "matrix", originatingChannel: "matrix" });
+    const retainedDeliver = vi.fn(async () => "delivered" as const);
+    turn.queued.queuedSourceReplyDelivery = {
+      deliver: retainedDeliver,
+      presentationOptions: {},
+    };
+    const latestOnBlockReply = vi.fn(async () => {});
+
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [{ text: "queued matrix final" }] },
+      turn,
+      defaults: createDefaults(latestOnBlockReply),
+      runId: "queued-run",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(retainedDeliver).toHaveBeenCalledWith(
+      { text: "queued matrix final" },
+      { kind: "final", runId: "queued-run" },
+    );
+    expect(channelState.deliver).not.toHaveBeenCalled();
+    expect(latestOnBlockReply).not.toHaveBeenCalled();
   });
 
   it("emits one safe cross-channel error when a terminal payload fails after status delivery", async () => {

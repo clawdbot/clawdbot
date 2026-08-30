@@ -726,4 +726,92 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config[scopeKey]).toBeUndefined();
   });
+
+  it.each(["groups", "rooms"] as const)(
+    "does not project a channel-wide %s turn-taking opt-out into the account room allowlist",
+    (scopeKey) => {
+      const roomId = "!turn-taking-opt-out:example.org";
+      const cfg = {
+        channels: {
+          matrix: {
+            [scopeKey]: {
+              [roomId]: { turnTaking: false },
+            },
+            accounts: {
+              ops: createMatrixAccountConfig("ops-token"),
+            },
+          },
+        },
+      } as unknown as CoreConfig;
+
+      expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config[scopeKey]).toBeUndefined();
+      expect(cfg.channels?.matrix?.[scopeKey]?.[roomId]).toEqual({ turnTaking: false });
+    },
+  );
+
+  it.each(["groups", "rooms"] as const)(
+    "strips channel-wide turn-taking from mixed inherited %s entries while preserving ordinary room policy",
+    (scopeKey) => {
+      const roomId = "!mixed-room-policy:example.org";
+      const cfg = {
+        channels: {
+          matrix: {
+            [scopeKey]: {
+              [roomId]: {
+                turnTaking: false,
+                enabled: true,
+                requireMention: false,
+              },
+            },
+            accounts: {
+              ops: createMatrixAccountConfig("ops-token"),
+            },
+          },
+        },
+      } as unknown as CoreConfig;
+
+      expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config[scopeKey]).toEqual({
+        [roomId]: {
+          enabled: true,
+          requireMention: false,
+        },
+      });
+      expect(cfg.channels?.matrix?.[scopeKey]?.[roomId]).toEqual({
+        turnTaking: false,
+        enabled: true,
+        requireMention: false,
+      });
+    },
+  );
+
+  it.each(["groups", "rooms"] as const)(
+    "drops a pure account-selected channel-wide %s opt-out for every ordinary account projection",
+    (scopeKey) => {
+      const optOutRoomId = "!scoped-turn-taking-opt-out:example.org";
+      const ordinaryRoomId = "!ordinary-room:example.org";
+      const cfg = {
+        channels: {
+          matrix: {
+            [scopeKey]: {
+              [optOutRoomId]: { turnTaking: false, account: "ops" },
+              [ordinaryRoomId]: { enabled: true, account: "ops" },
+            },
+            accounts: {
+              ops: createMatrixAccountConfig("ops-token"),
+              beta: createMatrixAccountConfig("beta-token"),
+            },
+          },
+        },
+      } as unknown as CoreConfig;
+
+      expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config[scopeKey]).toEqual({
+        [ordinaryRoomId]: { enabled: true, account: "ops" },
+      });
+      expect(resolveMatrixAccount({ cfg, accountId: "beta" }).config[scopeKey]).toBeUndefined();
+      expect(cfg.channels?.matrix?.[scopeKey]?.[optOutRoomId]).toEqual({
+        turnTaking: false,
+        account: "ops",
+      });
+    },
+  );
 });

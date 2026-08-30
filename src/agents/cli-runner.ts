@@ -35,20 +35,17 @@ import {
   type CliRecoveryOptions,
 } from "./cli-runner/cli-run-recovery.js";
 import {
-  assertCliRuntimeBinding,
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
   cliRunSettlementDeps,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
-  resolveCliSourceReplyMirror,
   settleCliBackendOutcome,
   settleCliPreparationError,
   settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import {
-  buildCliHookAssistantMessage,
   buildCliHookUserMessage,
   finalizeCliContextEngineTurn,
   persistApprovedCliUserTurnTranscript,
@@ -61,7 +58,10 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { createCliFailoverError } from "./cli-runner/exit-error.js";
+import {
+  executeCliAttemptForContext as executePreparedCliAttemptForContext,
+  resolveAcceptedCliFinalCandidate,
+} from "./cli-runner/final-candidate.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import {
   runClaudeCliAgentTurnWithDiagnostics,
@@ -347,132 +347,38 @@ export async function runPreparedCliAgent(
 
   let deliveredMessagingSideEffect = false;
   let userTurnHandled = false;
-  const executeCliAttempt = async (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => {
-    const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
-    const forkCliSessionOnResume =
-      options?.forkCliSessionOnResume ?? context.params.forkCliSessionOnResume;
-    const cliSessionResumeAt =
-      cliSessionIdToUse && forkCliSessionOnResume
-        ? (options?.resumeAt ??
-          context.params.cliSessionResumeAt ??
-          context.params.cliSessionBinding?.resumeCheckpointId)
-        : undefined;
-    const persistCliSessionForkSuccessor =
-      options?.onForkSuccessorPersisted && context.params.persistCliSessionForkSuccessor
-        ? async (sessionId: string) => {
-            await context.params.persistCliSessionForkSuccessor?.(sessionId);
-            options.onForkSuccessorPersisted?.(sessionId);
-          }
-        : context.params.persistCliSessionForkSuccessor;
-    const attemptContext =
-      timeoutMs === params.timeoutMs &&
-      forkCliSessionOnResume === context.params.forkCliSessionOnResume &&
-      cliSessionResumeAt === context.params.cliSessionResumeAt &&
-      persistCliSessionForkSuccessor === context.params.persistCliSessionForkSuccessor
-        ? context
-        : {
-            ...context,
-            params: {
-              ...context.params,
-              timeoutMs,
-              forkCliSessionOnResume,
-              cliSessionResumeAt,
-              persistCliSessionForkSuccessor,
-            },
-          };
-    diagnosticLifecycle?.setPhase("send");
-    const output = await executePreparedCliRun(
-      attemptContext,
+  const executeCliAttemptForContext = async (
+    attemptContext: PreparedCliRunContext,
+    cliSessionIdToUse?: string,
+    options?: CliRecoveryOptions,
+  ) => {
+    const acceptsStrictIsolatedEmpty =
+      attemptContext.params.isolatedCompletion === true &&
+      attemptContext.params.outputTextPolicy === "strict-visible" &&
+      attemptContext.params.allowEmptyAssistantReplyAsSilent !== true;
+    // Strict isolated completion owns valid-empty output after reasoning is
+    // removed. Preserve that policy without changing the prepared backend input.
+    const candidateContext = acceptsStrictIsolatedEmpty
+      ? {
+          ...attemptContext,
+          params: { ...attemptContext.params, allowEmptyAssistantReplyAsSilent: true },
+        }
+      : attemptContext;
+    const executeCandidateAttempt: typeof executePreparedCliRun = acceptsStrictIsolatedEmpty
+      ? async (_candidateContext, sessionId, executionOptions) =>
+          await executePreparedCliRun(attemptContext, sessionId, executionOptions)
+      : executePreparedCliRun;
+    return await executePreparedCliAttemptForContext({
+      attemptContext: candidateContext,
       cliSessionIdToUse,
-      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
-    );
-    // Test facades and non-instrumented executors may not signal the boundary.
-    diagnosticLifecycle?.setPhase("resolve");
-    const sourceReplyMirror = resolveCliSourceReplyMirror({
-      evidence: output,
-      runParams: params,
-      modelId: context.modelId,
+      options,
+      diagnosticLifecycle,
+      executePreparedCliRun: executeCandidateAttempt,
+      cliFailoverContext,
     });
-    const assistantText = sourceReplyMirror.delivered
-      ? (sourceReplyMirror.visibleText ?? "")
-      : output.text.trim();
-    if (
-      !assistantText &&
-      !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true &&
-      // Strict isolated completion owns valid-empty output after reasoning is removed.
-      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
-    ) {
-      const process = output.diagnostics?.process;
-      if (process) {
-        const diagnostics = [
-          `backend=${process.backendId}`,
-          `reason=${process.processReason}`,
-          `exitCode=${process.exitCode ?? "null"}`,
-          `exitSignal=${process.exitSignal ?? "null"}`,
-          `durationMs=${process.durationMs}`,
-          `stdoutBytes=${process.stdoutBytes}`,
-          `stdoutHash=${process.stdoutHash}`,
-          `stderrBytes=${process.stderrBytes}`,
-          `stderrHash=${process.stderrHash}`,
-          `useResume=${process.useResume ? "true" : "false"}`,
-        ].join(" ");
-        cliBackendLog.warn(`cli empty response diagnostics: ${diagnostics}`);
-      }
-      throw attachCliMessagingDeliveryEvidence(
-        createCliFailoverError(
-          "CLI backend returned an empty response.",
-          "empty_response",
-          cliFailoverContext,
-        ),
-        output,
-      );
-    }
-    const assistantTexts = assistantText ? [assistantText] : [];
-    const lastAssistant =
-      assistantText.length > 0
-        ? buildCliHookAssistantMessage({
-            text: assistantText,
-            provider: params.provider,
-            model: context.modelId,
-            usage: output.usage,
-            stopReason: resolveCliAssistantStopReason(output),
-          })
-        : undefined;
-    if (assistantText.length > 0 && hasLlmOutputHooks) {
-      runAgentHarnessLlmOutputHook({
-        event: {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          provider: params.provider,
-          model: context.modelId,
-          ...(context.contextWindowInfo?.tokens
-            ? { contextTokenBudget: context.contextWindowInfo.tokens }
-            : {}),
-          ...(context.contextWindowInfo?.source
-            ? { contextWindowSource: context.contextWindowInfo.source }
-            : {}),
-          ...(context.contextWindowInfo?.referenceTokens
-            ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
-            : {}),
-          resolvedRef: `${params.provider}/${context.modelId}`,
-          assistantTexts,
-          ...(lastAssistant ? { lastAssistant } : {}),
-          ...(output.usage ? { usage: output.usage } : {}),
-        },
-        ctx: hookContext,
-        hookRunner,
-      });
-    }
-    return {
-      output,
-      assistantText,
-      lastAssistant,
-      sourceReplyWasDelivered: sourceReplyMirror.delivered,
-      usedHistoryPrompt:
-        cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
-    };
   };
+  const executeCliAttempt = async (cliSessionIdToUse?: string, options?: CliRecoveryOptions) =>
+    await executeCliAttemptForContext(context, cliSessionIdToUse, options);
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
     if (isolatedCompletion) {
@@ -528,23 +434,68 @@ export async function runPreparedCliAgent(
           sessionTarget: params.sessionTarget,
         })
       : [];
+
+    type CliAttemptResult = Awaited<ReturnType<typeof executeCliAttempt>>;
+    const emitAcceptedCliLlmOutput = (result: CliAttemptResult): void => {
+      if (result.assistantText.length === 0 || !hasLlmOutputHooks) {
+        return;
+      }
+      runAgentHarnessLlmOutputHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: context.modelId,
+          ...(context.contextWindowInfo?.tokens
+            ? { contextTokenBudget: context.contextWindowInfo.tokens }
+            : {}),
+          ...(context.contextWindowInfo?.source
+            ? { contextWindowSource: context.contextWindowInfo.source }
+            : {}),
+          ...(context.contextWindowInfo?.referenceTokens
+            ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
+            : {}),
+          resolvedRef: `${params.provider}/${context.modelId}`,
+          assistantTexts: result.assistantTexts,
+          ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+          ...(result.output.usage ? { usage: result.output.usage } : {}),
+        },
+        ctx: hookContext,
+        hookRunner,
+      });
+    };
+
     const finishCliAttempt = async (
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
       fallbackCliSessionId?: string,
     ) => {
-      const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
-        result;
+      let acceptedResult = result;
       try {
+        const accepted = await resolveAcceptedCliFinalCandidate({
+          initialResult: result,
+          fallbackCliSessionId,
+          originalContext: context,
+          executeAttemptForContext: executeCliAttemptForContext,
+        });
+        acceptedResult = accepted.acceptedResult;
+        const { acceptedFallbackCliSessionId, discarded } = accepted;
+
+        const {
+          output,
+          assistantText,
+          hostFinalDeferredCandidate,
+          lastAssistant,
+          sourceReplyWasDelivered,
+          usedHistoryPrompt,
+        } = acceptedResult;
         const terminalInterruption = output.terminalInterruption;
-        if (!terminalInterruption) {
-          await assertCliRuntimeBinding(context);
-        }
-        const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
+        const effectiveCliSessionId = output.sessionId ?? acceptedFallbackCliSessionId;
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
-          text: sourceReplyWasDelivered ? "" : assistantText,
+          text:
+            discarded || sourceReplyWasDelivered || hostFinalDeferredCandidate ? "" : assistantText,
           modelId: context.modelId,
           usage: output.usage,
           stopReason: resolveCliAssistantStopReason(output),
@@ -552,7 +503,7 @@ export async function runPreparedCliAgent(
         await finalizeCliContextEngineTurn({
           context,
           historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
-          assistantText,
+          assistantText: discarded ? "" : assistantText,
           terminalAnchor: assistantTranscript.terminalAnchor,
           output,
         });
@@ -569,19 +520,33 @@ export async function runPreparedCliAgent(
         const interruptionError = terminalInterruption
           ? formatCliTerminalInterruption(terminalInterruption)
           : undefined;
-        await runCliAgentEndHook(params, {
-          event: {
-            messages: buildAgentEndMessages(lastAssistant),
-            success: interruptionError === undefined,
-            ...(interruptionError ? { error: interruptionError } : {}),
-            durationMs: Date.now() - context.started,
-          },
-          ctx: hookContext,
-          hookRunner,
-        });
-        return buildCliRunResult({
+        if (!discarded) {
+          emitAcceptedCliLlmOutput(acceptedResult);
+          await runCliAgentEndHook(params, {
+            event: {
+              messages: buildAgentEndMessages(lastAssistant),
+              success: interruptionError === undefined,
+              ...(interruptionError ? { error: interruptionError } : {}),
+              durationMs: Date.now() - context.started,
+            },
+            ctx: hookContext,
+            hookRunner,
+          });
+        }
+        const runResult = buildCliRunResult({
           context,
-          output,
+          output: discarded
+            ? {
+                ...output,
+                text: "",
+                rawText: "",
+                didDeliverSourceReplyViaMessageTool: false,
+                messagingToolSourceReplyPayloads: undefined,
+                toolMediaUrls: undefined,
+                toolAudioAsVoice: undefined,
+                toolTrustedLocalMedia: undefined,
+              }
+            : output,
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned: assistantTranscript.owned,
@@ -591,8 +556,21 @@ export async function runPreparedCliAgent(
           sessionBindingDisabled,
           preparedContextAgentMeta,
         });
+        return discarded
+          ? {
+              ...runResult,
+              payloads: undefined,
+              meta: {
+                ...runResult.meta,
+                intentionalTerminalCompletion: "source-finalization-discard" as const,
+                finalAssistantVisibleText: undefined,
+                finalAssistantRawText: undefined,
+                stopReason: undefined,
+              },
+            }
+          : runResult;
       } catch (error) {
-        throw attachCliMessagingDeliveryEvidence(error, output);
+        throw attachCliMessagingDeliveryEvidence(error, acceptedResult.output);
       }
     };
 

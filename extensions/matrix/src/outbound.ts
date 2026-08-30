@@ -1,5 +1,6 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements outbound behavior.
+import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   createReplyToFanout,
@@ -7,6 +8,9 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
+  normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -97,6 +101,36 @@ function resolveMatrixPayloadText(payload: ReplyPayload): string {
 function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
   const presentation = resolveMatrixPresentationContent(payload);
   return presentation ? { [MATRIX_OPENCLAW_PRESENTATION_KEY]: presentation } : undefined;
+}
+
+/**
+ * The inbound reply dispatcher predates portable rich ReplyPayloads and calls
+ * sendMessageMatrix directly. Materialize the same Matrix-native presentation
+ * envelope and a visible location fallback that the core outbound path would
+ * otherwise own, so host-final message-tool payloads cannot disappear at this
+ * older seam.
+ */
+export function materializeMatrixDirectReplyPayload(payload: ReplyPayload): ReplyPayload {
+  const legacyInteractive = normalizeLegacyInteractiveReply(payload.interactive);
+  const presentation =
+    normalizeMessagePresentation(payload.presentation) ??
+    (legacyInteractive ? legacyInteractiveReplyToPresentation(legacyInteractive) : undefined);
+  let materialized = presentation
+    ? renderMatrixPresentationPayload({ payload, presentation })
+    : payload;
+  if (!materialized.text?.trim() && materialized.location) {
+    materialized = {
+      ...materialized,
+      text: formatLocationText(materialized.location),
+    };
+  }
+  return materialized;
+}
+
+export function resolveMatrixDirectReplyExtraContent(
+  payload: ReplyPayload,
+): MatrixExtraContentFields | undefined {
+  return resolveMatrixExtraContent(payload);
 }
 
 function resolveMatrixDeliveryProgress(

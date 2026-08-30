@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadModelProviderCost, loadModelProvidersData, loadModelProviderUsage } from "./load.ts";
 
@@ -236,27 +237,51 @@ describe("loadModelProvidersData", () => {
     });
   });
 
-  it("cancels both supplemental requests through the shared task signal", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "usage.status"
-        ? { updatedAt: 1, providers: [] }
-        : { aggregates: { byProvider: [] } },
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const signal = new AbortController().signal;
-
-    await Promise.all([
-      loadModelProviderUsage(client, signal),
-      loadModelProviderCost(client, signal),
-    ]);
-
-    expect(request).toHaveBeenCalledWith("usage.status", undefined, { signal });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.usage",
-      expect.objectContaining({ agentScope: "all", groupBy: "family" }),
-      { signal },
-    );
-  });
+  it.each(["before dispatch", "while pending"] as const)(
+    "retires both supplemental requests when aborted %s",
+    async (when) => {
+      const pending = new GatewayPendingRequests({
+        createRequestId: () => "models-test",
+        nowMs: () => 0,
+      });
+      const sent: Array<{ method: string; params?: Record<string, unknown> }> = [];
+      const sender = {
+        send(frame: string) {
+          sent.push(JSON.parse(frame));
+        },
+      };
+      const client = {
+        request: <T>(...args: Parameters<GatewayBrowserClient["request"]>) =>
+          pending.request<T>(sender, ...args),
+      } as GatewayBrowserClient;
+      const controller = new AbortController();
+      if (when === "before dispatch") {
+        controller.abort();
+      }
+      const loading = Promise.allSettled([
+        loadModelProviderUsage(client, controller.signal),
+        loadModelProviderCost(client, controller.signal),
+      ]);
+      try {
+        if (when === "while pending") {
+          expect(sent.map(({ method }) => method)).toEqual(["usage.status", "sessions.usage"]);
+          expect(sent[0]?.params).toBeUndefined();
+          expect(sent[1]?.params).toMatchObject({ agentScope: "all", groupBy: "family" });
+          expect(sent[1]?.params).not.toHaveProperty("agentId");
+          expect(pending.hasPending).toBe(true);
+          controller.abort();
+        } else {
+          expect(sent).toEqual([]);
+        }
+        expect(pending.hasPending).toBe(false);
+        expect(await loading).toMatchObject([{ status: "rejected" }, { status: "rejected" }]);
+      } finally {
+        // Release any leaked wait if a cancellation regression makes the assertion fail.
+        pending.flush(new Error("test cleanup"));
+        await loading;
+      }
+    },
+  );
 
   it("surfaces an explicit catalog refresh failure while retaining cached configured models", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {

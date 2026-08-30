@@ -88,6 +88,7 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
   it.each([
     ["in progress", "in_progress", null],
     ["completed", "completed", "success"],
+    ["failed", "completed", "failure"],
   ])("throttles another %s run and prints its REST id", (_label, status, conclusion) => {
     const other = { ...currentRun, id: 122, status, conclusion, head_sha: previousSha };
     const result = runGate([currentRun, other]);
@@ -114,14 +115,25 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     expect(result.output).toBe(admittedOutput(previousSha));
   });
 
-  it("ignores skipped runs and uses a prior run outside the hourly window", () => {
+  it.each([
+    ["skipped", currentRun.created_at],
+    ["cancelled", currentRun.created_at],
+    ["cancelled", "2026-08-28T22:29:59Z"],
+  ])("ignores %s history from %s for cadence and review base", (conclusion, createdAt) => {
     const result = runGate([
       currentRun,
-      { ...currentRun, id: 122, status: "completed", conclusion: "skipped", head_sha: parentSha },
+      {
+        ...currentRun,
+        id: 122,
+        created_at: createdAt,
+        status: "completed",
+        conclusion,
+        head_sha: parentSha,
+      },
       {
         ...currentRun,
         id: 121,
-        created_at: "2026-08-28T22:29:59Z",
+        created_at: "2026-08-28T22:29:58Z",
         status: "completed",
         conclusion: "success",
         head_sha: previousSha,

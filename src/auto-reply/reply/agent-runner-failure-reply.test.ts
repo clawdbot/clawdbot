@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { PluginHarnessSourceFinalizationUnsupportedError } from "../../agents/harness/errors.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
+  buildExternalRunFailureReply,
   buildEmptyInteractiveReplyPayload,
   buildPreflightCompactionFailureText,
 } from "./agent-runner-failure-reply.js";
@@ -49,5 +51,19 @@ describe("buildPreflightCompactionFailureText", () => {
       "⚠️ Context is too large and auto-compaction timed out before it could finish. " +
         "Try again, use /compact, or use /new to start a fresh session.",
     );
+  });
+});
+
+describe("buildExternalRunFailureReply", () => {
+  it("surfaces the exact recovery for an unsupported Matrix freshness runtime", () => {
+    const error = new PluginHarnessSourceFinalizationUnsupportedError("copilot");
+
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text:
+        "⚠️ The selected plugin agent runtime does not support Matrix fresh-message redraft and discard, so it was not started. " +
+        "Use OpenClaw's registry-attested bundled Codex harness for plugin-harness freshness, select a supported embedded or CLI runtime, or set " +
+        "channels.matrix.turnTaking.redraftDepth to 0 for participation-only mode.",
+      isGenericRunnerFailure: false,
+    });
   });
 });

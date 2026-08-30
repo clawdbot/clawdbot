@@ -2,7 +2,7 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
-import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
+import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
@@ -215,7 +215,7 @@ export function startGatewayMaintenanceTimers(params: {
       return managedWorktrees.gc({
         // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
         // worktree activity so idle GC cannot remove a checkout still used by the session.
-        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+        ...createManagedWorktreeOwnerPolicy(cfg),
         // Read limits per run so a config edit applies at the next hourly sweep.
         limits: resolveWorktreeCleanupLimits(),
       });

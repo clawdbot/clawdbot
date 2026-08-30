@@ -336,6 +336,8 @@ type OpenClawCodingToolsOptions = {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Hold sends/replies to the exact source route for host-owned final delivery. */
+  deferSourceMessageToolDelivery?: boolean;
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
@@ -891,6 +893,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             registerRunCleanup: options?.registerRunCleanup,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+            deferSourceMessageToolDelivery: options?.deferSourceMessageToolDelivery,
             sourceReplyOnly,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,

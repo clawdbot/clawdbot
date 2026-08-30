@@ -340,6 +340,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
+          deferSourceMessageToolDelivery: requestContext.deferSourceMessageToolDelivery,
           sourceReplyOnly: requestContext.sourceReplyOnly,
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,

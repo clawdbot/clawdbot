@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import io
 import json
 import os
@@ -175,6 +176,30 @@ def load_helper() -> dict[str, object]:
     return runpy.run_path(str(SCRIPT), run_name="autoreview_under_test")
 
 
+@contextlib.contextmanager
+def deadline_after_reviewer_ready(helper, ready: Path):
+    deadline_type = helper["EngineRuntimeDeadline"]
+
+    class ReadyDeadline(deadline_type):
+        def __init__(self, label, seconds):
+            super().__init__(label, seconds)
+            self.expires_at = time.monotonic() + 5
+            self.ready_seen = False
+
+        def expired(self):
+            if not self.ready_seen and ready.exists():
+                self.ready_seen = True
+                self.expires_at = time.monotonic() + self.max_runtime_seconds
+            return super().expired()
+
+    # These fixtures test termination/draining after startup. The separate
+    # silent-reviewer case covers an unconditional deadline from process launch.
+    with mock.patch.dict(
+        helper["run_with_heartbeat"].__globals__, {"EngineRuntimeDeadline": ReadyDeadline}
+    ):
+        yield
+
+
 def git(repo: Path, *args: str) -> str:
     env = os.environ.copy()
     env.update(
@@ -253,6 +278,357 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.helper = load_helper()
 
+    @contextlib.contextmanager
+    def preparation_fixture(self, *options):
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            for index in range(24):
+                (repo / f"unchanged-{index}.txt").write_text("old\n")
+            (repo / "source.md").write_text("before\n")
+            (repo / ".gitignore").write_text("evidence/\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-qm", "fixture")
+            (repo / "source.md").write_text("after\n")
+            (repo / "evidence").mkdir()
+            (repo / "evidence/note.md").write_text("frozen evidence\r\n")
+            sends, scans = [], []
+            stdout, stderr = io.StringIO(), io.StringIO()
+
+            def engine(_args, _repo, prompt):
+                self.assertFalse(any(thread.name == "autoreview-preparation"
+                                     for thread in threading.enumerate()))
+                sends.append(prompt)
+                return json.dumps({
+                    "findings": [], "overall_correctness": "patch is correct",
+                    "overall_explanation": "fixture clean", "overall_confidence": 0.99,
+                })
+
+            with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                "repo_root": lambda: repo,
+                "run_engine": engine,
+                "scan_outgoing_review_pack": lambda _repo, prompt: scans.append(prompt),
+                "resolve_engine_binary": lambda *_args: (True, None),
+            }), mock.patch.object(sys, "argv", [str(SCRIPT), "--mode", "local", *options]), \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                yield repo, sends, scans, stdout, stderr
+
+    def test_preparation_reuses_untracked_capture_and_keeps_three_full_snapshots(self):
+        for explicit in (False, True):
+            options = ("--dataset", "note.md") if explicit else ()
+            with self.subTest(explicit=explicit), self.preparation_fixture(*options) as (repo, sends, scans, _out, err):
+                (repo / "note.md").write_text("untracked evidence\n")
+                read = mock.Mock(wraps=self.helper["file_bundle_snapshot"])
+                fingerprint = mock.Mock(wraps=self.helper["source_file_fingerprint"])
+                with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                    "file_bundle_snapshot": read, "source_file_fingerprint": fingerprint,
+                }):
+                    self.assertEqual(self.helper["main_impl"](), 0)
+                self.assertEqual(scans, sends)
+                # Explicit evidence has its own initial capture and three fresh
+                # checks; finding membership never adds another content read.
+                self.assertEqual(read.call_count, 5 if explicit else 1)
+                self.assertEqual(fingerprint.call_count, 3 * 27)
+                for index in range(24):
+                    self.assertEqual(sum(call.args[0] == repo / f"unchanged-{index}.txt"
+                                         for call in fingerprint.call_args_list), 3)
+                self.assertNotIn("note.md", err.getvalue())
+                self.assertNotIn("untracked evidence", err.getvalue())
+
+    def test_ignored_evidence_change_during_capture_refuses_send(self):
+        with self.preparation_fixture("--dataset", "evidence/note.md") as (repo, sends, *_):
+            original = self.helper["local_bundle"]
+
+            def build(*args, **kwargs):
+                captured = original(*args, **kwargs)
+                (repo / "evidence/note.md").write_text("changed evidence\n")
+                return captured
+
+            with mock.patch.dict(self.helper["main_impl"].__globals__, {"local_bundle": build}):
+                with self.assertRaisesRegex(SystemExit, "evidence changed"):
+                    self.helper["main_impl"]()
+            self.assertFalse(sends)
+
+    def test_preparation_progress_precedes_snapshot(self):
+        with self.preparation_fixture() as (_repo, sends, _scans, _out, err):
+            def snapshot(*_args, **_kwargs):
+                self.assertIn("preparation: initial source snapshot", err.getvalue())
+                self.assertFalse(sends)
+                raise KeyboardInterrupt
+
+            with mock.patch.dict(self.helper["main_impl"].__globals__, {"source_tree_snapshot": snapshot}):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.helper["main_impl"]()
+
+    def test_dry_run_reuses_capture_without_whole_tree_snapshots(self):
+        with self.preparation_fixture("--dry-run", "--dataset", "evidence/note.md") as (_repo, sends, scans, *_):
+            snapshot = mock.Mock(side_effect=AssertionError("dry run must not sweep the checkout"))
+            with mock.patch.dict(self.helper["main_impl"].__globals__, {"source_tree_snapshot": snapshot}):
+                self.assertEqual(self.helper["main_impl"](), 0)
+            snapshot.assert_not_called()
+            self.assertTrue(scans)
+            self.assertFalse(sends)
+
+    def test_evidence_mutations_refuse_stale_publication_and_later_passes(self):
+        for tracked in (False, True):
+            for timing in ("construction", "scan", "review", "between passes"):
+                with self.subTest(tracked=tracked, timing=timing), self.preparation_fixture(
+                    "--prompt-file", "evidence/note.md", "--dataset", "evidence/note.md",
+                ) as (repo, sends, _scans, out, _err):
+                    evidence = repo / "evidence/note.md"
+                    if tracked:
+                        git(repo, "add", "-f", "evidence/note.md")
+                        git(repo, "commit", "-qm", "unchanged evidence")
+                    frozen = evidence.read_bytes()
+                    original_engine = self.helper["main_impl"].__globals__["run_engine"]
+                    original_build = self.helper["build_bundle"]
+                    output = repo.parent / "report.json"
+
+                    def mutate():
+                        info = evidence.stat()
+                        evidence.write_bytes(frozen.replace(b"frozen", b"edited"))
+                        os.utime(evidence, ns=(info.st_atime_ns, info.st_mtime_ns))
+
+                    def engine(*args):
+                        result = original_engine(*args)
+                        if timing in ("review", "between passes"):
+                            mutate()
+                        return result
+
+                    def build(*args):
+                        result = original_build(*args)
+                        if timing == "construction":
+                            mutate()
+                        return result
+
+                    patches = {"run_engine": engine, "build_bundle": build}
+                    if timing == "scan":
+                        patches["scan_outgoing_review_pack"] = lambda *_args: mutate()
+                    if timing == "between passes":
+                        original_prepare = self.helper["prepare_review_prompts"]
+                        patches["prepare_review_prompts"] = lambda *args: original_prepare(*args) * 2
+                    with mock.patch.dict(self.helper["main_impl"].__globals__, patches), \
+                            mock.patch.object(sys, "argv", [*sys.argv, "--json-output", str(output)]):
+                        with self.assertRaisesRegex(SystemExit, "evidence changed"):
+                            self.helper["main_impl"]()
+                    self.assertEqual(len(sends), int(timing in ("review", "between passes")))
+                    if sends:
+                        self.assertEqual(sends[0].count(frozen.decode()), 2)
+                    self.assertFalse(output.exists())
+                    self.assertNotIn("autoreview scoped-clean", out.getvalue())
+
+    def test_evidence_topology_changes_with_identical_bytes_refuse_send(self):
+        for change in ("delete", "replace", "leaf symlink", "ancestor symlink"):
+            if "symlink" in change and os.name == "nt":
+                continue
+            with self.subTest(change=change), self.preparation_fixture(
+                "--dataset", "evidence/tree/note.md",
+            ) as (repo, sends, *_):
+                evidence = repo / "evidence/tree/note.md"
+                evidence.parent.mkdir()
+                (repo / "evidence/note.md").rename(evidence)
+                snapshot = self.helper["source_tree_snapshot"](repo)
+                original = self.helper["build_bundle"]
+
+                def build(*args):
+                    result = original(*args)
+                    if change == "delete":
+                        evidence.unlink()
+                    elif change == "replace":
+                        replacement = repo.parent / "replacement.md"
+                        replacement.write_bytes(evidence.read_bytes())
+                        replacement.replace(evidence)
+                    elif change == "leaf symlink":
+                        evidence.rename(evidence.with_name("same.md"))
+                        evidence.symlink_to("same.md")
+                    else:
+                        evidence.parent.rename(evidence.parent.with_name("same-tree"))
+                        evidence.parent.symlink_to("same-tree", target_is_directory=True)
+                    # All mutations stay inside ignored evidence: the ordinary
+                    # whole-tree guard cannot account for this failure.
+                    self.assertEqual(self.helper["source_tree_snapshot"](repo), snapshot)
+                    return result
+
+                with mock.patch.dict(self.helper["main_impl"].__globals__, {"build_bundle": build}):
+                    with self.assertRaisesRegex(SystemExit, "evidence changed"):
+                        self.helper["main_impl"]()
+                self.assertFalse(sends)
+
+    def test_duplicate_evidence_keeps_exact_frozen_bytes_across_passes(self):
+        with self.preparation_fixture(
+            "--prompt-file", "evidence/note.md", "--dataset", "evidence/note.md",
+            "--dataset", "evidence/note.md",
+        ) as (repo, sends, scans, *_):
+            evidence = (repo / "evidence/note.md").read_bytes().decode()
+            original = self.helper["prepare_review_prompts"]
+            with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                "prepare_review_prompts": lambda *args: original(*args) * 2,
+            }):
+                self.assertEqual(self.helper["main_impl"](), 0)
+            self.assertEqual(len(sends), 2)
+            self.assertEqual(scans, sends)
+            for prompt in sends:
+                self.assertEqual(prompt.count(evidence), 3)
+
+    def test_tracked_source_permission_never_authorizes_evidence(self):
+        with self.preparation_fixture("--dataset", "private/source.swift") as (repo, sends, *_):
+            source = repo / "private/source.swift"
+            source.parent.mkdir()
+            source.write_text("let safe = true\n")
+            git(repo, "add", "private/source.swift")
+            self.assertIn("private/source.swift", self.helper["local_bundle"](repo).paths)
+            with self.assertRaisesRegex(SystemExit, "sensitive --dataset"):
+                self.helper["main_impl"]()
+            self.assertFalse(sends)
+
+    def test_unrelated_same_size_restored_mtime_mutation_is_still_guarded(self):
+        for timing in ("construction", "review"):
+            with self.subTest(timing=timing), self.preparation_fixture() as (repo, sends, *_):
+                name = "build_bundle" if timing == "construction" else "run_engine"
+                original = self.helper["main_impl"].__globals__[name]
+
+                def mutate(*args):
+                    result = original(*args)
+                    source = repo / "unchanged-0.txt"
+                    info = source.stat()
+                    source.write_text("new\n")
+                    os.utime(source, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    return result
+
+                with mock.patch.dict(self.helper["main_impl"].__globals__, {name: mutate}):
+                    if timing == "construction":
+                        with self.assertRaisesRegex(SystemExit, "source changed"):
+                            self.helper["main_impl"]()
+                        self.assertFalse(sends)
+                    else:
+                        self.assertEqual(self.helper["main_impl"](), 1)
+
+    def test_preparation_ticker_rate_limit_counts_and_cleanup(self):
+        progress_type = self.helper["PreparationProgress"]
+        clock = [100.0]
+        stderr = io.StringIO()
+        with mock.patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+                contextlib.redirect_stderr(stderr):
+            progress = progress_type("initial source snapshot")
+            progress.advance(files=3, bytes=45)
+            for now in (100, 114, 115, 115, 129, 130):
+                clock[0] = now
+                progress._report()
+        self.assertEqual(stderr.getvalue().splitlines(), [
+            "preparation: initial source snapshot elapsed=15s files=3 bytes=45",
+            "preparation: initial source snapshot elapsed=30s files=3 bytes=45",
+        ])
+        for error in (None, ValueError, KeyboardInterrupt, self.helper["EngineInterrupted"]):
+            with self.subTest(error=error), contextlib.redirect_stderr(io.StringIO()):
+                progress = progress_type("bundle preparation")
+                try:
+                    with progress:
+                        self.assertTrue(progress.thread.is_alive())
+                        if error:
+                            raise error(130)
+                except BaseException as exc:
+                    self.assertIsInstance(exc, error)
+                self.assertFalse(progress.thread.is_alive())
+                self.assertTrue(progress.stopped.is_set())
+
+    def test_hash_progress_advances_inside_large_file_without_path_output(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            source = Path(tempdir) / "do-not-print-this-name.txt"
+            source.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+            progress = self.helper["PreparationProgress"]("initial source snapshot")
+            original = os.read
+            counts = []
+
+            def read(*args):
+                counts.append(progress.bytes)
+                return original(*args)
+
+            with mock.patch.object(os, "read", side_effect=read):
+                self.helper["source_file_fingerprint"](source, progress)
+            self.assertEqual(counts, [0, 1024 * 1024, 2 * 1024 * 1024, source.stat().st_size])
+
+    def test_preparation_ticker_reports_while_caller_is_blocked(self):
+        stderr = io.StringIO()
+        # An exact clock origin keeps the 15-second boundary independent of host float precision.
+        with mock.patch.object(time, "monotonic", return_value=100.0):
+            progress = self.helper["PreparationProgress"]("bundle preparation")
+        progress.stopped = mock.Mock()
+        progress.stopped.wait.side_effect = [False, True]
+        with mock.patch.object(time, "monotonic", return_value=progress.started + 15), \
+                contextlib.redirect_stderr(stderr), mock.patch.object(stderr, "flush") as flush:
+            with progress:
+                progress.thread.join()
+            self.assertEqual(flush.call_count, 2)
+        self.assertEqual(progress.stopped.wait.call_args_list, [mock.call(15), mock.call(15)])
+        self.assertIn("elapsed=15s files=0 bytes=0", stderr.getvalue())
+        self.assertFalse(progress.thread.is_alive())
+
+    def test_bundle_ref_pinning_keeps_patch_and_membership_coherent(self):
+        for target in ("branch", "commit"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tempdir:
+                repo = init_repo(Path(tempdir))
+                (repo / "base.md").write_text("base\n")
+                git(repo, "add", ".")
+                git(repo, "commit", "-qm", "base")
+                base = git(repo, "rev-parse", "HEAD").strip()
+                git(repo, "branch", "moving-base")
+                (repo / "task.md").write_text("task change\n")
+                git(repo, "add", ".")
+                git(repo, "commit", "-qm", "task")
+                head = git(repo, "rev-parse", "HEAD").strip()
+                original = self.helper["git"]
+
+                def moving_git(repo, *args, **kwargs):
+                    result = original(repo, *args, **kwargs)
+                    if "--patch" in args:
+                        git(repo, "update-ref", "refs/heads/moving-base", head)
+                        git(repo, "update-ref", "HEAD", base)
+                    return result
+
+                with mock.patch.dict(self.helper["build_bundle"].__globals__, {"git": moving_git}):
+                    captured = self.helper["build_bundle"](repo, target, "moving-base", "HEAD")
+                self.assertEqual(captured.paths, {"task.md"})
+                self.assertIn("+task change", captured.text)
+                self.assertFalse(captured.truncated)
+
+    def test_outgoing_pack_scan_disables_installed_scanner_updates(self) -> None:
+        prompt = "harmless review pack\npreserved CRLF\r\nfinal line\r"
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = root / "repo"
+            repo.mkdir()
+            write_executable(
+                root / "trufflehog",
+                r'''#!/usr/bin/env python3
+import json
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if "--no-update" not in args:
+    print("updater: cannot move binary: permission denied", file=sys.stderr)
+    raise SystemExit(1)
+assert args[0] == "filesystem"
+assert set(args[2:]) == {
+    "--json", "--no-color", "--results=verified,unknown",
+    "--fail", "--fail-on-scan-errors", "--no-update",
+}
+pack = Path(args[1])
+Path(__file__).with_name("scan.json").write_text(json.dumps({
+    "pack": str(pack),
+    "prompt": pack.read_bytes().decode("utf-8"),
+}))
+''',
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"PATH": f"{root}{os.pathsep}{os.environ.get('PATH', '')}"},
+            ):
+                self.helper["scan_outgoing_review_pack"](repo, prompt)
+
+            record = json.loads((root / "scan.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["prompt"], prompt)
+            self.assertFalse(Path(record["pack"]).parent.exists())
+
     def test_outgoing_pack_scan_reads_exact_prompt_including_deleted_lines(self) -> None:
         prompt = (
             "# Change Bundle\n"
@@ -272,7 +648,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 **_kwargs: object,
             ) -> subprocess.CompletedProcess[str]:
                 self.assertEqual(command[1], "filesystem")
-                self.assertEqual(Path(command[2]).read_text(encoding="utf-8"), prompt)
+                self.assertEqual(Path(command[2]).read_bytes(), prompt.encode("utf-8"))
                 self.assertIn("-const apiKey", prompt)
                 return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -366,7 +742,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             path.write_text("TOKEN=changed-placeholder\n", encoding="utf-8")
             git(repo, "add", path.name)
 
-            bundle, truncated = self.helper["local_bundle"](repo)
+            bundle, truncated, _paths = self.helper["local_bundle"](repo)
 
             self.assertIn(self.helper["REVIEW_SECURITY_OMISSION"], bundle)
             self.assertFalse(truncated)
@@ -375,6 +751,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
         harness = SCRIPT.with_name("test-review-harness.ps1").read_text(encoding="utf-8")
 
         self.assertIn("[ValidateSet('codex', 'claude', 'amp', 'pi', 'kimi')]", harness)
+
+    def test_smoke_harness_validates_runtime_prompt_without_provider(self) -> None:
+        harness = runpy.run_path(str(SCRIPT.with_name("test-review-harness.py")))
+        with tempfile.TemporaryDirectory() as tempdir:
+            harness["validate_prompt_policy"](init_repo(Path(tempdir)), SCRIPT)
 
     def test_local_bundle_omits_sensitive_untracked_file_without_blocking(self) -> None:
         for rel in (".env", "tokens/session.dat", "secrets/local.py"):
@@ -385,7 +766,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 path.write_text("placeholder=true\n", encoding="utf-8")
                 (repo / "review.py").write_text("print('review me')\n", encoding="utf-8")
 
-                bundle, truncated = self.helper["local_bundle"](repo)
+                bundle, truncated, _paths = self.helper["local_bundle"](repo)
 
                 self.assertIn("# Review Input Omissions", bundle)
                 self.assertIn(self.helper["REVIEW_SECURITY_OMISSION"], bundle)
@@ -399,7 +780,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(Path(tempdir))
             (repo / "image.bin").write_bytes(b"\x89PNG\r\n\0binary-content")
 
-            bundle, truncated = self.helper["local_bundle"](repo)
+            bundle, truncated, _paths = self.helper["local_bundle"](repo)
 
             self.assertIn(
                 '# Untracked File\npath: "image.bin"\n'
@@ -434,7 +815,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.helper["local_bundle"].__globals__,
                 {"read_prefix": read_once},
             ):
-                bundle, truncated = self.helper["local_bundle"](repo)
+                bundle, truncated, _paths = self.helper["local_bundle"](repo)
 
             expected_record = json.dumps("review me" + os.linesep)
             self.assertIn(
@@ -444,6 +825,365 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
             self.assertFalse(truncated)
             self.assertEqual(reads, 1)
+
+    def test_local_base_reviews_resolved_merge_without_upstream_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = repo / "source.txt"
+            source.write_text("common\nretained line\n", encoding="utf-8")
+            git(repo, "add", "source.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            common = git(repo, "rev-parse", "HEAD").strip()
+            git(repo, "checkout", "-q", "-b", "incoming")
+            (repo / "proof.png").write_bytes(b"\x89PNG\r\n\0upstream-proof")
+            source.write_text("upstream\nretained line\n", encoding="utf-8")
+            git(repo, "add", "source.txt", "proof.png")
+            git(repo, "commit", "-q", "-m", "upstream")
+            incoming = git(repo, "rev-parse", "HEAD").strip()
+            git(repo, "checkout", "-q", "-b", "task", common)
+            source.write_text("task\nretained line\n", encoding="utf-8")
+            (repo / "committed.txt").write_text("committed task change\n", encoding="utf-8")
+            git(repo, "add", "source.txt", "committed.txt")
+            git(repo, "commit", "-q", "-m", "task")
+            with self.assertRaises(subprocess.CalledProcessError):
+                git(repo, "merge", "--no-ff", "--no-commit", "incoming")
+            self.assertEqual(git(repo, "rev-parse", "MERGE_HEAD").strip(), incoming)
+            source.write_text("resolved staged task\n", encoding="utf-8")
+            git(repo, "add", "source.txt")
+            self.assertEqual(git(repo, "diff", "--name-only", "--diff-filter=U").strip(), "")
+            source.write_text("resolved staged task\nretained line\nunstaged task\n", encoding="utf-8")
+            (repo / "notes.md").write_text("untracked task note\n", encoding="utf-8")
+            # Review reads ignore host Git settings, including Windows autocrlf.
+            # Expected patches must use the same protected Git policy.
+            staged = self.helper["git"](repo, "diff", *self.helper["SAFE_DIFF_FLAGS"], "--cached", incoming)
+            unstaged = self.helper["git"](repo, "diff", *self.helper["SAFE_DIFF_FLAGS"])
+            scanned: list[str] = []
+            sent: list[str] = []
+            report = {
+                "findings": [{
+                    "title": "Task change finding",
+                    "body": "The committed task change remains in the selected review scope.",
+                    "priority": "P0",
+                    "confidence": 0.99,
+                    "category": "bug",
+                    "code_location": {"file_path": "committed.txt", "line": 1},
+                }],
+                "overall_correctness": "patch is incorrect",
+                "overall_explanation": "Task change finding.",
+                "overall_confidence": 0.99,
+            }
+
+            def run_engine(_args, _repo, prompt):
+                sent.append(prompt)
+                return json.dumps(report)
+
+            main = self.helper["main_impl"]
+            with mock.patch.dict(main.__globals__, {
+                "repo_root": lambda: repo,
+                "scan_outgoing_review_pack": lambda _repo, prompt: scanned.append(prompt),
+                "run_engine": run_engine,
+                "resolve_engine_binary": lambda _reviewer, _repo: (True, None),
+            }):
+                for dry_run in (False, True):
+                    argv = [str(SCRIPT), "--engine", "codex", "--mode", "local", "--base", "incoming"]
+                    if dry_run:
+                        argv.append("--dry-run")
+                    with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(main(), 0 if dry_run else 1)
+
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(scanned, [sent[0], sent[0]])
+            self.assertIn(f"# Staged Diff\nbase: {incoming}", sent[0])
+            self.assertIn(staged.rstrip(), sent[0])
+            self.assertIn(unstaged.rstrip(), sent[0])
+            self.assertIn("-retained line", sent[0])
+            self.assertIn("+retained line", sent[0])
+            self.assertIn('path: "notes.md"', sent[0])
+            self.assertIn("untracked task note", sent[0])
+            self.assertNotIn("diff --git a/proof.png", sent[0])
+            self.assertEqual(
+                self.helper["local_bundle"](repo, incoming).paths,
+                {"source.txt", "committed.txt", "notes.md"},
+            )
+            for mode in ("local", "uncommitted", "auto"):
+                self.assertEqual(self.helper["choose_target"](repo, mode, "incoming"), ("local", incoming))
+            self.assertEqual(self.helper["choose_target"](repo, "local", None), ("local", None))
+            with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
+                self.helper["local_bundle"](repo)
+
+    def test_local_base_pins_named_ref_and_rejects_invalid_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "source.txt").write_text("base\n", encoding="utf-8")
+            git(repo, "add", "source.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+            git(repo, "branch", "review-base")
+            (repo / "committed.txt").write_text("committed task change\n", encoding="utf-8")
+            git(repo, "add", "committed.txt")
+            git(repo, "commit", "-q", "-m", "task")
+            (repo / "source.txt").write_text("staged task change\n", encoding="utf-8")
+            git(repo, "add", "source.txt")
+            target, pinned = self.helper["choose_target"](repo, "local", "review-base")
+            self.assertEqual((target, pinned), ("local", base))
+            snapshot = self.helper["source_tree_snapshot"](repo)
+            git(repo, "update-ref", "refs/heads/review-base", "HEAD")
+            self.assertEqual(self.helper["source_tree_snapshot"](repo), snapshot)
+            bundle, truncated, _paths = self.helper["local_bundle"](repo, pinned)
+            self.assertFalse(truncated)
+            self.assertIn("+committed task change", bundle)
+            self.assertEqual(
+                self.helper["build_bundle"](repo, target, pinned, "HEAD").paths,
+                {"source.txt", "committed.txt"},
+            )
+            for ref, error in (("--help", "unsafe"), ("HEAD:source.txt", "unsafe"), ("", "unsafe"), ("missing-base", "unknown")):
+                with self.subTest(ref=ref), self.assertRaisesRegex(SystemExit, f"{error} base ref"):
+                    self.helper["choose_target"](repo, "local", ref)
+
+    def test_credential_source_filename_is_safe_but_stores_remain_blocked(self) -> None:
+        safe = "Sources/Configuration/CredentialFile.swift"
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            source = repo / safe
+            source.parent.mkdir(parents=True)
+            source.write_text("struct CredentialFile { let version = 1 }\n", encoding="utf-8")
+            for staged in (False, True):
+                if staged:
+                    git(repo, "add", safe)
+                with self.subTest(staged=staged):
+                    bundle, truncated, _paths = self.helper["local_bundle"](repo)
+                    self.assertFalse(truncated)
+                    self.assertIn("struct CredentialFile", bundle)
+                    self.assertIn(safe, self.helper["local_bundle"](repo).paths)
+                    for label in ("--dataset", "--prompt-file"):
+                        _, content, truncated = self.helper["validate_evidence_file"](repo, safe, label)
+                        self.assertEqual(content, source.read_bytes().decode("utf-8"))
+                        self.assertFalse(truncated)
+
+            blocked = (
+                "credentials.json", "config/prod-credentials.json", "credentials/store.json",
+                "tokens/session.dat", ".env", ".env.local", "config/client.pem", "config/client.key",
+                ".ssh/id_ed25519", "Sources/credentials/CredentialFile.swift",
+                "Sources/backup-secrets/CredentialFile.swift", ".env/CredentialFile.swift",
+                "Sources/CredentialFile.swift.key", "Sources/credentials.swift",
+            )
+            for rel in blocked:
+                with self.subTest(blocked=rel):
+                    self.assertIsNotNone(self.helper["sensitive_repo_path_risk"](rel))
+                    with self.assertRaisesRegex(SystemExit, "sensitive|unsafe"):
+                        self.helper["validate_evidence_file"](repo, rel, "--dataset")
+
+    def test_complete_candidate_scope_and_local_results_remain_honest(self) -> None:
+        source = "Sources/Configuration/CredentialFile.swift"
+        untracked = "Runtime/Configuration/CredentialFile.swift"
+        e2e = "Tests/Integration/EndToEndTests.swift"
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            # Match the helper's raw Git policy so CRLF fixtures stay committed-only.
+            git(repo, "config", "core.autocrlf", "false")
+            (repo / "runtime.txt").write_text("old runtime\n", encoding="utf-8")
+            (repo / "context.md").write_text("Full candidate context: integration contract broken.\n", encoding="utf-8")
+            git(repo, "add", ".")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+            test_file = repo / e2e
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text("// synthetic integration fixture\n" * 27 + "func testLive() { preconditionFailure() }\n", encoding="utf-8")
+            git(repo, "add", e2e)
+            git(repo, "commit", "-q", "-m", "original candidate")
+            self.assertEqual(git(repo, "status", "--porcelain"), "")
+            for rel in (source, untracked):
+                path = repo / rel
+                path.parent.mkdir(parents=True)
+                path.write_text("struct CredentialFile { let version = 2 }\n", encoding="utf-8")
+            (repo / "credentials.json").write_text('{"fixture": "OMIT_STAGED_STORE"}\n', encoding="utf-8")
+            git(repo, "add", source, "credentials.json")
+            (repo / "runtime.txt").write_text("unstaged runtime\n", encoding="utf-8")
+            (repo / ".env").write_text("OMIT_UNTRACKED_ENV\n", encoding="utf-8")
+            findings = [{
+                "title": title, "body": body, "priority": "P2", "confidence": 0.8,
+                "category": "bug", "code_location": {"file_path": rel, "line": line},
+            } for title, body, rel, line in (
+                ("Preserve source contract", "The public API contract is broken.", source, 1),
+                ("Keep integration runnable", "The live E2E fails unconditionally.", e2e, 28),
+            )]
+            provider_report = {
+                "findings": findings, "overall_correctness": "patch is incorrect",
+                "overall_explanation": "The public API contract is broken and live E2E fails unconditionally.",
+                "overall_confidence": 0.73,
+            }
+            cases = (
+                ("local", None, {source}, 2),
+                ("auto", None, {source}, 2),
+                ("branch", base, {e2e}, 2),
+                ("local", base, {source, e2e}, 1),
+            )
+            for engine in ("codex", "claude", "amp", "pi", "kimi"):
+                for mode, ref, accepted, expected_exit in cases:
+                    with self.subTest(engine=engine, mode=mode, ref=bool(ref)):
+                        scans, sends = [], []
+
+                        def run_engine(_args, _repo, prompt):
+                            sends.append(prompt)
+                            return json.dumps(provider_report)
+
+                        argv = [str(SCRIPT), "--engine", engine, "--mode", mode, "--max-priority", "P2",
+                                "--dataset", e2e, "--prompt-file", "context.md", "--prompt", "Review the complete candidate.",
+                                "--output", str(root / "result.txt"), "--json-output", str(root / "result.json")]
+                        if ref:
+                            argv.extend(["--base", ref])
+                        output = io.StringIO()
+                        with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                            "repo_root": lambda: repo, "run_engine": run_engine,
+                            "scan_outgoing_review_pack": lambda _repo, prompt: scans.append(prompt),
+                        }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+                            self.assertEqual(self.helper["main_impl"](), expected_exit)
+                        result = json.loads((root / "result.json").read_text())
+                        self.assertEqual({f["code_location"]["file_path"] for f in result["findings"]}, accepted)
+                        for key in ("overall_correctness", "overall_explanation", "overall_confidence"):
+                            self.assertEqual(result[key], provider_report[key])
+                        self.assertEqual(result["review_status"], "incomplete" if expected_exit == 2 else "findings")
+                        text = (root / "result.txt").read_text()
+                        self.assertIn(text, output.getvalue())
+                        self.assertIn("Keep integration runnable", text)
+                        self.assertIn("Preserve source contract", text)
+                        self.assertNotIn("clean:", text)
+                        rejected = result.get("scope_rejected_findings", [])
+                        self.assertEqual(len(rejected), 2 - len(accepted))
+                        self.assertEqual(scans, sends)
+                        self.assertIn("# Dataset: " + str(Path(e2e)), sends[0])
+                        self.assertNotIn("OMIT_STAGED_STORE", sends[0])
+                        self.assertNotIn("OMIT_UNTRACKED_ENV", sends[0])
+                        if mode == "local" and ref:
+                            self.assertIn(f"# Staged Diff\nbase: {base}", sends[0])
+                            for marker in ("+func testLive", "+struct CredentialFile", "-old runtime", "+unstaged runtime", f'path: "{untracked}"'):
+                                self.assertIn(marker, sends[0])
+            for target, ref in (("local", None), ("local", base), ("branch", base)):
+                paths = self.helper["build_bundle"](repo, target, ref, "HEAD").paths
+                self.assertNotIn("credentials.json", paths)
+                self.assertNotIn(".env", paths)
+                if target == "local":
+                    self.assertIn(untracked, paths)
+
+    def test_single_and_chunked_result_status_exit_and_required_checks(self) -> None:
+        finding = {
+            "title": "Synthetic defect", "body": "Keep this finding auditable.",
+            "priority": "P2", "confidence": 0.7, "category": "bug",
+            "code_location": {"file_path": "source.txt", "line": 1},
+        }
+        cases = (
+            # location, provider verdict, priority, required, expect, status, exit
+            (None, "patch is correct", "P2", [], False, "scoped-clean", 0),
+            (None, "patch is incorrect", "P2", [], False, "incorrect", 1),
+            ("source.txt", "patch is incorrect", "P2", [], False, "findings", 1),
+            ("source.txt", "patch is incorrect", "P2", ["Synthetic defect"], True, "findings", 0),
+            ("source.txt", "patch is incorrect", "P0", [], False, "filtered", 1),
+            ("source.txt", "patch is correct", "P0", [], False, "filtered", 0),
+            ("source.txt", "patch is incorrect", "P0", ["Synthetic defect"], True, "incomplete", 2),
+            ("elsewhere.txt", "patch is incorrect", "P2", [], False, "incomplete", 2),
+            ("elsewhere.txt", "patch is correct", "P0", [], True, "incomplete", 2),
+            ("elsewhere.txt", "patch is incorrect", "P2", ["Synthetic defect"], False, "incomplete", 2),
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            (repo / "source.txt").write_text("changed\n", encoding="utf-8")
+            for count in (1, 2):
+                for rel, verdict, priority, required, expect, expected_status, exit_code in cases:
+                    with self.subTest(count=count, rel=rel, verdict=verdict, priority=priority, required=required, expect=expect):
+                        issue = copy.deepcopy(finding)
+                        issue["code_location"]["file_path"] = rel
+                        provider = {
+                            "findings": [issue] if rel else [], "overall_correctness": verdict,
+                            "overall_explanation": "Synthetic provider explanation.", "overall_confidence": 0.61,
+                        }
+                        argv = [str(SCRIPT), "--engine", "codex", "--mode", "local", "--max-priority", priority,
+                                "--output", str(root / "result.txt"), "--json-output", str(root / "result.json")]
+                        for needle in required:
+                            argv.extend(["--require-finding", needle])
+                        if expect:
+                            argv.append("--expect-findings")
+                        with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                            "repo_root": lambda: repo,
+                            "build_review_prompts": lambda *_args: ["synthetic pack"] * count,
+                            "scan_outgoing_review_pack": lambda *_args: None,
+                            "run_engine": lambda *_args: json.dumps(provider),
+                        }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                            self.assertEqual(self.helper["main_impl"](), exit_code)
+                        result = json.loads((root / "result.json").read_text())
+                        text = (root / "result.txt").read_text()
+                        self.assertEqual(result["review_status"], expected_status)
+                        self.assertEqual(result["overall_correctness"], verdict)
+                        self.assertEqual(result["overall_confidence"], 0.61)
+                        self.assertIn(provider["overall_explanation"], text)
+                        self.assertEqual("scoped-clean:" in text, expected_status == "scoped-clean")
+                        if rel:
+                            self.assertIn("Keep this finding auditable.", text)
+                        if expected_status == "incomplete":
+                            self.assertIn("incomplete:", text)
+                        if required and expected_status == "incomplete":
+                            self.assertEqual(result["missing_required_findings"], required)
+
+    def test_credential_source_exception_still_scans_every_outgoing_input(self) -> None:
+        source = "Sources/Configuration/CredentialFile.swift"
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            path = repo / source
+            path.parent.mkdir(parents=True)
+            path.write_text("// DELETED_SCAN_MARKER\n", encoding="utf-8")
+            git(repo, "add", source)
+            git(repo, "commit", "-q", "-m", "base")
+            path.write_text("// STAGED_SCAN_MARKER\n", encoding="utf-8")
+            git(repo, "add", source)
+            untracked = repo / "Runtime/CredentialFile.swift"
+            untracked.parent.mkdir()
+            untracked.write_text("// UNTRACKED_SCAN_MARKER\n", encoding="utf-8")
+            evidence = self.helper["capture_evidence_inputs"](argparse.Namespace(
+                prompt=["PROMPT_SCAN_MARKER"], prompt_file=[source],
+                dataset=[str(untracked.relative_to(repo))],
+            ), repo)
+            extra, datasets = evidence.prompt, evidence.datasets
+            bundle, _, _paths = self.helper["local_bundle"](repo)
+            pack, = self.helper["build_review_prompts"](repo, "local", None, bundle, extra, datasets)
+            provider = mock.Mock(return_value=json.dumps({
+                "findings": [], "overall_correctness": "patch is correct",
+                "overall_explanation": "Synthetic review.", "overall_confidence": 0.8,
+            }))
+            for marker in (None, "DELETED_SCAN_MARKER", "STAGED_SCAN_MARKER", "UNTRACKED_SCAN_MARKER", "PROMPT_SCAN_MARKER"):
+                events = []
+
+                def scanner(command, _repo, **_kwargs):
+                    outgoing = Path(command[2])
+                    self.assertEqual(outgoing.read_bytes(), pack.encode("utf-8"))
+                    if os.name != "nt":
+                        self.assertEqual(stat.S_IMODE(outgoing.stat().st_mode), 0o600)
+                    self.assertIn("--results=verified,unknown", command)
+                    self.assertIn("--no-update", command)
+                    for token in ("-// DELETED_SCAN_MARKER", "+// STAGED_SCAN_MARKER", "UNTRACKED_SCAN_MARKER", "PROMPT_SCAN_MARKER", "# Dataset:", "# Prompt file:"):
+                        self.assertIn(token, pack)
+                    events.append("scan")
+                    if marker:
+                        line = next(i for i, text in enumerate(pack.splitlines(), 1) if marker in text)
+                        detected = {"SourceMetadata": {"Data": {"Filesystem": {"file": str(outgoing), "line": line}}}}
+                        return subprocess.CompletedProcess(command, self.helper["TRUFFLEHOG_FINDINGS_EXIT_CODE"], json.dumps(detected), "")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                provider.reset_mock()
+                with self.subTest(marker=marker), mock.patch.dict(self.helper["run_reviewer"].__globals__, {
+                    "find_command": lambda *_args: "/trusted/trufflehog", "run": scanner, "run_engine": provider,
+                }):
+                    args = argparse.Namespace(engine="codex", max_priority="P2")
+                    if marker:
+                        with self.assertRaisesRegex(SystemExit, "refusing to send review pack"):
+                            self.helper["run_reviewer"](args, repo, pack, {source}, [])
+                        provider.assert_not_called()
+                    else:
+                        self.helper["run_reviewer"](args, repo, pack, {source}, [])
+                        provider.assert_called_once_with(args, repo, pack)
+                    self.assertEqual(events, ["scan"])
 
     def test_tracked_binary_changes_are_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -455,9 +1195,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             base = git(repo, "rev-parse", "HEAD").strip()
 
             binary.write_bytes(b"\0changed")
-            git(repo, "add", "artifact.bin")
-            with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
-                self.helper["local_bundle"](repo)
+            for staged in (False, True):
+                if staged:
+                    git(repo, "add", "artifact.bin")
+                for local_base in (None, base):
+                    with self.subTest(staged=staged, base=local_base), self.assertRaisesRegex(SystemExit, "refusing binary changes"):
+                        self.helper["local_bundle"](repo, local_base)
 
             git(repo, "commit", "-q", "-m", "binary change")
             with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
@@ -481,8 +1224,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "--cacheinfo",
                 f"160000,{base},vendor/dependency",
             )
-            with self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
-                self.helper["local_bundle"](repo)
+            for local_base in (None, base):
+                with self.subTest(base=local_base), self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
+                    self.helper["local_bundle"](repo, local_base)
 
             git(repo, "commit", "-q", "-m", "add gitlink")
             with self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
@@ -568,7 +1312,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 },
             ):
                 self.assertEqual(
-                    self.helper["safe_untracked_files"](repo),
+                    [rel for rel, _, _ in self.helper["collect_untracked_file_snapshots"](repo)[0]],
                     ["hostile-gitconfig", "visible.txt"],
                 )
 
@@ -604,13 +1348,13 @@ class AutoreviewHardeningTests(unittest.TestCase):
             untracked = repo / "untracked.txt"
             untracked.write_text(content, encoding="utf-8")
             with self.assertRaisesRegex(SystemExit, "file too large to scan safely"):
-                self.helper["safe_untracked_files"](repo)
+                [rel for rel, _, _ in self.helper["collect_untracked_file_snapshots"](repo)[0]]
 
             untracked.unlink()
             binary = repo / "binary.bin"
             binary.write_bytes(b"\0" + content.encode())
             self.assertEqual(
-                self.helper["safe_untracked_files"](repo),
+                [rel for rel, _, _ in self.helper["collect_untracked_file_snapshots"](repo)[0]],
                 ["binary.bin"],
             )
 
@@ -649,8 +1393,134 @@ class AutoreviewHardeningTests(unittest.TestCase):
             git(repo, "commit", "-q", "-m", "main")
             git(repo, "merge", "-q", "--no-ff", "side", "-m", "merge")
 
-            with self.assertRaisesRegex(SystemExit, "does not accept merge commits"):
-                self.helper["commit_bundle"](repo, "HEAD")
+            shallow = Path(tempdir) / "shallow"
+            git(repo, "clone", "-q", "--depth=1", repo.resolve().as_uri(), str(shallow))
+            for checkout in (repo, shallow):
+                with self.subTest(checkout=checkout.name), self.assertRaisesRegex(
+                    SystemExit, "does not accept merge commits"
+                ):
+                    self.helper["commit_bundle"](checkout, "HEAD")
+
+    def test_commit_review_uses_raw_parents_at_history_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir).resolve()
+            repo = init_repo(root)
+            (repo / "behavior.py").write_text("def behavior(): return 'preexisting'\n", encoding="utf-8")
+            git(repo, "add", "behavior.py")
+            git(repo, "commit", "-qm", "initial behavior")
+            initial = git(repo, "rev-parse", "HEAD").strip()
+            for value in ("before", "after"):
+                (repo / "unrelated.txt").write_text(value + "\n", encoding="utf-8")
+                git(repo, "add", "unrelated.txt")
+                git(repo, "commit", "-qm", "unrelated maintenance")
+            expected_parent = git(repo, "rev-parse", "HEAD^").strip()
+            expected_patch = git(repo, "diff", *self.helper["SAFE_DIFF_FLAGS"], "HEAD^", "HEAD")
+            for state, depth in (("missing", 1), ("available", 2), ("retained", None)):
+                with self.subTest(state=state):
+                    checkout = root / state
+                    depth_args = [f"--depth={depth}"] if depth else []
+                    git(repo, "clone", "-q", *depth_args, repo.as_uri(), str(checkout))
+                    if state == "retained":
+                        git(checkout, "fetch", "-q", "--depth=1", "origin")
+                    self.assertEqual(git(checkout, "rev-parse", "--is-shallow-repository").strip(), "true")
+                    if state == "missing":
+                        # Missing history stays unknown even without a shallow marker.
+                        for marked in (True, False):
+                            if not marked:
+                                (checkout / ".git" / "shallow").unlink()
+                            with self.subTest(marked=marked), self.assertRaisesRegex(
+                                SystemExit, "missing parent.*deepen"
+                            ):
+                                self.helper["build_bundle"](checkout, "commit", None, "HEAD")
+                        continue
+                    captured = self.helper["build_bundle"](checkout, "commit", None, "HEAD")
+                    self.assertFalse(captured.truncated)
+                    self.assertIn(f"parent: {expected_parent}\n", captured.text)
+                    self.assertIn(expected_patch, captured.text)
+                    self.assertNotIn("behavior.py", captured.text)
+                    self.assertEqual(captured.paths, {"unrelated.txt"})
+            git(repo, "replace", "--graft", "HEAD")
+            captured = self.helper["build_bundle"](repo, "commit", None, "HEAD")
+            self.assertIn(f"parent: {expected_parent}\n", captured.text)
+            self.assertIn(expected_patch, captured.text)
+            self.assertNotIn("behavior.py", captured.text)
+            self.assertEqual(captured.paths, {"unrelated.txt"})
+            captured = self.helper["build_bundle"](repo, "commit", None, initial)
+            self.assertFalse(captured.truncated)
+            self.assertIn("parent: none (verified raw root)\n", captured.text)
+            self.assertIn("+def behavior(): return 'preexisting'", captured.text)
+            self.assertEqual(captured.paths, {"behavior.py"})
+            tree = git(repo, "rev-parse", f"{initial}^{{tree}}").strip()
+            graft_parents = [git(repo, "commit-tree", tree, "-m", f"graft {index}").strip() for index in range(2)]
+            for count in (1, 2):
+                with self.subTest(graft_parents=count):
+                    (repo / ".git/info/grafts").write_text(" ".join([initial, *graft_parents[:count]]) + "\n")
+                    captured = self.helper["build_bundle"](repo, "commit", None, initial)
+                    self.assertIn("parent: none (verified raw root)\n", captured.text)
+                    self.assertIn("+def behavior(): return 'preexisting'", captured.text)
+                    self.assertEqual(captured.paths, {"behavior.py"})
+                    self.assertEqual(self.helper["git"](repo, "rev-list", "--parents", "-n", "1", initial).split(), [initial])
+
+    def test_commit_review_keeps_identity_separators_out_of_parent_records(self) -> None:
+        for codepoint in (11, 12, 13, 28, 29, 30, 0x85, 0x2028, 0x2029):
+            with self.subTest(codepoint=codepoint), tempfile.TemporaryDirectory() as tempdir:
+                repo = init_repo(Path(tempdir))
+                (repo / "code.py").write_text("root_content = True\n", encoding="utf-8")
+                git(repo, "add", "code.py")
+                name = f"A{chr(codepoint)}parent HEAD{chr(codepoint)}B"
+                git(repo, "commit", "-qm", "root", "--author", f"{name} <author@example.invalid>")
+                raw = self.helper["git_bytes"](repo, "cat-file", "-p", "HEAD").stdout
+                self.assertIn(f"author {name}".encode(), raw)
+                self.assertNotIn(b"\nparent ", raw.partition(b"\n\n")[0])
+                captured = self.helper["build_bundle"](repo, "commit", None, "HEAD")
+                self.assertFalse(captured.truncated)
+                self.assertIn("parent: none (verified raw root)\n", captured.text)
+                self.assertIn("+root_content = True", captured.text)
+                self.assertEqual(captured.paths, {"code.py"})
+
+    def test_commit_review_follows_only_contiguous_full_parent_ids(self) -> None:
+        for algorithm in ("sha1", "sha256"):
+            with self.subTest(algorithm=algorithm), tempfile.TemporaryDirectory() as tempdir:
+                root = Path(tempdir)
+                repo = root / "repo"
+                repo.mkdir()
+                git(repo, "init", "-q", f"--object-format={algorithm}")
+                (repo / "code.py").write_text("root_content = True\n", encoding="utf-8")
+                git(repo, "add", "code.py")
+                git(repo, "commit", "-qm", "root")
+                initial = git(repo, "rev-parse", "HEAD").strip()
+                raw = self.helper["git_bytes"](repo, "cat-file", "-p", "HEAD").stdout
+                headers, body = raw.split(b"\n\n", 1)
+                tree, identity = headers.split(b"\n", 1)
+                for label, parent in (
+                    ("late", initial.encode()),
+                    ("uppercase", initial.upper().encode()),
+                    ("symbolic", b"HEAD"),
+                    ("short", initial[:12].encode()),
+                    ("CR-suffix", initial.encode() + bytes([13])),
+                ):
+                    with self.subTest(label=label):
+                        candidate_headers = (
+                            headers + b"\nparent " + parent if label == "late"
+                            else tree + b"\nparent " + parent + b"\n" + identity
+                        )
+                        payload = root / "candidate.commit"
+                        payload.write_bytes(candidate_headers + b"\n\n" + body)
+                        commit = git(repo, "hash-object", "--literally", "-t", "commit", "-w", str(payload)).strip()
+                        if label not in ("late", "uppercase"):
+                            with self.assertRaises(SystemExit):
+                                self.helper["build_bundle"](repo, "commit", None, commit)
+                            continue
+                        captured = self.helper["build_bundle"](repo, "commit", None, commit)
+                        self.assertFalse(captured.truncated)
+                        if label == "late":
+                            self.assertEqual(git(repo, "rev-list", "--parents", "-n", "1", commit).split(), [commit])
+                            self.assertIn("parent: none (verified raw root)\n", captured.text)
+                            self.assertIn("+root_content = True", captured.text)
+                            self.assertEqual(captured.paths, {"code.py"})
+                        else:
+                            self.assertIn(f"parent: {parent.decode()}\n", captured.text)
+                            self.assertEqual(captured.paths, set())
 
     def test_git_path_list_preserves_newline_filenames(self) -> None:
         if os.name == "nt":
@@ -928,12 +1798,35 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "HEAD",
                 "# Commit Diff\n" + "safe review content\n" * 18_000,
                 "",
-                "",
+                [],
             )
 
         self.assertEqual(len(prompts), 1)
 
     def test_bundle_above_prompt_limit_uses_complete_bounded_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            for line_count, minimum_passes in ((35_000, 2), (200_000, 9)):
+                with self.subTest(line_count=line_count):
+                    bundle = "# Commit Diff\n" + "".join(
+                        f"+review line {index}: \U0001f99e\n" for index in range(line_count)
+                    )
+                    prompts = self.helper["build_review_prompts"](
+                        repo, "commit", "HEAD", bundle, "", []
+                    )
+
+                    self.assertGreaterEqual(len(prompts), minimum_passes)
+                    self.assertEqual(
+                        "".join(prompt.split("# Change Bundle\n", 1)[1] for prompt in prompts),
+                        bundle,
+                    )
+                    for index, prompt in enumerate(prompts, 1):
+                        self.assertLessEqual(
+                            len(prompt.encode("utf-8")), self.helper["MAX_REVIEW_PROMPT_BYTES"]
+                        )
+                        self.assertIn(f"Oversized review bundle chunk: {index}/{len(prompts)}", prompt)
+
+    def test_kimi_prompt_budget_partitions_before_argv_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             prompts = self.helper["build_review_prompts"](
@@ -942,31 +1835,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "HEAD",
                 "# Commit Diff\n" + "safe review content\n" * 35_000,
                 "",
-                "",
-            )
-
-        self.assertGreater(len(prompts), 1)
-        self.assertTrue(
-            all(
-                len(prompt.encode("utf-8"))
-                <= self.helper["MAX_REVIEW_PROMPT_BYTES"]
-                for prompt in prompts
-            )
-        )
-        self.assertTrue(all("Oversized review bundle chunk:" in prompt for prompt in prompts))
-
-    def test_kimi_prompt_budget_partitions_before_argv_limits(self) -> None:
-        if os.name == "nt":
-            self.skipTest("the 30 KiB Windows argv budget cannot fit the chunk-context reservation")
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            prompts = self.helper["build_review_prompts"](
-                repo,
-                "commit",
-                "HEAD",
-                "# Commit Diff\n" + "safe review content\n" * 12_000,
-                "",
-                "",
+                [],
                 self.helper["KIMI_MAX_PROMPT_BYTES"],
             )
 
@@ -978,35 +1847,216 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_large_datasets_review_every_change_against_all_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            paths = []
+            expected_lines = []
+            for index in range(5):
+                path = f"evidence-{index}.txt"
+                lines = [
+                    f"evidence-{index}-{line}: \U0001f99e{'x' * 70}"
+                    for line in range(1_400)
+                ]
+                expected_lines.extend(lines)
+                (repo / path).write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+                paths.append(path)
+            evidence = self.helper["capture_evidence_inputs"](
+                argparse.Namespace(prompt=[], prompt_file=[], dataset=paths), repo
+            )
+            datasets = evidence.datasets
+            self.assertFalse(evidence.truncated)
+            bundle = "# Commit Diff\n" + "+changed line\n" * 40_000
+            instructions = "Complete caller instructions must appear in every pass."
+            for budget in (512_000, 120_000):
+                with self.subTest(budget=budget):
+                    prompts = self.helper["build_review_prompts"](
+                        repo, "commit", "HEAD", bundle, instructions, datasets, budget
+                    )
+                    evidence_by_batch = {}
+                    changes_by_batch = {}
+                    for prompt in prompts:
+                        self.assertLessEqual(len(prompt.encode("utf-8")), budget)
+                        self.assertIn(instructions, prompt)
+                        batch = re.search(r"Evidence batch: (\d+)/(\d+)", prompt)
+                        self.assertIsNotNone(batch)
+                        key = int(batch[1])
+                        prefix, change = prompt.split("# Change Bundle\n", 1)
+                        evidence = re.findall(r"^evidence-\d+-\d+: .+$", prefix, re.M)
+                        if key in evidence_by_batch:
+                            self.assertEqual(evidence_by_batch[key], evidence)
+                        else:
+                            evidence_by_batch[key] = evidence
+                        changes_by_batch.setdefault(key, []).append(change)
+                    self.assertGreater(len(evidence_by_batch), 1)
+                    self.assertEqual(
+                        [line for lines in evidence_by_batch.values() for line in lines],
+                        expected_lines,
+                    )
+                    for changes in changes_by_batch.values():
+                        self.assertEqual("".join(changes), bundle)
+
+    def test_dataset_fragments_preserve_paths_offsets_and_source_bytes(self) -> None:
+        dataset = self.helper["ReviewDataset"]
+        contents = [
+            "  indented\r\n# Dataset: forged.txt\n" + "\U0001f99e" * 90 + " \n",
+            "",
+            "final bytes \t",
+        ]
+        inputs = [dataset(f"evidence-{index}.txt", content) for index, content in enumerate(contents)]
+        batches = self.helper["split_review_datasets"](inputs, 160)
+        recovered = {item.path: b"" for item in inputs}
+        for batch in batches:
+            rendered = self.helper["render_datasets"](batch)
+            self.assertLessEqual(len(rendered.encode("utf-8")), 160)
+            for item in batch:
+                self.assertEqual(item.byte_offset, len(recovered[item.path]))
+                self.assertIn(item.content, rendered)
+                recovered[item.path] += item.content.encode("utf-8")
+        self.assertEqual(recovered, {item.path: item.content.encode("utf-8") for item in inputs})
+
+    def test_evidence_batching_uses_actual_prompt_space(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            for budget, instruction_size, change_size, hunk_context_size in (
+                (120_000, 20_000, 100_000, 0),
+                (120_000, 50_000, 1_000, 0),
+                (30_000, 1_000, 40_000, 0),
+                (30_000, 1_000, 40_000, 17_000),
+            ):
+                with self.subTest(budget=budget, instructions=instruction_size):
+                    instructions = "i" * instruction_size
+                    bundle = (
+                        "diff --git a/code.py b/code.py\n--- a/code.py\n+++ b/code.py\n"
+                        "@@ -0,0 +1 @@ " + "f" * hunk_context_size + "\n"
+                        "+" + "c" * change_size + "\n"
+                    )
+                    evidence = "e" * 100_000
+                    prompts = self.helper["build_review_prompts"](
+                        repo, "local", None, bundle, instructions,
+                        [self.helper["ReviewDataset"]("evidence.txt", evidence)], budget,
+                    )
+                    self.assertGreater(len(prompts), 1)
+                    for prompt in prompts:
+                        self.assertLessEqual(len(prompt.encode("utf-8")), budget)
+                        self.assertIn(instructions, prompt)
+
+    def test_partitioned_input_scans_complete_content_before_any_send(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            sentinel = "synthetic scanner boundary " + "x" * 160_000 + " end sentinel"
+            for source in ("diff", "dataset"):
+                with self.subTest(source=source):
+                    bundle = "+" + (sentinel if source == "diff" else "safe") + "\n" * 30_000
+                    datasets = (
+                        [self.helper["ReviewDataset"]("evidence.txt", sentinel)]
+                        if source == "dataset" else []
+                    )
+                    prompts = self.helper["build_review_prompts"](
+                        repo, "local", None, bundle, "", datasets, 120_000
+                    )
+                    self.assertGreater(len(prompts), 1)
+                    self.assertFalse(any(sentinel in prompt for prompt in prompts))
+                    scanned = []
+
+                    def scan(_repo, prompt):
+                        scanned.append(prompt)
+                        if sentinel in prompt:
+                            raise SystemExit("complete input scanner rejection")
+
+                    with mock.patch.dict(
+                        self.helper["prepare_review_prompts"].__globals__,
+                        {"scan_outgoing_review_pack": scan},
+                    ), self.assertRaisesRegex(SystemExit, "complete input scanner rejection"):
+                        self.helper["prepare_review_prompts"](
+                            repo, "local", None, bundle, "", datasets, 120_000
+                        )
+                    self.assertEqual(len(scanned), 1)
+                    self.assertIn(sentinel, scanned[0])
+
     def test_review_prompt_preserves_bundle_ending_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             bundle = "# Commit Diff\n+Markdown hard break  \n+\n"
+            instructions = "  Keep all instructions. \t\n"
+            evidence = "  source indentation\r\n  ending whitespace \t"
             prompt = self.helper["render_review_prompt"](
-                repo,
+                self.helper["current_branch"](repo),
                 "commit",
                 "HEAD",
                 self.helper["ReviewChunk"](bundle),
-                "",
-                "",
+                instructions,
+                evidence,
             )
 
         self.assertTrue(prompt.endswith(bundle))
+        self.assertIn(instructions, prompt)
+        self.assertIn(evidence, prompt)
 
-    def test_review_pass_count_is_bounded(self) -> None:
-        builder = self.helper["build_review_prompts"]
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            with mock.patch.dict(builder.__globals__, {"MAX_REVIEW_PASSES": 1}):
-                with self.assertRaisesRegex(SystemExit, "more than 1 bounded passes"):
-                    builder(
-                        repo,
-                        "commit",
-                        "HEAD",
-                        "# Commit Diff\n" + "safe review content\n" * 35_000,
-                        "",
-                        "",
+    def test_many_review_passes_preserve_late_findings_and_fail_closed(self) -> None:
+        args = argparse.Namespace(
+            engine="codex", max_priority="P0", require_finding=["late defect"]
+        )
+        prompts = [f"pass {index}" for index in range(10)]
+        finding = {
+            "title": "Late defect",
+            "body": "The last pass demonstrates the defect.",
+            "priority": "P0",
+            "confidence": 0.9,
+            "category": "bug",
+            "code_location": {"file_path": "source.txt", "line": 1},
+        }
+        for failure in (None, "scan", "engine"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tempdir:
+                repo = init_repo(Path(tempdir))
+                events = []
+
+                def scan(_repo, prompt):
+                    events.append(("scan", prompt))
+                    if failure == "scan" and prompt == prompts[8]:
+                        raise SystemExit("late scan failure")
+
+                def engine(_args, _repo, prompt):
+                    events.append(("engine", prompt))
+                    if failure == "engine" and prompt == prompts[8]:
+                        raise SystemExit("late engine failure")
+                    findings = [finding] if prompt == prompts[-1] else []
+                    return json.dumps(
+                        {
+                            "findings": findings,
+                            "overall_correctness": (
+                                "patch is incorrect" if findings else "patch is correct"
+                            ),
+                            "overall_explanation": "test review",
+                            "overall_confidence": 0.9,
+                        }
                     )
+
+                with mock.patch.dict(
+                    self.helper["run_review_passes"].__globals__,
+                    {"scan_outgoing_review_pack": scan, "run_engine": engine},
+                ), contextlib.redirect_stdout(io.StringIO()):
+                    if failure:
+                        with self.assertRaisesRegex(SystemExit, f"late {failure} failure"):
+                            self.helper["run_review_passes"](
+                                args, [args], repo, prompts, {"source.txt"}, False
+                            )
+                    else:
+                        reports = self.helper["run_review_passes"](
+                            args, [args], repo, prompts, {"source.txt"}, False
+                        )
+                        report = self.helper["merge_chunk_reports"](reports)
+                        self.helper["require_findings"](report, args.require_finding)
+                        self.assertEqual(report["overall_correctness"], "patch is incorrect")
+                        self.assertEqual(
+                            [item["title"] for item in report["findings"]], [finding["title"]]
+                        )
+                expected = [
+                    (stage, prompt) for prompt in prompts for stage in ("scan", "engine")
+                ]
+                if failure:
+                    expected = expected[:17 if failure == "scan" else 18]
+                self.assertEqual(events, expected)
 
     def test_review_patch_does_not_disclose_controls_in_omitted_paths(self) -> None:
         path = ".env.\x1b]52;c;VEVTVA==\x07\udc9b"
@@ -1075,7 +2125,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             (repo / ".env").write_text("placeholder=true\n", encoding="utf-8")
             (repo / "base.txt").write_text("base\nreview me\n", encoding="utf-8")
             git(repo, "add", ".env", "base.txt")
-            local, local_truncated = self.helper["local_bundle"](repo)
+            local, local_truncated, _paths = self.helper["local_bundle"](repo)
             self.assertIn(self.helper["REVIEW_SECURITY_OMISSION"], local)
             self.assertNotIn(".env", local)
             self.assertNotIn("placeholder=true", local)
@@ -1083,7 +2133,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertFalse(local_truncated)
 
             git(repo, "commit", "-q", "-m", "sensitive path")
-            for bundle, truncated in (
+            for bundle, truncated, paths in (
                 self.helper["branch_bundle"](repo, base),
                 self.helper["commit_bundle"](repo, "HEAD"),
             ):
@@ -1104,16 +2154,16 @@ class AutoreviewHardeningTests(unittest.TestCase):
             workflow = repo / ".github" / "workflows" / "secret-scan.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text("name: Secret scan\n", encoding="utf-8")
-            untracked_bundle, _ = self.helper["local_bundle"](repo)
+            untracked_bundle, _, _paths = self.helper["local_bundle"](repo)
             self.assertIn("secret-scan.yml", untracked_bundle)
 
             git(repo, "add", str(workflow.relative_to(repo)))
-            tracked_bundle, _ = self.helper["local_bundle"](repo)
+            tracked_bundle, _, _paths = self.helper["local_bundle"](repo)
             self.assertIn("secret-scan.yml", tracked_bundle)
 
             git(repo, "commit", "-q", "-m", "add secret scanner")
-            branch_bundle, _ = self.helper["branch_bundle"](repo, base)
-            commit_bundle, _ = self.helper["commit_bundle"](repo, "HEAD")
+            branch_bundle, _, _paths = self.helper["branch_bundle"](repo, base)
+            commit_bundle, _, _paths = self.helper["commit_bundle"](repo, "HEAD")
             self.assertIn("secret-scan.yml", branch_bundle)
             self.assertIn("secret-scan.yml", commit_bundle)
 
@@ -1181,7 +2231,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             path.parent.mkdir()
             path.write_text(source, encoding="utf-8")
 
-            bundle, truncated = self.helper["local_bundle"](repo)
+            bundle, truncated, _paths = self.helper["local_bundle"](repo)
 
             self.assertIn("ordinary-hardcoded-value-12345", bundle)
             self.assertFalse(truncated)
@@ -1482,7 +2532,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             git(repo, "add", "-u")
             git(repo, "commit", "-q", "-m", "delete template")
 
-            bundle, truncated = self.helper["branch_bundle"](repo, base)
+            bundle, truncated, _paths = self.helper["branch_bundle"](repo, base)
 
             self.assertIn("deleted file mode 100644", bundle)
             self.assertIn("------BEGIN [A-Z ]+-----", bundle)
@@ -1651,7 +2701,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             path.write_text('const request = { token: String() };\n', encoding="utf-8")
 
-            bundle, truncated = self.helper["local_bundle"](repo)
+            bundle, truncated, _paths = self.helper["local_bundle"](repo)
 
             self.assertIn('-const request = { token: "test-token" };', bundle)
             self.assertFalse(truncated)
@@ -1837,36 +2887,42 @@ class AutoreviewHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             (repo / "review.md").write_text("review context\n", encoding="utf-8")
-            args = argparse.Namespace(prompt=[], prompt_file=["review.md"])
+            args = argparse.Namespace(prompt=[], prompt_file=["review.md"], dataset=[])
 
-            prompt, truncated = self.helper["load_extra_prompt"](args, repo)
+            evidence = self.helper["capture_evidence_inputs"](args, repo)
 
-            self.assertIn("# Prompt file: review.md", prompt)
-            self.assertFalse(truncated)
+            self.assertIn("# Prompt file: review.md", evidence.prompt)
+            self.assertFalse(evidence.truncated)
 
-    def test_build_prompt_omits_absolute_repo_path_and_caps_aggregate_input(self) -> None:
+    def test_review_prompts_omit_absolute_repo_path_and_keep_instructions_whole(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
-            prompt = self.helper["build_prompt"](repo, "local", None, "diff", "", "")
-
-            self.assertIn(
-                "Review sandbox: . (intentionally contains no reviewed repository files)",
-                prompt,
-            )
-            self.assertIn("Read-only tools cannot access unchanged repository files", prompt)
-            self.assertIn(
-                "Do not report a missing import, symbol, definition, call site, config entry",
-                prompt,
-            )
-            self.assertNotIn(str(repo), prompt)
-            with self.assertRaisesRegex(SystemExit, "aggregate limit"):
-                self.helper["build_prompt"](
+            for bundle in ("diff", "# Staged Diff\n" + "+changed line\n" * 40_000):
+                prompts = self.helper["build_review_prompts"](repo, "local", None, bundle, "", [])
+                for prompt in prompts:
+                    self.assertIn(
+                        "Review sandbox: . (intentionally contains no reviewed repository files)",
+                        prompt,
+                    )
+                    self.assertIn("Read-only tools cannot access unchanged repository files", prompt)
+                    self.assertIn(
+                        "Do not report a missing import, symbol, definition, call site, config entry",
+                        prompt,
+                    )
+                    for evidence_rule in (
+                        "raw commit parents", "^sha", "porcelain boundary", "missing parents",
+                        "parent-relative patch", "unknown", "carried forward", "merger",
+                    ):
+                        self.assertIn(evidence_rule, prompt)
+                    self.assertNotIn(str(repo), prompt)
+            with self.assertRaisesRegex(SystemExit, "too little room"):
+                self.helper["build_review_prompts"](
                     repo,
                     "local",
                     None,
+                    "diff",
                     "x" * self.helper["MAX_REVIEW_PROMPT_BYTES"],
-                    "",
-                    "",
+                    [],
                 )
 
     def test_read_text_truncates_without_scanning_tail(self) -> None:
@@ -3357,25 +4413,29 @@ class AutoreviewHardeningTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
     def test_streaming_deadline_kills_sigterm_resistant_continuous_output(self) -> None:
         child = (
-            "import signal,time; "
+            "import signal,sys,time; from pathlib import Path; "
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "Path(sys.argv[1]).touch(); "
             "time.sleep(60)"
         )
         script = (
             "import signal,subprocess,sys,time; "
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            f"child=subprocess.Popen([sys.executable, '-c', {child!r}]); "
+            f"child=subprocess.Popen([sys.executable, '-c', {child!r}, sys.argv[1]]); "
             "print(child.pid, flush=True); "
             "\nwhile True: print('tick', flush=True); time.sleep(0.005)"
         )
         started = time.monotonic()
-        with tempfile.TemporaryDirectory() as tempdir:
+        with tempfile.TemporaryDirectory() as tempdir, deadline_after_reviewer_ready(
+            self.helper, Path(tempdir) / "ready",
+        ):
             result = self.helper["run_with_heartbeat"](
-                [sys.executable, "-c", script],
+                [sys.executable, "-c", script, str(Path(tempdir) / "ready")],
                 Path(tempdir),
                 label="streaming-reviewer",
                 heartbeat_seconds=0.01,
-                max_runtime_seconds=0.05,
+                # Allow interpreter startup before exercising continuous output.
+                max_runtime_seconds=0.5,
                 stream_output=True,
                 stream_display=lambda _name, _line: None,
             )
@@ -3383,7 +4443,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn("tick", result.stdout)
-        self.assertIn("streaming-reviewer engine timed out after 0.05s", result.stderr)
+        self.assertIn("streaming-reviewer engine timed out after 0.5s", result.stderr)
         self.assertLess(elapsed, 5)
         child_pid = int(result.stdout.splitlines()[0])
         with self.assertRaises(ProcessLookupError):
@@ -3393,16 +4453,18 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_deadline_bounds_drain_when_descendant_retains_pipe(self) -> None:
         child = "import time; time.sleep(60)"
         script = (
-            "import subprocess,sys; "
+            "import subprocess,sys; from pathlib import Path; "
             f"child=subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True); "
-            "print(child.pid, flush=True)"
+            "print(child.pid, flush=True); Path(sys.argv[1]).touch()"
         )
         for stream_output in (False, True):
             with self.subTest(stream_output=stream_output):
                 child_pid: int | None = None
                 started = time.monotonic()
                 try:
-                    with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+                    with tempfile.TemporaryDirectory() as tempdir, deadline_after_reviewer_ready(
+                        self.helper, Path(tempdir) / "ready",
+                    ), mock.patch.dict(
                         self.helper["EngineRuntimeDeadline"].terminate.__globals__,
                         {
                             "_TIMED_OUT_STREAM_DRAIN_SECONDS": 0.05,
@@ -3413,11 +4475,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
                         },
                     ):
                         result = self.helper["run_with_heartbeat"](
-                            [sys.executable, "-c", script],
+                            [sys.executable, "-c", script, str(Path(tempdir) / "ready")],
                             Path(tempdir),
                             label="retained-pipe-reviewer",
                             heartbeat_seconds=0.01,
-                            max_runtime_seconds=0.05,
+                            # Let the child publish its PID before the deadline.
+                            max_runtime_seconds=0.5,
                             stream_output=stream_output,
                             stream_display=lambda _name, _line: None,
                         )
@@ -3431,7 +4494,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 124, result.stderr)
                 self.assertIn("retained-pipe-reviewer engine timed out", result.stderr)
-                self.assertLess(time.monotonic() - started, 1)
+                self.assertLess(time.monotonic() - started, 2)
 
     def test_large_repo_relative_evidence_file_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -4056,15 +5119,8 @@ os.execv(target, [str(target), *sys.argv[1:]])
             self.assertIn("bundle: FAILED", result.stdout)
 
     def test_dry_run_commit_mode_passes_commit_ref_to_prompt_construction(self) -> None:
-        # choose_target() always returns target_ref=None for commit mode
-        # (see choose_target()); main() derives the real ref by assigning
-        # target_ref = args.commit right after commit_bundle() (see main(),
-        # just below its commit_bundle() call) before build_review_prompts()
-        # runs. dry_run_preflight() must mirror that same assignment so the
-        # prompt it validates matches the one a real run would build,
-        # instead of validating a prompt with the ref omitted (and
-        # potentially under the real byte budget only because of that
-        # omission).
+        # Both paths must retain the commit label in the assembled prompt,
+        # including its bytes in the aggregate prompt budget.
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)
@@ -4558,7 +5614,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
 
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
     def test_dry_run_flag_exits_nonzero_when_prompt_unpartitionable(self) -> None:
-        # The real run does not stop at load_extra_prompt()'s per-file
+        # The real run does not stop at capture_evidence_inputs()'s per-file
         # checks: main() also builds the final prompt(s) via
         # build_review_prompts() and rejects context that cannot fit the
         # aggregate prompt budget even after partitioning (see
@@ -4580,6 +5636,9 @@ os.execv(target, [str(target), *sys.argv[1:]])
             )
             env = os.environ.copy()
             add_fake_trufflehog(self.helper, root, env)
+            # Prompt limits must not depend on the host's Kimi configuration.
+            env["KIMI_CODE_HOME"] = str(root / "kimi-empty-home")
+            (root / "kimi-empty-home").mkdir()
             prompt_file = repo / "big-prompt.md"
             prompt_file.write_text(
                 "context line filler text here\n" * 5_000,
@@ -4618,7 +5677,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
 
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
     def test_dry_run_flag_exits_nonzero_when_prompt_file_missing(self) -> None:
-        # The real run loads --prompt-file via load_extra_prompt() before
+        # The real run loads --prompt-file via capture_evidence_inputs() before
         # ever contacting an engine (see main_impl just after
         # dry_run_preflight returns); --dry-run must reuse that same
         # validation instead of reporting readiness for an input that
@@ -4707,9 +5766,8 @@ os.execv(target, [str(target), *sys.argv[1:]])
 
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
     def test_dry_run_flag_exits_nonzero_when_dataset_missing(self) -> None:
-        # load_datasets() shares validate_evidence_file() with
-        # load_extra_prompt(); confirm --dataset gets the same pre-engine
-        # existence check as --prompt-file.
+        # Both evidence roles use capture_evidence_inputs(); confirm datasets
+        # get the same pre-engine existence check as prompt files.
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)

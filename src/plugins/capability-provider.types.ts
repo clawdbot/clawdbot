@@ -205,6 +205,15 @@ export type WorkerProvider = {
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
   /**
+   * Resolve the exact cleanup handle for this operation, even if no machine was created.
+   * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
+   * Identity is not existence/readiness proof; destroy still owns teardown confirmation.
+   */
+  resolveAllocation: (
+    profile: WorkerProfile,
+    operationId: string,
+  ) => Promise<{ leaseId: string; sharedHost: boolean }>;
+  /**
    * Provision or adopt the lease for this operation id.
    * Repeating the same operation id must be idempotent across gateway restarts.
    */

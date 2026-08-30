@@ -7,9 +7,11 @@ import { describe, expect, it } from "vitest";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   admitInitialUserMessageHandoff,
+  getChatRunOwner,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatRunOwner,
   setChatSessionProjection,
 } from "./history-merge.ts";
 import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
@@ -281,6 +283,7 @@ describe("pane-owned canonical session projection", () => {
       scope: initialScope,
     });
     setChatSessionProjection(owner, runningProjection);
+    setChatRunOwner(owner, "same-live-run");
     const learnedScope = {
       ...initialScope,
       sessionId: "learned-session",
@@ -294,6 +297,8 @@ describe("pane-owned canonical session projection", () => {
     expect(projection.entries[0]?.live).toBe(true);
     expect(projection.runs).toBe(runningProjection.runs);
     expect(projection.runs["same-live-run"]?.status).toBe("streaming");
+    expect(getChatRunOwner(owner)).toBe("same-live-run");
+    expect(getChatRunOwner({})).toBeUndefined();
   });
 
   it.each([
@@ -350,12 +355,25 @@ describe("pane-owned canonical session projection", () => {
       scope: previous,
     });
     setChatSessionProjection(owner, running);
+    setChatRunOwner(owner, "obsolete-run");
 
     const projection = getChatSessionProjection(owner, [], next);
 
     expect(projection.messages).toEqual([]);
     expect(projection.runs).toEqual({});
     expect(projection.scope).toEqual(next);
+    expect(getChatRunOwner(owner)).toBeUndefined();
+  });
+
+  it("retires run display ownership when the same session is reset", () => {
+    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
+    reduceChatSessionProjection(owner, { type: "runDelta", runId: "before-reset" });
+    setChatRunOwner(owner, "before-reset");
+
+    reduceChatSessionProjection(owner, { type: "sessionReset" });
+
+    expect(getChatRunOwner(owner)).toBeUndefined();
+    expect(getChatSessionProjection(owner, owner.chatMessages).runs).toEqual({});
   });
 
   it("retains a proven live branch when another consumer omits optional scope", () => {

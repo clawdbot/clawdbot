@@ -349,6 +349,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           requireExplicitMessageTarget:
             attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey),
           sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+          deferSourceMessageToolDelivery: attempt.deferSourceMessageToolDelivery,
           taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
           inboundEventKind: attempt.currentInboundEventKind,
           disableMessageTool: attempt.disableMessageTool,

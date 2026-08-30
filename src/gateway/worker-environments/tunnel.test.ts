@@ -123,13 +123,21 @@ describe("worker tunnel manager", () => {
   });
 
   it("fences stale owners when a replacement epoch takes ownership", async () => {
-    const fake = fakeRunner();
+    const fake = fakeRunner((argv) =>
+      argv.at(-1)?.includes('process.stdout.write("quiesced "')
+        ? success(`quiesced ${"c".repeat(32)}\n`)
+        : undefined,
+    );
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const stale = await startTestTunnel(manager, "worker:epoch", 4);
+    const quiescence = await stale.quiesceWorkspace("/home/worker/workspace");
 
     await expect(startTestTunnel(manager, "worker:epoch", 3)).rejects.toThrow("epoch is stale");
 
     const replacement = await startTestTunnel(manager, "worker:epoch", 5);
+    const priorCommands = fake.runs.length;
+    await expect(quiescence.resume()).resolves.toBeUndefined();
+    expect(fake.runs).toHaveLength(priorCommands);
     await expect(stale.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
       "Worker tunnel owner is no longer connected",
     );

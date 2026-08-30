@@ -81,6 +81,8 @@ type EmbeddedAttemptResultState = Pick<
   | "finalPromptText"
   | "messagesSnapshot"
   | "beforeAgentFinalizeRevisionReason"
+  | "beforeAgentFinalizeRevisionDisableTools"
+  | "beforeAgentFinalizeDiscarded"
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
@@ -213,6 +215,7 @@ export function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
 ): EmbeddedRunAttemptWithReceiptEvidence {
   const { attempt, state, subscription } = input;
+  const beforeAgentFinalizeDiscarded = state.beforeAgentFinalizeDiscarded === true;
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
   const {
     assistantTexts,
@@ -283,6 +286,7 @@ export function completeEmbeddedAttemptResult(
 
   if (
     attempt.operation !== "settled-tool-finalization" &&
+    !beforeAgentFinalizeDiscarded &&
     input.hookRunner?.hasHooks("llm_output") &&
     shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
   ) {
@@ -368,7 +372,9 @@ export function completeEmbeddedAttemptResult(
   });
   const completedClientToolCalls = collectCompletedClientToolCalls(input.clientToolCallSlots);
   const clientToolCalls =
-    completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
+    !beforeAgentFinalizeDiscarded && completedClientToolCalls.length > 0
+      ? completedClientToolCalls
+      : undefined;
   const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
   const lastToolError = getLastToolError();
   const heartbeatToolResponse = getHeartbeatToolResponse();
@@ -458,7 +464,14 @@ export function completeEmbeddedAttemptResult(
     setTerminalLifecycleMeta,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
-    assistantTexts,
+    assistantTexts: beforeAgentFinalizeDiscarded ? [] : assistantTexts,
+    lastAssistant: beforeAgentFinalizeDiscarded ? undefined : state.lastAssistant,
+    currentAttemptAssistant: beforeAgentFinalizeDiscarded
+      ? undefined
+      : state.currentAttemptAssistant,
+    currentAttemptCompletedAssistant: beforeAgentFinalizeDiscarded
+      ? undefined
+      : state.currentAttemptCompletedAssistant,
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),

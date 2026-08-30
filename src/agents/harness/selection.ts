@@ -42,14 +42,22 @@ import { resolveAgentHarnessAvailabilityDecision } from "./availability.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
-import { AgentHarnessPreflightError, MissingAgentHarnessError } from "./errors.js";
+import {
+  AgentHarnessPreflightError,
+  MissingAgentHarnessError,
+  PluginHarnessSourceFinalizationUnsupportedError,
+} from "./errors.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
 import type { AgentHarnessPolicy } from "./policy.js";
-import { listRegisteredAgentHarnesses, resolveAgentHarnessOwnerPluginId } from "./registry.js";
+import {
+  hasBundledCodexAgentHarnessSourceFinalization,
+  listRegisteredAgentHarnesses,
+  resolveAgentHarnessOwnerPluginId,
+} from "./registry.js";
 import {
   buildAgentHarnessSupportContext,
   compareHarnessSupport,
@@ -474,7 +482,22 @@ async function runSelectedAgentHarnessAttempt(
           effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
         );
         return pluginAttempt.runWithHostScope(() =>
-          runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams),
+          selection.builtIn
+            ? runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams)
+            : runAgentHarnessLifecycleAttempt(
+                harness,
+                effectiveAttemptParams,
+                (lifecycleParams) => {
+                  const privateCodexExecutor = createPrivateCodexSourceFinalizationExecutor({
+                    harness,
+                    params: lifecycleParams,
+                    onBeforeAgentFinalize: attemptParams.onBeforeAgentFinalize,
+                  });
+                  return privateCodexExecutor
+                    ? privateCodexExecutor(lifecycleParams)
+                    : harness.runAttempt(lifecycleParams);
+                },
+              ),
         );
       }),
     );
@@ -658,7 +681,9 @@ function withoutPluginHarnessPrivateState(
   const {
     admittedRunContext: _admittedRunContext,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    deferSourceMessageToolDelivery: _deferSourceMessageToolDelivery,
     hostCapabilities: _hostCapabilities,
+    onBeforeAgentFinalize: _onBeforeAgentFinalize,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
@@ -667,6 +692,66 @@ function withoutPluginHarnessPrivateState(
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
   return pluginParams;
+}
+
+type PrivateCodexBeforeAgentFinalize = NonNullable<
+  EmbeddedRunAttemptParams["onBeforeAgentFinalize"]
+>;
+
+type PrivateCodexRunAttempt = (
+  this: AgentHarness,
+  params: import("./types.js").AgentHarnessAttemptParamsV2,
+  onBeforeAgentFinalize: PrivateCodexBeforeAgentFinalize,
+) => ReturnType<AgentHarness["runAttempt"]>;
+
+/**
+ * Hands source-finalization authority to the exact registry-owned Codex
+ * runtime without placing it on the public plugin attempt object.
+ */
+function createPrivateCodexSourceFinalizationExecutor(params: {
+  harness: AgentHarness;
+  params: import("./types.js").AgentHarnessAttemptParamsV2;
+  onBeforeAgentFinalize?: EmbeddedRunAttemptParams["onBeforeAgentFinalize"];
+}):
+  | ((
+      attemptParams: import("./types.js").AgentHarnessAttemptParamsV2,
+    ) => ReturnType<AgentHarness["runAttempt"]>)
+  | undefined {
+  if (!params.onBeforeAgentFinalize) {
+    return undefined;
+  }
+  if (!hasBundledCodexAgentHarnessSourceFinalization(params.harness)) {
+    // Participation-only Matrix turns do not provide this callback. When the
+    // freshness gate is requested, reject unsupported runtimes before provider
+    // work instead of silently delivering without the configured gate.
+    throw new PluginHarnessSourceFinalizationUnsupportedError(params.harness.id);
+  }
+  const sourceFinalizer = params.onBeforeAgentFinalize;
+  const assertActive = params.params.hostCapabilities.assertActive;
+  const guardedFinalizer: PrivateCodexBeforeAgentFinalize = async (event) => {
+    assertActive();
+    const result = await sourceFinalizer(event);
+    assertActive();
+    if (result.action === "continue" || !result.onAccepted) {
+      return result;
+    }
+    const onAccepted = result.onAccepted;
+    return {
+      ...result,
+      onAccepted: async () => {
+        assertActive();
+        await onAccepted();
+        assertActive();
+      },
+    };
+  };
+  return async (attemptParams) =>
+    // SAFETY: The registry attestation above proves this exact bundled Codex harness implements the private second-argument ABI.
+    await (params.harness.runAttempt as PrivateCodexRunAttempt).call(
+      params.harness,
+      attemptParams,
+      guardedFinalizer,
+    );
 }
 
 function preparePluginHarnessParams(

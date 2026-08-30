@@ -29,6 +29,7 @@ import {
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { logInboundDrop } from "./runtime-api.js";
+import { resolveMatrixTurnTakingConfig } from "./turn-taking-coordinator.js";
 import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
@@ -43,6 +44,7 @@ export async function resolveMatrixIngressContent(config: {
   senderId: string;
   roomHistoryTracker: ReturnType<typeof createRoomHistoryTracker>;
   commitInboundEventIfClaimed: () => Promise<void>;
+  turnTakingTransportSupported?: boolean;
 }) {
   const {
     handler,
@@ -86,6 +88,8 @@ export async function resolveMatrixIngressContent(config: {
     markReservedHistorySlotConsumed,
     commitInboundEventIfClaimedAndDiscardReserved,
     roomConfig,
+    turnTakingDisabled,
+    trustedEnhancedFinal,
     allowBotsMode,
     isConfiguredBotSender,
     selfUserId,
@@ -249,7 +253,13 @@ export async function resolveMatrixIngressContent(config: {
     text: mentionPrecheckTextWithTranscript,
     mentionRegexes: agentMentionRegexes,
   });
-  if (isConfiguredBotSender && allowBotsMode === "mentions" && !isDirectMessage && !wasMentioned) {
+  if (
+    isConfiguredBotSender &&
+    allowBotsMode === "mentions" &&
+    !isDirectMessage &&
+    !wasMentioned &&
+    !trustedEnhancedFinal
+  ) {
     logVerboseMessage(
       `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
     );
@@ -269,7 +279,11 @@ export async function resolveMatrixIngressContent(config: {
     displayName: selfDisplayName,
     mentionRegexes: agentMentionRegexes,
   });
-  const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
+  // Authenticated sibling finals are conversation data, never a control plane.
+  // A sibling answer beginning with `/...` must not execute or be rejected as a command.
+  const hasControlCommandInMessage = trustedEnhancedFinal
+    ? false
+    : core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
     useAccessGroups,
     allowTextCommands,
@@ -286,7 +300,7 @@ export async function resolveMatrixIngressContent(config: {
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
   }
-  const shouldRequireMention = isRoom
+  const configuredRequireMention = isRoom
     ? roomConfig?.autoReply === true
       ? false
       : roomConfig?.autoReply === false
@@ -295,28 +309,10 @@ export async function resolveMatrixIngressContent(config: {
           ? roomConfig?.requireMention
           : true
     : false;
-  const mentionDecision = resolveInboundMentionDecision({
-    facts: {
-      // Matrix native mention metadata lets us reliably decide absence even
-      // when no custom mention regex is configured.
-      canDetectMention: true,
-      wasMentioned,
-      hasAnyMention: hasExplicitMention,
-    },
-    policy: {
-      isGroup: isRoom,
-      requireMention: shouldRequireMention,
-      allowTextCommands,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
-    },
-  });
-  const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
-  const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-  if (mentionDecision.shouldSkip) {
-    const pendingHistoryBody = preflightAudioTranscript
-      ? formatAudioTranscriptForAgent(preflightAudioTranscript)
-      : pendingHistoryText || pendingHistoryPollText;
+  const pendingHistoryBody = preflightAudioTranscript
+    ? formatAudioTranscriptForAgent(preflightAudioTranscript)
+    : pendingHistoryText || pendingHistoryPollText;
+  const recordSkippedRoomMessage = async (reason: string) => {
     if (historyLimit > 0 && pendingHistoryBody) {
       const pendingEntry: HistoryEntry = {
         sender: senderId,
@@ -336,8 +332,93 @@ export async function resolveMatrixIngressContent(config: {
         roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
       }
     }
-    logger.info("skipping room message", { roomId, reason: "no-mention" });
+    logger.info("skipping room message", { roomId, reason });
     await commitInboundEventIfClaimed();
+  };
+
+  const turnTakingConfig = resolveMatrixTurnTakingConfig(handler.turnTaking);
+  let enhancedTurnTakingEligible = false;
+  let turnTakingBaselineSequence: number | undefined;
+  let turnTakingInitialActivePreviewResponseIds: string[] | undefined;
+  if (
+    turnTakingConfig.enabled &&
+    config.turnTakingTransportSupported !== false &&
+    !turnTakingDisabled &&
+    handler.turnTakingCoordinator
+  ) {
+    const participationBody =
+      mentionPrecheckTextWithTranscript ||
+      pendingHistoryText ||
+      (isPollEvent ? ((await getPollSnapshot())?.text ?? "") : "");
+    if (hasControlCommandInMessage) {
+      const eligibility = await handler.turnTakingCoordinator.resolveEligibility({
+        cfg,
+        roomId,
+        accountId,
+        senderId,
+        threadId: threadRootId,
+        eventTs,
+        eventId: messageId,
+        trustedEnhancedFinal,
+      });
+      enhancedTurnTakingEligible = eligibility.eligible;
+      if (eligibility.eligible) {
+        turnTakingBaselineSequence = handler.turnTakingCoordinator.observeMessage({
+          roomId,
+          eventId: messageId,
+          senderId,
+          body: participationBody,
+          timestamp: eventTs,
+          threadId: threadRootId,
+        });
+      }
+    } else {
+      const participation = await handler.turnTakingCoordinator.decideParticipation({
+        cfg,
+        roomId,
+        eventId: messageId,
+        senderId,
+        body: participationBody,
+        trustedEnhancedFinal,
+        accountId,
+        threadId: threadRootId,
+        eventTs,
+      });
+      enhancedTurnTakingEligible = participation.eligible;
+      if (participation.eligible) {
+        turnTakingBaselineSequence = participation.baselineSequence;
+        turnTakingInitialActivePreviewResponseIds = participation.initialActivePreviewResponseIds;
+        logVerboseMessage(
+          `matrix: shared turn-taking room=${roomId} event=${messageId} account=${accountId} disposition=${participation.disposition} owner=${participation.ownerAccountId ?? "unknown"}`,
+        );
+        if (participation.disposition === "strongly-silent") {
+          await recordSkippedRoomMessage("turn-taking-strongly-silent");
+          return undefined;
+        }
+      }
+    }
+  }
+  const shouldRequireMention = enhancedTurnTakingEligible ? false : configuredRequireMention;
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      // Matrix native mention metadata lets us reliably decide absence even
+      // when no custom mention regex is configured.
+      canDetectMention: true,
+      wasMentioned,
+      hasAnyMention: hasExplicitMention,
+    },
+    policy: {
+      isGroup: isRoom,
+      requireMention: shouldRequireMention,
+      allowTextCommands,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    },
+  });
+  const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
+  const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
+  if (mentionDecision.shouldSkip) {
+    await recordSkippedRoomMessage("no-mention");
     return undefined;
   }
   if (preflightAudioTranscript) {
@@ -520,7 +601,11 @@ export async function resolveMatrixIngressContent(config: {
     threadRootId,
     thread,
     botLoopProtection,
+    enhancedTurnTakingEligible,
+    turnTakingBaselineSequence,
+    turnTakingInitialActivePreviewResponseIds,
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
+    selfUserId,
   };
 }

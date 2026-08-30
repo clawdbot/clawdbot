@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/agents/*.test.ts",
-    "../../src/agents/*.test.tsx"
+    "../../src/agents/*.test.tsx",
+    "../../src/agents/cli-runner/**/*.test.ts",
+    "../../src/agents/cli-runner/**/*.test.tsx"
   ]
 }

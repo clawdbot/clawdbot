@@ -201,6 +201,65 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts channel-wide turn-taking with an AI next-step decider and room opt-out", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      turnTaking: {
+        enabled: true,
+        redraftDepth: 2,
+        nextStep: { decider: "ai" },
+      },
+      groups: {
+        "!quiet:example.org": { turnTaking: false },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a fixed user-selected turn-taking action", () => {
+    const result = MatrixConfigSchema.safeParse({
+      turnTaking: {
+        enabled: true,
+        redraftDepth: 1,
+        nextStep: { decider: "user", action: "discard" },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    { redraftDepth: 3 },
+    { nextStep: { decider: "user" } },
+    { nextStep: { decider: "ai", action: "redraft" } },
+    { nextStep: { decider: "user", action: "suppress" } },
+  ])("rejects invalid channel-wide turn-taking input %#", (turnTaking) => {
+    expect(MatrixConfigSchema.safeParse({ turnTaking }).success).toBe(false);
+  });
+
+  it.each([
+    { turnTaking: { enabled: true } },
+    { groups: { "!room:example.org": { turnTaking: false } } },
+    { rooms: { "!room:example.org": { turnTaking: false } } },
+  ])("rejects per-account turn-taking overrides %#", (account) => {
+    const result = MatrixConfigSchema.safeParse({ accounts: { work: account } });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.issues)).toContain("channel-wide");
+    }
+  });
+
+  it.each([true, { enabled: false }])(
+    "rejects non-opt-out room turn-taking value %#",
+    (turnTaking) => {
+      expect(
+        MatrixConfigSchema.safeParse({
+          groups: { "!room:example.org": { turnTaking } },
+        }).success,
+      ).toBe(false);
+    },
+  );
 });
 
 describe("MatrixConfigSchema exec approvals", () => {

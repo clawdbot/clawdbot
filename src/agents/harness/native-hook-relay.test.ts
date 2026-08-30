@@ -1457,6 +1457,97 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("runs a bundled turn-local finalizer without a global finalize hook", async () => {
+    const evaluate = vi.fn(async () => ({
+      action: "revise" as const,
+      instruction: "Use the newer room activity before replying.",
+    }));
+    const relay = registerRetainedNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-local-finalizer",
+      runId: "run-local-finalizer",
+      allowedEvents: ["before_agent_finalize"],
+      turnLocalBeforeAgentFinalize: { evaluate },
+      retention: {
+        readClaim: () => undefined,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: () => false,
+        onDispose: () => undefined,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(true);
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "before_agent_finalize",
+        rawPayload: {
+          hook_event_name: "Stop",
+          turn_id: "turn-local-finalizer",
+          last_assistant_message: "Stale draft",
+        },
+      }),
+    ).resolves.toEqual({
+      stdout: `${JSON.stringify({ continue: false })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(evaluate).toHaveBeenCalledWith({
+      turnId: "turn-local-finalizer",
+      lastAssistantMessage: "Stale draft",
+    });
+  });
+
+  it("keeps global finalize hooks disabled for an exclusive bundled finalizer", async () => {
+    const globalFinalize = vi.fn(async () => ({
+      action: "revise" as const,
+      reason: "global revision must stay disabled",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: globalFinalize }]),
+    );
+    const evaluate = vi.fn(async () => ({
+      action: "revise" as const,
+      instruction: "Use the newer source activity.",
+    }));
+    const relay = registerRetainedNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-exclusive-local-finalizer",
+      runId: "run-exclusive-local-finalizer",
+      allowedEvents: ["before_agent_finalize"],
+      turnLocalBeforeAgentFinalize: {
+        evaluate,
+        skipGlobalBeforeAgentFinalize: true,
+      },
+      retention: {
+        readClaim: () => undefined,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: () => false,
+        onDispose: () => undefined,
+      },
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "before_agent_finalize",
+        rawPayload: {
+          hook_event_name: "Stop",
+          turn_id: "turn-exclusive-local-finalizer",
+          last_assistant_message: "Stale draft",
+        },
+      }),
+    ).resolves.toEqual({
+      stdout: `${JSON.stringify({ continue: false })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(globalFinalize).not.toHaveBeenCalled();
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
+
   it("allows callers to replace a relay at a stable id", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",

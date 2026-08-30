@@ -60,6 +60,7 @@ import {
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -539,6 +540,15 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  [
+    "patches/vitest@4.1.11.patch",
+    [
+      "test/scripts/run-vitest-profile.test.ts",
+      "test/scripts/run-vitest-state-cleanup.test.ts",
+      "test/scripts/vitest-fork-shutdown.test.ts",
+    ],
+  ],
+  ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
   ...[
     "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
@@ -2110,8 +2120,12 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
-  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git"]],
-  ["test/scripts/fixtures/ci-platform-checkout.mjs", ["ci-platform-checkout", "ci-linux-git"]],
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [
+    "test/scripts/fixtures/ci-platform-checkout.mjs",
+    ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"],
+  ],
+  ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
   [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
@@ -2253,6 +2267,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
+  [
+    /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
+    ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
+  ],
   [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
@@ -2376,7 +2394,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
+  [
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner)\/|workflows\/workflow-sanity\.yml$)/u,
+    ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
+  ],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
@@ -4126,8 +4147,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
   // CI publishes a persistent cache root, not a writer-safe leaf. Every
   // concurrent Vitest process still needs its own live directory below it.
-  const cacheRoot =
-    configuredCacheRoot ?? path.join(cwd, "node_modules", ".experimental-vitest-cache");
+  const cacheRoot = configuredCacheRoot ?? resolveVitestFsModuleCacheRoot(cwd);
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {

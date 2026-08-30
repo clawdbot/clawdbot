@@ -3,12 +3,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -42,13 +39,20 @@ import {
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
-import { buildMessagePayload, executeMessageSend } from "./message-action-send.js";
+import { executeMessageSend } from "./message-action-send.js";
+import {
+  buildInternalSourceReplyToolResult,
+  prepareInternalSourceReplyPayload,
+  resolvesToCurrentSourceRoute,
+} from "./message-action-source-reply.js";
 import type { MessageSendResult } from "./message.js";
 import {
   enforceMessageActionAllowlist,
   resolveEffectiveMessageToolsConfig,
 } from "./outbound-policy.js";
 import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
+
+export { prepareInternalSourceReplyPayload };
 
 const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
   () => import("../../gateway/internal-source-reply-persistence.js"),
@@ -121,6 +125,7 @@ async function handleBroadcastAction(
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
   }
+  const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
   const results: Array<{
     channel: ChannelId;
     to: string;
@@ -130,49 +135,153 @@ async function handleBroadcastAction(
     payload?: unknown;
     result?: MessageSendResult;
   }> = [];
+  type BroadcastPlanEntry =
+    | {
+        kind: "send";
+        channel: ChannelId;
+        inputTarget: string;
+        resolvedTo: string;
+        accountId?: string | null;
+        actionParams: Record<string, unknown>;
+        receiptDiscriminator: string;
+      }
+    | {
+        kind: "error";
+        channel: ChannelId;
+        inputTarget: string;
+        error: unknown;
+        receiptDiscriminator: string;
+      };
+  const plan: BroadcastPlanEntry[] = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
   let attemptIndex = 0;
-  for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
+
+  // Preserve the established sequential broadcast behavior unless this exact
+  // run carries the private source-finalization fence. Only fenced turns need
+  // all-leg preflight to prevent a foreign leg from sending before a later
+  // current-source leg is rejected.
+  if (input.deferSourceMessageToolDelivery !== true || dryRun) {
+    for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
+      throwIfAborted(input.abortSignal);
+      for (const target of rawTargets) {
+        throwIfAborted(input.abortSignal);
+        const receiptDiscriminator = `broadcast:${attemptIndex++}`;
+        try {
+          const targetAccountId = validateExplicitMessageAccountSelection({
+            cfg: input.cfg,
+            channel: targetChannel,
+            accountId: explicitAccountId,
+          });
+          const targetArgs: Record<string, unknown> = { to: target };
+          const resolved = await resolveMessageTarget({
+            cfg: input.cfg,
+            channel: targetChannel,
+            action: "send",
+            args: targetArgs,
+            accountId: targetAccountId,
+            plugin: targetChannelPlugin,
+          });
+          if (!resolved) {
+            throw new Error("Broadcast target resolution unexpectedly deferred.");
+          }
+          const sendResult = await runMessageAction({
+            ...input,
+            action: "send",
+            params: {
+              ...params,
+              channel: targetChannel,
+              target: resolved.to,
+            },
+          });
+          results.push({
+            channel: targetChannel,
+            to: resolved.to,
+            ...resolveMessageSendOutcome(
+              sendResult.kind === "send" ? sendResult.sendResult : undefined,
+              "Broadcast",
+            ),
+            payload: sendResult.kind === "send" ? sendResult.payload : undefined,
+            result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
+          });
+        } catch (err) {
+          if (isAbortError(err)) {
+            throw err;
+          }
+          if (err instanceof MessageActionDeniedError) {
+            input.onActionDenied?.(err, targetChannel, receiptDiscriminator);
+          }
+          results.push({
+            channel: targetChannel,
+            to: target,
+            ok: false,
+            error: formatErrorMessage(err),
+            ...(err &&
+            typeof err === "object" &&
+            (err as { sentBeforeError?: unknown }).sentBeforeError === true
+              ? { sentBeforeError: true as const }
+              : {}),
+          });
+        }
+      }
+    }
+    return {
+      kind: "broadcast",
+      channel:
+        targetChannels[0]?.channel ?? normalizeOptionalLowercaseString(channelHint) ?? "unknown",
+      action: "broadcast",
+      handledBy: input.dryRun ? "dry-run" : "core",
+      payload: { results },
+      dryRun: Boolean(input.dryRun),
+    };
+  }
+
+  // Resolve every leg before any provider call. Broadcast is non-atomic, so
+  // this preflight is what guarantees a mixed broadcast cannot send its
+  // foreign legs before discovering that another leg is the freshness-fenced
+  // current source route.
+  for (const { channel: targetChannel } of targetChannels) {
     throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
       const receiptDiscriminator = `broadcast:${attemptIndex++}`;
       try {
-        const targetAccountId = validateExplicitMessageAccountSelection({
-          cfg: input.cfg,
+        const legParams: Record<string, unknown> = {
+          ...params,
           channel: targetChannel,
-          accountId: explicitAccountId,
+          target,
+          ...(explicitAccountId ? { accountId: explicitAccountId } : {}),
+        };
+        const legInput: MessageActionInput = {
+          ...input,
+          action: "send",
+          params: legParams,
+        };
+        const route = await prepareMessageRoute({
+          input: legInput,
+          actionParams: legParams,
+          agentId: input.agentId,
         });
-        const targetArgs: Record<string, unknown> = { to: target };
         const resolved = await resolveMessageTarget({
           cfg: input.cfg,
-          channel: targetChannel,
+          channel: route.channel,
           action: "send",
-          args: targetArgs,
-          accountId: targetAccountId,
-          plugin: targetChannelPlugin,
+          args: route.params,
+          accountId: route.accountId,
+          toolContext: input.toolContext,
+          agentId: input.agentId,
+          plugin: route.channelPlugin,
         });
         if (!resolved) {
           throw new Error("Broadcast target resolution unexpectedly deferred.");
         }
-        const sendResult = await runMessageAction({
-          ...input,
-          action: "send",
-          params: {
-            ...params,
-            channel: targetChannel,
-            target: resolved.to,
-          },
-        });
-        results.push({
-          channel: targetChannel,
-          to: resolved.to,
-          ...resolveMessageSendOutcome(
-            sendResult.kind === "send" ? sendResult.sendResult : undefined,
-            "Broadcast",
-          ),
-          payload: sendResult.kind === "send" ? sendResult.payload : undefined,
-          result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
+        plan.push({
+          kind: "send",
+          channel: route.channel,
+          inputTarget: target,
+          resolvedTo: resolved.to,
+          accountId: route.accountId,
+          actionParams: route.params,
+          receiptDiscriminator,
         });
       } catch (err) {
         if (isAbortError(err)) {
@@ -183,18 +292,95 @@ async function handleBroadcastAction(
           // otherwise admitted-run audit would have to infer policy from presentation.
           input.onActionDenied?.(err, targetChannel, receiptDiscriminator);
         }
-        results.push({
+        plan.push({
+          kind: "error",
           channel: targetChannel,
-          to: target,
-          ok: false,
-          error: formatErrorMessage(err),
-          ...(err &&
-          typeof err === "object" &&
-          (err as { sentBeforeError?: unknown }).sentBeforeError === true
-            ? { sentBeforeError: true as const }
-            : {}),
+          inputTarget: target,
+          error: err,
+          receiptDiscriminator,
         });
       }
+    }
+  }
+
+  if (
+    plan.some(
+      (entry) =>
+        entry.kind === "send" &&
+        resolvesToCurrentSourceRoute({
+          input,
+          actionParams: {
+            ...entry.actionParams,
+            to: entry.resolvedTo,
+          },
+          channel: entry.channel,
+          accountId: entry.accountId,
+          dryRun,
+        }),
+    )
+  ) {
+    throw new MessageActionDeniedError(
+      "Broadcast cannot include the current source route while its final reply is awaiting host-owned finalization.",
+      "message_broadcast_host_final_unsupported",
+      "message-source-final:broadcast",
+    );
+  }
+
+  for (const entry of plan) {
+    throwIfAborted(input.abortSignal);
+    if (entry.kind === "error") {
+      results.push({
+        channel: entry.channel,
+        to: entry.inputTarget,
+        ok: false,
+        error: formatErrorMessage(entry.error),
+        ...(entry.error &&
+        typeof entry.error === "object" &&
+        // SAFETY: The preceding short-circuit guard narrows this error to a non-null object before the optional field read.
+        (entry.error as { sentBeforeError?: unknown }).sentBeforeError === true
+          ? { sentBeforeError: true as const }
+          : {}),
+      });
+      continue;
+    }
+    try {
+      const sendResult = await runMessageAction({
+        ...input,
+        action: "send",
+        params: {
+          ...entry.actionParams,
+          to: entry.resolvedTo,
+        },
+      });
+      results.push({
+        channel: entry.channel,
+        to: entry.resolvedTo,
+        ...resolveMessageSendOutcome(
+          sendResult.kind === "send" ? sendResult.sendResult : undefined,
+          "Broadcast",
+        ),
+        payload: sendResult.kind === "send" ? sendResult.payload : undefined,
+        result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
+      });
+    } catch (err) {
+      if (isAbortError(err)) {
+        throw err;
+      }
+      if (err instanceof MessageActionDeniedError) {
+        input.onActionDenied?.(err, entry.channel, entry.receiptDiscriminator);
+      }
+      results.push({
+        channel: entry.channel,
+        to: entry.resolvedTo,
+        ok: false,
+        error: formatErrorMessage(err),
+        ...(err &&
+        typeof err === "object" &&
+        // SAFETY: The preceding short-circuit guard narrows this error to a non-null object before the optional field read.
+        (err as { sentBeforeError?: unknown }).sentBeforeError === true
+          ? { sentBeforeError: true as const }
+          : {}),
+      });
     }
   }
   return {
@@ -212,88 +398,8 @@ async function handleInternalSourceReplySendAction(
   input: MessageActionInput,
   params: Record<string, unknown>,
 ): Promise<MessageActionResult> {
-  throwIfAborted(input.abortSignal);
+  const prepared = await prepareInternalSourceReplyPayload(input, params);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const agentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-      : undefined);
-  const mediaAccess =
-    input.mediaAccess ??
-    resolveAgentScopedOutboundMediaAccess({
-      cfg: input.cfg,
-      agentId,
-      workspaceDir: input.workspaceDir,
-      mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
-      messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
-      accountId: input.sessionKey ? input.requesterAccountId : undefined,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
-    });
-  const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
-    ? mediaAccess.readFile
-    : undefined;
-  await hydrateAttachmentParamsForAction({
-    cfg: input.cfg,
-    channel: INTERNAL_MESSAGE_CHANNEL,
-    args: params,
-    action: "send",
-    dryRun,
-    mediaPolicy: resolveAttachmentMediaPolicy({
-      sandboxRoot: input.sandboxRoot,
-      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-      mediaAccess,
-      mediaReadFile: sandboxMediaReadFile,
-    }),
-  });
-  const sourceReply = await buildMessagePayload({
-    cfg: input.cfg,
-    actionParams: params,
-    input,
-    agentId,
-  });
-  let sourceReplyPayload = sourceReply.payload;
-  const requestedMediaCount =
-    resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length;
-  if (!dryRun && requestedMediaCount > 0) {
-    const workspaceDir =
-      input.workspaceDir ??
-      mediaAccess.workspaceDir ??
-      (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined);
-    if (!workspaceDir) {
-      throw new Error("Current-source media requires an agent workspace.");
-    }
-    const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
-    sourceReplyPayload = await createReplyMediaPathNormalizer({
-      cfg: input.cfg,
-      sessionKey: input.sessionKey,
-      agentId,
-      workspaceDir,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
-      requesterSenderId: input.requesterSenderId ?? undefined,
-      requesterSenderName: input.requesterSenderName ?? undefined,
-      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
-      requesterSenderE164: input.requesterSenderE164 ?? undefined,
-      mediaAccess,
-      sandboxRoot: input.sandboxRoot,
-      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-    })(sourceReplyPayload);
-    if (
-      resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
-    ) {
-      throw new Error(
-        "Current-source media could not be staged. Use an accessible URL, a file inside the agent workspace, or the buffer field.",
-      );
-    }
-  }
-  const sourceReplyMediaUrls = resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls;
-  const sourceReplyMessage = sourceReplyPayload.text ?? sourceReply.message;
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
   let persistedIdempotencyKey: string | undefined;
   let persistedTranscriptOwner = false;
@@ -308,7 +414,7 @@ async function handleInternalSourceReplySendAction(
       sessionKey,
       expectedSessionId: input.sessionId,
       agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
-      payload: sourceReplyPayload,
+      payload: prepared.payload,
       idempotencyKey,
       runId: input.runId,
       sourceReplyFinal: input.sourceReplyFinal,
@@ -327,10 +433,10 @@ async function handleInternalSourceReplySendAction(
     ...(persistedIdempotencyKey ? { idempotencyKey: persistedIdempotencyKey } : {}),
     ...(persistedTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
     ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
-    sourceReply: sourceReplyPayload,
-    ...(sourceReplyMessage ? { message: sourceReplyMessage } : {}),
-    ...(sourceReplyMediaUrls[0] ? { mediaUrl: sourceReplyMediaUrls[0] } : {}),
-    ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
+    sourceReply: prepared.payload,
+    ...(prepared.message ? { message: prepared.message } : {}),
+    ...(prepared.mediaUrls[0] ? { mediaUrl: prepared.mediaUrls[0] } : {}),
+    ...(prepared.mediaUrls.length ? { mediaUrls: prepared.mediaUrls } : {}),
     dryRun,
   };
   return withSendNormalization(
@@ -344,66 +450,90 @@ async function handleInternalSourceReplySendAction(
       toolResult: buildInternalSourceReplyToolResult(payload),
       dryRun,
     },
-    sourceReply.normalization,
+    prepared.normalization,
   );
 }
 
-function buildInternalSourceReplyToolResult(payload: {
-  status: string;
-  deliveryStatus: string;
+async function handleDeferredHostFinalAction(params: {
+  input: MessageActionInput;
+  actionParams: Record<string, unknown>;
   channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}): AgentToolResult<{
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}> {
-  const action = payload.dryRun ? "Prepared" : "Sent";
-  const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
-  return {
-    content: [
-      {
-        type: "text",
-        text: `${action} visible reply to the current source conversation${sink}.`,
+  accountId?: string | null;
+  agentId?: string;
+}): Promise<MessageActionResult> {
+  if (params.input.deferredSourceReplyFinalIntent === false) {
+    const details = {
+      status: "suppressed",
+      deliveryStatus: "suppressed",
+      reason: "source_progress_host_final_unsupported",
+      sourceReplySink: "host-final" as const,
+    };
+    const target =
+      readToolStringParam(params.actionParams, "to") ??
+      readToolStringParam(params.actionParams, "target") ??
+      readToolStringParam(params.actionParams, "channelId") ??
+      "current-source";
+    return {
+      kind: "send",
+      channel: params.channel,
+      action: "send",
+      to: target,
+      handledBy: "host-final",
+      payload: details,
+      toolResult: {
+        content: [
+          {
+            type: "text",
+            text: "Skipped the non-final current-source progress send. Continue the run and provide the completed answer normally.",
+          },
+        ],
+        details,
       },
-    ],
-    details: {
-      status: payload.status,
-      deliveryStatus: payload.deliveryStatus,
-      channel: payload.channel,
-      target: payload.target,
-      ...(payload.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
-        : {}),
-      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
-      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
-      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
-      sourceReply: payload.sourceReply,
-      ...(payload.message ? { message: payload.message } : {}),
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
-      dryRun: payload.dryRun,
-    },
+      dryRun: false,
+    };
+  }
+  const prepared = await prepareInternalSourceReplyPayload(
+    { ...params.input, action: "send", agentId: params.agentId },
+    params.actionParams,
+    { channel: params.channel, accountId: params.accountId },
+  );
+  const details = {
+    status: "deferred",
+    deliveryStatus: "deferred",
+    reason: "source_final_delivery_deferred",
+    sourceReplySink: "host-final" as const,
+    hostFinalDeferred: true as const,
+    sourceReply: prepared.payload,
+    ...(prepared.message ? { message: prepared.message } : {}),
+    ...(prepared.mediaUrls[0] ? { mediaUrl: prepared.mediaUrls[0] } : {}),
+    ...(prepared.mediaUrls.length ? { mediaUrls: prepared.mediaUrls } : {}),
   };
+  const target =
+    readToolStringParam(params.actionParams, "to") ??
+    readToolStringParam(params.actionParams, "target") ??
+    readToolStringParam(params.actionParams, "channelId") ??
+    "current-source";
+  return withSendNormalization(
+    {
+      kind: "send",
+      channel: params.channel,
+      action: "send",
+      to: target,
+      handledBy: "host-final",
+      payload: details,
+      toolResult: {
+        content: [
+          {
+            type: "text",
+            text: "Prepared the current-source reply for automatic host delivery. Do not retry it with the message tool.",
+          },
+        ],
+        details,
+      },
+      dryRun: false,
+    },
+    prepared.normalization,
+  );
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
@@ -518,7 +648,9 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       extraParamKeys: extraActionMediaSourceParamKeys,
     });
 
-  if (action !== "send") {
+  const delayNonSendHydrationForSourceFence =
+    action !== "send" && input.deferSourceMessageToolDelivery === true && !dryRun;
+  if (action !== "send" && !delayNonSendHydrationForSourceFence) {
     await hydrateActionAttachmentParams();
   }
 
@@ -533,6 +665,36 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     deferExternalTargetResolution: defersExternalTargetResolution,
     plugin: channelPlugin,
   });
+
+  const currentSourceRoute = resolvesToCurrentSourceRoute({
+    input,
+    actionParams: params,
+    channel,
+    accountId,
+    dryRun,
+  });
+  if (currentSourceRoute) {
+    if (action === "send" || action === "reply") {
+      return await handleDeferredHostFinalAction({
+        input,
+        actionParams: params,
+        channel,
+        accountId,
+        agentId: resolvedAgentId,
+      });
+    }
+    if (action === "poll") {
+      throw new MessageActionDeniedError(
+        "A poll cannot be published to the current source while its final reply is awaiting host-owned finalization.",
+        "message_poll_host_final_unsupported",
+        "message-source-final:poll",
+      );
+    }
+  }
+
+  if (delayNonSendHydrationForSourceFence) {
+    await hydrateActionAttachmentParams();
+  }
 
   if (action === "send") {
     // Target validation must finish before buffer staging, which can perform

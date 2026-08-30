@@ -316,18 +316,6 @@ export function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
 }
 
-export function stripPromptThinkingDirectives(body: string): string {
-  return body
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
-        .replace(/[ \t]{2,}/g, " ")
-        .trimEnd(),
-    )
-    .join("\n");
-}
-
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (
     Array.isArray(ctx.InboundHistory) &&

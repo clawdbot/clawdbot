@@ -42,6 +42,7 @@ import {
   runInstalledBrowserOverrideImportSmoke,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   verifyInstalledCandidate,
+  withNpmDiagnostics,
 } from "./install.ts";
 import {
   ensureDevUpdateGitInstall,
@@ -253,14 +254,16 @@ export async function runUpgradeLane(
     let usedWindowsPackagedUpgradeTimeoutFallback = false;
     await runTimedLanePhase(lane, "update", async () => {
       try {
-        updateResult = await runOpenClaw({
-          lane,
-          env: updateEnv,
-          args: updateArgs,
-          logPath: updateLogPath,
-          timeoutMs: updateTimeoutMs(),
-          check: false,
-        });
+        updateResult = await withNpmDiagnostics(lane.homeDir, updateLogPath, updateEnv, () =>
+          runOpenClaw({
+            lane,
+            env: updateEnv,
+            args: updateArgs,
+            logPath: updateLogPath,
+            timeoutMs: updateTimeoutMs(),
+            check: false,
+          }),
+        );
       } catch (error) {
         if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
           throw error;

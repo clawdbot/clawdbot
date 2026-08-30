@@ -1,4 +1,5 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MatrixOpenClawPreviewKind } from "../preview-protocol.js";
 import type { MatrixClient } from "../sdk.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 
@@ -12,6 +13,10 @@ export type MatrixDraftStreamHandle = {
   mustDeliverFinalNormally: () => boolean;
   matchesPreparedText: (text: string) => boolean;
   finalizeLive: () => Promise<boolean>;
+  finalize: (text: string, options?: { includeMentions?: boolean }) => Promise<boolean>;
+  abandon: (options?: { isSourceLive?: () => boolean }) => Promise<void>;
+  setKind: (kind: MatrixOpenClawPreviewKind) => void;
+  responseId: () => string | undefined;
   reset: () => void;
 };
 

@@ -725,9 +725,19 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 - `slack-restart-resume`
 - `slack-progress-commentary-true`, `slack-progress-commentary-false`,
   `slack-progress-commentary-omitted`, and
-  `slack-progress-commentary-verbose-dedupe` - opt-in real-Slack probes for
+  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack probes for
   independent commentary/tool-progress controls, the omitted-key legacy
-  default, and single-delivery behavior when durable verbose progress is on.
+  default, and single-delivery behavior for durable verbose progress. The `on`
+  probe requires a safe Exec summary without command text or output; the `full`
+  probe requires the exact stdout marker in a separate tool-output message.
+  Both use the same command and require one commentary identity separate from
+  the final answer. Full verbosity allows the runtime's command metadata and
+  one separate start summary, while requiring a unique completed-output identity.
+  Slack may strip command-summary headers during delivery, so the exact output
+  line, not a tool label, identifies completed output.
+  Failures retain bounded
+  presentation facts without raw Slack messages or platform identities,
+  including marker formatting and `sleep` summaries missing the command marker.
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.
@@ -1119,6 +1129,13 @@ or staging directory. The caller retains the lifecycle owner and always calls
 caller's artifact policy, so failure reports can preserve sanitized Gateway logs
 before temporary runtime state is removed.
 
+After confirmed shutdown, a successful export (or choosing no export) finalizes
+the artifact policy before temporary state removal. Cleanup retries retain that
+export without rewriting it or using a later destination, while RPC and staging
+cleanup still retry. Failed exports remain retryable. Unconfirmed stops refresh
+requested snapshots, and the final confirmed snapshot includes later output.
+Keeping temporary state leaves its logs available for a later cleanup retry.
+
 If termination cannot be confirmed, the suite reports a cleanup failure, keeps
 the runtime directory, and leaves the adapter's lease and heartbeat owned.
 Inspect the reported process group and retained runtime before reusing those
@@ -1126,6 +1143,13 @@ credentials. Log, RPC, or artifact errors are still reported, but do not prevent
 after-stop cleanup when the process group is confirmed stopped. This ordering
 requires adapters to use the two cleanup phases; it does not change broker TTLs
 or provide a durable guarantee after the QA parent or host is lost.
+
+Temporary runtime and staged-plugin directories are removed independently, and
+removal failures are reported with redacted diagnostics. A cleanup error can
+therefore leave isolated runtime or auth state on disk even when process
+termination is confirmed. Correct the filesystem problem and retry `stop()` on
+the retained lifecycle owner; confirmed termination still permits after-stop
+credential cleanup.
 
 Payload shapes the broker validates on `admin/add`:
 

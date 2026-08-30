@@ -225,7 +225,6 @@ describe("webchat admission to plugin node duplex authority", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),

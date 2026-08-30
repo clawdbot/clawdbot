@@ -97,6 +97,7 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
+  "scripts/print-live-docker-plugin-selection.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
@@ -110,6 +111,8 @@ const repositoryScriptEntries = [
   "scripts/update-clawtributors.ts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
+  // Staging and signed-app packaging execute this verifier with each bundled Node.
+  "scripts/verify-mac-node-worker.mjs!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
@@ -440,6 +443,12 @@ const config = {
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
+    // Focused Matrix tests instantiate isolated coordinators and inspect the reserved wire marker;
+    // production uses the singleton coordinator and protocol helpers within their owning modules.
+    "extensions/matrix/src/matrix/monitor/turn-taking-coordinator.ts": ["exports"],
+    "extensions/matrix/src/matrix/preview-protocol.ts": ["exports"],
+    // Focused retry tests exercise this parameter-resolution seam; production calls it in-module.
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are

@@ -1428,6 +1428,11 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase assert-volume-idempotence assert_volume_idempotence
 fi
 phase fixture-plugin-consent repair_fixture_plugin_consent
+if [ "$SCENARIO" = "meeting-transcripts-sqlite" ]; then
+  # Export recreates the archived source path. Finish every repeated survival
+  # check before exercising the explicit artifact materialization command.
+  phase transcript-export node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-meeting-transcript-export
+fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status

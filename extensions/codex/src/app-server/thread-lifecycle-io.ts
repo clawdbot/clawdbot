@@ -15,7 +15,6 @@ import {
   isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
-import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -125,7 +124,6 @@ export async function resumeExistingCodexThread(
     contextEngineBinding,
     environmentSelectionFingerprint,
     hostSystemAgentActive,
-    ringZeroActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
@@ -220,11 +218,7 @@ export async function resumeExistingCodexThread(
         signal: params.signal,
       });
     }
-    if (
-      ringZeroActive ||
-      isMessageOnlyCodexSourceReply(params.params) ||
-      params.params.pluginHarnessToolPolicyRestricted === true
-    ) {
+    if (restrictedToolSurface) {
       try {
         await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
           attestCodexRestrictedToolSurfaceMcpServersDisabled(
@@ -425,7 +419,6 @@ export async function startFreshCodexThread(
     contextEngineBinding,
     environmentSelectionFingerprint,
     hostSystemAgentActive,
-    ringZeroActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
@@ -523,11 +516,7 @@ export async function startFreshCodexThread(
     }
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  if (
-    ringZeroActive ||
-    isMessageOnlyCodexSourceReply(params.params) ||
-    params.params.pluginHarnessToolPolicyRestricted === true
-  ) {
+  if (restrictedToolSurface) {
     try {
       await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
         attestCodexRestrictedToolSurfaceMcpServersDisabled(

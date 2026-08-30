@@ -165,6 +165,202 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleScopedAction).not.toHaveBeenCalled();
     });
 
+    describe("host-final canonical route preflight", () => {
+      const resolveTarget = vi.fn(async ({ input }: { input: string }) => ({
+        to: input === "#source" ? "room:source" : input === "#other" ? "room:other" : input,
+        kind: "group" as const,
+      }));
+      const routePlugin = createGatewayActionPlugin({
+        pluginId: "routechat",
+        label: "Route Chat",
+        blurb: "Canonical source-route preflight test plugin.",
+        actions: ["send", "poll"],
+        gatewayActions: [],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+            resolveTarget,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      const cfg = {
+        channels: { routechat: { enabled: true } },
+      } as OpenClawConfig;
+      const sourceContext = {
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        deferSourceMessageToolDelivery: true,
+        workspaceDir: "/tmp",
+        toolContext: {
+          currentChannelProvider: "routechat",
+          currentChannelId: "room:source",
+          currentMessagingTarget: "room:source",
+          currentChatType: "group" as const,
+        },
+      };
+
+      beforeEach(() => {
+        setTestPlugin(routePlugin, "routechat");
+        resolveTarget.mockClear();
+      });
+
+      it("defers an alias that canonically resolves to the exact current source", async () => {
+        const result = await runMessageAction({
+          cfg,
+          action: "send",
+          params: { channel: "routechat", target: "#source", message: "answer" },
+          ...sourceContext,
+        });
+
+        expect(result).toMatchObject({
+          kind: "send",
+          handledBy: "host-final",
+          payload: {
+            status: "deferred",
+            sourceReply: { text: "answer" },
+          },
+        });
+        expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      });
+
+      it("suppresses non-final progress after canonical alias resolution", async () => {
+        const result = await runMessageAction({
+          cfg,
+          action: "send",
+          params: { channel: "routechat", target: "#source", message: "Still working" },
+          ...sourceContext,
+          deferredSourceReplyFinalIntent: false,
+        });
+
+        expect(result).toMatchObject({
+          kind: "send",
+          handledBy: "host-final",
+          payload: {
+            status: "suppressed",
+            reason: "source_progress_host_final_unsupported",
+          },
+        });
+        expect(result.payload).not.toHaveProperty("hostFinalDeferred");
+        expect(result.payload).not.toHaveProperty("sourceReply");
+        expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      });
+
+      it("materializes explicit speech before serializing the deferred host final", async () => {
+        mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+          text: "spoken answer",
+          mediaUrl: "https://example.org/final-answer.ogg",
+          mediaUrls: ["https://example.org/final-answer.ogg"],
+          audioAsVoice: true,
+        });
+
+        const result = await runMessageAction({
+          cfg,
+          action: "send",
+          params: { channel: "routechat", target: "#source", voiceText: "spoken answer" },
+          ...sourceContext,
+        });
+
+        expect(result).toMatchObject({
+          kind: "send",
+          handledBy: "host-final",
+          payload: {
+            sourceReply: {
+              text: "spoken answer",
+              mediaUrls: ["https://example.org/final-answer.ogg"],
+              audioAsVoice: true,
+            },
+          },
+        });
+        expect(mocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+          expect.objectContaining({ channel: "routechat", accountId: "default" }),
+        );
+        expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      });
+
+      it("rejects an exact-source poll after alias resolution without provider I/O", async () => {
+        await expect(
+          runMessageAction({
+            cfg,
+            action: "poll",
+            params: {
+              channel: "routechat",
+              target: "#source",
+              pollQuestion: "Proceed?",
+              pollOption: ["Yes", "No"],
+            },
+            ...sourceContext,
+          }),
+        ).rejects.toMatchObject({
+          reasonCode: "message_poll_host_final_unsupported",
+          policyRef: "message-source-final:poll",
+        });
+        expect(mocks.executePollAction).not.toHaveBeenCalled();
+      });
+
+      it("preflights every broadcast leg and sends nothing when one resolves to the source", async () => {
+        mocks.executeSendAction.mockResolvedValue({
+          handledBy: "core",
+          payload: { ok: true },
+          sendResult: {
+            channel: "routechat",
+            to: "room:other",
+            via: "direct",
+            mediaUrl: null,
+          },
+        });
+
+        await expect(
+          runMessageAction({
+            cfg,
+            action: "broadcast",
+            params: {
+              channel: "routechat",
+              targets: ["#other", "#source"],
+              message: "announcement",
+            },
+            ...sourceContext,
+          }),
+        ).rejects.toMatchObject({
+          reasonCode: "message_broadcast_host_final_unsupported",
+          policyRef: "message-source-final:broadcast",
+        });
+        expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      });
+
+      it("preserves a same-provider broadcast whose route resolves to another room", async () => {
+        mocks.executeSendAction.mockResolvedValue({
+          handledBy: "core",
+          payload: { ok: true },
+          sendResult: {
+            channel: "routechat",
+            to: "room:other",
+            via: "direct",
+            mediaUrl: null,
+          },
+        });
+
+        const result = await runMessageAction({
+          cfg,
+          action: "broadcast",
+          params: {
+            channel: "routechat",
+            targets: ["#other"],
+            message: "announcement",
+          },
+          ...sourceContext,
+        });
+
+        expect(result).toMatchObject({
+          kind: "broadcast",
+          payload: {
+            results: [{ channel: "routechat", to: "room:other", ok: true }],
+          },
+        });
+        expect(mocks.executeSendAction).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("rejects unsupported read actions before conversation authorization", async () => {
       await expect(
         runMessageAction({

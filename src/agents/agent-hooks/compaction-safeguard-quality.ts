@@ -28,6 +28,15 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
+/** Demotes canonical headings when a summary is embedded as supporting context. */
+export function nestRequiredSummaryHeadings(text: string): string {
+  return text.replace(/^##[ \t]+\S.*$/gmu, (heading) =>
+    REQUIRED_SUMMARY_SECTIONS.some((required) => required === heading.trim())
+      ? heading.replace("##", "###")
+      : heading,
+  );
+}
+
 /** Wraps operator-provided compaction instruction text as untrusted prompt data. */
 export function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({

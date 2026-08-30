@@ -31,10 +31,26 @@ function selectInheritedMatrixRoomEntries(params: {
     return undefined;
   }
   const selected = Object.fromEntries(
-    Object.entries(entries).filter(([, value]) => {
+    Object.entries(entries).flatMap(([roomId, value]) => {
       const scopedAccount =
         typeof value?.account === "string" ? normalizeAccountId(value.account) : undefined;
-      return scopedAccount === undefined || scopedAccount === params.accountId;
+      if (scopedAccount !== undefined && scopedAccount !== params.accountId) {
+        return [];
+      }
+
+      // `turnTaking` is a channel-wide room policy. It must never become an
+      // account-scoped room entry because the mere presence of such an entry
+      // participates in the ordinary Matrix room allowlist. Keep the raw
+      // top-level map for the turn-taking resolver, while projecting only the
+      // existing access/behavior fields into each account.
+      const { turnTaking: _turnTaking, ...ordinaryRoomConfig } = value ?? {};
+      const onlyAccountSelectorRemains =
+        Object.hasOwn(value ?? {}, "turnTaking") &&
+        Object.keys(ordinaryRoomConfig).every((key) => key === "account");
+      if (onlyAccountSelectorRemains) {
+        return [];
+      }
+      return [[roomId, ordinaryRoomConfig]];
     }),
   ) as MatrixRoomEntries;
   return Object.keys(selected).length > 0 ? selected : undefined;

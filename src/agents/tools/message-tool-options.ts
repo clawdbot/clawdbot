@@ -1,0 +1,53 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
+import type { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import type { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+
+export type MessageToolOptions = {
+  agentAccountId?: string;
+  agentSessionKey?: string;
+  runSessionKey?: string;
+  runId?: string;
+  sessionId?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
+  getRuntimeConfig?: () => OpenClawConfig;
+  getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
+  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
+  runMessageAction?: typeof runMessageAction;
+  currentChannelId?: string;
+  currentChatType?: ChatType;
+  currentMessagingTarget?: string;
+  messageActionTurnCapability?: string;
+  currentChannelProvider?: string;
+  currentThreadTs?: string;
+  agentThreadId?: string | number;
+  currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
+  hasCurrentInboundAudio?: () => boolean;
+  replyToMode?: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
+  sameChannelThreadRequired?: boolean;
+  sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
+  sandboxFsBridge?: SandboxFsBridge;
+  sandboxWorkspaceMediaReadAllowed?: boolean;
+  requireExplicitTarget?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Hold exact-source sends/replies for host-owned automatic finalization. */
+  deferSourceMessageToolDelivery?: boolean;
+  /** Process-local completion authority: send only to the current source route. */
+  sourceReplyOnly?: boolean;
+  inboundEventKind?: InboundEventKind;
+  requesterSenderId?: string;
+  senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
+};

@@ -256,7 +256,7 @@ export function resolveCliSourceReplyMirror(params: {
   >;
   runParams: RunCliAgentParams;
   modelId: string;
-}): { payloads: ReplyPayload[]; delivered: boolean; visibleText?: string } {
+}): { payloads: ReplyPayload[]; delivered: boolean; deferred: boolean; visibleText?: string } {
   const { evidence, modelId, runParams } = params;
   const payloads = buildEmbeddedRunPayloads({
     assistantTexts: [],
@@ -272,8 +272,12 @@ export function resolveCliSourceReplyMirror(params: {
     agentId: runParams.agentId,
     runId: runParams.runId,
   });
+  const deferred =
+    evidence.messagingToolSourceReplyPayloads?.some(
+      (payload) => payload.hostFinalDeferred === true,
+    ) === true;
   const delivered =
-    payloads.length > 0 ||
+    (!deferred && payloads.length > 0) ||
     (runParams.sourceReplyDeliveryMode === "message_tool_only" &&
       evidence.didDeliverSourceReplyViaMessageTool === true);
   const visibleText =
@@ -281,7 +285,7 @@ export function resolveCliSourceReplyMirror(params: {
       .map((payload) => payload.text?.trim() ?? "")
       .filter(Boolean)
       .join("\n\n") || undefined;
-  return { payloads, delivered, visibleText };
+  return { payloads, delivered, deferred, visibleText };
 }
 
 export function buildBlockedCliRunResult(params: {
@@ -457,9 +461,10 @@ export function buildCliRunResult(params: {
     runParams,
     modelId: context.modelId,
   });
-  const finalAssistantVisibleText = sourceReplyMirror.delivered
-    ? sourceReplyMirror.visibleText
-    : text;
+  const finalAssistantVisibleText =
+    sourceReplyMirror.delivered || sourceReplyMirror.deferred
+      ? sourceReplyMirror.visibleText
+      : text;
   const payloads =
     sourceReplyMirror.payloads.length > 0
       ? sourceReplyMirror.payloads

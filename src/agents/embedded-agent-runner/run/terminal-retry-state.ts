@@ -7,6 +7,8 @@ export type EmbeddedRunTerminalRetryState = {
   compactionContinuationAttempts: number;
   compactionContinuationInstruction: string | null;
   beforeFinalizeRevisionAttempts: number;
+  /** Tool isolation activated only after a source-local final revision is accepted. */
+  disableToolsForBeforeFinalizeRevision: boolean;
   codeModeReconciliationAttempts: number;
   forceCodeModeReconciliationTools: boolean;
 };
@@ -19,6 +21,7 @@ export function createEmbeddedRunTerminalRetryState(): EmbeddedRunTerminalRetryS
     compactionContinuationAttempts: 0,
     compactionContinuationInstruction: null,
     beforeFinalizeRevisionAttempts: 0,
+    disableToolsForBeforeFinalizeRevision: false,
     codeModeReconciliationAttempts: 0,
     forceCodeModeReconciliationTools: false,
   };

@@ -24,6 +24,7 @@ export type MessagingToolSourceReplyPayload = Pick<
   | "attachments"
   | "channelData"
   | "interactive"
+  | "location"
   | "mediaUrl"
   | "mediaUrls"
   | "presentation"
@@ -32,6 +33,8 @@ export type MessagingToolSourceReplyPayload = Pick<
 > & {
   idempotencyKey?: string;
   transcriptOwner?: true;
+  /** Prepared by the message tool but not sent; the channel host owns delivery. */
+  hostFinalDeferred?: true;
   /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
 };

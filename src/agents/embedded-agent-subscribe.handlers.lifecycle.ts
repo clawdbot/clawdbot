@@ -16,6 +16,7 @@ import {
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
+import { resolveHostFinalDeferredDraftCandidate } from "./embedded-agent-messaging-extraction.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
@@ -89,6 +90,9 @@ export function handleAgentEnd(
   const hasAssistantVisibleText =
     hasStreamedAssistantVisibleText ||
     hasAssistantVisibleReply({ text: completedAssistantFallbackText ?? "" });
+  const hostFinalDeferredCandidate = resolveHostFinalDeferredDraftCandidate(
+    ctx.state.messagingToolSourceReplyPayloads,
+  );
   const hadLivenessPreservingSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
@@ -303,6 +307,7 @@ export function handleAgentEnd(
       ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
       ...(lastAssistant ? { lastAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
+      ...(hostFinalDeferredCandidate ? { hostFinalDeferredCandidate } : {}),
       hasAssistantVisibleText,
       isError,
       incompleteTerminalAssistant,

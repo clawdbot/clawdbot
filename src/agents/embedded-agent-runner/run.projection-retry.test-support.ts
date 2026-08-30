@@ -33,103 +33,138 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     resetSharedRunIntegrationHarnessMocks();
   });
 
-  it("settles an owned compacted retry before durable reopen while ordinary reads stay fail-fast", async () => {
-    const sessionId = "projection-retry-session";
-    const sessionKey = "agent:main:projection-retry";
-    const storePath = path.join(tempDirs.make("openclaw-projection-retry-"), "sessions.json");
-    const sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
-    await sessionAccessor.persistSessionTranscriptTurn(sessionTarget, {
-      messages: [
-        {
-          eventId: "seed",
-          parentId: null,
-          message: { role: "user", content: "seed" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    const databaseOptions = sqliteScope.toDatabaseOptions(
-      sqliteScope.resolveSqliteTranscriptReadScope(sessionTarget),
-    );
-    const controller = new AbortController();
-    const originalWaitForProjection = reconcile.waitForSessionTranscriptProjection;
-    let ownedProjectionSettled = false;
-    const waitForProjection = vi
-      .spyOn(reconcile, "waitForSessionTranscriptProjection")
-      .mockImplementation(async (scope) => {
-        await originalWaitForProjection(scope);
-        expect(
-          agentDatabase
-            .openOpenClawAgentDatabase(databaseOptions)
-            .db.prepare(
-              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(sessionId),
-        ).toEqual({ needs_rebuild: 0 });
-        ownedProjectionSettled = true;
+  it.each(["compaction", "global-finalize", "source-finalize"] as const)(
+    "settles an owned %s retry before durable reopen while ordinary reads stay fail-fast",
+    async (retryKind) => {
+      const sessionId = `projection-retry-${retryKind}`;
+      const sessionKey = "agent:main:projection-retry";
+      const storePath = path.join(tempDirs.make("openclaw-projection-retry-"), "sessions.json");
+      const sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
+      await sessionAccessor.persistSessionTranscriptTurn(sessionTarget, {
+        messages: [
+          {
+            eventId: "seed",
+            parentId: null,
+            message: { role: "user", content: "seed" },
+          },
+        ],
+        touchSessionEntry: false,
       });
-
-    try {
-      mockedRunEmbeddedAttempt
-        .mockResolvedValueOnce(
-          makeAttemptResult({
-            timedOut: true,
-            sessionIdUsed: sessionId,
-            lastAssistant: { usage: { input: 160_000 } } as never,
-          }),
-        )
-        .mockImplementationOnce(async () => {
-          expect(ownedProjectionSettled).toBe(true);
+      const databaseOptions = sqliteScope.toDatabaseOptions(
+        sqliteScope.resolveSqliteTranscriptReadScope(sessionTarget),
+      );
+      const controller = new AbortController();
+      const originalWaitForProjection = reconcile.waitForSessionTranscriptProjection;
+      let ownedProjectionSettled = false;
+      const waitForProjection = vi
+        .spyOn(reconcile, "waitForSessionTranscriptProjection")
+        .mockImplementation(async (scope, abortSignal) => {
+          await originalWaitForProjection(scope, abortSignal);
           expect(
+            agentDatabase
+              .openOpenClawAgentDatabase(databaseOptions)
+              .db.prepare(
+                "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+              )
+              .get(sessionId),
+          ).toEqual({ needs_rebuild: 0 });
+          ownedProjectionSettled = true;
+        });
+
+      try {
+        mockedRunEmbeddedAttempt
+          .mockImplementationOnce(async () => {
+            if (retryKind === "compaction") {
+              return makeAttemptResult({
+                timedOut: true,
+                sessionIdUsed: sessionId,
+                lastAssistant: { usage: { input: 160_000 } } as never,
+              });
+            }
+            await sessionAccessor.persistSessionTranscriptTurn(sessionTarget, {
+              messages: [
+                {
+                  eventId: "rejected",
+                  parentId: "seed",
+                  message: { role: "assistant", content: "Rejected candidate" },
+                },
+              ],
+              touchSessionEntry: false,
+            });
+            // Match the settlement owner's append-only rewind. Leaf controls dirty
+            // even a tiny transcript; the next attempt must join its scheduled rebuild.
+            await sessionAccessor.appendTranscriptEvent(sessionTarget, {
+              type: "leaf",
+              id: "rewind",
+              parentId: "rejected",
+              targetId: "seed",
+              appendParentId: "seed",
+            });
+            expect(() =>
+              activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
+                maxMessages: 1,
+                offset: 0,
+              }),
+            ).toThrow(activeEvents.SessionTranscriptProjectionUnavailableError);
+            return makeAttemptResult({
+              sessionIdUsed: sessionId,
+              beforeAgentFinalizeRevisionReason: "Use the updated room context.",
+              beforeAgentFinalizeRevisionDisableTools:
+                retryKind === "source-finalize" ? true : undefined,
+            });
+          })
+          .mockImplementationOnce(async () => {
+            const page = activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
+              maxMessages: 1,
+              offset: 0,
+            });
+            expect(page.totalMessages).toBe(1);
+            expect(ownedProjectionSettled).toBe(true);
+            return makeAttemptResult({ sessionIdUsed: sessionId });
+          });
+        mockedCompactDirect.mockImplementationOnce(async () => {
+          const database = agentDatabase.openOpenClawAgentDatabase(databaseOptions);
+          database.db
+            .prepare(
+              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+            )
+            .run(sessionId);
+
+          expect(() =>
             activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
               maxMessages: 1,
               offset: 0,
-            }).totalMessages,
-          ).toBe(1);
-          return makeAttemptResult({ sessionIdUsed: sessionId });
+            }),
+          ).toThrow(activeEvents.SessionTranscriptProjectionUnavailableError);
+          reconcile.startSessionTranscriptIndexReconcile({
+            ...databaseOptions,
+            preferredSessionId: sessionId,
+          });
+          return makeCompactionSuccess({
+            summary: "compacted before projection retry",
+            tokensBefore: 160_000,
+            tokensAfter: 60_000,
+          });
         });
-      mockedCompactDirect.mockImplementationOnce(async () => {
-        const database = agentDatabase.openOpenClawAgentDatabase(databaseOptions);
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(sessionId);
 
-        expect(() =>
-          activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
-            maxMessages: 1,
-            offset: 0,
-          }),
-        ).toThrow(activeEvents.SessionTranscriptProjectionUnavailableError);
-        reconcile.startSessionTranscriptIndexReconcile({
-          ...databaseOptions,
-          preferredSessionId: sessionId,
+        await runEmbeddedAgent({
+          ...overflowBaseRunParams,
+          runId: "run-owned-projection-retry",
+          sessionId,
+          sessionKey,
+          sessionFile: sessionKey,
+          sessionTarget,
+          abortSignal: controller.signal,
         });
-        return makeCompactionSuccess({
-          summary: "compacted before projection retry",
-          tokensBefore: 160_000,
-          tokensAfter: 60_000,
-        });
-      });
 
-      await runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        runId: "run-owned-projection-retry",
-        sessionId,
-        sessionKey,
-        sessionFile: sessionKey,
-        sessionTarget,
-        abortSignal: controller.signal,
-      });
-
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(waitForProjection).toHaveBeenCalledOnce();
-      expect(waitForProjection).toHaveBeenCalledWith(sessionTarget, controller.signal);
-    } finally {
-      waitForProjection.mockRestore();
-      await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
-      agentDatabase.closeOpenClawAgentDatabasesForTest();
-    }
-  });
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+        expect(waitForProjection).toHaveBeenCalledOnce();
+        expect(waitForProjection).toHaveBeenCalledWith(sessionTarget, controller.signal);
+      } finally {
+        waitForProjection.mockRestore();
+        await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
+        agentDatabase.closeOpenClawAgentDatabasesForTest();
+      }
+    },
+  );
 });

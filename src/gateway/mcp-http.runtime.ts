@@ -201,6 +201,7 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
+      params.deferSourceMessageToolDelivery === true ? "defer-source-message" : "",
       params.sourceReplyOnly === true ? "source-reply-only" : "",
       params.taskSuggestionDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",

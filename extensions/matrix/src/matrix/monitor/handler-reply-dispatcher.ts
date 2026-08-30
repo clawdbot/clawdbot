@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
@@ -54,6 +55,10 @@ export function createMatrixReplyDispatcher(config: {
   accountId: string;
   mediaLocalRoots: readonly string[];
   logVerboseMessage: (message: string) => void;
+  enhancedTurnTakingEligible: boolean;
+  enhancedFinalProtocol?: NonNullable<
+    Parameters<typeof deliverMatrixReplies>[0]["enhancedFinalProtocol"]
+  >;
 }) {
   const {
     cfg,
@@ -72,12 +77,16 @@ export function createMatrixReplyDispatcher(config: {
     accountId,
     mediaLocalRoots,
     logVerboseMessage,
+    enhancedTurnTakingEligible,
+    enhancedFinalProtocol,
   } = config;
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   // Tool, block, and final payloads are delivered separately but share one first-reply slot.
   const hasRepliedRef = { value: false };
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
+  let enhancedLogicalFinalCommitted = false;
+  let enhancedLogicalResponseId: string | undefined;
   const beginNextBlockDraft = () => {
     // Each block owns a new draft generation; prior retained/consumed state must not
     // suppress settlement or cleanup for the next provider-visible event.
@@ -101,6 +110,53 @@ export function createMatrixReplyDispatcher(config: {
           // Re-assert typing so the user still sees the indicator while
           // the next block generates.
           await typingCallbacks.onReplyStart();
+        }
+        return result;
+      };
+      const deliverReplies = async (replies: ReplyPayload[]) => {
+        const commitsLogicalFinal =
+          enhancedTurnTakingEligible &&
+          info.kind === "final" &&
+          !enhancedLogicalFinalCommitted &&
+          Boolean(enhancedFinalProtocol);
+        const responseId = commitsLogicalFinal
+          ? randomUUID()
+          : (enhancedLogicalResponseId ?? randomUUID());
+        const result = await deliverMatrixReplies({
+          cfg,
+          replies,
+          roomId,
+          client,
+          runtime,
+          replyToMode,
+          hasRepliedRef,
+          threadId: threadTarget,
+          replyToId: threadTarget ?? replyToEventId ?? undefined,
+          accountId,
+          mediaLocalRoots,
+          ...(enhancedTurnTakingEligible && enhancedFinalProtocol
+            ? {
+                enhancedFinalProtocol: {
+                  ...enhancedFinalProtocol,
+                  mode: commitsLogicalFinal ? ("final" as const) : ("ancillary" as const),
+                  createResponseId: () => responseId,
+                  onLogicalFinalAccepted: ({ responseId: acceptedResponseId }) => {
+                    if (!commitsLogicalFinal) {
+                      return;
+                    }
+                    // Matrix wire acceptance is the commitment boundary. A
+                    // later ancillary-media or journal failure must not allow a
+                    // retry to create a second logical sibling turn.
+                    enhancedLogicalFinalCommitted = true;
+                    enhancedLogicalResponseId = acceptedResponseId;
+                  },
+                },
+              }
+            : {}),
+        });
+        if (commitsLogicalFinal && result.visibleReplySent) {
+          enhancedLogicalFinalCommitted = true;
+          enhancedLogicalResponseId = responseId;
         }
         return result;
       };
@@ -129,6 +185,7 @@ export function createMatrixReplyDispatcher(config: {
         draftContent: string;
         deliver: () => Promise<MatrixReplyDeliveryResult>;
       }): Promise<MatrixReplyDeliveryResult> => {
+        await draftStream?.abandon();
         const draftDelivery = createDraftDeliveryResult(params.draftEventId, params.draftContent);
         let replacement: MatrixReplyDeliveryResult;
         try {
@@ -161,27 +218,17 @@ export function createMatrixReplyDispatcher(config: {
 
         if (draftController.draftDisposition() !== "active") {
           await draftStream.discardPending();
-          return await completeDelivery(
-            await deliverMatrixReplies({
-              cfg,
-              replies: [fallbackPayload],
-              roomId,
-              client,
-              runtime,
-              replyToMode,
-              hasRepliedRef,
-              threadId: threadTarget,
-              replyToId: threadTarget ?? replyToEventId ?? undefined,
-              accountId,
-              mediaLocalRoots,
-            }),
-          );
+          return await completeDelivery(await deliverReplies([fallbackPayload]));
         }
 
+        const payloadReplyToId = normalizeOptionalString(payload.replyToId);
         const payloadReplyMismatch =
           !threadTarget &&
-          (replyToMode !== "off" || payload.replyToTag || payload.replyToCurrent) &&
-          normalizeOptionalString(payload.replyToId) !== draftController.currentReplyToId();
+          payloadReplyToId !== draftController.currentReplyToId() &&
+          (replyToMode !== "off" ||
+            payload.replyToTag ||
+            payload.replyToCurrent ||
+            payload.replyToIdSource === "explicit");
         let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
         const canPotentiallyFinalizeDraft =
           Boolean(payload.text?.trim()) &&
@@ -251,26 +298,15 @@ export function createMatrixReplyDispatcher(config: {
                   : {}),
               }),
               editFinal: async (_draftEventId, edit) => {
-                if (edit.finalizeLive) {
-                  if (!(await draftStream.finalizeLive())) {
-                    throw new Error("Matrix draft live finalize failed");
-                  }
-                  finalizedDraftContent = draftStream.content() ?? preparedFinalPreviewContent;
-                  return;
+                if (
+                  !(await draftStream.finalize(edit.text, {
+                    includeMentions:
+                      info.kind === "final" && !quietDraftStreaming && !edit.finalizeLive,
+                  }))
+                ) {
+                  throw new Error("Matrix draft final edit failed");
                 }
-                const { editMessageMatrix } = await loadMatrixSendModule();
-                await editMessageMatrix(roomId, _draftEventId, edit.text, {
-                  client,
-                  cfg,
-                  threadId: threadTarget,
-                  accountId,
-                  extraContent: edit.extraContent,
-                });
-                finalizedDraftContent = prepareMatrixSingleText(edit.text, {
-                  cfg,
-                  accountId,
-                  preserveWhitespace: true,
-                }).convertedText;
+                finalizedDraftContent = draftStream.content() ?? preparedFinalPreviewContent;
               },
               createPreviewReceipt: createDraftReceipt,
               logPreviewEditFailure: (err) => {
@@ -281,26 +317,15 @@ export function createMatrixReplyDispatcher(config: {
               fallbackResult = await settleDraftReplacement({
                 draftEventId,
                 draftContent: draftStream.content() ?? preparedFinalPreviewContent,
-                deliver: async () =>
-                  await deliverMatrixReplies({
-                    cfg,
-                    replies: [fallbackPayload],
-                    roomId,
-                    client,
-                    runtime,
-                    replyToMode,
-                    hasRepliedRef,
-                    threadId: threadTarget,
-                    replyToId: threadTarget ?? replyToEventId ?? undefined,
-                    accountId,
-                    mediaLocalRoots,
-                  }),
+                deliver: async () => await deliverReplies([fallbackPayload]),
               });
               return fallbackResult.visibleReplySent;
             },
           });
           if (previewResult.kind === "preview-finalized") {
             draftController.markDraftConsumed();
+            enhancedLogicalFinalCommitted = enhancedTurnTakingEligible;
+            enhancedLogicalResponseId = draftStream.responseId();
           }
           const settledResult =
             previewResult.kind === "preview-finalized" && previewResult.liveState?.receipt
@@ -310,7 +335,29 @@ export function createMatrixReplyDispatcher(config: {
                 )
               : (fallbackResult ?? mergeMatrixReplyDeliveryResults([]));
           return await completeDelivery(settledResult);
-        } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
+        } else if (
+          draftEventId &&
+          hasMedia &&
+          !payloadReplyMismatch &&
+          enhancedTurnTakingEligible
+        ) {
+          // A standalone media-bearing final replaces, rather than overlaps,
+          // the live preview lineage. Close the preview before publishing the
+          // authenticated replacement final so sibling awareness never sees
+          // both as active answers.
+          return await completeDelivery(
+            await settleDraftReplacement({
+              draftEventId,
+              draftContent: draftStream.content() ?? "",
+              deliver: async () => await deliverReplies([fallbackPayload]),
+            }),
+          );
+        } else if (
+          draftEventId &&
+          hasMedia &&
+          !payloadReplyMismatch &&
+          !enhancedTurnTakingEligible
+        ) {
           let textEditOk = !mustDeliverFinalNormally;
           const payloadText = payload.text ?? ttsSupplement?.spokenText;
           const preparedPayloadContent =
@@ -380,20 +427,7 @@ export function createMatrixReplyDispatcher(config: {
               : draftContent
                 ? createDraftDeliveryResult(draftEventId, draftContent)
                 : mergeMatrixReplyDeliveryResults([]);
-          const deliverMedia = async () =>
-            await deliverMatrixReplies({
-              cfg,
-              replies: [mediaPayload],
-              roomId,
-              client,
-              runtime,
-              replyToMode,
-              hasRepliedRef,
-              threadId: threadTarget,
-              replyToId: threadTarget ?? replyToEventId ?? undefined,
-              accountId,
-              mediaLocalRoots,
-            });
+          const deliverMedia = async () => await deliverReplies([mediaPayload]);
           if (reusesDraftAsFinalText) {
             draftController.markDraftConsumed();
             let mediaDelivery: MatrixReplyDeliveryResult;
@@ -423,20 +457,7 @@ export function createMatrixReplyDispatcher(config: {
             payloadReplyMismatch ||
             mustDeliverFinalNormally ||
             draftFinalTextNeedsNormalMentionDelivery);
-        const deliverFallback = async () =>
-          await deliverMatrixReplies({
-            cfg,
-            replies: [fallbackPayload],
-            roomId,
-            client,
-            runtime,
-            replyToMode,
-            hasRepliedRef,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-          });
+        const deliverFallback = async () => await deliverReplies([fallbackPayload]);
         const draftContent = draftStream.content();
         if (shouldRedactDraft && draftEventId && draftContent) {
           return await completeDelivery(
@@ -449,21 +470,7 @@ export function createMatrixReplyDispatcher(config: {
         }
         return await completeDelivery(await deliverFallback());
       }
-      return await completeDelivery(
-        await deliverMatrixReplies({
-          cfg,
-          replies: [payload],
-          roomId,
-          client,
-          runtime,
-          replyToMode,
-          hasRepliedRef,
-          threadId: threadTarget,
-          replyToId: threadTarget ?? replyToEventId ?? undefined,
-          accountId,
-          mediaLocalRoots,
-        }),
-      );
+      return await completeDelivery(await deliverReplies([payload]));
     },
     onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {

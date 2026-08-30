@@ -873,7 +873,10 @@ function assertMeetingTranscriptsMigrated(stateDir, stage) {
   } finally {
     db.close();
   }
+}
 
+function assertMeetingTranscriptExport(stateDir) {
+  const legacySessionDir = path.join(stateDir, "transcripts", "2026-07-01", "design-review");
   const exportedDir = execFileSync(
     "openclaw",
     ["transcripts", "path", "2026-07-01/design-review", "--dir"],
@@ -1263,9 +1266,9 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
     result.status === "error" ? "post-plugin-doctor-invalid-config" : undefined,
   );
   assertStrict.deepEqual(plugins.integrityDrifts, []);
-  // These are the reviewed packages in the base and configured-plugin recipes.
+  // These are the reviewed packages in the base and scenario recipes.
   // Any other plugin or failure needs investigation before accepting it.
-  const reviewed = new Set(["codex", "discord", "whatsapp", "matrix", "brave"]);
+  const reviewed = new Set(["acpx", "brave", "codex", "discord", "feishu", "matrix", "whatsapp"]);
   const denied = new Set();
   assertStrict.ok(Array.isArray(plugins.npm?.outcomes));
   for (const outcome of plugins.npm.outcomes) {
@@ -1515,6 +1518,12 @@ if (command === "list-scenarios") {
 } else if (command === "assert-state") {
   assertStateSurvived();
   assertConfiguredPluginInstalls();
+} else if (command === "assert-meeting-transcript-export") {
+  assert(
+    getScenario() === "meeting-transcripts-sqlite",
+    "transcript export requires the meeting scenario",
+  );
+  assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
 } else if (command === "assert-companion-installs") {
   assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {

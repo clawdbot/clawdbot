@@ -54,6 +54,7 @@ import {
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { shouldEnableCodexTurnLocalFinalization } from "./turn-local-finalization.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -445,6 +446,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
+    requireBeforeAgentFinalize:
+      params.operation !== "settled-tool-finalization" &&
+      shouldEnableCodexTurnLocalFinalization({
+        callback: params.onBeforeAgentFinalize,
+        revisionAttempt: params.beforeAgentFinalizeRevisionAttempts ?? 0,
+        ...(params.maxBeforeAgentFinalizeRevisions !== undefined
+          ? { maxRevisionAttempts: params.maxBeforeAgentFinalizeRevisions }
+          : {}),
+      }),
   });
   const mutable = {
     startupBinding,

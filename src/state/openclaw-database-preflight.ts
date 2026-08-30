@@ -16,6 +16,7 @@ import {
 import {
   describeRunningOpenClawBuild,
   readSqliteUserVersion,
+  SqliteSchemaVersionError,
 } from "../infra/sqlite-user-version.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -93,7 +94,7 @@ function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase
 }
 
 /** Fatal refusal when persisted schemas were written by a newer build. */
-export class OpenClawDatabaseSchemaPreflightError extends Error {
+export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
   constructor(
     readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
     options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},

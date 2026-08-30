@@ -91,6 +91,7 @@ struct GatewayConnectionControlUIAuthTests {
                         routeAuthority: 1,
                         deviceAuthGatewayID: "route-a")
                 },
+                supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession()))
             _ = try await routeAConnection.request(
@@ -110,6 +111,7 @@ struct GatewayConnectionControlUIAuthTests {
                         routeAuthority: 2,
                         deviceAuthGatewayID: "route-b")
                 },
+                supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession()))
             _ = try await routeBConnection.request(
@@ -141,6 +143,7 @@ struct GatewayConnectionControlUIAuthTests {
                 deviceAuthGatewayID: "route-a"))
             let connection = GatewayConnection(
                 endpointProvider: { source.snapshot() },
+                supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession(
                     issuedDeviceToken: "route-a-issued-token")))

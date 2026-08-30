@@ -98,6 +98,8 @@ type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "contextEngineLogicalTurnLease"
+  | "deferSourceMessageToolDelivery"
+  | "onBeforeAgentFinalize"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
 >;

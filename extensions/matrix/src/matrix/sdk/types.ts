@@ -20,6 +20,10 @@ export type MatrixRawEvent = {
   state_key?: string;
   /** Bridge-owned membership evidence; snapshots never establish a new join. */
   membershipProvenance?: "snapshot" | "transition" | "update";
+  /** Matrix v1-10 redaction target. Room v11+ uses content.redacts. */
+  redacts?: string;
+  /** Runtime-only fact set after authenticated enhanced-preview promotion. */
+  __openclawTrustedEnhancedFinal?: true;
 };
 
 export type MatrixRelationsPage = {

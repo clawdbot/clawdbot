@@ -43,6 +43,7 @@ type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
   requireWriteSuccess?: boolean;
@@ -187,6 +188,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 transactionEntries.set(sessionKey, transactionRow.entry);
               }
             }
+            params.assertCommitAllowed?.();
             for (const replacement of applicable) {
               const sourceEntries = [
                 replacement.sessionKey,

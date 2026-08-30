@@ -20,6 +20,7 @@ import {
   listStagedChangedPaths,
 } from "./changed-lanes.mts";
 import type { ChangedLaneResult } from "./changed-lanes.mts";
+import { detectChangedScope, isMacosToolingPath } from "./ci-changed-scope.mjs";
 import {
   booleanFlag,
   isOpenEndedTruthyValue,
@@ -129,7 +130,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -159,7 +160,11 @@ function hasAndroidVersionSyncPath(paths: string[]) {
 }
 
 function hasMacosAppCiPath(paths: string[]) {
-  return paths.some((changedPath) => MACOS_APP_CI_PATH_RE.test(normalizeChangedPath(changedPath)));
+  // Native-source policy stays local; script and test owners share the CI selector.
+  return paths.some((changedPath) => {
+    const normalized = normalizeChangedPath(changedPath);
+    return MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized);
+  });
 }
 
 function executableExistsOnPath(command: string, env: NodeJS.ProcessEnv = process.env) {
@@ -819,18 +824,34 @@ export function createChangedCheckPlan(
       addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
     }
   }
-  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
-    addCommand(
-      "lint apps (swiftlint unavailable on this host)",
-      "node",
-      [
-        "-e",
-        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
-      ],
-      baseEnv,
-    );
-  } else if (lanes.apps) {
-    addLint("lint apps", ["lint:apps"]);
+  if (lanes.apps) {
+    const appScopes = result.paths
+      .filter((changedPath) => getChangedPathFacts(changedPath).surface === "app")
+      .map((changedPath) => detectChangedScope([changedPath]));
+    // Shared Apple sources select Android consumer CI, but Gradle ktlint owns
+    // only Android-exclusive app paths. Classify each path so mixed diffs retain both.
+    if (
+      appScopes.some(
+        ({ runAndroid, runMacos, runIosBuild }) => runAndroid && !runMacos && !runIosBuild,
+      )
+    ) {
+      addLint("lint Android", ["android:lint"]);
+    }
+    if (appScopes.some(({ runMacos, runIosBuild }) => runMacos || runIosBuild)) {
+      if (shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+        addCommand(
+          "lint apps (swiftlint unavailable on this host)",
+          "node",
+          [
+            "-e",
+            "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
+          ],
+          baseEnv,
+        );
+      } else {
+        addLint("lint apps", ["lint:apps"]);
+      }
+    }
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);

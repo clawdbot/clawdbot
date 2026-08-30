@@ -280,6 +280,28 @@ describe("native owner content records", () => {
     expect(matches()).toBe(false);
   });
 
+  it("ignores tool scratch churn under installed roots", () => {
+    const f = fixture(true);
+    fs.mkdirSync(path.join(f.root, "node_modules"));
+    const run = f.prepare();
+    // Sibling config loads mint these between the before and seal walks.
+    f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
+    const record = f.seal(run);
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+      );
+    expect(matches()).toBe(true);
+    fs.rmSync(path.join(f.root, "node_modules/.vite-temp"), { recursive: true });
+    f.write("node_modules/.cache/jiti/config.deadbeef.mjs", "export default {};");
+    expect(matches()).toBe(true);
+    f.write("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.js", "export const value = 1;");
+    expect(matches()).toBe(false);
+  });
+
   it("propagates non-ENOENT link resolution errors", () => {
     const f = fixture(true);
     fs.symlinkSync("loop", path.join(f.root, "loop"));

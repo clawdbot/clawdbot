@@ -125,8 +125,6 @@ class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
   private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
-  private val requestGatewayWithTimeout: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String =
-    { method, paramsJson, _ -> requestGateway(method, paramsJson) },
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
   private val gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
@@ -187,9 +185,6 @@ class ChatController internal constructor(
     scope = scope,
     json = json,
     requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
-    requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
-      session.request(method, paramsJson, timeoutMs)
-    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
@@ -1073,17 +1068,29 @@ class ChatController internal constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    color: String? = null,
+    clearColor: Boolean = false,
     pinned: Boolean? = null,
     archived: Boolean? = null,
     unread: Boolean? = null,
     unreadExpectation: ChatSessionUnreadExpectation? = null,
   ): Boolean {
     val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return false
+    val requestCacheScope = currentCacheScope()
     val capturedOwnerAgentId =
       resolveAgentIdFromMainSessionKey(sessionKey)
         ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
-    val hasPatch = clearLabel || label != null || clearCategory || category != null || pinned != null || archived != null || unread != null
+    val hasPatch =
+      clearLabel ||
+        label != null ||
+        clearCategory ||
+        category != null ||
+        clearColor ||
+        color != null ||
+        pinned != null ||
+        archived != null ||
+        unread != null
     if (!hasPatch) return false
     val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
     if (archived != null && lifecycleSessionId == null) {
@@ -1106,6 +1113,11 @@ class ChatController internal constructor(
           } else if (category != null) {
             put("category", JsonPrimitive(category))
           }
+          if (clearColor) {
+            put("color", JsonNull)
+          } else if (color != null) {
+            put("color", JsonPrimitive(color))
+          }
           if (pinned != null) put("pinned", JsonPrimitive(pinned))
           if (archived != null) put("archived", JsonPrimitive(archived))
           if (unread != null) put("unread", JsonPrimitive(unread))
@@ -1115,12 +1127,33 @@ class ChatController internal constructor(
           }
         }
       if (archived == true) {
-        requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)
+        val defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
+        val selection =
+          synchronized(gatewayScopeApplyLock) {
+            currentSessionActionSnapshot(sessionKey)?.takeIf {
+              it.gatewayScope == requestCacheScope &&
+                it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
+                _sessionId.value == lifecycleSessionId
+            }
+          }
+        val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
+        lease.request("sessions.patch", params.toString(), 10 * 60_000L)
+        lease.commitIfCurrent {
+          synchronized(gatewayScopeApplyLock) {
+            // Same-key history and default-owner changes need not move selection generation.
+            // Only the selection captured at entry may navigate after the archive completes.
+            if (
+              selection != null &&
+              isCurrentSessionAction(selection) &&
+              _sessionId.value == lifecycleSessionId &&
+              (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
+            ) {
+              fallBackFromRetiredActiveSession(sessionKey)
+            }
+          }
+        }
       } else {
         requestGateway("sessions.patch", params.toString())
-      }
-      if (archived == true) {
-        fallBackFromRetiredActiveSession(sessionKey)
       }
       fetchSessionsForCurrentWindow()
       return true
@@ -6883,6 +6916,13 @@ class ChatController internal constructor(
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
       category = obj["category"].asStringOrNull()?.trim(),
+      color =
+        obj["color"]
+          .asJsonStringOrNull()
+          ?.trim()
+          ?.lowercase()
+          ?.takeIf { it.isNotEmpty() },
+      hasColorMetadata = "color" in obj,
       pinned = obj["pinned"].asBooleanOrNull(),
       archived = obj["archived"].asBooleanOrNull(),
       unread = obj["unread"].asBooleanOrNull(),
@@ -7850,6 +7890,9 @@ internal fun mergeChatSessionEntry(
     displayName = next.displayName ?: existing.displayName,
     label = next.label ?: existing.label,
     category = next.category ?: existing.category,
+    // Omitted metadata preserves the tint; explicit null from another client clears it.
+    color = if (next.hasColorMetadata) next.color else existing.color,
+    hasColorMetadata = existing.hasColorMetadata || next.hasColorMetadata,
     pinned = next.pinned ?: existing.pinned,
     archived = next.archived ?: existing.archived,
     unread = next.unread ?: existing.unread,

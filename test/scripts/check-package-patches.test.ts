@@ -57,6 +57,7 @@ describe("check-package-patches", () => {
     ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
     ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
     ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
+    ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
   ])("allows approved pnpm patch %s", (specifier, patchPath) => {
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });

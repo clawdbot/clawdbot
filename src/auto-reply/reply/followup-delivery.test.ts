@@ -508,22 +508,6 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("keeps ambient room-event finals silent", () => {
-    const turn = createTurn({
-      queued: {
-        ...createTurn().queued,
-        currentInboundEventKind: "room_event",
-      },
-    });
-
-    expect(
-      resolveFollowupDeliveryDecision({
-        turn,
-        execution: createSettledExecution("private room final"),
-      }),
-    ).toEqual({ kind: "suppress", reason: "room-event" });
-  });
-
   it("honors the admission-time send policy before any final projection", () => {
     expect(
       resolveFollowupDeliveryDecision({

@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -89,6 +90,7 @@ const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
 );
 const tryOutputSetupOnboardConfigureHelpMock = vi.hoisted(() => vi.fn(async () => true));
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const parkCurrentLaunchAgentForMaintenanceMock = vi.hoisted(() => vi.fn(async () => true));
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
@@ -244,6 +246,10 @@ vi.mock("./route.js", () => ({
 
 vi.mock("./gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
+}));
+
+vi.mock("../daemon/launchd.js", () => ({
+  parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
 }));
 
 vi.mock("./command-execution-startup.js", () => ({
@@ -683,6 +689,70 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
     expect(parseAsync).toHaveBeenCalledTimes(1);
     expect(getPluginCache()).toBe(owner);
+  });
+
+  it.each(["environment selection", "full Commander preaction"])(
+    "parks the managed Gateway when a newer schema blocks %s",
+    async (phase) => {
+      const error = createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        "/tmp/openclaw-startup/state/openclaw.sqlite",
+        14,
+        13,
+      );
+      const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
+      if (phase === "environment selection") {
+        readConfigFileSnapshotMock.mockRejectedValueOnce(error);
+      } else {
+        buildProgramMock.mockReturnValueOnce({
+          commands: [{ name: () => "gateway", aliases: () => [] }],
+          parseAsync: vi.fn().mockRejectedValueOnce(error),
+        });
+        tryRouteCliMock.mockResolvedValueOnce(false);
+      }
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+        throw new Error(`exit:${code}`);
+      }) as never);
+      try {
+        await expect(runCli(argv)).rejects.toThrow("exit:78");
+
+        expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
+        expect(exitSpy).toHaveBeenCalledWith(78);
+        expect(errorSpy.mock.calls.flat().join("\n")).toContain(error.message);
+        expect(addGatewayRunCommandMock).not.toHaveBeenCalled();
+        if (phase === "environment selection") {
+          expect(buildProgramMock).not.toHaveBeenCalled();
+        } else {
+          expect(buildProgramMock).toHaveBeenCalledOnce();
+        }
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { label: "Gateway help", args: ["gateway", "--help"] },
+    { label: "another command", args: ["status"] },
+  ])("does not park the Gateway for a newer-schema failure during $label", async ({ args }) => {
+    const error = createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      "/tmp/openclaw-startup/state/openclaw.sqlite",
+      14,
+      13,
+    );
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync: vi.fn().mockRejectedValueOnce(error),
+    });
+
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
+      await expect(runCli(["node", "openclaw", ...args])).rejects.toBe(error);
+    });
+
+    expect(parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
   });
 
   it("does not load inactive provider cleanup modules for cold help", async () => {
@@ -2552,6 +2622,31 @@ describe("runCli exit behavior", () => {
 
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
+
+  it.each([
+    ["worker", { observe: false, pluginValidation: "core-only" }],
+    ["run", { skipPluginValidation: true }],
+  ])(
+    "preserves node %s config ownership when startup tracing is enabled",
+    async (subcommand, readOptions) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-timeline-"));
+      const timelinePath = path.join(root, "timeline.jsonl");
+      tryRouteCliMock.mockResolvedValueOnce(true);
+      loadConfigMock.mockResolvedValueOnce({ diagnostics: { flags: ["timeline"] } });
+      try {
+        await withEnvAsync(
+          { OPENCLAW_DIAGNOSTICS: "", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
+          async () => {
+            await runCli(["node", "openclaw", "node", subcommand]);
+          },
+        );
+        expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
+        expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],

@@ -115,7 +115,7 @@ Current limits:
 - Paired-node Claude history reads do not expose a definitive thread-not-found result, so remote Claude deletions are not classified as `upstream_missing` in v1.
 - Catalog sessions that have not been adopted remain outside the awareness layer in v1.
 - Sessions adopted before this feature carry no upstream link; continue them from the catalog once to start upstream monitoring.
-- Upstream links assume each adopted session key maps to one owning agent (adoption uses the default store agent). Multi-agent adoption of the same external thread is not monitored in v1.
+- Upstream monitoring requires one owning agent per adopted session key. Adoption uses the resolved agent and returns an agent-qualified key; distinct watched keys can monitor the same native thread. Links that reuse the exact same key under multiple agent IDs are skipped as ambiguous.
 
 ## Related
 

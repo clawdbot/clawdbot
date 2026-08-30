@@ -13,7 +13,7 @@ vi.mock("../../scripts/lib/managed-child-process.mts", () => ({
 }));
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
-  runE2eGlobalSetup: commands.prepareE2e,
+  prepareE2eVitestRuntime: commands.prepareE2e,
 }));
 vi.mock("../../scripts/run-vitest.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/run-vitest.mts")>()),
@@ -42,7 +42,7 @@ let startCount = 0;
 
 beforeEach(() => {
   commands.prepare.mockReset();
-  commands.prepareE2e.mockReset();
+  commands.prepareE2e.mockReset().mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
   commands.reader.mockReset().mockImplementation(() => ({
     completion: Promise.resolve({ code: 0, signal: null }),
     getForwardedSignal: () => undefined,
@@ -354,18 +354,19 @@ describe("test-projects build admission", () => {
     "admits the built native-host integration after %s",
     async (mode) => {
       if (mode === "prebuilt") vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
-      const preparation = createDeferred();
+      const preparation = createDeferred<NodeJS.ProcessEnv>();
       commands.prepareE2e.mockReturnValue(preparation.promise);
+      if (mode === "prebuilt") preparation.resolve({});
       await start([nativeHostTarget]);
       if (mode !== "prebuilt") {
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepareE2e).toHaveBeenCalledOnce();
         if (mode === "failed build") preparation.reject(new Error("build failed"));
-        else preparation.resolve();
+        else preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
       }
       await terminal.promise;
       expect(commands.prepare).not.toHaveBeenCalled();
-      expect(commands.prepareE2e).toHaveBeenCalledTimes(mode === "prebuilt" ? 0 : 1);
+      expect(commands.prepareE2e).toHaveBeenCalledOnce();
       expect(commands.reader).toHaveBeenCalledTimes(mode === "failed build" ? 0 : 1);
       if (mode === "failed build") {
         expect(process.exitCode).toBe(1);
@@ -399,7 +400,7 @@ describe("test-projects build admission", () => {
 
   it("coalesces mixed E2E and private QA preparation before marking only E2E prebuilt", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
-    const preparation = createDeferred();
+    const preparation = createDeferred<NodeJS.ProcessEnv>();
     commands.prepareE2e.mockReturnValue(preparation.promise);
     await start([...targets, e2eTarget]);
     try {
@@ -407,7 +408,7 @@ describe("test-projects build admission", () => {
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
     } finally {
-      preparation.resolve();
+      preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
       await terminal.promise;
     }
     expect(await terminal.promise).toMatch(/^\[test\] passed 3 Vitest shards/u);
@@ -433,9 +434,12 @@ describe("test-projects build admission", () => {
     "preserves the explicit %s contract",
     async (key) => {
       vi.stubEnv(key, "1");
+      commands.prepareE2e.mockResolvedValue({});
       await start([...targets, e2eTarget]);
       await terminal.promise;
-      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ [key]: "1" }),
+      );
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.reader).toHaveBeenCalledTimes(3);
       for (const [options] of commands.reader.mock.calls) {

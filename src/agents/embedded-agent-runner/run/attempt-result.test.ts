@@ -28,6 +28,7 @@ function completeResult(params?: {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
+  discarded?: boolean;
 }) {
   return completeEmbeddedAttemptResult({
     attempt: {
@@ -73,6 +74,14 @@ function completeResult(params?: {
       yieldAcknowledgment: params?.yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
+      ...(params?.discarded
+        ? {
+            beforeAgentFinalizeDiscarded: true as const,
+            lastAssistant: { role: "assistant", content: "discarded draft" },
+            currentAttemptAssistant: { role: "assistant", content: "discarded draft" },
+            currentAttemptCompletedAssistant: { role: "assistant", content: "discarded draft" },
+          }
+        : {}),
     } as never,
     clientToolCallSlots: params?.clientToolCallSlots ?? [],
     hookRunner: null,
@@ -266,6 +275,21 @@ describe("attempt result projection", () => {
       { name: "search", params: { query: "one" } },
       { name: "fetch", params: { id: 3 } },
     ]);
+  });
+
+  it("removes a discarded draft and pending client action from the attempt result", () => {
+    const result = completeResult({
+      discarded: true,
+      clientToolCallSlots: [
+        { toolCallId: "pending", name: "computer_use", params: { task: "stale" }, completed: true },
+      ],
+    });
+
+    expect(result.clientToolCalls).toBeUndefined();
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+    expect(result.currentAttemptCompletedAssistant).toBeUndefined();
   });
 
   it("filters invalid tool metadata and preserves terminal flags", () => {

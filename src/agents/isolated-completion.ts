@@ -158,13 +158,21 @@ function hasCliSideEffectEvidence(result: {
   acceptedSessionSpawns?: unknown[];
   successfulCronAdds?: number;
 }): boolean {
+  const deliveredSourceReplyPayload = result.messagingToolSourceReplyPayloads?.some(
+    (payload) =>
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      // SAFETY: The preceding short-circuit guards narrow payload to a non-array object before this optional field read.
+      (payload as { hostFinalDeferred?: unknown }).hostFinalDeferred !== true,
+  );
   return Boolean(
     result.didSendViaMessagingTool ||
     result.didDeliverSourceReplyViaMessageTool ||
     result.messagingToolSentTexts?.length ||
     result.messagingToolSentMediaUrls?.length ||
     result.messagingToolSentTargets?.length ||
-    result.messagingToolSourceReplyPayloads?.length ||
+    deliveredSourceReplyPayload ||
     result.acceptedSessionSpawns?.length ||
     result.successfulCronAdds,
   );

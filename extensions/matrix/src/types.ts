@@ -52,6 +52,23 @@ export type MatrixRoomConfig = {
   skills?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+  /** Disable channel-wide intelligent turn-taking in this room. */
+  turnTaking?: false;
+};
+
+type MatrixTurnTakingAction = "redraft" | "discard" | "send-as-is";
+
+type MatrixTurnTakingNextStep =
+  | { decider: "ai" }
+  | { decider: "user"; action: MatrixTurnTakingAction };
+
+export type MatrixTurnTakingConfig = {
+  /** Enable intelligent multi-agent turn-taking for eligible Matrix rooms. Default: false. */
+  enabled?: boolean;
+  /** 0 is participation-only; plugin freshness at 1/2 requires the attested bundled Codex harness. Default: 1. */
+  redraftDepth?: 0 | 1 | 2;
+  /** Who selects the action when newer room activity arrives. Default: { decider: "ai" }. */
+  nextStep?: MatrixTurnTakingNextStep;
 };
 
 type MatrixActionConfig = {
@@ -108,8 +125,19 @@ type MatrixNetworkConfig = {
   dangerouslyAllowPrivateNetwork?: boolean;
 };
 
-/** Per-account Matrix config (excludes the accounts field to prevent recursion). */
-export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
+type MatrixAccountRoomConfig = Omit<MatrixRoomConfig, "turnTaking">;
+
+/**
+ * Per-account Matrix config. Channel-wide turn-taking and its room opt-outs are
+ * intentionally excluded so every local Matrix account observes one policy.
+ */
+export type MatrixAccountConfig = Omit<
+  MatrixConfig,
+  "accounts" | "turnTaking" | "groups" | "rooms"
+> & {
+  groups?: Record<string, MatrixAccountRoomConfig>;
+  rooms?: Record<string, MatrixAccountRoomConfig>;
+};
 
 export type MatrixConfig = {
   /** Introduce the bot when it joins an allowed group room. Default: true. */
@@ -203,6 +231,8 @@ export type MatrixConfig = {
   groups?: Record<string, MatrixRoomConfig>;
   /** @deprecated Use groups. */
   rooms?: Record<string, MatrixRoomConfig>;
+  /** Channel-wide intelligent multi-agent turn-taking with room-specific opt-out. */
+  turnTaking?: MatrixTurnTakingConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
   /**

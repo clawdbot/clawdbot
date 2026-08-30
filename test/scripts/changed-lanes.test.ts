@@ -2052,6 +2052,7 @@ describe("scripts/changed-lanes", () => {
     for (const changedPath of [
       "apps/macos/Sources/OpenClawMac/AppDelegate.swift",
       "apps/macos-mlx-tts/Sources/OpenClawMLXTTS/main.swift",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
       "apps/swabble/Sources/SwabbleKit/WakeWordGate.swift",
       "Swabble/Sources/SwabbleKit/WakeWordGate.swift",
@@ -2064,6 +2065,7 @@ describe("scripts/changed-lanes", () => {
       });
 
       expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+      expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
       expect(plan.commands).toContainEqual(
         expect.objectContaining({
           name: "lint apps (swiftlint unavailable on this host)",
@@ -2136,6 +2138,26 @@ describe("scripts/changed-lanes", () => {
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
+      "scripts/restart-mac.sh",
+      "scripts/stage-mac-node-worker.sh",
+      "scripts/test-macos-native.mts",
+      "test/scripts/macos-native-test-launch.test.ts",
+      "scripts/verify-mac-node-worker.mjs",
+      "scripts/verify-mac-node-worker-fs.mjs",
+      "scripts/materialize-mac-node-worker.py",
+      "scripts/lib/mac-app-bundle.sh",
+      "scripts/lib/mac-native-inventory.py",
+      "scripts/lib/mac-worker-portability.mjs",
+      "scripts/lib/mac-node-worker-proof-state.mjs",
+      "scripts/lib/mac-bundle-mutation.py",
+      "test/helpers/mac-native.ts",
+      "test/helpers/mac-signing.ts",
+      "test/scripts/mac-node-worker.test.ts",
+      "test/scripts/verify-mac-node-worker-fs.test.ts",
+      "test/scripts/restart-mac.test.ts",
+      "test/scripts/mac-elevation-artifact.test-support.ts",
+      "test/scripts/mac-native-fixtures.test-support.ts",
+      "test/scripts/mac-node-worker-materialization.test-support.ts",
       "test/scripts/codesign-mac-app.test.ts",
       "test/scripts/create-dmg.test.ts",
       "test/scripts/mac-elevation-host.test.ts",
@@ -2151,6 +2173,7 @@ describe("scripts/changed-lanes", () => {
       });
 
       expectLanes(result.lanes, {
+        scripts: changedPath.endsWith(".mts"),
         testRoot: changedPath.endsWith(".ts"),
         tooling: true,
       });
@@ -2178,38 +2201,110 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
   });
 
-  it("runs app lint when SwiftLint is available in Testbox", () => {
-    const result = detectChangedLanes([
-      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-    ]);
-    const plan = createChangedCheckPlan(result, {
-      env: { CI: "1", PATH: "/usr/bin" },
-      platform: "linux",
-      swiftlintAvailable: true,
-    });
+  it.each<[string, NodeJS.Platform, boolean, boolean]>([
+    ["apps/ios/Sources/RootTabs.swift", "darwin", true, false],
+    ["apps/macos/Sources/OpenClawMac/AppDelegate.swift", "darwin", false, true],
+    ["apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift", "linux", true, true],
+    ["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift", "linux", true, true],
+  ])(
+    "preserves Swift lint for %s on %s with SwiftLint=%s",
+    (changedPath, platform, swiftlintAvailable, macosCi) => {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { CI: "1", PATH: "/usr/bin" },
+        platform,
+        swiftlintAvailable,
+      });
+      const commands = plan.commands.map((command) => command.args[0]);
 
-    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "macOS app CI tests",
-        args: ["test:macos:ci"],
-      }),
-    );
+      expect(commands).toContain("lint:apps");
+      expect(commands).not.toContain("android:lint");
+      expect(commands.includes("test:macos:ci")).toBe(macosCi);
+    },
+  );
+
+  it.each<[string, NodeJS.Platform, boolean]>([
+    [
+      "apps/android/app/src/test/java/ai/openclaw/app/gateway/GatewaySessionReconnectTest.kt",
+      "darwin",
+      true,
+    ],
+    [
+      "apps/android/app/src/test/java/ai/openclaw/app/gateway/GatewaySessionReconnectTest.kt",
+      "linux",
+      false,
+    ],
+    ["apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt", "darwin", false],
+    ["apps/android/app/src/main/AndroidManifest.xml", "linux", true],
+    ["apps/android/app/build.gradle.kts", "linux", false],
+    ["apps/android/settings.gradle.kts", "darwin", true],
+  ])(
+    "selects only Android lint for %s on %s with SwiftLint=%s",
+    (changedPath, platform, swiftlintAvailable) => {
+      const result = detectChangedLanes([changedPath]);
+      const plan = createChangedCheckPlan(result, {
+        env: { CI: "1", PATH: "/usr/bin" },
+        platform,
+        swiftlintAvailable,
+      });
+
+      expectLanes(result.lanes, { apps: true });
+      expect
+        .soft(plan.commands)
+        .toContainEqual(expect.objectContaining({ args: ["android:lint"] }));
+      expect.soft(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+      expect
+        .soft(plan.commands.map((command) => command.name))
+        .not.toContain("lint apps (swiftlint unavailable on this host)");
+      expect(plan.commands.map((command) => command.args[0])).not.toContain("test:macos:ci");
+    },
+  );
+
+  it.each([false, true])("preserves mixed native lint with SwiftLint=%s", (swiftlintAvailable) => {
+    for (const { paths, androidLint, macosCi } of [
+      { paths: ["apps/ios/Sources/RootTabs.swift"], androidLint: false, macosCi: false },
+      {
+        paths: [
+          "apps/android/app/src/main/AndroidManifest.xml",
+          "apps/ios/Sources/RootTabs.swift",
+          "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
+        ],
+        androidLint: true,
+        macosCi: true,
+      },
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes(paths), {
+        env: { CI: "1", PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable,
+      });
+      const commands = plan.commands.map((command) => command.args[0]);
+
+      expect(commands.includes("android:lint")).toBe(androidLint);
+      expect(commands.includes("lint:apps")).toBe(swiftlintAvailable);
+      expect(commands.includes("test:macos:ci")).toBe(macosCi);
+      expect(
+        plan.commands.some(
+          (command) => command.name === "lint apps (swiftlint unavailable on this host)",
+        ),
+      ).toBe(!swiftlintAvailable);
+    }
   });
 
-  it("keeps macOS app CI tests out of Android-only app changes", () => {
-    const result = detectChangedLanes(["apps/android/app/src/main/AndroidManifest.xml"]);
-    const plan = createChangedCheckPlan(result, {
-      env: { CI: "1", PATH: "/usr/bin" },
-      platform: "linux",
-      swiftlintAvailable: true,
-    });
+  it.each(["apps/.i18n/native-source.json", "apps/web/index.ts", "appcast.xml"])(
+    "keeps non-native app assets out of native lint: %s",
+    (changedPath) => {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
 
-    expectLanes(result.lanes, {
-      apps: true,
-    });
-    expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
-  });
+      expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
+      expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+      expect(plan.commands.map((command) => command.name)).not.toContain(
+        "lint apps (swiftlint unavailable on this host)",
+      );
+    },
+  );
 
   it("routes A2UI bundle source changes as extension changes", () => {
     const result = detectChangedLanes([

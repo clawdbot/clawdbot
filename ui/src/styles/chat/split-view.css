@@ -221,6 +221,8 @@ openclaw-chat-pane {
    shared 8px gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
+  display: inline-flex;
+  align-items: center;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -230,7 +232,6 @@ openclaw-chat-pane {
 
 .chat-pane__session-title-button,
 .chat-pane__parent-session {
-  display: block;
   /* Hover padding is drawn outside the text box: the plain-span title (catalog
      and rename-disabled panes) has none, and without the pull-back the same
      title would start 5px further right the moment renaming is allowed. */

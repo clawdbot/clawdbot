@@ -8,6 +8,10 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import { resolveCommandTurnContext, type CommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import {
+  hasAutomaticRoomEventFinalCapability,
+  type AutomaticRoomEventFinalCapability,
+} from "./automatic-room-event-final-capability.js";
 
 /** Minimal inbound context needed for source-reply delivery decisions. */
 export type SourceReplyDeliveryModeContext = {
@@ -91,6 +95,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  automaticRoomEventFinalCapability?: AutomaticRoomEventFinalCapability;
   strictMessageToolOnly?: boolean;
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
@@ -98,7 +103,17 @@ export function resolveSourceReplyDeliveryMode(params: {
   if (params.strictMessageToolOnly === true) {
     return "message_tool_only";
   }
-  if (params.ctx.InboundEventKind === "room_event" && !isInternalRoomEvent(params.ctx)) {
+  const hostOwnsAutomaticRoomEventFinal =
+    params.requested === "automatic" &&
+    hasAutomaticRoomEventFinalCapability({
+      capability: params.automaticRoomEventFinalCapability,
+      context: params.ctx,
+    });
+  if (
+    params.ctx.InboundEventKind === "room_event" &&
+    !isInternalRoomEvent(params.ctx) &&
+    !hostOwnsAutomaticRoomEventFinal
+  ) {
     return "message_tool_only";
   }
   if (
@@ -164,6 +179,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  automaticRoomEventFinalCapability?: AutomaticRoomEventFinalCapability;
   strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
   suppressAcpChildUserDelivery?: boolean;
@@ -184,6 +200,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
+    automaticRoomEventFinalCapability: params.automaticRoomEventFinalCapability,
     strictMessageToolOnly: params.strictMessageToolOnly,
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,

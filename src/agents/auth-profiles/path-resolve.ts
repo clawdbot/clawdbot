@@ -87,6 +87,18 @@ export function noteCommittedSharedAuthStoreOwnership(
   sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
 }
 
+/** Reload shared auth ownership after an explicit out-of-process auth mutation. */
+export function reloadSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  const ownership = parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
+  );
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  return ownership;
+}
+
 /** Resolve the canonical shared auth database path. */
 export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env): string {
   if (resolveSharedAuthStoreOwnership(env).location === "state-db") {

@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 // Matrix tests cover draft stream plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MATRIX_PREVIEW_PROTOCOL_KEY } from "./preview-protocol.js";
 
 const sendModuleMocks = vi.hoisted(() => {
   const loadConfigMock = vi.fn(() => ({}));
@@ -44,6 +45,7 @@ const sendModuleMocks = vi.hoisted(() => {
         msgtype?: string;
         includeMentions?: boolean;
         live?: boolean;
+        extraContent?: Record<string, unknown>;
       } = {},
     ) => {
       const prepared = prepareMatrixSingleText(text, {
@@ -60,6 +62,7 @@ const sendModuleMocks = vi.hoisted(() => {
       const content: Record<string, unknown> = {
         msgtype: opts.msgtype ?? "m.text",
         body: prepared.convertedText,
+        ...opts.extraContent,
       };
       if (opts.live) {
         content["org.matrix.msc4357.live"] = {};
@@ -89,12 +92,14 @@ const sendModuleMocks = vi.hoisted(() => {
         };
         msgtype?: string;
         live?: boolean;
+        extraContent?: Record<string, unknown>;
       } = {},
     ) => {
       const convertedText = convertMarkdownTablesMock(newText);
       const newContent: Record<string, unknown> = {
         msgtype: opts.msgtype ?? "m.text",
         body: convertedText,
+        ...opts.extraContent,
       };
       if (opts.live) {
         newContent["org.matrix.msc4357.live"] = {};
@@ -107,6 +112,7 @@ const sendModuleMocks = vi.hoisted(() => {
           rel_type: "m.replace",
           event_id: originalEventId,
         },
+        ...opts.extraContent,
       };
       if (opts.live) {
         content["org.matrix.msc4357.live"] = {};
@@ -232,6 +238,128 @@ describe("createMatrixDraftStream", () => {
       msgtype: "m.text",
     });
     expect(stream.eventId()).toBe("$evt1");
+  });
+
+  it("emits one correlated progress-to-answer protocol through finalization", async () => {
+    sendMessageMock
+      .mockReset()
+      .mockResolvedValueOnce("$root")
+      .mockResolvedValueOnce("$edit-1")
+      .mockResolvedValueOnce("$edit-final");
+    const onUpdate = vi.fn();
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      protocol: {
+        triggerEventId: "$trigger",
+        createResponseId: () => "response-fixed",
+        onUpdate,
+      },
+    });
+
+    stream.setKind("progress");
+    stream.update("Working");
+    await stream.flush();
+    const initial = sentContentAt(0);
+    expect(initial[MATRIX_PREVIEW_PROTOCOL_KEY]).toEqual({
+      v: 1,
+      responseId: "response-fixed",
+      triggerEventId: "$trigger",
+      state: "in-progress",
+      revision: 0,
+      kind: "progress",
+    });
+    expect(initial).toHaveProperty("org.matrix.msc4357.live");
+
+    vi.advanceTimersByTime(1000);
+    stream.setKind("answer");
+    stream.update("Draft answer");
+    await stream.flush();
+    const partialEdit = sentContentAt(1);
+    const partialNewContent = partialEdit["m.new_content"] as Record<string, unknown>;
+    expect(partialEdit[MATRIX_PREVIEW_PROTOCOL_KEY]).toEqual(
+      partialNewContent[MATRIX_PREVIEW_PROTOCOL_KEY],
+    );
+    expect(partialEdit[MATRIX_PREVIEW_PROTOCOL_KEY]).toMatchObject({
+      state: "in-progress",
+      revision: 1,
+      kind: "answer",
+    });
+    expect(partialEdit).toHaveProperty("org.matrix.msc4357.live");
+    expect(partialNewContent).toHaveProperty("org.matrix.msc4357.live");
+
+    await expect(stream.finalize("Final answer")).resolves.toBe(true);
+    const finalEdit = sentContentAt(2);
+    const finalNewContent = finalEdit["m.new_content"] as Record<string, unknown>;
+    expect(finalEdit[MATRIX_PREVIEW_PROTOCOL_KEY]).toEqual(
+      finalNewContent[MATRIX_PREVIEW_PROTOCOL_KEY],
+    );
+    expect(finalEdit[MATRIX_PREVIEW_PROTOCOL_KEY]).toMatchObject({
+      state: "final",
+      revision: 2,
+      kind: "answer",
+    });
+    expect(finalEdit).not.toHaveProperty("org.matrix.msc4357.live");
+    expect(finalNewContent).not.toHaveProperty("org.matrix.msc4357.live");
+    expect(onUpdate.mock.calls.map((call) => call[0])).toMatchObject([
+      { originalEventId: "$root", sourceEventId: "$root" },
+      { originalEventId: "$root", sourceEventId: "$edit-1" },
+      { originalEventId: "$root", sourceEventId: "$edit-final" },
+    ]);
+  });
+
+  it("marks an abandoned preview terminally and never exposes later updates", async () => {
+    sendMessageMock.mockReset().mockResolvedValueOnce("$root").mockResolvedValueOnce("$abandoned");
+    const onUpdate = vi.fn();
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      protocol: {
+        triggerEventId: "$trigger",
+        createResponseId: () => "response-abandoned",
+        onUpdate,
+      },
+    });
+    stream.update("Draft");
+    await stream.flush();
+    await stream.abandon();
+
+    const abandoned = sentContentAt(1);
+    const abandonedNewContent = abandoned["m.new_content"] as Record<string, unknown>;
+    expect(abandoned[MATRIX_PREVIEW_PROTOCOL_KEY]).toEqual(
+      abandonedNewContent[MATRIX_PREVIEW_PROTOCOL_KEY],
+    );
+    expect(abandoned[MATRIX_PREVIEW_PROTOCOL_KEY]).toMatchObject({
+      state: "abandoned",
+      revision: 1,
+    });
+    expect(abandoned).not.toHaveProperty("org.matrix.msc4357.live");
+    stream.update("NO_REPLY");
+    await stream.flush();
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reclassify an accepted final when protocol observation fails", async () => {
+    sendMessageMock.mockReset().mockResolvedValueOnce("$root").mockResolvedValueOnce("$final");
+    const log = vi.fn();
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      log,
+      protocol: {
+        triggerEventId: "$trigger",
+        onUpdate: vi.fn().mockRejectedValue(new Error("observer unavailable")),
+      },
+    });
+    stream.update("Draft");
+    await stream.flush();
+    await expect(stream.finalize("Final")).resolves.toBe(true);
+    expect(stream.mustDeliverFinalNormally()).toBe(false);
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expectLogContaining(log, "protocol observation failed after accepted send");
   });
 
   it("tracks the provider-visible prepared draft content", async () => {

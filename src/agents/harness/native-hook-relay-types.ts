@@ -67,6 +67,21 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
+type NativeHookRelayTurnLocalFinalizeOutcome =
+  | { action: "continue" }
+  | { action: "revise"; instruction: string }
+  | { action: "discard" };
+
+/** Private bundled-runtime controller for an admitted turn's source-local final gate. */
+export type NativeHookRelayTurnLocalFinalizer = Readonly<{
+  /** Keeps an explicitly disabled global relay disabled while forcing this local safety gate. */
+  skipGlobalBeforeAgentFinalize?: boolean;
+  evaluate: (event: {
+    turnId: string;
+    lastAssistantMessage: string;
+  }) => Promise<NativeHookRelayTurnLocalFinalizeOutcome>;
+}>;
+
 export type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
@@ -142,6 +157,12 @@ type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
+/** Private retained-relay command controls used only by bundled runtimes. */
+type RetainedNativeHookRelayCommandForEventOptions = NativeHookRelayCommandForEventOptions & {
+  /** Authoritative event work may not be undercut by a shorter generic relay timeout. */
+  minimumTimeoutMs?: number;
+};
+
 export type InvokeNativeHookRelayParams = {
   provider: unknown;
   relayId: unknown;
@@ -202,10 +223,23 @@ export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
+  /** Bundled-runtime-only final gate retained outside the public registration shape. */
+  turnLocalBeforeAgentFinalize?: NativeHookRelayTurnLocalFinalizer;
 };
 
 export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
   generation: string;
+};
+
+/** Private retained handle with bundled-only authoritative timeout control. */
+export type RetainedNativeHookRelayRegistrationHandle = Omit<
+  ActiveNativeHookRelayRegistrationHandle,
+  "commandForEvent"
+> & {
+  commandForEvent: (
+    event: NativeHookRelayEvent,
+    options?: RetainedNativeHookRelayCommandForEventOptions,
+  ) => string;
 };
 
 export type NativeHookRelayPermissionApprovalRequest = {

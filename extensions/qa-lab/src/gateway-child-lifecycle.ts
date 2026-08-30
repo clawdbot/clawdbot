@@ -51,6 +51,7 @@ export class QaGatewayChildLifecycle {
   private current: OwnedProcess | null = null;
   private operation: Promise<unknown> | null = null;
   private stopping: Promise<QaGatewayStopResult> | null = null;
+  private artifactsFinalized = false;
   private readonly keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
 
   repoRoot?: string;
@@ -125,8 +126,6 @@ export class QaGatewayChildLifecycle {
           ? new QaSuiteInfraError(error.code, message, { cause: error })
           : new Error(message, { cause: error });
       if (result.errors.length) {
-        // Oxlint 1.78 checks cause at argument 2; AggregateError takes it at 3.
-        // oxlint-disable-next-line preserve-caught-error
         throw new AggregateError(
           [primary, ...result.errors],
           "qa gateway startup and cleanup failed",
@@ -246,7 +245,7 @@ export class QaGatewayChildLifecycle {
     const tempRoot = this.tempRoot;
     const keepTemp = opts?.keepTemp ?? this.keepTemp;
     let artifactsPreserved = true;
-    if (tempRoot && opts?.preserveToDir && !keepTemp) {
+    if (tempRoot && opts?.preserveToDir && !keepTemp && !this.artifactsFinalized) {
       try {
         await preserveQaGatewayDebugArtifacts({
           preserveToDir: opts.preserveToDir,
@@ -265,6 +264,9 @@ export class QaGatewayChildLifecycle {
       }
     }
     if (tempRoot && stopped.process !== "unconfirmed" && artifactsPreserved && !keepTemp) {
+      // Finalize artifact policy before cleanup can delete its log sources.
+      // Unconfirmed stops must keep refreshing their still-writable snapshots.
+      this.artifactsFinalized = true;
       await attempt(() =>
         cleanupQaGatewayTempRoots({
           tempRoot,

@@ -12,6 +12,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import type { TurnLocalBeforeAgentFinalize } from "../../auto-reply/reply/source-finalization.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -184,6 +185,10 @@ export type RunCliAgentParams = {
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Hold exact-source message-tool sends until the source final gate settles. */
+  deferSourceMessageToolDelivery?: boolean;
+  /** Source-owned final-candidate gate; CLI runs execute it before persistence or terminal hooks. */
+  onBeforeAgentFinalize?: TurnLocalBeforeAgentFinalize;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;

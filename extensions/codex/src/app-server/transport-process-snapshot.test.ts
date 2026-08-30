@@ -5,7 +5,10 @@ import path from "node:path";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
+import {
+  readCodexAppServerProcessCommand,
+  readCodexAppServerProcessSnapshot,
+} from "./transport-process-snapshot.js";
 
 const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(file: string) => Promise<string>>(),
@@ -27,6 +30,43 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         ? procfs.readdir()
         : original.readdir(...args),
   };
+});
+
+describe("Codex procfs command inspector", () => {
+  it.for([
+    {
+      input: "/opt/codex\0app-server\0--listen\0stdio://\0",
+      expected: "/opt/codex app-server --listen stdio://",
+    },
+    { input: "", expected: undefined },
+    { input: "\0", expected: undefined },
+    { code: "ENOENT", expected: undefined },
+    { code: "ESRCH", expected: undefined },
+    { code: "EACCES", expected: undefined },
+  ])(
+    "reads command identity without authorizing absent or unreadable processes: %j",
+    async (fixture, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      procfs.readFile.mockImplementation(async (file) => {
+        expect(file).toBe(`/proc/${process.pid}/cmdline`);
+        if (fixture.code) {
+          throw Object.assign(new Error("command unavailable"), { code: fixture.code });
+        }
+        return fixture.input!;
+      });
+
+      expect(await readCodexAppServerProcessCommand(process.pid, Date.now() + 1_000)).toBe(
+        fixture.expected,
+      );
+      procfs.readFile.mockClear();
+      expect(await readCodexAppServerProcessCommand(process.pid, Date.now() - 1)).toBeUndefined();
+      expect(procfs.readFile).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe.skipIf(process.platform !== "linux")("Codex procfs process inspector", () => {
@@ -74,9 +114,14 @@ describe.skipIf(process.platform !== "linux")("Codex procfs process inspector", 
 describe.skipIf(process.platform === "win32" || process.platform === "linux")(
   "Codex POSIX process inspector",
   () => {
-    it.for(["unavailable", "hung"] as const)(
+    it.for([
+      ["snapshot", "unavailable"],
+      ["snapshot", "hung"],
+      ["command", "unavailable"],
+      ["command", "hung"],
+    ] as const)(
       "settles a %s ps inspector without leaking its process",
-      async (mode, ctx) => {
+      async ([kind, mode], ctx) => {
         const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ps-deadline-"));
         const inspectorPath = path.join(tempDir, "ps");
         const pidPath = path.join(tempDir, "inspector.pid");
@@ -111,7 +156,10 @@ ${mode === "unavailable" ? "process.exit(1);" : "setInterval(() => {}, 1000);"}
           async () => {
             const startedAt = Date.now();
             const budgetMs = 1_000;
-            const result = await readCodexAppServerProcessSnapshot(startedAt + budgetMs);
+            const result =
+              kind === "command"
+                ? await readCodexAppServerProcessCommand(process.pid, startedAt + budgetMs)
+                : await readCodexAppServerProcessSnapshot(startedAt + budgetMs);
             const pid = Number(await fs.readFile(pidPath, "utf8"));
             inspectorPid = pid;
             expect(pid).toBeGreaterThan(0);

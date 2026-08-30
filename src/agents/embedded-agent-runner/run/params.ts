@@ -10,6 +10,7 @@ import type {
 } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import type { TurnLocalBeforeAgentFinalize } from "../../../auto-reply/reply/source-finalization.types.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
@@ -257,6 +258,8 @@ export type RunEmbeddedAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /** Turn-local source adapter gate evaluated before terminal delivery. */
+  onBeforeAgentFinalize?: TurnLocalBeforeAgentFinalize;
   provider?: string;
   model?: string;
   /** Outer model-fallback owner facts for this admitted attempt. */
@@ -386,6 +389,8 @@ export type RunEmbeddedAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
+  /** Reports a committed generic recovery compaction before its retry starts. */
+  onAutoCompactionSucceeded?: (count: number) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
   onToolStreamBoundary?: () => void | Promise<void>;
   /**
@@ -399,6 +404,8 @@ export type RunEmbeddedAgentParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Hold exact-source message-tool sends until the source final gate settles. */
+  deferSourceMessageToolDelivery?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];

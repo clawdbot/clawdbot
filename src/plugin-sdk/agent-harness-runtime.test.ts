@@ -21,6 +21,7 @@ import {
   type AgentHarnessV2,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
+  type NativeHookRelayRegistrationHandle,
 } from "./agent-harness-runtime.js";
 import type {
   ProviderModelRouteRuntimePolicy,
@@ -203,6 +204,32 @@ describe("agent harness runtime SDK facade", () => {
         ? true
         : false
     >().toEqualTypeOf<false>();
+  });
+
+  it("keeps source-local finalization controls out of public harness and relay contracts", () => {
+    type PrivateAttemptKeys = "deferSourceMessageToolDelivery" | "onBeforeAgentFinalize";
+    type PublicRelayCommandOptions = NonNullable<
+      Parameters<NativeHookRelayRegistrationHandle["commandForEvent"]>[1]
+    >;
+
+    expectTypeOf<
+      Extract<keyof AgentHarnessAttemptParams, PrivateAttemptKeys>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<keyof AgentHarnessAttemptParamsV2, PrivateAttemptKeys>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<keyof EmbeddedRunAttemptParams, PrivateAttemptKeys>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<keyof EmbeddedRunAttemptParamsV2, PrivateAttemptKeys>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<keyof NativeHookRelayRegistrationHandle, "turnLocalBeforeAgentFinalize">
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<keyof PublicRelayCommandOptions, "minimumTimeoutMs">
+    >().toEqualTypeOf<never>();
   });
 
   it("exposes attached model request transport metadata helpers", () => {

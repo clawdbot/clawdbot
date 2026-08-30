@@ -23,7 +23,7 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
     hostId: "gateway:local",
     threadId: "thread-101",
   } satisfies CatalogSessionKey;
-  const sourceSessionKey = buildCatalogSessionKey(key);
+  const sourceSessionKey = buildCatalogSessionKey(key, "main");
   state.sessionKey = sourceSessionKey;
   pane.sessionKey = sourceSessionKey;
   state.chatMessage = "Continue the original catalog conversation";
@@ -43,6 +43,32 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
 }
 
 describe("chat pane catalog session lifecycle", () => {
+  it.each(["global", "agent:other:main", "agent:other:catalog:fixture:gateway:Thread"])(
+    "preserves the pane owner and pending model selection across ordinary snapshots for %s",
+    (sessionKey) => {
+      const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+      const retireModelOverride = vi.fn();
+      const sessions = { retireModelOverride } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client, sessions });
+      pane.sessionKey = state.sessionKey = sessionKey;
+      pane.context.agentSelection.set("other");
+      state.assistantAgentId = "other";
+      const pending = { [sessionKey]: new Promise<boolean>(() => {}) };
+      state.chatModelSwitchPromises = pending;
+
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        assistantAgentId: "main",
+        selfUser: { id: "fixture-user", name: "Fixture User" },
+      });
+
+      expect(state.selfUser?.id).toBe("fixture-user");
+      expect(state.assistantAgentId).toBe("other");
+      expect(state.chatModelSwitchPromises).toBe(pending);
+      expect(retireModelOverride).not.toHaveBeenCalled();
+    },
+  );
+
   it("finds continuation metadata on a later catalog page", async () => {
     const key = {
       catalogId: "codex",
@@ -96,7 +122,7 @@ describe("chat pane catalog session lifecycle", () => {
       .mockResolvedValueOnce(transcript);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    pane.sessionKey = buildCatalogSessionKey(key);
+    pane.sessionKey = buildCatalogSessionKey(key, "main");
 
     await pane.loadCatalogSession(key, false);
 
@@ -118,7 +144,7 @@ describe("chat pane catalog session lifecycle", () => {
     expect(pane.catalogSession).toEqual(selectedSession);
   });
 
-  it("discards a catalog read when the selected agent changes", async () => {
+  it("discards a catalog read when the pane owner changes", async () => {
     const key = {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -156,13 +182,14 @@ describe("chat pane catalog session lifecycle", () => {
       .mockImplementationOnce(() => read.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    pane.sessionKey = buildCatalogSessionKey(key);
+    pane.sessionKey = buildCatalogSessionKey(key, "main");
     state.sessionKey = pane.sessionKey;
     state.assistantAgentId = "main";
 
     const pending = pane.loadCatalogSession(key, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    state.assistantAgentId = "jarvis";
+    state.sessionKey = buildCatalogSessionKey(key, "other");
+    pane.sessionKey = state.sessionKey;
     read.resolve({
       hostId: key.hostId,
       threadId: key.threadId,
@@ -244,7 +271,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "cursor-1";
@@ -269,7 +296,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "final-page";
@@ -297,7 +324,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "cursor-1";
@@ -324,7 +351,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "cursor-2";
@@ -465,14 +492,15 @@ describe("chat pane catalog continuation lifecycle", () => {
     expect(state.chatSending).toBe(false);
   });
 
-  it("does not apply a catalog continuation after the selected agent changes", async () => {
+  it("does not apply a catalog continuation after the pane owner changes", async () => {
     const continued = createDeferred<{ sessionKey: string }>();
     const request = vi.fn(() => continued.promise);
     const { key, pane, state } = createCatalogContinuationPane(request);
     state.assistantAgentId = "main";
 
     const pending = pane.continueCatalogSession(key);
-    state.assistantAgentId = "jarvis";
+    state.sessionKey = buildCatalogSessionKey(key, "other");
+    pane.sessionKey = state.sessionKey;
     continued.resolve({ sessionKey: "agent:main:stale-owner" });
     await pending;
 
