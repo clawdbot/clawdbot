@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
@@ -18,6 +19,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   resolveOpenClawAgentSqlitePath,
@@ -210,9 +212,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       continue;
     }
     seenPaths.add(sqlitePath);
+    let readDatabase: DatabaseSync | undefined;
     try {
-      for (const sessionId of readOnlySqliteTranscriptSessionIds(sqlitePath)) {
-        const snapshot = readOnlySqliteHeaderlessTranscriptSnapshot(sqlitePath, sessionId);
+      // Each snapshot exhausts or closes its iterators before repair, so this read-only
+      // connection holds no read transaction across a guarded writer transaction.
+      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      for (const sessionId of readOnlySqliteTranscriptSessionIds(readDatabase)) {
+        const snapshot = readOnlySqliteHeaderlessTranscriptSnapshot(readDatabase, sessionId);
         if (!snapshot.ok) {
           const detail = formatErrorMessage(snapshot.error).replace(/\s+/g, " ").trim();
           note(
@@ -303,6 +309,8 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         `- Failed to inspect transcript headers for ${target.agentId} (${sqlitePath}): ${detail}`,
         NOTE_TITLE,
       );
+    } finally {
+      readDatabase?.close();
     }
   }
 

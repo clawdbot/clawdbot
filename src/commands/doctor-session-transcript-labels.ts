@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -10,6 +11,7 @@ import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
@@ -203,15 +205,17 @@ export async function noteSessionTranscriptLabelHealth(params: {
     seenPaths.add(sqlitePath);
     const { agentId } = target;
 
+    let readDatabase: DatabaseSync | undefined;
     try {
+      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
       // Detect read-only, then repair each session in its own transaction as it is found, so a large
       // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
       // latter gained its columns post-ship and is not safe to assume on old databases.
-      const sessionIds = readOnlySqliteTranscriptSessionIds(sqlitePath);
+      const sessionIds = readOnlySqliteTranscriptSessionIds(readDatabase);
       for (const sessionId of sessionIds) {
         // Read transcript in read-only mode (detection phase).
         const readResult = readOnlySqliteTranscriptRepairSnapshot(
-          sqlitePath,
+          readDatabase,
           sessionId,
           normalizeLegacyInboundContextLabels,
         );
@@ -285,6 +289,8 @@ export async function noteSessionTranscriptLabelHealth(params: {
         `- Failed to inspect or rewrite labels for ${agentId} (${sqlitePath}): ${detail}`,
         NOTE_TITLE,
       );
+    } finally {
+      readDatabase?.close();
     }
   }
 
