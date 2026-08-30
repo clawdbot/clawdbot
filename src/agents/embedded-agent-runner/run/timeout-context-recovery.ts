@@ -66,14 +66,16 @@ export async function recoverEmbeddedRunTimeout(
       `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
         `attempting compaction before retry (attempt ${input.state.timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
     );
-    const { result: timeoutCompactResult, previousSessionId } =
-      await compactEmbeddedRunForRecovery(input, {
+    const { result: timeoutCompactResult, previousSessionId } = await compactEmbeddedRunForRecovery(
+      input,
+      {
         tokenBudget: input.contextTokenBudget,
         trigger: "timeout_recovery",
         diagId: timeoutDiagId,
         attempt: input.state.timeoutCompactionAttempts,
         maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
-      });
+      },
+    );
     input.assertRecoveryActive();
     await input.runOwnsCompactionAfterHook(
       "timeout recovery",

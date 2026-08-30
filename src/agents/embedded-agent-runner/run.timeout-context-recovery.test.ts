@@ -6,13 +6,13 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
-import { createUsageAccumulator } from "./usage-accumulator.js";
 import {
   isEmbeddedRunAbandoned,
   markActiveEmbeddedRunAbandoned,
   setActiveEmbeddedRun,
 } from "./runs.js";
 import { testing as runsTesting } from "./runs.test-support.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
   compact: vi.fn(),

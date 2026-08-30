@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendSubagentAnnounceDirectly } from "../subagents/announce/subagent-announce-direct-delivery.js";
 import { testing as deliveryTesting } from "../subagents/announce/subagent-announce-delivery.test-support.js";
+import { sendSubagentAnnounceDirectly } from "../subagents/announce/subagent-announce-direct-delivery.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
