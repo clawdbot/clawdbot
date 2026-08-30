@@ -912,6 +912,7 @@ export async function snapshotRoleViaCdp(opts: {
   lookup?: typeof dnsLookupCb;
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
+  recurseIframes?: boolean;
   timeoutMs?: number;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
@@ -930,7 +931,7 @@ export async function snapshotRoleViaCdp(opts: {
         send,
         options: opts.options ?? {},
         urls: opts.urls,
-        recurseIframes: true,
+        recurseIframes: opts.recurseIframes ?? true,
         nextRef: { value: 1 },
       });
       const renderedSnapshot =

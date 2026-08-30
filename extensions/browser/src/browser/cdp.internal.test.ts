@@ -534,6 +534,16 @@ describe("cdp internal", () => {
       expect(snap.snapshot).toContain('  - button "Inside" [ref=e2]');
       expect(snap.refs.e1?.frameId).toBe("FRAME_1");
       expect(snap.refs.e2?.frameId).toBe("FRAME_1");
+
+      const mainFrameOnly = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        options: { interactive: true },
+        recurseIframes: false,
+      });
+
+      expect(mainFrameOnly.snapshot).toContain('- Iframe "Child" [ref=e1]');
+      expect(mainFrameOnly.snapshot).not.toContain('button "Inside"');
+      expect(mainFrameOnly.refs.e2).toBeUndefined();
     });
   });
 

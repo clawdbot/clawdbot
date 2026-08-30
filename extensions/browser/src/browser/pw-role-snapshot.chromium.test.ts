@@ -1,9 +1,11 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import { snapshotRoleViaCdp } from "./cdp.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import {
   closePlaywrightBrowserConnection,
+  getMainFrameDocumentIdentityViaPlaywright,
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
@@ -13,7 +15,7 @@ import {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  storeAriaSnapshotRefsViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
 } from "./pw-tools-core.snapshot.js";
 import { getFreePort } from "./test-port.js";
 
@@ -73,6 +75,74 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         expect(present.snapshot).toContain('button "Present"');
         expect(refFree.refs).toEqual({});
         expect(refFree.snapshot).toContain("https://example.test/docs");
+      } finally {
+        await closePlaywrightBrowserConnection({ cdpUrl });
+        await context.close();
+      }
+    }, 30_000);
+
+    it("publishes actionable main-frame CDP refs into the Playwright cache", async () => {
+      const rootDir = tempDirs.make("openclaw-cdp-role-refs-");
+      const port = await getFreePort();
+      const cdpUrl = `http://127.0.0.1:${port}`;
+      const context = await getPlaywrightCore().chromium.launchPersistentContext(
+        path.join(rootDir, "profile"),
+        {
+          headless: true,
+          executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+          args: [`--remote-debugging-port=${port}`],
+        },
+      );
+      try {
+        const page = context.pages()[0] ?? (await context.newPage());
+        await page.setContent(
+          [
+            "<button onclick=\"document.querySelector('output').textContent='button'\">Native</button>",
+            "<div style=\"cursor:pointer\" onclick=\"document.querySelector('output').textContent='cursor'\">Cursor card</div>",
+            "<output></output>",
+            '<iframe srcdoc="<button>Child frame</button>"></iframe>',
+          ].join(""),
+        );
+        await page.frameLocator("iframe").getByRole("button").waitFor();
+        const session = await context.newCDPSession(page);
+        const { targetInfo } = await session.send("Target.getTargetInfo");
+        await session.detach();
+        const targets = (await fetch(`${cdpUrl}/json/list`).then((res) => res.json())) as Array<{
+          id?: string;
+          webSocketDebuggerUrl?: string;
+        }>;
+        const wsUrl = targets.find(
+          (target) => target.id === targetInfo.targetId,
+        )?.webSocketDebuggerUrl;
+        expect(wsUrl).toBeTypeOf("string");
+        const target = { cdpUrl, targetId: targetInfo.targetId };
+        const snapshot = await snapshotRoleViaCdp({
+          wsUrl: wsUrl!,
+          options: { interactive: true },
+          recurseIframes: false,
+        });
+        const nativeRef = Object.entries(snapshot.refs).find(
+          ([, info]) => info.name === "Native",
+        )?.[0];
+        const cursorRef = Object.entries(snapshot.refs).find(
+          ([, info]) => info.name === "Cursor card",
+        )?.[0];
+
+        expect(nativeRef).toBeDefined();
+        expect(cursorRef).toBeDefined();
+        expect(Object.values(snapshot.refs).some((info) => info.name === "Child frame")).toBe(
+          false,
+        );
+        await storeSnapshotRefsViaPlaywright({
+          ...target,
+          refs: snapshot.refs,
+          expectedDocumentIdentity: await getMainFrameDocumentIdentityViaPlaywright(target),
+        });
+
+        await clickViaPlaywright({ ...target, ref: nativeRef!, timeoutMs: 1_000 });
+        expect(await page.locator("output").textContent()).toBe("button");
+        await clickViaPlaywright({ ...target, ref: cursorRef!, timeoutMs: 1_000 });
+        expect(await page.locator("output").textContent()).toBe("cursor");
       } finally {
         await closePlaywrightBrowserConnection({ cdpUrl });
         await context.close();
@@ -215,7 +285,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         expect(await page.locator("output").textContent()).toBe("raw-empty");
         // Real AX names with unavailable DOM ids exercise the existing role fallback.
         // Restore onto the launcher's distinct Page wrapper to cross the target cache.
-        await storeAriaSnapshotRefsViaPlaywright({
+        await storeSnapshotRefsViaPlaywright({
           ...target,
           nodes: aria.nodes.map(({ backendDOMNodeId: _backendId, ...node }) => node),
         });
