@@ -188,6 +188,7 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
       name = parseStringField("name", 500);
     }
     const cwd = parseStringField("cwd");
+    const color = parseStringField("color");
     const createdAt = parseNumberField("createdAt") as number | undefined;
     const updatedAt = parseNumberField("updatedAt") as number | undefined;
     const recencyAt = parseNumberField("recencyAt", true);
@@ -201,6 +202,7 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
       modelProvider: "anthropic",
       archived: false,
       ...(name !== undefined ? { name } : {}),
+      ...(color ? { color } : {}),
       ...(cwd ? { cwd } : {}),
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt } : {}),

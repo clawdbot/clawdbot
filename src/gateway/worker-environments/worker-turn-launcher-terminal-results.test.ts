@@ -18,6 +18,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   openSessionManager,
   placements,
   seedActivePlacement,
@@ -46,6 +47,7 @@ describe("worker turn launcher terminal results", () => {
         resume: vi.fn(async () => {}),
       })),
       runWorkspaceCommand: vi.fn(),
+      measureLaunchTurn,
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
         const completed = openSessionManager();
@@ -196,6 +198,7 @@ describe("worker turn launcher terminal results", () => {
             resume: vi.fn(async () => {}),
           })),
           runWorkspaceCommand: vi.fn(),
+          measureLaunchTurn,
           launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
             request.onDispatchReady?.();
             const completed = openSessionManager();

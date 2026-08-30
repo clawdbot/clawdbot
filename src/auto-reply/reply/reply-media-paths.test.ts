@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -24,6 +25,7 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess,
 }));
 
+import { parseReplyDirectives } from "./reply-directives.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 type NormalizedReply = {
@@ -133,6 +135,28 @@ describe("createReplyMediaPathNormalizer", () => {
     ]);
   });
 
+  it.each([
+    { name: "plain", fileName: "photo.png", prefix: "file://" },
+    { name: "encoded", fileName: "café 100% image.png", prefix: "file://" },
+    { name: "localhost", fileName: "café 100% image.png", prefix: "file://localhost" },
+    { name: "uppercase single-slash", fileName: "café 100% image.png", prefix: "FILE:" },
+  ])("stages $name file URL directives without allowing raw host file URLs", async (testCase) => {
+    const workspaceDir = path.resolve("agent-workspace");
+    const filePath = path.join(workspaceDir, testCase.fileName);
+    const fileUrl = pathToFileURL(filePath).href.replace(/^file:\/\//u, testCase.prefix);
+    const normalize = createReplyMediaPathNormalizer({ cfg: {}, workspaceDir });
+
+    const result = await normalize(parseReplyDirectives(`Caption\nMEDIA:${fileUrl}`));
+
+    const stagedPath = path.join("/tmp/outbound-media", testCase.fileName);
+    expectMedia(result, stagedPath, [stagedPath]);
+    expect(result.text).toBe("Caption");
+    expectOutboundAttachmentCall(0, filePath, 5 * 1024 * 1024);
+
+    expectNoMedia(await normalize({ mediaUrls: [fileUrl] }));
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not grant local-media trust to remote-only replies", async () => {
     const normalize = createTestReplyMediaNormalizer();
 
@@ -182,14 +206,19 @@ describe("createReplyMediaPathNormalizer", () => {
         containerWorkdir,
       });
       const normalize = createTestReplyMediaNormalizer();
+      const fileUrl = `file://${containerWorkdir}/screens/final%20image.png`;
 
       const result = await normalize({
-        mediaUrls: ["./out/photo.png", `file://${containerWorkdir}/screens/final.png`],
+        mediaUrls: [
+          "./out/photo.png",
+          fileUrl,
+          ...(parseReplyDirectives(`MEDIA:${fileUrl}`).mediaUrls ?? []),
+        ],
       });
 
       expectMedia(result, "/tmp/outbound-media/photo.png", [
         "/tmp/outbound-media/photo.png",
-        "/tmp/outbound-media/final.png",
+        "/tmp/outbound-media/final image.png",
       ]);
       expectOutboundAttachmentCall(
         0,
@@ -198,7 +227,7 @@ describe("createReplyMediaPathNormalizer", () => {
       );
       expectOutboundAttachmentCall(
         1,
-        path.join("/tmp/sandboxes/session-1", "screens", "final.png"),
+        path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
         5 * 1024 * 1024,
       );
     },

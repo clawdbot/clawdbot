@@ -119,6 +119,21 @@ own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
 
+### Native catalog links
+
+Native catalog threads use the agent path with a source query:
+
+```text
+/chat/<agentId>?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+URL-encode each query value. The agent in the path owns the OpenClaw pane,
+including catalog reads and continuation; `catalog`, `host`, and `thread`
+identify the native source. Opening the same source under different agents
+keeps their panes and drafts separate, including in split view. Continuing a
+thread navigates to the adopted OpenClaw session link. The same catalog query
+also works under `/dashboard/<agentId>`.
+
 ## Focus presentation routes
 
 A focus route renders one supported content surface without the normal Control
@@ -184,6 +199,34 @@ paths, and the removed desktop and dashboard query forms are not accepted.
 `/focus` and unsupported `/focus/*` targets show an error without the ordinary
 application shell. They do not open a normal application route.
 
+## Beam share URLs
+
+Beam uploads return a dedicated share path such as:
+
+```text
+/beam/0123456789ab
+```
+
+This route is an adapter into the existing read-only Beam session catalog, not
+a separate transcript or storage path. It stays in the browser address bar
+while the catalog transcript renders. Normal Gateway authentication still
+applies; the URL identifies a Beam row but does not authorize access.
+
+Share links open in chat under the default agent. Sidebar and dashboard navigation
+keep the explicit catalog-query URL so the selected agent and view are preserved.
+
+New URLs use the first 12 lowercase hexadecimal characters of the 32-character
+Beam id. Twelve characters provide 48 bits; against Beam's 500-row retention
+bound, the probability that any pair shares that prefix is about 1 in 2.26
+billion. Resolution still never assumes uniqueness: exactly one retained row
+must match. A missing prefix shows session recovery links, while an
+ambiguous prefix shows the matching rows and asks for a longer id. Any longer
+lowercase hexadecimal prefix through the full 32-character id is accepted.
+Uppercase, non-hexadecimal, shorter, longer, and extra-segment forms are invalid.
+
+With `gateway.controlUi.basePath: "/openclaw"`, use
+`/openclaw/beam/0123456789ab`.
+
 ## Route table
 
 This table lists every Control UI application route. A dash means the route has
@@ -193,6 +236,7 @@ no route-specific URL parameters.
 | ------------------- | --------------------------- | ------------------------- | -------------------------------------------------------------- |
 | Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`                |
 | Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`                |
+| Beam transcript     | `/beam/<beam-id>`           | -                         | 12-32 lowercase hexadecimal characters                         |
 | Dashboards          | `/dashboards`               | -                         | -                                                              |
 | Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`                           |
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                     |
@@ -263,7 +307,11 @@ These Gateway-served documents sit outside the application route table:
 - `/?onboarding=1` opens the first-run onboarding presentation.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
-  never authorizes it; normal Gateway authentication still applies.
+  never authorizes it; normal Gateway authentication still applies. An approval
+  notification uses a scope-relative approval path and may add
+  `#gatewayUrl=<encoded-ws-url>` when the owning Gateway has
+  `gateway.publicOrigin`. The Control UI strips that fragment before
+  authentication and applies the normal remote-Gateway handoff below.
 
 Registered exact and prefix plugin HTTP routes can own `/focus` and
 `/focus/*`. After plugin authentication and dispatch decline a request, the
@@ -298,5 +346,6 @@ or password explicitly, and use `wss://` behind TLS.
 ## Related
 
 - [Control UI](/web/control-ui)
+- [Beam plugin](/plugins/beam)
 - [Dashboard](/web/dashboard)
 - [Session dashboards](/web/dashboards)

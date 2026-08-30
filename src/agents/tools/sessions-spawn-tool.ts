@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -364,7 +365,10 @@ export function createSessionsSpawnTool(
       subagentThreadAvailable: threadAvailability.subagent,
       swarmEnabled: swarmConfig.enabled,
     }),
-    execute: async (_toolCallId, args, signal = opts?.signal) => {
+    execute: async (_toolCallId, args, signal) => {
+      const executionSignal =
+        signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal);
+      const assertActive = captureAgentToolSourceExecutionGuard(executionSignal);
       const params = args as Record<PropertyKey, unknown>;
       if (opts?.swarmCollector && params.collect !== true) {
         throw new ToolInputError(
@@ -467,7 +471,7 @@ export function createSessionsSpawnTool(
         ? await runWithScopedSessionAccess({
             cfg: visibilityCfg,
             expectedSessionId: opts.expectedParentSessionId,
-            ...(signal ? { signal } : {}),
+            ...(executionSignal ? { signal: executionSignal } : {}),
             targetSessionKey: expectedParentSessionKey!,
             run: spawnVisible,
           })
@@ -572,7 +576,7 @@ export function createSessionsSpawnTool(
               agentGroupId: opts?.agentGroupId ?? undefined,
               agentGroupSpace: opts?.agentGroupSpace,
               agentMemberRoleIds: opts?.agentMemberRoleIds,
-              signal,
+              signal: executionSignal,
               sandboxed: opts?.sandboxed,
               inheritedToolAllowlist: opts?.inheritedToolAllowlist,
               inheritedToolDenylist: opts?.inheritedToolDenylist,
@@ -647,6 +651,7 @@ export function createSessionsSpawnTool(
             inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
             requesterRunId: opts?.requesterRunId,
+            assertActive,
           },
           parentExecutionIdentityToken,
         ),

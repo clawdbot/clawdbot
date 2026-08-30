@@ -80,6 +80,7 @@ function toGenericClaudeHost(
       return {
         threadId: session.threadId,
         ...(session.name ? { name: session.name } : {}),
+        ...(session.color ? { color: session.color } : {}),
         ...(session.cwd ? { cwd: session.cwd } : {}),
         status: session.status,
         ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),

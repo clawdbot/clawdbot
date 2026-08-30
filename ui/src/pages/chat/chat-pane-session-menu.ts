@@ -170,10 +170,13 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           }
           break;
         }
-        case "set-icon": {
+        case "set-icon":
+        case "set-color": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
-            await operations.patchSession(host, currentSession, { icon: action.icon }, scope);
+            const patch =
+              action.kind === "set-icon" ? { icon: action.icon } : { color: action.color };
+            await operations.patchSession(host, currentSession, patch, scope);
           }
           break;
         }

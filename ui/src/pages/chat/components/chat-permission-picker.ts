@@ -17,6 +17,7 @@ export type ChatPermissionPickerProps = {
   disabled?: boolean;
   disabledReason?: string;
   mode?: SessionPermissionMode;
+  defaultMode?: SessionPermissionMode;
   onSelect: (mode: PermissionSelection) => unknown;
 };
 
@@ -49,10 +50,17 @@ function handlePermissionPickerKeydown(
   dropdown.querySelector<HTMLButtonElement>("[slot=trigger]")?.focus();
 }
 
-function modeLabel(mode: SessionPermissionMode | null | undefined): string {
+function modeLabel(
+  mode: SessionPermissionMode | null | undefined,
+  defaultMode?: SessionPermissionMode,
+): string {
   return mode
     ? t(`chat.permissionControls.modes.${mode}.label`)
-    : t("chat.permissionControls.default");
+    : defaultMode
+      ? t("chat.permissionControls.defaultWithMode", {
+          mode: t(`chat.permissionControls.modes.${defaultMode}.label`),
+        })
+      : t("chat.permissionControls.default");
 }
 
 function modeIcon(mode: SessionPermissionMode | null): unknown {
@@ -114,7 +122,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
           : ""}"
         data-chat-permission-select="true"
         data-chat-select-value=${params.mode ?? ""}
-        aria-label=${`${t("chat.permissionControls.label")}: ${modeLabel(params.mode)}`}
+        aria-label=${`${t("chat.permissionControls.label")}: ${modeLabel(params.mode, params.defaultMode)}`}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason ?? t("chat.permissionControls.help")}
         ?disabled=${params.disabled}
@@ -127,7 +135,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
             ? "chat-controls__permission-label--full"
             : ""}"
         >
-          ${modeLabel(params.mode)}
+          ${modeLabel(params.mode, params.defaultMode)}
         </span>
       </button>
       <div class="chat-controls__popover-title chat-controls__permission-heading">
@@ -155,8 +163,8 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
             role="menuitemradio"
             aria-checked=${selected ? "true" : "false"}
             aria-label=${locked
-              ? `${modeLabel(mode)}. ${t("chat.permissionControls.fullRequiresAdmin")}`
-              : modeLabel(mode)}
+              ? `${modeLabel(mode, params.defaultMode)}. ${t("chat.permissionControls.fullRequiresAdmin")}`
+              : modeLabel(mode, params.defaultMode)}
             title=${locked ? t("chat.permissionControls.fullRequiresAdmin") : nothing}
             ?disabled=${params.disabled || locked}
           >
@@ -165,7 +173,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
             >
             <span class="chat-controls__permission-option-copy">
               <span class="chat-controls__permission-option-title">
-                <span>${modeLabel(mode)}</span>
+                <span>${modeLabel(mode, params.defaultMode)}</span>
               </span>
               <span class="chat-controls__permission-option-description">
                 ${mode

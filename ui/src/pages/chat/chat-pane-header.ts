@@ -431,12 +431,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      title: this.paneTitle,
+      title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
       showOwnerChip,
       ownerViewing,
       personActivity,
       catalog,
+      catalogColor: this.catalogSession?.color,
       editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
@@ -518,6 +519,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 archived: row.archived === true,
                 category: normalizeOptionalString(row.category) ?? null,
                 icon: normalizeOptionalString(row.icon) ?? null,
+                color: normalizeOptionalString(row.color) ?? null,
                 categoryClearReturnsToGroups: false,
               }}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}

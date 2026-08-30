@@ -11,6 +11,7 @@ import {
   findJsonSchemaShapeError,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
@@ -189,6 +190,15 @@ export type JsonSchemaValidationError = {
   allowedValues?: string[];
   allowedValuesHiddenCount?: number;
 };
+
+export function parseJsonSchemaIssuePath(
+  path: JsonSchemaValidationError["path"],
+): Array<string | number> {
+  if (!path || path === "<root>") {
+    return [];
+  }
+  return path.split(".").map((segment) => parseConfigPathArrayIndex(segment) ?? segment);
+}
 
 function normalizeErrorPath(instancePath: string | undefined): string {
   const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");

@@ -293,7 +293,23 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
   state.headingLineEnd = undefined;
 }
 
+// These seven parser switches bound the prepared configurations to 128 entries.
+// Parse state and rendered options remain local to each markdownToIRWithMeta call.
+const markdownParsers = new Map<number, MarkdownItParser>();
+
 function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
+  const key =
+    ((options.linkify ?? true) ? 1 : 0) |
+    (options.preserveDunderIdentifiers ? 2 : 0) |
+    (options.enableTaskLists ? 4 : 0) |
+    (options.enableHtmlUnderline ? 8 : 0) |
+    (options.enableSpoilers ? 16 : 0) |
+    (options.tableMode && options.tableMode !== "off" ? 32 : 0) |
+    (options.autolink === false ? 64 : 0);
+  const prepared = markdownParsers.get(key);
+  if (prepared) {
+    return prepared;
+  }
   const md = new MarkdownIt({
     html: false,
     linkify: options.linkify ?? true,
@@ -333,6 +349,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   if (options.autolink === false) {
     md.disable("autolink");
   }
+  markdownParsers.set(key, md);
   return md;
 }
 

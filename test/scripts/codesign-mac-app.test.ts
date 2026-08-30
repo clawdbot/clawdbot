@@ -5,142 +5,58 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { link } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  machoFixture,
+  nativeObjectFixture,
+  universalArchiveFixture,
+  writeFat64Fixture,
+} from "../helpers/mac-native.js";
+import {
+  installFakeCodesign,
+  installTransientFakeCodesign,
+  installElevationFakeCodesign,
+  makeSigningFixture,
+} from "../helpers/mac-signing.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/codesign-mac-app.sh";
+// Signing integration exercises the real Darwin mutation fence, not a sandbox mock.
+const macIt = it.runIf(process.platform === "darwin");
 
-function entitlementTemps(dir: string): string[] {
-  return readdirSync(dir).filter((name) => name.startsWith("openclaw-entitlements"));
-}
-
-function runCodesign(args: string[], tempRoot: string) {
-  return spawnSync("bash", [scriptPath, ...args], {
+function runCodesignWithoutAllocation(
+  args: string[],
+  tempRoot: string,
+  env: NodeJS.ProcessEnv = {},
+) {
+  const binDir = path.join(tempRoot, "bin");
+  const allocation = path.join(tempRoot, "allocation-attempted");
+  const allocator = path.join(binDir, "mktemp");
+  mkdirSync(binDir);
+  writeFileSync(
+    allocator,
+    `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(allocation)}, 'called');\nprocess.exit(91);\n`,
+  );
+  chmodSync(allocator, 0o755);
+  const result = spawnSync("bash", [scriptPath, ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
       ...process.env,
+      ...env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TMPDIR: tempRoot,
     },
   });
-}
-
-function installFakeCodesign(binDir: string) {
-  const fakeCodesign = path.join(binDir, "codesign");
-  writeFileSync(
-    fakeCodesign,
-    `#!/usr/bin/env bash
-set -euo pipefail
-
-if [ -n "\${CODESIGN_ARGS_LOG:-}" ]; then
-  printf '%s\\n' "$*" >>"$CODESIGN_ARGS_LOG"
-fi
-
-entitlements=""
-target=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --entitlements)
-      shift
-      entitlements="$1"
-      ;;
-  esac
-  target="$1"
-  shift || true
-done
-
-if [ -z "$target" ]; then
-  echo "missing codesign target" >&2
-  exit 2
-fi
-
-if [ -n "$entitlements" ]; then
-  count_file="$CODESIGN_CAPTURE_DIR/count"
-  count=0
-  if [ -f "$count_file" ]; then
-    count="$(cat "$count_file")"
-  fi
-  count=$((count + 1))
-  printf '%s' "$count" >"$count_file"
-  copy="$CODESIGN_CAPTURE_DIR/entitlements-$count.plist"
-  cp "$entitlements" "$copy"
-  printf 'entitled\\t%s\\t%s\\t%s\\n' "$target" "$entitlements" "$copy" >>"$CODESIGN_LOG"
-else
-  printf 'plain\\t%s\\n' "$target" >>"$CODESIGN_LOG"
-fi
-`,
-  );
-  chmodSync(fakeCodesign, 0o755);
-}
-
-function installTransientFakeCodesign(binDir: string) {
-  const fakeCodesign = path.join(binDir, "codesign");
-  writeFileSync(
-    fakeCodesign,
-    `#!/usr/bin/env bash
-set -euo pipefail
-
-count=0
-if [ -f "$CODESIGN_COUNT_FILE" ]; then
-  count="$(cat "$CODESIGN_COUNT_FILE")"
-fi
-count=$((count + 1))
-printf '%s' "$count" >"$CODESIGN_COUNT_FILE"
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--entitlements" ]; then
-    printf '%s' "$2" >"$CODESIGN_COUNT_FILE.entitlements"
-  fi
-  shift
-done
-if [ "\${CODESIGN_PERMANENT_FAILURE:-0}" = "1" ]; then
-  echo "signing identity is not available" >&2
-  exit 7
-fi
-if [ "$count" -le "$CODESIGN_TRANSIENT_FAILURES" ]; then
-  echo "A timestamp was expected but was not found" >&2
-  exit 1
-fi
-`,
-  );
-  chmodSync(fakeCodesign, 0o755);
-}
-
-function installElevationFakeCodesign(binDir: string) {
-  const fakeCodesign = path.join(binDir, "codesign");
-  writeFileSync(
-    fakeCodesign,
-    `#!/usr/bin/env bash
-set -euo pipefail
-
-for arg in "$@"; do
-  if [ "$arg" = "-dv" ]; then
-    printf '%s\n' 'TeamIdentifier=FWJYW4S8P8' >&2
-    if [ "\${CODESIGN_FAKE_NO_AUTHORITY:-0}" != "1" ]; then
-      printf '%s\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2
-    fi
-    if [ "\${CODESIGN_FAKE_SECOND_AUTHORITY:-0}" = "1" ]; then
-      printf '%s\n' 'Authority=Unexpected Secondary Authority' >&2
-    fi
-    for i in $(seq 1 20000); do
-      printf 'Metadata-%s=value\n' "$i" >&2
-    done
-    if [ "\${CODESIGN_FAKE_FAIL_AFTER_METADATA:-0}" = "1" ]; then
-      exit 7
-    fi
-    exit 0
-  fi
-done
-exit 0
-`,
-  );
-  chmodSync(fakeCodesign, 0o755);
+  expect(existsSync(allocation), result.stderr).toBe(false);
+  return result;
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
@@ -156,48 +72,44 @@ describe("codesign-mac-app temp file hygiene", () => {
 
   it("does not allocate entitlement temp files for help output", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-help-");
-    const result = runCodesign(["--help"], tempRoot);
+    const result = runCodesignWithoutAllocation(["--help"], tempRoot);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: scripts/codesign-mac-app.sh");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
   it("does not allocate entitlement temp files before app validation", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-missing-");
     const missingApp = path.join(tempRoot, "Missing.app");
-    const result = runCodesign([missingApp], tempRoot);
+    const result = runCodesignWithoutAllocation([missingApp], tempRoot);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("App bundle not found");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
   it("rejects unknown options before app validation", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-unknown-");
-    const result = runCodesign(["--wat"], tempRoot);
+    const result = runCodesignWithoutAllocation(["--wat"], tempRoot);
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("ERROR: Unknown codesign option: --wat");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
   it("rejects extra app bundle arguments before signing", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-extra-");
     const app = path.join(tempRoot, "Fake.app");
     mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
-    const result = runCodesign([app, "extra"], tempRoot);
+    const result = runCodesignWithoutAllocation([app, "extra"], tempRoot);
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("ERROR: Unexpected codesign argument: extra");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
-  it("keeps helper signing plain and limits app entitlements to app code", () => {
+  macIt("keeps helper signing plain and seals app code once", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-success-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
-    const captureDir = path.join(tempRoot, "capture");
+    const captureDir = path.join(app, "Contents", "test-capture");
     const logPath = path.join(captureDir, "codesign.log");
     mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(binDir);
@@ -224,12 +136,9 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(result.stdout).toContain(`Codesign complete for ${app}`);
 
     const signLines = readFileSync(logPath, "utf8").trim().split("\n");
-    expect(signLines).toHaveLength(3);
+    expect(signLines).toHaveLength(2);
     expect(signLines[0]).toBe(`plain\t${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}`);
-    expect(signLines[1]).toContain(
-      `entitled\t${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`,
-    );
-    expect(signLines[2]).toContain(`entitled\t${app}\t`);
+    expect(signLines[1]).toContain(`entitled\t${app}\t`);
     for (const line of signLines.slice(1)) {
       const columns = line.split("\t");
       const entitlementPath = columns[2];
@@ -242,10 +151,10 @@ describe("codesign-mac-app temp file hygiene", () => {
       const copiedEntitlements = readFileSync(copiedEntitlementSource, "utf8");
       expect(entitlementSource).toContain("openclaw-entitlements");
       expect(existsSync(entitlementSource)).toBe(false);
+      expect(existsSync(path.dirname(entitlementSource))).toBe(false);
       expect(copiedEntitlements).toContain("com.apple.security.automation.apple-events");
       expect(copiedEntitlements).toContain("com.apple.security.device.camera");
     }
-    expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
   it.each([
@@ -253,20 +162,13 @@ describe("codesign-mac-app temp file hygiene", () => {
     ["SKIP_TEAM_ID_CHECK", "forbids SKIP_TEAM_ID_CHECK=1"],
   ])("rejects elevation-host %s bypasses before app validation", (key, diagnostic) => {
     const tempRoot = tempDirs.make("openclaw-codesign-elevation-bypass-");
-    const result = spawnSync("bash", [scriptPath, path.join(tempRoot, "Missing.app")], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-        [key]: "1",
-        TMPDIR: tempRoot,
-      },
+    const result = runCodesignWithoutAllocation([path.join(tempRoot, "Missing.app")], tempRoot, {
+      OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+      [key]: "1",
     });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(diagnostic);
-    expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
   it("defines a closed Foundation elevation-host signing profile", () => {
@@ -319,7 +221,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(result.stderr).toContain("must not contain bundled CUA driver");
   });
 
-  it("consumes complete codesign metadata under pipefail before validating authority", () => {
+  macIt("consumes complete codesign metadata under pipefail before validating authority", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-elevation-metadata-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
@@ -347,7 +249,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(result.stderr).not.toContain("Elevation host requires");
   });
 
-  it("preserves the precise diagnostic when codesign omits Authority", () => {
+  macIt("preserves the precise diagnostic when codesign omits Authority", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-elevation-no-authority-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
@@ -373,7 +275,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(result.stderr).toContain("got 'not set'");
   });
 
-  it("preserves a codesign failure after metadata output", () => {
+  macIt("preserves a codesign failure after metadata output", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-elevation-failed-metadata-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
@@ -395,17 +297,17 @@ describe("codesign-mac-app temp file hygiene", () => {
       },
     });
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(7);
     expect(result.signal).toBeNull();
     expect(result.stdout).not.toContain(`Codesign complete for ${app}`);
-    expect(result.stderr).toContain("got 'not set'");
+    expect(result.stderr).toContain("Could not read codesign metadata");
   });
 
-  it("retries only transient Apple timestamp failures", () => {
+  macIt("retries only transient Apple timestamp failures", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-retry-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
-    const countFile = path.join(tempRoot, "codesign-count");
+    const countFile = path.join(app, "Contents", "codesign-count");
     mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(binDir);
     writeFileSync(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
@@ -430,62 +332,68 @@ describe("codesign-mac-app temp file hygiene", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("Transient Apple timestamp failure");
-    expect(readFileSync(countFile, "utf8")).toBe("5");
-    expect(entitlementTemps(tempRoot)).toEqual([]);
+    expect(readFileSync(countFile, "utf8")).toBe("4");
   });
 
-  it.each(["main binary", "app bundle"])(
-    "does not retry non-timestamp %s signing failures",
+  macIt.each(["helper", "app bundle"])(
+    "cleans signing resources without retrying non-timestamp %s failures",
     (target) => {
       const tempRoot = tempDirs.make("openclaw-codesign-permanent-");
       const app = path.join(tempRoot, "Fake.app");
       const binDir = path.join(tempRoot, "bin");
-      const countFile = path.join(tempRoot, "codesign-count");
+      const countFile = path.join(app, "Contents", "codesign-count");
       mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
       mkdirSync(binDir);
-      if (target === "main binary") {
-        writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+      if (target === "helper") {
+        writeFileSync(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
       }
       installTransientFakeCodesign(binDir);
       // Keep identity lookup and attribute cleanup inert even if signing setup changes.
       for (const command of ["security", "xattr"]) {
         writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       }
-      writeFileSync(
-        path.join(binDir, "mktemp"),
-        '#!/bin/sh\nset -eu\nmkdir "$TMPDIR/openclaw-entitlements.fixture"\nprintf "%s\\n" "$TMPDIR/openclaw-entitlements.fixture"\n',
-        { mode: 0o755 },
-      );
 
       const result = spawnSync("bash", [scriptPath, app], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
-          ...process.env,
           CODESIGN_COUNT_FILE: countFile,
           CODESIGN_PERMANENT_FAILURE: "1",
           CODESIGN_TIMESTAMP_RETRY_ATTEMPTS: "3",
           CODESIGN_TIMESTAMP_RETRY_DELAY_SECONDS: "0",
           CODESIGN_TRANSIENT_FAILURES: "0",
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          PATH: `${binDir}:/usr/bin:/bin`,
           SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
           SKIP_TEAM_ID_CHECK: "1",
           TMPDIR: tempRoot,
         },
       });
 
-      expect(result.status).toBe(7);
-      expect(result.stdout).not.toContain("Codesign complete");
-      expect(result.stderr).not.toContain("Transient Apple timestamp failure");
-      expect(readFileSync(countFile, "utf8")).toBe("1");
-      // Assert cleanup of the allocated resource, not only the requested TMPDIR.
-      const entitlementPath = readFileSync(`${countFile}.entitlements`, "utf8");
-      expect(existsSync(path.dirname(entitlementPath))).toBe(false);
-      expect(entitlementTemps(tempRoot)).toEqual([]);
+      // Darwin mktemp -t can ignore TMPDIR; observe the actual signer allocation.
+      const directory = readFileSync(`${countFile}.tempdir`, "utf8");
+      try {
+        expect(result.status, result.stderr).toBe(7);
+        expect(result.stdout).not.toContain("Codesign complete");
+        expect(result.stderr).not.toContain("Transient Apple timestamp failure");
+        expect(readFileSync(countFile, "utf8")).toBe("1");
+        expect(existsSync(directory)).toBe(false);
+        if (target === "app bundle") {
+          const entitlementPath = readFileSync(`${countFile}.entitlements`, "utf8");
+          expect(path.dirname(entitlementPath)).toBe(directory);
+          expect(existsSync(entitlementPath)).toBe(false);
+        } else {
+          expect(existsSync(`${countFile}.entitlements`)).toBe(false);
+        }
+      } finally {
+        // Clean a regression's task-created leak, never an unexpected system path.
+        if (path.basename(directory).startsWith("openclaw-entitlements.")) {
+          cleanupTempDirs([directory]);
+        }
+      }
     },
   );
 
-  it.each([
+  macIt.each([
     {
       label: "Developer ID hash",
       identity: "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1",
@@ -522,7 +430,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     const tempRoot = tempDirs.make("openclaw-codesign-timestamp-");
     const app = path.join(tempRoot, "Fake.app");
     const binDir = path.join(tempRoot, "bin");
-    const captureDir = path.join(tempRoot, "capture");
+    const captureDir = path.join(app, "Contents", "test-capture");
     const argsLog = path.join(captureDir, "codesign-args.log");
     mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(binDir);
@@ -562,4 +470,670 @@ printf '%s\\n' \\
       expect(args.split(" ")).toContain(expectedFlag);
     }
   });
+});
+
+describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
+  const workerPath = "Contents/Resources/node-worker/arm64/";
+
+  it.each([
+    { arch: "arm64", sdkArch: "arm64", cpuType: 0x0100000c },
+    { arch: "x86_64", sdkArch: "x64", cpuType: 0x01000007 },
+  ])(
+    "limits worker JIT entitlements to known JS runtime executables on $arch",
+    ({ arch, sdkArch, cpuType }) => {
+      const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-jit-"));
+      const modules = "lib/node_modules/openclaw/node_modules";
+      const sdkRuntime = `node_modules/@anthropic-ai/claude-agent-sdk-darwin-${sdkArch}/claude`;
+      const expected = new Map<string, boolean>();
+      for (const [relative, fileType, jit] of [
+        ["bin/node", 2, true],
+        [`lib/node_modules/openclaw/${sdkRuntime}`, 2, true],
+        [`${modules}/nested/${sdkRuntime}`, 2, true],
+        [
+          `${modules}/@lydell/node-pty-darwin-${sdkArch}/prebuilds/darwin-${sdkArch}/spawn-helper`,
+          2,
+          false,
+        ],
+        [`${modules}/other/bin/node`, 2, false],
+        [`${modules}/other/claude`, 2, false],
+        [`${modules}/library/${sdkRuntime}`, 6, false],
+        ["lib/addon.node", 6, false],
+      ] as const) {
+        const bytes = machoFixture(64, true, false, fileType);
+        bytes.writeUInt32LE(cpuType, 4);
+        const filename = fixture.put(`Contents/Resources/node-worker/${arch}/${relative}`, bytes);
+        expected.set(filename, jit);
+      }
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(0);
+      const events = fixture.events();
+      const signs = events.filter(({ args }) => args.includes("--sign"));
+      expect(signs).toHaveLength(expected.size + 1);
+      expect(signs.at(-1)?.args.at(-1)).toBe(fixture.app);
+      for (const [filename, jit] of expected) {
+        const signed = expectDefined(
+          signs.find(({ args }) => args.at(-1) === filename),
+          filename,
+        );
+        const keys = Array.from(
+          signed.entitlements.matchAll(/<key>([^<]+)<\/key>/g),
+          (match) => match[1],
+        );
+        expect(keys, filename).toEqual(
+          jit
+            ? [
+                "com.apple.security.cs.allow-jit",
+                "com.apple.security.cs.allow-unsigned-executable-memory",
+              ]
+            : [],
+        );
+        expect(signed.args).toEqual(
+          expect.arrayContaining(["--force", "--options", "runtime", "--timestamp", "--sign"]),
+        );
+        expect(signed.args.includes("--entitlements"), filename).toBe(jit);
+        expect(
+          events.some(
+            ({ args }) =>
+              args.at(-1) === filename && args.includes("--verify") && args.includes("--strict"),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "selects every canonical native format with header-appropriate entitlements (elevation: %s)",
+    (elevation) => {
+      const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-formats-"));
+      const expected = new Map<string, boolean>();
+      const candidates: string[] = [];
+      for (const bits of [32, 64]) {
+        for (const little of [false, true]) {
+          for (const fat of [false, true]) {
+            // mach-o/fat.h requires big-endian containers; swapped wrappers are rejected below.
+            if (fat && little) {
+              continue;
+            }
+            for (const type of [2, 6]) {
+              const filename = fixture.put(
+                `${workerPath}formats/${bits}-${little}-${fat}-${type} executable\n\t'\\/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
+                machoFixture(bits, little, fat, type),
+              );
+              candidates.push(filename);
+              expected.set(filename, type === 2);
+            }
+          }
+        }
+      }
+      for (const [name, bytes] of [
+        ["Mach-O executable.txt", Buffer.from("not native code")],
+        ["Java.class", Buffer.from("cafebabe0000003d0001", "hex")],
+        ["truncated", Buffer.from("cffa", "hex")],
+        ["fat-false-positive", Buffer.from("cafebabe", "hex")],
+      ] as const) {
+        fixture.put(workerPath + name, bytes);
+      }
+      symlinkSync(
+        expectDefined(candidates[0], "native fixture"),
+        path.join(fixture.worker, "native-link"),
+      );
+      symlinkSync("missing", path.join(fixture.worker, "dangling"));
+      const result = fixture.run({}, elevation);
+      expect(result.status, result.stderr).toBe(0);
+      const events = fixture.events();
+      const signed = events.filter(
+        ({ args }) => args.includes("--sign") && args.at(-1) !== fixture.app,
+      );
+      expect(signed).toHaveLength(expected.size);
+      expect(new Set(signed.map(({ args }) => args.at(-1)))).toEqual(new Set(expected.keys()));
+      for (const { args, entitlements } of signed) {
+        const target = expectDefined(args.at(-1), "signed path");
+        expect(entitlements.includes("allow-jit"), target).toBe(expected.get(target));
+        expect(entitlements).not.toContain("disable-library-validation");
+        expect(entitlements).not.toContain("automation.apple-events");
+        expect(
+          events.some(
+            ({ args: verify }) =>
+              verify.includes("--verify") &&
+              verify.includes("--strict") &&
+              verify.at(-1) === target,
+          ),
+        ).toBe(true);
+      }
+      for (const { args } of events.filter(
+        ({ args: query }) => query.includes("-dv") || query.includes("-d"),
+      )) {
+        expect(new Set([fixture.app, ...expected.keys()])).toContain(args.at(-1));
+      }
+      const classifiedMagics = new Set(fixture.classifications().flatMap(({ magics }) => magics));
+      expect(classifiedMagics).toEqual(
+        new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "cafebabf"]),
+      );
+    },
+  );
+
+  it.each([32, 64])("examines but rejects byte-swapped fat%d containers", (bits) => {
+    const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-swapped-fat-"));
+    const bytes = machoFixture(bits, true, true);
+    fixture.put(workerPath + "invalid-fat.node", bytes);
+    const result = fixture.run();
+    expect(result.status, result.stdout).not.toBe(0);
+    expect(result.stderr).toMatch(/native header/i);
+    expect(fixture.classifications().flatMap(({ magics }) => magics)).toContain(
+      bytes.subarray(0, 4).toString("hex"),
+    );
+    expect(fixture.events()).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "classifies real fat64 code and rejects mixed slice types (mixed: %s)",
+    (mixed) => {
+      const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-real-fat64-"));
+      const native = fixture.put(workerPath + "bin/node");
+      const bytes = writeFat64Fixture(native);
+      expect(bytes.readUInt32BE(0)).toBe(0xcafebabf);
+      expect(bytes.readUInt32BE(4)).toBeGreaterThanOrEqual(2);
+      if (mixed) {
+        const offset = Number(bytes.readBigUInt64BE(48));
+        expect(bytes.readUInt32LE(offset)).toBe(0xfeedfacf);
+        bytes.writeUInt32LE(6, offset + 12); // One MH_DYLIB slice must not inherit MH_EXECUTE JIT rights.
+        writeFileSync(native, bytes);
+      }
+      expect(spawnSync("/usr/bin/lipo", ["-archs", native]).status).toBe(0);
+      const result = fixture.run();
+      if (mixed) {
+        expect(result.status, result.stdout).not.toBe(0);
+        expect(result.stderr).toMatch(/mixed.*native/i);
+        expect(fixture.events()).toEqual([]);
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      const signs = fixture
+        .events()
+        .filter(({ args }) => args.includes("--sign") && args.at(-1) === native);
+      expect(signs).toHaveLength(1);
+      expect(signs[0]?.entitlements).toContain("allow-jit");
+    },
+  );
+
+  it("separates documented Mach-O resources from native signing candidates", () => {
+    const fixture = makeSigningFixture(tempDirs.make("openclaw-macho-filetypes-"));
+    const resources = new Map<string, Buffer>();
+    const candidates: string[] = [];
+    for (const fileType of [1, 2, 4, 5, 6, 7, 8, 9, 10, 11]) {
+      const bytes = machoFixture(64, true, false, fileType);
+      const filename = fixture.put(
+        `${workerPath}type-${fileType}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
+        bytes,
+      );
+      if ([1, 4, 9, 10].includes(fileType)) {
+        resources.set(filename, bytes);
+      } else {
+        candidates.push(filename);
+      }
+    }
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    const events = fixture.events();
+    const signed = events
+      .filter(({ args }) => args.includes("--sign"))
+      .map(({ args }) => args.at(-1));
+    expect(signed).toHaveLength(candidates.length + 1);
+    expect(new Set(signed)).toEqual(new Set([...candidates, fixture.app]));
+    for (const [filename, bytes] of resources) {
+      expect(readFileSync(filename)).toEqual(bytes);
+      expect(events.filter(({ args }) => args.at(-1) === filename)).toEqual([]);
+    }
+  });
+
+  it.each(["thin", "fat32", "fat64"] as const)(
+    "resource-seals real %s linker objects without direct signing",
+    (format) => {
+      const root = tempDirs.make("openclaw-real-object-");
+      const fixture = makeSigningFixture(root);
+      const node = fixture.put(workerPath + "bin/node");
+      const bytes = nativeObjectFixture(path.join(root, "object-inputs"), format);
+      const object = fixture.put(workerPath + "opaque-object", bytes);
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(object)).toEqual(bytes);
+      const events = fixture.events();
+      expect(events.filter(({ args }) => args.at(-1) === object)).toEqual([]);
+      expect(
+        events.filter(({ args }) => args.includes("--sign")).map(({ args }) => args.at(-1)),
+      ).toEqual([node, fixture.app]);
+    },
+  );
+
+  it.each([false, true].flatMap((fat64) => [0, 1].map((imageSlice) => ({ fat64, imageSlice }))))(
+    "rejects object/image containers in either slice order (fat64: $fat64, image: $imageSlice)",
+    ({ fat64, imageSlice }) => {
+      const root = tempDirs.make("openclaw-mixed-object-");
+      const fixture = makeSigningFixture(root);
+      const bytes = nativeObjectFixture(
+        path.join(root, "object-inputs"),
+        fat64 ? "fat64" : "fat32",
+      );
+      const record = 8 + imageSlice * (fat64 ? 32 : 20);
+      const offset = fat64
+        ? Number(bytes.readBigUInt64BE(record + 8))
+        : bytes.readUInt32BE(record + 8);
+      expect(bytes.readUInt32LE(offset)).toBe(0xfeedfacf);
+      bytes.writeUInt32LE(6, offset + 12);
+      fixture.put(workerPath + "mixed", bytes);
+      const result = fixture.run();
+      expect(result.status, result.stdout).not.toBe(0);
+      expect(result.stderr).toMatch(/Mixed.*resource/);
+      expect(fixture.events()).toEqual([]);
+    },
+  );
+
+  it.each(
+    [false, true].flatMap((fat64) =>
+      ["archive", "mixed", "invalid"].map((content) => ({ fat64, content })),
+    ),
+  )(
+    "resource-seals static archives and rejects mixed images (fat64: $fat64, $content)",
+    ({ fat64, content }) => {
+      const root = tempDirs.make("openclaw-inventory-archive-");
+      const fixture = makeSigningFixture(root);
+      const node = fixture.put(workerPath + "node");
+      const bytes = universalArchiveFixture(
+        path.join(root, "archive-inputs"),
+        fat64,
+        content !== "archive",
+      );
+      if (content === "invalid") {
+        for (let index = 0; index < bytes.readUInt32BE(4); index++) {
+          const record = 8 + index * (fat64 ? 32 : 20);
+          const offset = fat64
+            ? Number(bytes.readBigUInt64BE(record + 8))
+            : bytes.readUInt32BE(record + 8);
+          if (bytes.readUInt32LE(offset) === 0xfeedfacf) {
+            bytes.writeUInt32LE(0, offset);
+          }
+        }
+      }
+      const archive = fixture.put(workerPath + "opaque-resource", bytes);
+      const result = fixture.run();
+      expect(readFileSync(archive)).toEqual(bytes);
+      if (content !== "archive") {
+        expect(result.status, result.stdout).not.toBe(0);
+        expect(result.stderr).toMatch(
+          content === "mixed" ? /Mixed.*resource/i : /Unrecognized native header/,
+        );
+        expect(fixture.events()).toEqual([]);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(
+          fixture
+            .events()
+            .filter(({ args }) => args.includes("--sign"))
+            .map(({ args }) => args.at(-1)),
+        ).toEqual([node, fixture.app]);
+      }
+    },
+  );
+
+  it("keeps classification process count bounded at candidate scale and never follows symlinks", async () => {
+    const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-scale-"));
+    for (let i = 0; i < 24; i++) {
+      fixture.put(`${workerPath}native-${i}`, machoFixture(64, true, false, i % 2 ? 6 : 2));
+    }
+    const dataSource = path.join(path.dirname(fixture.app), "non-code-payload");
+    writeFileSync(dataSource, "export {};\n");
+    for (let start = 24; start < 1_024; start += 256) {
+      const directory = path.join(fixture.worker, "data", String(start));
+      mkdirSync(directory, { recursive: true });
+      await Promise.all(
+        Array.from({ length: Math.min(256, 1_024 - start) }, (_, index) =>
+          link(dataSource, path.join(directory, `${start + index}.js`)),
+        ),
+      );
+    }
+    const outside = path.join(path.dirname(fixture.app), "external");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "native"), machoFixture());
+    symlinkSync(outside, path.join(fixture.worker, "directory-link"));
+    symlinkSync(path.join(outside, "native"), path.join(fixture.worker, "file-link"));
+    symlinkSync("missing", path.join(fixture.worker, "dangling"));
+    const result = fixture.scan({ maxFileCalls: 8 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(fixture.classifications().length).toBeLessThanOrEqual(2);
+    const records = result.stdout.split("\0");
+    expect(records.pop()).toBe("");
+    const natives = records.filter((kind, index) => index % 2 === 0 && kind !== "symlink");
+    expect(natives).toHaveLength(24);
+    expect(records.filter((kind, index) => index % 2 === 0 && kind === "symlink")).toHaveLength(3);
+    expect(records).not.toContain(path.join(outside, "native"));
+  });
+
+  it.each(["", "/", "///"])(
+    "rejects a symlink bundle root with suffix %j before signing",
+    (suffix) => {
+      const root = tempDirs.make("openclaw-inventory-root-link-");
+      const fixture = makeSigningFixture(root);
+      fixture.put(workerPath + "node");
+      const alias = path.join(root, "Alias.app");
+      symlinkSync(fixture.app, alias);
+      const result = fixture.run({}, false, alias + suffix);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("must not be a symlink");
+      expect(fixture.events()).toEqual([]);
+    },
+  );
+
+  it.each([
+    "before-directory-open",
+    "after-directory-open",
+    "before-classification",
+    "after-classification",
+    "before-sign",
+  ])("rejects directory swaps without mutating external files (%s)", (swapStage) => {
+    const root = tempDirs.make("openclaw-inventory-swap-");
+    const fixture = makeSigningFixture(root);
+    const swapDirectory = path.join(fixture.worker, "package");
+    const externalDirectory = path.join(root, "external");
+    const name = "native ' payload\n.node";
+    const external = path.join(externalDirectory, name);
+    mkdirSync(swapDirectory);
+    mkdirSync(externalDirectory);
+    const original = machoFixture();
+    writeFileSync(external, original);
+    const attribute = "org.openclaw.signing-fixture";
+    expect(spawnSync("/usr/bin/xattr", ["-w", attribute, "untouched", external]).status).toBe(0);
+    // The first schedule discovers a file that never existed in the bundle.
+    // Later schedules redirect a previously discovered name at the next boundary.
+    if (swapStage !== "before-directory-open") {
+      fixture.put(`${workerPath}package/${name}`);
+    }
+    const result = fixture.run({
+      swapStage,
+      swapDirectory,
+      externalDirectory,
+      retainedDirectory: path.join(root, "retained-package"),
+      swapTarget: path.join(swapDirectory, name),
+    });
+    expect(fixture.swaps(), result.stderr).toEqual([{ stage: swapStage }]);
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect.soft(readFileSync(external)).toEqual(original);
+    expect
+      .soft(spawnSync("/usr/bin/xattr", ["-p", attribute, external], { encoding: "utf8" }).stdout)
+      .toBe("untouched\n");
+    expect.soft(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect.soft(result.stdout).not.toContain("Codesign complete");
+    const signs = fixture.events().filter(({ args }) => args.includes("--sign"));
+    if (swapStage === "before-sign") {
+      expect(signs).toEqual([
+        expect.objectContaining({ resolvedTarget: external, mutationAttempt: true }),
+      ]);
+      expect(result.stderr).toMatch(/signing write rejected: (EPERM|EACCES)/);
+    } else {
+      expect(signs).toEqual([]);
+    }
+  });
+
+  it("allows bundle writes but closes inherited writable descriptors", () => {
+    const root = tempDirs.make("openclaw-inventory-descriptors-");
+    const fixture = makeSigningFixture(root);
+    const native = fixture.put(workerPath + "node");
+    const signed = fixture.run({ writeTarget: native });
+    expect(signed.status, signed.stderr).toBe(0);
+    expect(readFileSync(native).subarray(-19).toString()).toBe("\nfixture-signature\n");
+
+    const external = path.join(root, "external");
+    writeFileSync(external, "untouched");
+    const scratch = path.join(root, "mutation-tmp");
+    mkdirSync(scratch);
+    const result = spawnSync(
+      "/usr/bin/python3",
+      [
+        "-c",
+        `
+import os, subprocess, sys
+with open(sys.argv[1], 'ab', buffering=0) as stream:
+    fd = stream.fileno()
+    result = subprocess.run([
+        '/usr/bin/python3', 'scripts/lib/mac-bundle-mutation.py', sys.argv[2], sys.argv[3],
+        '/usr/bin/python3', '-c', 'import os,sys; os.write(int(sys.argv[1]), b"changed")', str(fd)
+    ], pass_fds=(fd,))
+    sys.exit(result.returncode)
+`,
+        external,
+        fixture.app,
+        scratch,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Bad file descriptor");
+    expect(readFileSync(external, "utf8")).toBe("untouched");
+  });
+
+  it("rejects hardlinked input before clearing an external alias's attributes", async () => {
+    const root = tempDirs.make("openclaw-inventory-hardlink-");
+    const fixture = makeSigningFixture(root);
+    const external = path.join(root, "external");
+    writeFileSync(external, machoFixture());
+    const attribute = "org.openclaw.signing-fixture";
+    expect(spawnSync("/usr/bin/xattr", ["-w", attribute, "untouched", external]).status).toBe(0);
+    await link(external, path.join(fixture.worker, "native.node"));
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("private app copy");
+    expect(fixture.events()).toEqual([]);
+    expect(
+      spawnSync("/usr/bin/xattr", ["-p", attribute, external], { encoding: "utf8" }).stdout,
+    ).toBe("untouched\n");
+  });
+
+  it("rejects special files before attribute cleanup can block on them", () => {
+    const root = tempDirs.make("openclaw-inventory-fifo-");
+    const fixture = makeSigningFixture(root);
+    expect(spawnSync("/usr/bin/mkfifo", [path.join(fixture.worker, "fifo")]).status).toBe(0);
+    // Observe the cleanup boundary without letting a regression hang real xattr on the FIFO.
+    const invoked = path.join(fixture.app, "xattr-invoked");
+    const xattr = path.join(root, "bin", "xattr");
+    writeFileSync(
+      xattr,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(invoked)}, 'called');\n`,
+    );
+    chmodSync(xattr, 0o755);
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("special files");
+    expect(existsSync(invoked)).toBe(false);
+    expect(fixture.events()).toEqual([]);
+  });
+
+  it.each(["", "/", "///"])(
+    "seals each bundle owner once after nested code with suffix %j",
+    (suffix) => {
+      const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-order-"));
+      const helper = fixture.put("Contents/MacOS/openclaw-mlx-tts");
+      const cua = fixture.put("Contents/Resources/cua-driver");
+      const worker = fixture.put(workerPath + "node");
+      fixture.put("Contents/MacOS/OpenClaw");
+      const sparkle = "Contents/Frameworks/Sparkle.framework";
+      for (const member of [
+        "Sparkle",
+        "Autoupdate",
+        "Updater.app/Contents/MacOS/Updater",
+        "XPCServices/Downloader.xpc/Contents/MacOS/Downloader",
+        "XPCServices/Installer.xpc/Contents/MacOS/Installer",
+      ]) {
+        fixture.put(
+          `${sparkle}/Versions/B/${member}`,
+          member === "Autoupdate" ? machoFixture(64, false, true) : machoFixture(),
+        );
+      }
+      const extra = fixture.put(
+        `${sparkle}/Versions/B/Extras/extra.node`,
+        machoFixture(64, true, false, 6),
+      );
+      const nested = fixture.put(
+        "Contents/Frameworks/Outer.framework/Versions/A/Inner.framework/inner.dylib",
+        machoFixture(64, true, false, 6),
+      );
+      const result = fixture.run({}, false, fixture.app + suffix);
+      expect(result.status, result.stderr).toBe(0);
+      const signs = fixture
+        .events()
+        .filter(({ args }) => args.includes("--sign"))
+        .map(({ args }) => args.at(-1));
+      const expected = [
+        helper,
+        cua,
+        worker,
+        extra,
+        nested,
+        fixture.app,
+        ...[
+          `${sparkle}/Versions/B/Autoupdate`,
+          `${sparkle}/Versions/B/Updater.app`,
+          `${sparkle}/Versions/B/XPCServices/Downloader.xpc`,
+          `${sparkle}/Versions/B/XPCServices/Installer.xpc`,
+          sparkle,
+          "Contents/Frameworks/Outer.framework/Versions/A/Inner.framework",
+          "Contents/Frameworks/Outer.framework",
+        ].map((member) => path.join(fixture.app, member)),
+      ];
+      expect(signs).toHaveLength(expected.length);
+      expect(new Set(signs)).toEqual(new Set(expected));
+      expect(signs.slice(0, 3)).toEqual([helper, cua, worker]);
+      for (const child of signs) {
+        for (const container of signs) {
+          if (child && container && child.startsWith(container + "/")) {
+            expect(signs.lastIndexOf(child), `${child} before ${container}`).toBeLessThan(
+              signs.indexOf(container),
+            );
+          }
+        }
+      }
+      expect(signs).toContain(nested);
+      expect(signs.at(-1)).toBe(fixture.app);
+    },
+  );
+
+  it.each([
+    "mismatch",
+    "metadata",
+    "metadataFailure",
+    "missingTeam",
+    "format",
+    "formatSkipTeam",
+    "missingFormat",
+    "verifyFailure",
+    "authority",
+    "appleEvents",
+    "entitlementFailure",
+  ])("fails closed on %s at the signing/audit boundary", (failure) => {
+    const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-gates-"));
+    const native = fixture.put(workerPath + "node");
+    const config =
+      failure === "formatSkipTeam"
+        ? { format: native, skipTeam: true }
+        : failure === "missingTeam"
+          ? { metadata: "missing" }
+          : failure === "missingFormat"
+            ? { signatureFormat: "missing" }
+            : {
+                [failure]:
+                  failure === "metadata"
+                    ? "failure"
+                    : failure === "authority"
+                      ? "Wrong Authority"
+                      : native,
+              };
+    const result = fixture.run(
+      config,
+      ["authority", "appleEvents", "entitlementFailure"].includes(failure),
+    );
+    expect(result.status, result.stdout).not.toBe(0);
+    expect(result.stdout).not.toContain("Codesign complete");
+  });
+
+  it.each(["valid", "team", "format", "authority", "missingTeam", "missingFormat"])(
+    "uses signature metadata rather than filename text (%s)",
+    (failure) => {
+      const fixture = makeSigningFixture(
+        tempDirs.make("openclaw-metadata-"),
+        "Injected\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20400\nTeamIdentifier=FWJYW4S8P8\nAuthority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)\n.app",
+      );
+      const native = fixture.put(workerPath + "node");
+      const configs: Record<string, Record<string, unknown>> = {
+        valid: {},
+        team: { mismatch: native },
+        format: { format: native },
+        authority: { authority: "Unexpected Authority" },
+        missingTeam: { metadata: "missing" },
+        missingFormat: { signatureFormat: "missing" },
+      };
+      const result = fixture.run(configs[failure], failure === "authority");
+      expect(
+        fixture.events().some(({ args }) => args.includes("-dv")),
+        result.stderr,
+      ).toBe(true);
+      if (failure === "valid") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("Codesign complete");
+      } else {
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+        expect(result.stdout).not.toContain("Codesign complete");
+      }
+    },
+  );
+
+  it.each(["before", "after"])(
+    "does not consume failed or partial inventory %s signing",
+    (phase) => {
+      for (const fault of [
+        "scanner",
+        "walk",
+        "spawn",
+        "classifier",
+        "empty",
+        "partial",
+        "unterminated",
+        "error-record",
+      ]) {
+        const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-failure-"));
+        const native = fixture.put(workerPath + "node");
+        fixture.put(workerPath + "addon", machoFixture(64, true, false, 6));
+        const result = fixture.run({ fault, phase, partialPath: native });
+        expect(result.status, `${phase}/${fault}: ${result.stdout}`).not.toBe(0);
+        expect(result.stdout).not.toContain("Codesign complete");
+        if (phase === "before") {
+          expect(fixture.events().filter(({ args }) => args.includes("--sign"))).toEqual([]);
+        }
+      }
+    },
+  );
+
+  it.each(["team", "entitlement"])(
+    "audits native files created while signing the app (%s)",
+    (gate) => {
+      const fixture = makeSigningFixture(tempDirs.make("openclaw-inventory-fresh-"));
+      fixture.put(workerPath + "node");
+      const generated = path.join(fixture.worker, "generated-after-sign.node");
+      const result = fixture.run(
+        {
+          generated,
+          generatedHex: machoFixture(64, true, false, 6).toString("hex"),
+          ...(gate === "team" ? { mismatch: generated } : { appleEvents: generated }),
+        },
+        gate === "entitlement",
+      );
+      expect(result.status, result.stdout).not.toBe(0);
+      expect(
+        fixture
+          .events()
+          .some(
+            ({ args }) =>
+              args.at(-1) === generated && args.includes(gate === "team" ? "-dv" : "-d"),
+          ),
+      ).toBe(true);
+    },
+  );
 });

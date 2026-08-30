@@ -1335,8 +1335,8 @@ describe("scripts/test-group-report run plans", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
+      path.join("/repo", ".cache", "vitest", "0-a.ts"),
+      path.join("/repo", ".cache", "vitest", "1-b.ts"),
     ]);
     expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
   });

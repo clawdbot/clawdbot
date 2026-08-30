@@ -110,6 +110,74 @@ describe("xAI doctor contract", () => {
     expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({ config, changes: [] });
   });
 
+  it("migrates retired xAI image models in tools.media.models to grok-4.3", () => {
+    const config = {
+      tools: {
+        media: {
+          models: [
+            { provider: "xai", model: "grok-4-fast", capabilities: ["image"] },
+            { provider: "x-ai", model: "grok-4-fast", capabilities: ["image"] },
+            {
+              provider: "xai",
+              model: "grok-4-fast-non-reasoning",
+              capabilities: ["image"],
+            },
+            { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
+            { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
+            { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
+            {
+              provider: "xai",
+              model: "grok-4-fast",
+              command: "vision",
+              capabilities: ["image"],
+            },
+            { provider: "xai", model: "custom-vision", capabilities: ["image"] },
+            { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
+            { provider: "xai", model: "grok-4-fast" },
+            { provider: "xai", model: "grok-4-fast", capability: "image" },
+          ],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      legacyConfigRules.filter((rule) => rule.match(readPathForTest(config, rule.path))),
+    ).toHaveLength(1);
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+
+    expect(result.changes).toHaveLength(1);
+    expect(result.changes[0]).toMatch(/Migrated 2 retired xAI image models/);
+    expect(result.config).not.toBe(config);
+    expect(result.config.tools?.media?.models).toEqual([
+      { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
+      { provider: "x-ai", model: "grok-4.3", capabilities: ["image"] },
+      {
+        provider: "xai",
+        model: "grok-4-fast-non-reasoning",
+        capabilities: ["image"],
+      },
+      { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
+      { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
+      { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
+      {
+        provider: "xai",
+        model: "grok-4-fast",
+        command: "vision",
+        capabilities: ["image"],
+      },
+      { provider: "xai", model: "custom-vision", capabilities: ["image"] },
+      { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
+      { provider: "xai", model: "grok-4-fast" },
+      { provider: "xai", model: "grok-4-fast", capability: "image" },
+    ]);
+    expect(config.tools?.media?.models?.[0]).toHaveProperty("model", "grok-4-fast");
+    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
+
   it("removes only the obsolete xAI STT model selector from media entries", () => {
     const config = {
       tools: {
@@ -144,7 +212,7 @@ describe("xAI doctor contract", () => {
       { type: "provider", provider: "xai", model: "custom-stt" },
       { type: "provider", provider: "openai", model: "grok-stt" },
       { type: "cli", provider: "xai", model: "grok-stt", command: "whisper" },
-      { provider: "x-ai", model: "grok-stt" },
+      { provider: "x-ai" },
       { provider: "xai" },
     ]);
     expect(config.tools?.media?.models?.[0]).toHaveProperty("model", " GROK-STT ");

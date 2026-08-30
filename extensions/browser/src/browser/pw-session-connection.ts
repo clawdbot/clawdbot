@@ -15,8 +15,7 @@ import {
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
-import { getPlaywrightCore } from "./playwright-core.runtime.js";
-import { connectOverCdpPinnedTransport } from "./pw-session-cdp-transport.js";
+import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -420,16 +419,21 @@ export async function connectBrowser(
           return null;
         });
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
-        if (!resolvedEndpoint && hasUrlCredentials && !isWebSocketUrl(normalized)) {
-          // Playwright preserves explicit headers across HTTP discovery redirects.
-          // Keep credentialed discovery in OpenClaw's guarded fetch path instead.
-          throw new Error("Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.");
-        }
-        if (!resolvedEndpoint && ssrfPolicy && !isWebSocketUrl(normalized)) {
+        const configuredIsWebSocket = isWebSocketUrl(normalized);
+        if (!resolvedEndpoint && !configuredIsWebSocket) {
+          if (hasUrlCredentials) {
+            // Playwright preserves explicit headers across HTTP discovery redirects.
+            // Keep credentialed discovery in OpenClaw's guarded fetch path instead.
+            throw new Error(
+              "Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.",
+            );
+          }
           const detail = endpointDiscoveryError
             ? ` Reason: ${redactCdpErrorText(formatErrorMessage(endpointDiscoveryError))}`
             : "";
-          throw new Error(`Guarded CDP endpoint did not expose a usable WebSocket URL.${detail}`);
+          if (ssrfPolicy) {
+            throw new Error(`Guarded CDP endpoint did not expose a usable WebSocket URL.${detail}`);
+          }
         }
         const normalizedCdpHostname = new URL(normalized).hostname;
         const needsPinnedDependencyConnect =
@@ -441,19 +445,17 @@ export async function connectBrowser(
         const connectEndpoint = async (target: string, lookup?: CdpEndpointPin["lookup"]) => {
           const headers = getHeadersWithAuth(target);
           const connectionUrl = stripCdpUrlCredentials(target);
+          const resolveWebSocketUrl = isWebSocketUrl(connectionUrl)
+            ? undefined
+            : async () => (await getChromeWebSocketEndpoint(connectionUrl, timeout))?.url;
           // Keep both loopback bypasses active until the Playwright handshake settles.
           return await withManagedProxyForCdpUrl(connectionUrl, () =>
             withNoProxyForCdpUrl(connectionUrl, async () => {
-              if (lookup) {
-                return await connectOverCdpPinnedTransport(connectionUrl, {
-                  timeout,
-                  headers,
-                  lookup,
-                });
-              }
-              return await getPlaywrightCore().chromium.connectOverCDP(connectionUrl, {
+              return await connectOverCdpTransport(connectionUrl, {
                 timeout,
                 headers,
+                lookup,
+                resolveWebSocketUrl,
               });
             }),
           );
@@ -462,7 +464,7 @@ export async function connectBrowser(
         try {
           browser = await connectEndpoint(endpointUrl, endpointLookup);
         } catch (err) {
-          if (!isWebSocketUrl(normalized) || endpointUrl === normalized) {
+          if (!configuredIsWebSocket || endpointUrl === normalized) {
             throw err;
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);

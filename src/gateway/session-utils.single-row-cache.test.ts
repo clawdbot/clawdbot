@@ -44,6 +44,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
     getSubagentSessionRuntimeMs: vi.fn(() => undefined),
     getSubagentSessionStartedAt: vi.fn(() => undefined),
     isSubagentRunLive: vi.fn(() => false),
+    isSubagentRunQueued: vi.fn(() => false),
     listSubagentRunsForController: vi.fn((controllerSessionKey: string) =>
       [...runsByChildSessionKey.values()].filter((entry) => {
         const controller =
@@ -68,11 +69,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => subagentRegistryReadMock);
 
-import {
-  listSessionsFromStore,
-  listSessionsFromStoreAsync,
-  loadGatewaySessionRow,
-} from "./session-utils.js";
+import { listSessionsFromStoreAsync, loadGatewaySessionRow } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
 const TEST_MODEL = "openai/gpt-5.4";
@@ -320,21 +317,6 @@ describe("single gateway session row child-session cache", () => {
             defaults: { model: { primary: TEST_MODEL } },
           },
         } as OpenClawConfig;
-
-        const syncListed = listSessionsFromStore({
-          cfg,
-          storePath,
-          store,
-          opts: { agentId: MAIN_AGENT_ID, limit: 1 },
-        });
-
-        expect(syncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentSessionListReadIndex).toHaveBeenCalledTimes(1);
-        expect(
-          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
-        ).not.toHaveBeenCalled();
-
-        vi.clearAllMocks();
 
         const asyncListed = await listSessionsFromStoreAsync({
           cfg,

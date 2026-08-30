@@ -3,6 +3,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
+import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 
@@ -18,6 +19,33 @@ afterEach(() => {
 });
 
 describe("AppSidebar session indicators", () => {
+  it("removes a session stripe when a changed event clears its color", async () => {
+    const key = "agent:main:color";
+    const sessions = createSessionsHarness("main", [key]);
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    const row = () => sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: key,
+        color: "purple",
+      }).result,
+    });
+    await sidebar.updateComplete;
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(true);
+    expect(row()?.style.getPropertyValue("--session-color")).toBe("var(--session-color-purple)");
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: key,
+        color: null,
+      }).result,
+    });
+    await sidebar.updateComplete;
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
+    expect(row()?.style.getPropertyValue("--session-color")).toBe("");
+  });
+
   it("renders named glyphs as strokes and keeps emoji as text", async () => {
     const glyphKey = "agent:main:glyph";
     const emojiKey = "agent:main:emoji";

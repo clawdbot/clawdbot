@@ -14,5 +14,4 @@ export {
   listControlledSubagentRuns,
   MAX_RECENT_MINUTES,
   resolveSubagentController,
-  type ResolvedSubagentController,
 } from "./subagent-control-scope.js";

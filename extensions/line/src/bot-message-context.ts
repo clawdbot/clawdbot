@@ -293,6 +293,13 @@ async function finalizeLineInboundContext(params: {
       ? `line:room:${params.source.roomId}`
       : `line:${params.source.userId ?? params.source.peerId}`;
 
+  const groupConfig = params.source.isGroup
+    ? resolveLineGroupConfigEntry(params.account.config.groups, {
+        groupId: params.source.groupId,
+        roomId: params.source.roomId,
+      })
+    : undefined;
+
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -350,14 +357,7 @@ async function finalizeLineInboundContext(params: {
       GroupSubject: params.source.isGroup
         ? (groupName ?? params.source.groupId ?? params.source.roomId)
         : undefined,
-      GroupSystemPrompt: params.source.isGroup
-        ? normalizeOptionalString(
-            resolveLineGroupConfigEntry(params.account.config.groups, {
-              groupId: params.source.groupId,
-              roomId: params.source.roomId,
-            })?.systemPrompt,
-          )
-        : undefined,
+      GroupSystemPrompt: normalizeOptionalString(groupConfig?.systemPrompt),
     },
   });
 
@@ -387,6 +387,8 @@ async function finalizeLineInboundContext(params: {
   return {
     ctxPayload,
     replyToken: (params.event as { replyToken: string }).replyToken,
+    // A group's configured skill scope belongs to the turn that answers it.
+    skillFilter: groupConfig?.skills,
     turn: {
       storePath,
       record: {
@@ -505,6 +507,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   return {
     ctxPayload: finalized.ctxPayload,
     turn: finalized.turn,
+    skillFilter: finalized.skillFilter,
     event,
     userId,
     groupId,
@@ -588,6 +591,7 @@ export async function buildLinePostbackContext(params: {
   return {
     ctxPayload: finalized.ctxPayload,
     turn: finalized.turn,
+    skillFilter: finalized.skillFilter,
     event,
     userId,
     groupId,

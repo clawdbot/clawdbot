@@ -1,9 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   type TestRunEmbeddedAgent,
   useOpenAIPlatformAuthFixture,
@@ -13,31 +14,44 @@ import {
 // The mocked harness only supports the OpenAI route, so these params keep the
 // plugin harness selected. Falling back to the built-in host harness would drag
 // the whole OpenClaw tool graph into this shard and prove the wrong owner.
-const pluginHarnessRunParams = {
-  ...overflowBaseRunParams,
-  provider: "openai",
-  model: "gpt-5.6-luna",
-  sessionRoot: "/tmp/openclaw-plugin-session-root",
-} as const;
+function createPluginHarnessRunParams(state: OpenClawTestState) {
+  return {
+    ...createOverflowRunParams(state),
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    sessionRoot: state.sessionsDir(),
+  } as const;
+}
+
+let state: OpenClawTestState;
 
 describe("embedded run session permissions", () => {
   let runEmbeddedAgent: TestRunEmbeddedAgent;
 
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    await withOpenClawTestState({ label: "session-permissions-warmup" }, async (warmupState) => {
+      await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState);
+    });
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.session-permissions" });
     useOpenAIPlatformAuthFixture();
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("prepares the exec mode with plugin-owned permission facts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
 
     await runEmbeddedAgent({
-      ...pluginHarnessRunParams,
+      ...createPluginHarnessRunParams(state),
       permissionMode: "workspace",
       runId: "run-plugin-session-permissions",
     });
@@ -47,7 +61,7 @@ describe("embedded run session permissions", () => {
         agentHarnessId: "codex",
         execOverrides: expect.objectContaining({ mode: "auto" }),
         permissionMode: "workspace",
-        sessionRoot: "/tmp/openclaw-plugin-session-root",
+        sessionRoot: state.sessionsDir(),
       }),
     );
   });
@@ -63,7 +77,7 @@ describe("embedded run session permissions", () => {
     });
 
     await runEmbeddedAgent({
-      ...pluginHarnessRunParams,
+      ...createPluginHarnessRunParams(state),
       permissionMode: "full",
       execOverrides,
       runId: "run-plugin-clamped-session-permissions",

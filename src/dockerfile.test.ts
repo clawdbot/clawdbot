@@ -546,11 +546,18 @@ describe("Dockerfile", () => {
     expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
   });
 
-  it("uses one source commit and timestamp for every official Docker artifact", async () => {
-    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+  it("uses one release identity for every official Docker artifact", async () => {
+    const [rawDockerfile, workflow] = await Promise.all([
+      readFile(dockerfilePath, "utf8"),
+      readFile(dockerReleaseWorkflowPath, "utf8"),
+    ]);
+    const dockerfile = collapseDockerContinuations(rawDockerfile);
 
     expect(workflow).toContain("resolve_build_provenance:");
     expect(workflow).toContain("built_at: ${{ steps.build_provenance.outputs.built_at }}");
+    expect(workflow).toContain(
+      "release_version: ${{ needs.resolve_release_policy.outputs.version }}",
+    );
     expect(workflow).toContain("source_sha: ${{ steps.build_provenance.outputs.source_sha }}");
     expect(workflow.match(/date -u \+%Y-%m-%dT%H:%M:%SZ/gu)).toHaveLength(1);
     expect(
@@ -569,6 +576,30 @@ describe("Dockerfile", () => {
         "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}",
       ).length - 1,
     ).toBe(4);
+    expect(
+      workflow.split(
+        "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}",
+      ).length - 1,
+    ).toBe(4);
+
+    const stampIndex = dockerfile.indexOf('pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"');
+    const buildIndex = dockerfile.indexOf("pnpm build:docker");
+    const productionDepsIndex = dockerfile.indexOf("COPY --from=production-deps /app/ ./");
+    const restoreVersionIndex = dockerfile.indexOf(
+      "COPY --from=build /app/package.json ./package.json",
+    );
+    expect(stampIndex).toBeGreaterThan(dockerfile.indexOf("COPY . ."));
+    expect(stampIndex).toBeLessThan(buildIndex);
+    expect(restoreVersionIndex).toBeGreaterThan(productionDepsIndex);
+    expect(dockerfile).toContain(
+      'test "$(node -p "require(\\"/app/package.json\\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
+    );
+    expect(dockerfile).toContain(
+      'test "$(node -p "require(\\"/app/dist/build-info.json\\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
+    );
+    expect(dockerfile).toContain(
+      'test "$(node /app/openclaw.mjs --version | cut -d \' \' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
+    );
   });
 
   it("publishes official Docker browser images with baked Chromium", async () => {

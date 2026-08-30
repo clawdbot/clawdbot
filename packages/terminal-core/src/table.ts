@@ -501,17 +501,14 @@ function wrapLine(text: string, width: number): string[] {
     }
 
     const ch = token.value;
-    if (skipNextLf) {
+    if (skipNextLf && ch === "\n") {
       skipNextLf = false;
-      if (ch === "\n") {
-        continue;
-      }
+      continue;
     }
-    if (ch === "\n" || ch === "\r") {
+    // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
+    skipNextLf = ch === "\r";
+    if (ch === "\n" || ch === "\r" || ch === "\r\n") {
       flushAt(buf.length);
-      if (ch === "\r") {
-        skipNextLf = true;
-      }
       continue;
     }
     const charWidth = visibleWidth(ch);
@@ -582,7 +579,7 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const metrics = columns.map((c) => {
     const headerW = visibleWidth(c.header);
-    const cellW = Math.max(0, ...rows.map((r) => visibleWidth(r[c.key] ?? "")));
+    const cellW = rows.reduce((max, row) => Math.max(max, visibleWidth(row[c.key] ?? "")), 0);
     return { headerW, cellW };
   });
 

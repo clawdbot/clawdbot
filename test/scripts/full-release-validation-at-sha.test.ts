@@ -438,24 +438,28 @@ describe("full-release-validation-at-sha", () => {
         () => true,
       ),
     ).toThrow("does not belong to release branch");
-    expect(
-      verifyTargetRef(
-        "extended-stable/2026.6.33",
-        candidateSha,
-        "2026.6.33",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toBe("extended-stable/2026.6.33");
-    expect(() =>
-      verifyTargetRef(
-        "extended-stable/2026.6.33",
-        candidateSha,
-        "2026.6.33-beta.1",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toThrow("does not match extended-stable branch");
+    for (const version of ["2026.6.33", "2026.6.34", "2026.6.35"]) {
+      expect(
+        verifyTargetRef(
+          "extended-stable/2026.6.33",
+          candidateSha,
+          version,
+          () => branchTipSha,
+          () => true,
+        ),
+      ).toBe("extended-stable/2026.6.33");
+    }
+    for (const version of ["2026.6.32", "2026.7.35", "2026.6.35-beta.1", "2026.6.35-1"]) {
+      expect(() =>
+        verifyTargetRef(
+          "extended-stable/2026.6.33",
+          candidateSha,
+          version,
+          () => branchTipSha,
+          () => true,
+        ),
+      ).toThrow("does not belong to extended-stable branch");
+    }
     expect(
       verifyTargetRef(
         "v2026.7.1-beta.5",

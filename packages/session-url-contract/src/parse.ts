@@ -6,6 +6,8 @@ import {
   parseShortSessionRef,
 } from "./grammar.js";
 
+export { matchControlUiCatalogSharePath, type ControlUiCatalogSharePathMatch } from "./share.js";
+
 export type ControlUiSessionPathTarget =
   | { namespace: "chat" | "dashboard"; kind: "main"; agentId: string }
   | {

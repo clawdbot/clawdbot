@@ -106,6 +106,8 @@ export async function maybeHandleResetCommand(
       storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
+      previousSessionMemory: params.previousSessionMemory,
+      previousSessionResetMessages: params.previousSessionResetMessages,
       onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
       workspaceDir: params.workspaceDir,
     });
@@ -182,6 +184,8 @@ export async function maybeHandleResetCommand(
     storePath: params.storePath,
     sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
+    previousSessionMemory: params.previousSessionMemory,
+    previousSessionResetMessages: params.previousSessionResetMessages,
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
     workspaceDir: params.workspaceDir,
   });

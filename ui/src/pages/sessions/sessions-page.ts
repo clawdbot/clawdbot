@@ -15,10 +15,8 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import {
-  requestCloudWorkerStop,
-  resolveCloudWorkerStopAction,
-} from "../../components/cloud-worker-stop.ts";
+import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
@@ -879,10 +877,14 @@ class SessionsPage extends OpenClawLightDomElement {
     let mutationError: string | null = null;
     try {
       const agentId = parseAgentSessionKey(row.key)?.agentId;
-      await requestCloudWorkerStop(scope.client, {
-        key: row.key,
-        ...(agentId ? { agentId } : {}),
-      });
+      await requestCloudWorkerStop(
+        scope.client,
+        {
+          key: row.key,
+          ...(agentId ? { agentId } : {}),
+        },
+        scope.context.placementStartup,
+      );
       if (this.isRequestScopeCurrent(scope)) {
         await this.refreshSessionList(scope);
       }
@@ -1426,6 +1428,7 @@ class SessionsPage extends OpenClawLightDomElement {
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
           icon: normalizeOptionalString(row.icon) ?? null,
+          color: normalizeOptionalString(row.color) ?? null,
           categoryClearReturnsToGroups: false,
         }}
         .anchor=${menu}
@@ -1471,6 +1474,9 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "rename":
               void this.renameSession(row);
+              break;
+            case "set-color":
+              void this.patchSession(row.key, { color: action.color });
               break;
             case "set-icon":
               void this.patchSession(row.key, { icon: action.icon });

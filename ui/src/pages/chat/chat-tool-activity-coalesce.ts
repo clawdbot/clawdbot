@@ -1,5 +1,6 @@
 // Reconcile invocation projections before grouping so summaries and expanded
 // cards consume the same calls, regardless of history/live delivery order.
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -124,7 +125,10 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       source,
       id,
       call,
-      runId: normalizeOptionalString(raw.runId) ?? normalizeOptionalString(message.runId),
+      runId:
+        normalizeOptionalString(raw.runId) ??
+        readSessionMessageIdentity(message)?.runId ??
+        normalizeOptionalString(message.runId),
       name:
         normalizeOptionalString(raw.name) ??
         normalizeOptionalString(message.toolName) ??

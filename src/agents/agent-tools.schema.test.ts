@@ -56,9 +56,7 @@ describe("direct exec tool schema", () => {
     expect(describeField("timeoutSeconds")).toContain("seconds");
     expect(describeField("pty")).toContain("PTY");
     expect(describeField("elevated")).toContain("if allowed");
-    expect(describeField("security")).toContain("tools.exec.security");
-    expect(describeField("security")).toContain("host approvals");
-    expect(describeField("ask")).toContain("tools.exec.ask");
+    expect(describeField("ask")).toContain("tools.exec.mode");
     expect(describeField("ask")).toContain("channel-origin");
     expect(describeField("ask")).toContain("ask=off");
   });

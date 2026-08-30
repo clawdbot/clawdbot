@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   expandToolGroups,
@@ -32,7 +32,6 @@ import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
-  PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
@@ -56,11 +55,9 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
-  PluginHookBeforeCompactionEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
-  PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginAgentTurnPrepareEvent,
@@ -68,22 +65,14 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginHookBeforeAgentRunEvent,
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
   PluginHookMessageContext,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
   PluginHookName,
   PluginHookRegistration,
-  PluginHookSessionContext,
-  PluginHookSessionStartEvent,
   PluginHookSubagentContext,
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
-  PluginHookSubagentEndedEvent,
-  PluginHookSubagentProgressEvent,
-  PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -494,14 +483,10 @@ export function createHookRunner(
     if (normalizedRight.includes("*")) {
       return normalizedLeft;
     }
+    const matchesLeft = createToolPolicyMatcher({ allow: normalizedLeft });
+    const matchesRight = createToolPolicyMatcher({ allow: normalizedRight });
     return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
-      (name) => {
-        const normalized = normalizeToolPolicyName(name);
-        return (
-          isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
-          isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
-        );
-      },
+      (name) => matchesLeft(name) && matchesRight(name),
     );
   };
 
@@ -1209,26 +1194,6 @@ export function createHookRunner(
     );
   }
 
-  /**
-   * Run before_compaction hook.
-   */
-  async function runBeforeCompaction(
-    event: PluginHookBeforeCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("before_compaction", event, ctx);
-  }
-
-  /**
-   * Run after_compaction hook.
-   */
-  async function runAfterCompaction(
-    event: PluginHookAfterCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("after_compaction", event, ctx);
-  }
-
   // =========================================================================
   // Message Hooks
   // =========================================================================
@@ -1772,12 +1737,15 @@ export function createHookRunner(
     runLlmOutput: bindVoidHook("llm_output"),
     runBeforeAgentFinalize,
     runAgentEnd,
-    runBeforeCompaction,
-    runAfterCompaction,
-    runBeforeReset: async (
-      event: PluginHookBeforeResetEvent,
-      ctx: PluginHookAgentContext,
-    ): Promise<void> => runVoidHook("before_reset", event, ctx),
+    /**
+     * Run before_compaction hook.
+     */
+    runBeforeCompaction: bindVoidHook("before_compaction"),
+    /**
+     * Run after_compaction hook.
+     */
+    runAfterCompaction: bindVoidHook("after_compaction"),
+    runBeforeReset: bindVoidHook("before_reset"),
     // Lifecycle gate hooks
     runBeforeAgentRun,
     // Message hooks
@@ -1790,10 +1758,7 @@ export function createHookRunner(
     runReplyDispatch,
     runReplyPayloadSending,
     runMessageSending,
-    runMessageSent: async (
-      event: PluginHookMessageSentEvent,
-      ctx: PluginHookMessageContext,
-    ): Promise<void> => runVoidHook("message_sent", event, ctx),
+    runMessageSent: bindVoidHook("message_sent"),
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
@@ -1801,29 +1766,14 @@ export function createHookRunner(
     // Message write hooks
     runBeforeMessageWrite,
     // Session hooks
-    runSessionStart: async (
-      event: PluginHookSessionStartEvent,
-      ctx: PluginHookSessionContext,
-    ): Promise<void> => runVoidHook("session_start", event, ctx),
+    runSessionStart: bindVoidHook("session_start"),
     runSessionEnd: bindVoidHook("session_end"),
     runSubagentDeliveryTarget,
-    runSubagentSpawned: async (
-      event: PluginHookSubagentSpawnedEvent,
-      ctx: PluginHookSubagentContext,
-    ): Promise<void> => runVoidHook("subagent_spawned", event, ctx),
-    runSubagentProgress: async (
-      event: PluginHookSubagentProgressEvent,
-      ctx: PluginHookSubagentContext,
-    ): Promise<void> => runVoidHook("subagent_progress", event, ctx),
-    runSubagentEnded: async (
-      event: PluginHookSubagentEndedEvent,
-      ctx: PluginHookSubagentContext,
-    ): Promise<void> => runVoidHook("subagent_ended", event, ctx),
+    runSubagentSpawned: bindVoidHook("subagent_spawned"),
+    runSubagentProgress: bindVoidHook("subagent_progress"),
+    runSubagentEnded: bindVoidHook("subagent_ended"),
     // Gateway hooks
-    runGatewayStart: async (
-      event: PluginHookGatewayStartEvent,
-      ctx: PluginHookGatewayContext,
-    ): Promise<void> => runVoidHook("gateway_start", event, ctx),
+    runGatewayStart: bindVoidHook("gateway_start"),
     runGatewayStop: bindVoidHook("gateway_stop"),
     runHeartbeatPromptContribution,
     runCronReconciled: bindVoidHook("cron_reconciled"),

@@ -183,16 +183,37 @@ class GitFailure(Exception):
         self.code = code
 
 
-def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None):
+def git_lock_files(directory):
+    git_dir = os.path.join(os.path.realpath(directory), ".git")
+    if not os.path.lexists(git_dir):
+        return set()
+    if not os.path.isdir(git_dir) or os.path.realpath(git_dir) != git_dir:
+        raise RuntimeError("Checkout Git directory is not physical")
+    def scan_error(error):
+        raise error
+    locks = set()
+    for root, directories, files in os.walk(git_dir, onerror=scan_error):
+        directories[:] = [name for name in directories
+                          if os.path.realpath(os.path.join(root, name)) == os.path.join(root, name)]
+        locks.update(os.path.join(root, name) for name in files if name.endswith(".lock"))
+    return locks
+
+
+def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None,
+            reclaim_locks=False):
     global closed
     if closed:
         raise RuntimeError("Git owner is closed")
     check_cancelled()
     if git is None:
         raise RuntimeError("Git unavailable")
+    # Process ownership alone does not grant metadata ownership: generic callers
+    # may use linked worktrees. Only exclusive checkout fetches reclaim locks.
+    previous_locks = git_lock_files(directory) if reclaim_locks else None
     command = [git, "-C", directory, *arguments]
     job = None
     child = None
+    timed_out = False
     deadline = time.monotonic() + timeout if timeout is not None else None
     try:
         options = {"stdin": subprocess.DEVNULL, "stdout": stdout, "stderr": stderr,
@@ -217,6 +238,7 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
             os.set_handle_inheritable(job, False)
         while child.poll() is None and not cancelled:
             if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
                 raise FetchTimeout()
             time.sleep(0.05)
     finally:
@@ -226,6 +248,11 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
         try:
             if child is not None:
                 drain(child, job)
+                if previous_locks is not None and (timed_out or cancelled or child.returncode):
+                    # Forced termination skips Git's lockfile cleanup. This checkout is exclusive;
+                    # reclaim only newly created locks after tree extinction, never existing locks.
+                    for lock in sorted(git_lock_files(directory) - previous_locks):
+                        os.unlink(lock)
         finally:
             if job is not None:
                 close_handle(job)
@@ -251,7 +278,7 @@ def fetch(directory, *refs, prune=False, max_attempts=3, depth=1,
             run_git(directory, "-c", "protocol.version=2", "fetch", "--no-tags",
                     *(["--prune"] if prune else []), "--no-recurse-submodules", f"--depth={depth}",
                     *(["--filter=blob:none"] if blobless else []), "origin", *refs,
-                    timeout=fetch_timeout_seconds)
+                    timeout=fetch_timeout_seconds, reclaim_locks=True)
             return
         except (FetchTimeout, GitFailure) as error:
             check_cancelled()
@@ -350,9 +377,17 @@ def checkout():
     os.makedirs(harness, exist_ok=True)
     run_git(harness, "init", harness)
     run_git(harness, "remote", "add", "origin", remote)
-    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness", max_attempts=1)
+    # The harness only supplies .github/actions, so narrow the fetch before it runs:
+    # sparse first, then blob-less. A full snapshot here downloads a second copy of
+    # the repository that the checkout below immediately discards, and every extra
+    # byte is amplified by the shared runner egress.
     run_git(harness, "sparse-checkout", "set", ".github/actions")
-    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"])
+    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
+          max_attempts=1, blobless=True)
+    # Checkout now materializes the sparse blobs over the network, so it carries the
+    # fetch deadline instead of running unbounded like a local checkout.
+    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
+            timeout=fetch_timeout_seconds)
     if not os.path.isfile(os.path.join(harness, action)):
         raise GitFailure(1)
     check_cancelled()
@@ -375,9 +410,10 @@ def main():
                     raise RuntimeError("Git owner is closed")
                 check_cancelled()
             return
-        if sys.argv[1] != "--git":
+        if sys.argv[1] not in ("--git", "--checkout-git"):
             raise ValueError("Unknown Git owner command")
-        run_git(os.getcwd(), *sys.argv[3:], timeout=float(sys.argv[2]) or None)
+        run_git(os.getcwd(), *sys.argv[3:], timeout=float(sys.argv[2]) or None,
+                reclaim_locks=sys.argv[1] == "--checkout-git")
         return
     if git is None:
         raise RuntimeError("Git unavailable")

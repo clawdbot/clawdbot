@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import {
   createFollowupRun,
@@ -30,6 +30,7 @@ import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { registerAgentHarness } from "../harness/registry.js";
 import {
@@ -44,7 +45,7 @@ import {
   mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
@@ -72,6 +73,16 @@ function runAdmittedAttempt(
 beforeAll(globalBeforeAll0);
 
 describe("prepared harness source delivery", () => {
+  let state: OpenClawTestState;
+  async function loadSourceDeliveryHarness() {
+    const loaded = await loadRunOverflowCompactionHarness();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "prepared-source-delivery" });
+    return loaded;
+  }
+  afterEach(async () => {
+    await state?.cleanup();
+  });
   beforeEach(describe2BeforeEach0);
 
   it.each([
@@ -151,8 +162,7 @@ describe("prepared harness source delivery", () => {
         params as Parameters<typeof createBlockReplyDeliveryHandler>[0],
       ),
     );
-    const { runEmbeddedAgent, registerPreparedAgentHarness } =
-      await loadRunOverflowCompactionHarness();
+    const { runEmbeddedAgent, registerPreparedAgentHarness } = await loadSourceDeliveryHarness();
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_model_resolve",
     );
@@ -160,6 +170,7 @@ describe("prepared harness source delivery", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
     });
+    const followupRun = createFollowupRun();
     const emittedStreamingCallbacks: string[] = [];
     let modelVisiblePrompt = "";
     const recordModelVisiblePrompt = (attemptParams: {
@@ -168,7 +179,7 @@ describe("prepared harness source delivery", () => {
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
       modelVisiblePrompt = buildEmbeddedSystemPrompt({
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: followupRun.run.workspaceDir,
         reasoningTagHint: false,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
         sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
@@ -324,7 +335,6 @@ describe("prepared harness source delivery", () => {
         modeTransitions.push(mode);
         outerModeCallback?.(mode);
       };
-      const followupRun = createFollowupRun();
       // These candidate facts precede the hook-selected route inside embedded execution.
       followupRun.run.thinkingCatalog = [
         { provider: "custom", id: "plugin-fallback", api: "messages", input: ["text"] },
@@ -481,8 +491,7 @@ describe("prepared harness source delivery", () => {
   });
 
   it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
-    const { runEmbeddedAgent, registerPreparedAgentHarness } =
-      await loadRunOverflowCompactionHarness();
+    const { runEmbeddedAgent, registerPreparedAgentHarness } = await loadSourceDeliveryHarness();
     registerPreparedAgentHarness({
       id: "fallback-owner",
       label: "Fallback owner",
@@ -500,7 +509,7 @@ describe("prepared harness source delivery", () => {
     const runParams: RunEmbeddedAgentInternalParams = {
       agentId: "worker",
       sessionId: "runtime-preparation-hint",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       runId: "runtime-preparation-hint",
       timeoutMs: 30_000,
@@ -545,13 +554,13 @@ describe("prepared harness source delivery", () => {
   });
 
   it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
     const config = {};
-    const workspaceDir = "/tmp/workspace";
+    const workspaceDir = state.workspaceDir;
     const pluginRegistry = createEmptyPluginRegistry();
     const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       workspaceDir,
     });
     const admittedMetadataSnapshot = {
@@ -614,7 +623,7 @@ describe("prepared harness source delivery", () => {
       admittedGeneration,
       async () =>
         await runEmbeddedAgent({
-          ...overflowBaseRunParams,
+          ...createOverflowRunParams(state),
           config,
           provider: "openai",
           model: "gpt-5.4",
@@ -635,12 +644,12 @@ describe("prepared harness source delivery", () => {
   });
 
   it("starts an isolated probe outside its caller's admitted generation", async () => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
     const config = {};
-    const workspaceDir = "/tmp/isolated-probe-workspace";
+    const workspaceDir = state.workspaceDir;
     const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
       agentId: "openclaw",
-      agentDir: "/tmp/isolated-probe-agent",
+      agentDir: state.agentDir("openclaw"),
       workspaceDir,
     });
     const admittedGeneration: PreparedModelRuntimePluginGeneration = {
@@ -676,9 +685,9 @@ describe("prepared harness source delivery", () => {
     const abortSignal = new AbortController().signal;
 
     const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       agentId: "openclaw",
-      agentDir: "/tmp/isolated-probe-agent",
+      agentDir: state.agentDir("openclaw"),
       config,
       provider: "openai",
       model: "gpt-5.4",
@@ -705,7 +714,7 @@ describe("prepared harness source delivery", () => {
     ["agentHarnessId", { agentHarnessId: "codex" }],
     ["agentHarnessRuntimeOverride", { agentHarnessRuntimeOverride: "codex" }],
   ] as const)("keeps %s authoritative across fallback preparation", async (_label, override) => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
     mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -716,7 +725,7 @@ describe("prepared harness source delivery", () => {
     await runEmbeddedAgent({
       agentId: "worker",
       sessionId: `authoritative-${_label}`,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       runId: `authoritative-${_label}`,
       timeoutMs: 30_000,

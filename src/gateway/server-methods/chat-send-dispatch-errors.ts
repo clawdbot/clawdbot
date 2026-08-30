@@ -57,7 +57,7 @@ export async function handleChatSendSetupError(params: {
       });
     }
   }
-  cleanupAdmittedRun({ force: true });
+  cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
   const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
@@ -189,10 +189,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
     context.chatRunState.deleteAbortMarker(clientRunId);
     if (agentTerminalPersistenceOwnedAtDispatchReject && activeRunAbort.entry) {
       activeRunAbort.entry.isAbortable = () => false;
-      activeRunAbort.cleanup();
-    } else {
-      activeRunAbort.cleanup({ force: true });
     }
+    activeRunAbort.cleanup();
 
     let restartSafeDispatchFailureTerminalized = false;
     if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {

@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,6 +19,8 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
+import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker node provisioning shutdown replay", () => {
@@ -28,6 +31,16 @@ describe("worker node provisioning shutdown replay", () => {
     const leaseId = "lease-node-shutdown-replay";
     const operationIds: string[] = [];
     const physicalLeases = new Set<string>();
+    const enrollments: WorkerNodeEnrollment[] = [];
+    support.testState.config.gateway = { publicOrigin: "https://gateway.example.test" };
+    const prepareArtifact = async () => ({
+      tarballPath: "/gateway/cache/node-runtime.tgz",
+      tarballSha256: support.NODE_BOOTSTRAP.sha256,
+      tarballBytes: support.NODE_BOOTSTRAP.bytes,
+      openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
+      enabledPluginIds: support.NODE_BOOTSTRAP.enabledPluginIds,
+      buildId: "gateway-source-build",
+    });
     const destroy = vi.fn(async ({ leaseId: destroyedLeaseId }: { leaseId: string }) => {
       physicalLeases.delete(destroyedLeaseId);
     });
@@ -46,6 +59,7 @@ describe("worker node provisioning shutdown replay", () => {
         if (!enrollment) {
           throw new Error("node enrollment was not prepared");
         }
+        enrollments.push(enrollment);
         return {
           leaseId,
           node: { deviceId: await enrollment.waitForDeviceId() },
@@ -87,17 +101,22 @@ describe("worker node provisioning shutdown replay", () => {
       patch: { nodeDeviceId: deviceId },
     });
     const unavailable = vi.fn(async () => ({ available: false as const }));
+    const firstTransfer = createWorkerBootstrapArtifactTransferService();
     const firstEnrollment = createWorkerNodeEnrollmentManager({
       store: support.testState.store,
       getConfig: () => support.testState.config,
       resolveAvailability: unavailable,
+      prepareArtifact,
+      transfer: firstTransfer,
     });
     const receipt = {
       ...support.BOOTSTRAP_RECEIPT,
       protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
     };
     const first = support.createService(provider, {
+      prepareNodeBootstrap: firstEnrollment.prepare,
       prepareNodeEnrollment: firstEnrollment.begin,
+      closeNodeEnrollment: firstEnrollment.close,
       stopNodeEnrollmentWaits: firstEnrollment.stop,
       ensureNodeWorkerBundle: async () => receipt,
     });
@@ -147,6 +166,13 @@ describe("worker node provisioning shutdown replay", () => {
     await support.waitForFast(() => expect(stopped).toBe(true), { timeout: 1_000 });
     await Promise.all([recovery, stopping]);
     await uninstallFirstGuard();
+    expect(enrollments[0]?.signal?.aborted).toBe(true);
+    expect(
+      firstTransfer.authorize({
+        token: enrollments[0]!.nodeBootstrap.token,
+        artifactKey: enrollments[0]!.nodeBootstrap.sha256,
+      }),
+    ).toBeUndefined();
 
     expect(placements.get(REQUEST.sessionId)).toEqual(placement);
     expect(support.testState.store.get(intent.environmentId)).toMatchObject({
@@ -172,10 +198,13 @@ describe("worker node provisioning shutdown replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
+    const restartedTransfer = createWorkerBootstrapArtifactTransferService();
     const restartedEnrollment = createWorkerNodeEnrollmentManager({
       store: support.testState.store,
       getConfig: () => support.testState.config,
       resolveAvailability: async () => ({ available: true }),
+      prepareArtifact,
+      transfer: restartedTransfer,
     });
     const syncWorkspace = vi.fn(async () => ({
       mode: "git" as const,
@@ -187,6 +216,7 @@ describe("worker node provisioning shutdown replay", () => {
       start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
         environmentId,
         ownerEpoch,
+        measureLaunchTurn,
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
@@ -198,7 +228,9 @@ describe("worker node provisioning shutdown replay", () => {
       stopAll: vi.fn(async () => {}),
     };
     const restarted = support.createService(provider, {
+      prepareNodeBootstrap: restartedEnrollment.prepare,
       prepareNodeEnrollment: restartedEnrollment.begin,
+      closeNodeEnrollment: restartedEnrollment.close,
       stopNodeEnrollmentWaits: restartedEnrollment.stop,
       ensureNodeWorkerBundle: async () => receipt,
       nodeTunnelManager: nodeTunnelManager as never,

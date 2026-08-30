@@ -90,8 +90,8 @@ function fakeCatalog(params: {
         label: "Local",
         threadId,
         items: params.items ?? [
-          { type: "userMessage", text: "Fix the flow." },
           { type: "agentMessage", text: "Done." },
+          { type: "userMessage", text: "Fix the flow." },
         ],
       };
     },
@@ -214,13 +214,13 @@ describe("parseBeamMirrorConfig", () => {
 });
 
 describe("buildBeamMirrorItems", () => {
-  it("keeps user and agent text, collapses the rest into counts", () => {
+  it("restores chronological text from newest-first catalog items and summarizes raw content", () => {
     const reduced = buildBeamMirrorItems([
-      { type: "userMessage", text: "Fix it." },
-      { type: "toolCall", text: "rm -rf /tmp/x", raw: { command: "secret" } },
-      { type: "toolResult", raw: { output: "secret output" } },
-      { type: "reasoning", text: "private thoughts" },
       { type: "agentMessage", text: "Done." },
+      { type: "reasoning", text: "private thoughts" },
+      { type: "toolResult", raw: { output: "secret output" } },
+      { type: "toolCall", text: "rm -rf /tmp/x", raw: { command: "secret" } },
+      { type: "userMessage", text: "Fix it." },
     ]);
     expect(reduced.items).toEqual([
       { type: "userMessage", text: "Fix it." },
@@ -472,37 +472,51 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
-  it("uploads active local sessions and skips unchanged ones", async () => {
-    const sent: SentRequest[] = [];
-    const reads: string[] = [];
-    const cancel = vi.fn();
-    const catalog = fakeCatalog({
-      id: "claude",
-      sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: NOW - 60_000 }],
-      onRead: (threadId) => reads.push(threadId),
-    });
-    const runner = createBeamMirrorRunner({
-      runtime: fakeRuntime(mirrorConfig({ token: "scratch-token" })),
-      logger: silentLogger,
-      fetchFn: captureFetch(sent, 200, cancel),
-      now: () => NOW,
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(reads).toEqual(["t1", "t1"]);
-    expect(sent[0]?.auth).toBe("Bearer scratch-token");
-    expect(sent[0]?.payload).toMatchObject({
-      version: 1,
-      beamId: beamMirrorId("claude", "gateway:local", "t1"),
-      source: "claude",
-      title: "Fix flow",
-      completed: false,
-    });
-    expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
+  it.each([2, 50])(
+    "uploads the newest chronological suffix of %i catalog items once",
+    async (count) => {
+      const sent: SentRequest[] = [];
+      const reads: string[] = [];
+      const cancel = vi.fn();
+      const chronological = Array.from({ length: count }, (_, index) => ({
+        type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
+        text: `Message ${index}: ${"text ".repeat(300)}end`,
+      }));
+      const catalog = fakeCatalog({
+        id: "claude",
+        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: NOW - 60_000 }],
+        items: chronological.toReversed(),
+        onRead: (threadId) => reads.push(threadId),
+      });
+      const runner = createBeamMirrorRunner({
+        runtime: fakeRuntime(mirrorConfig({ token: "scratch-token" })),
+        logger: silentLogger,
+        fetchFn: captureFetch(sent, 200, cancel),
+        now: () => NOW,
+        listCatalogs: () => [catalog],
+      });
+      await runner.tick();
+      await runner.tick();
+      expect(sent).toHaveLength(1);
+      expect(reads).toEqual(["t1", "t1"]);
+      expect(sent[0]?.auth).toBe("Bearer scratch-token");
+      expect(sent[0]?.payload).toMatchObject({
+        version: 1,
+        beamId: beamMirrorId("claude", "gateway:local", "t1"),
+        source: "claude",
+        title: "Fix flow",
+        completed: false,
+      });
+      expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
+      const payload = sent[0]!.payload;
+      expect(payload.items).toEqual(chronological.slice(-payload.items.length));
+      if (count === 50) {
+        expect(payload.truncated).toBe(true);
+        expect(payload.items.length).toBeLessThan(count);
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not split a surrogate pair when clipping the session title", async () => {
     const sent: SentRequest[] = [];

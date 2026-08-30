@@ -10,7 +10,18 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { resolveManagedOutgoingMediaArtifactDownload } from "../../gateway/managed-image-attachments.js";
+import {
+  readTranscriptEventId,
+  readTranscriptEventMessage,
+} from "../../config/sessions/session-accessor.sqlite-read.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import * as sessionTranscript from "../../config/sessions/transcript.js";
+import { persistInternalSourceReply } from "../../gateway/internal-source-reply-persistence.js";
+import {
+  cleanupManagedOutgoingMediaRecords,
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
+  resolveManagedOutgoingMediaArtifactDownload,
+} from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import {
   onSessionTranscriptUpdate,
@@ -18,6 +29,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
+import { createEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
@@ -303,10 +315,28 @@ describe("WebChat message tool internal source reply", () => {
             );
           }
         });
+        const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
+        let preCommitCleanup:
+          | Awaited<ReturnType<typeof cleanupManagedOutgoingMediaRecords>>
+          | undefined;
+        const appendSpy = vi
+          .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
+          .mockImplementationOnce(async (params) => {
+            preCommitCleanup = await cleanupManagedOutgoingMediaRecords({ stateDir });
+            return append(params);
+          });
         const [toolResult, overlappingResult] = await Promise.all([
           tool.execute("restart-proof-call", sendParams),
           tool.execute("restart-proof-call", sendParams),
-        ]).finally(unsubscribe);
+        ]).finally(() => {
+          unsubscribe();
+          appendSpy.mockRestore();
+        });
+        expect(preCommitCleanup).toEqual({
+          deletedRecordCount: 0,
+          deletedFileCount: 0,
+          retainedCount: 3,
+        });
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ transcriptOwner: true });
         expect(overlappingResult.details).toMatchObject({
@@ -421,6 +451,147 @@ describe("WebChat message tool internal source reply", () => {
             stateDir,
           }),
         ).resolves.toMatchObject({ type: "file", title: "report.json" });
+      },
+    );
+  });
+
+  it.each([
+    "rejected",
+    "throws-before-commit",
+    "conflicting-writer",
+    "lifecycle-drain-failure",
+  ] as const)("cleans only uncommitted source-reply originals when append %s", async (outcome) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "source-reply-append-outcome-" },
+      async (state) => {
+        const sessionKey = "agent:main:webchat:dm:append-outcome";
+        const sessionId = "append-outcome-session";
+        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+        const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        const imagePath = path.join(state.workspaceDir, "proof.png");
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
+        const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ sessionId });
+        const preparedOriginals: string[] = [];
+        const appendSpy = vi
+          .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
+          .mockImplementationOnce(async (params) => {
+            for (const { record } of listManagedImageRecordEntries({
+              stateDir: state.stateDir,
+              sessionKey,
+            })) {
+              preparedOriginals.push(
+                path.join(
+                  record.original.mediaRoot,
+                  record.original.mediaSubdir,
+                  record.original.mediaId,
+                ),
+              );
+            }
+            if (outcome === "rejected") {
+              return { ok: false, code: "session-rebound", reason: "session rebound" };
+            }
+            if (outcome === "throws-before-commit") {
+              throw new Error("append failed before commit");
+            }
+            if (outcome === "conflicting-writer") {
+              // Another writer wins after the source-reply owner's initial lookup.
+              await append({
+                ...params,
+                eventId: "winning-message",
+                content: [{ type: "text", text: "Already delivered" }],
+                onMessageCommitted: undefined,
+              });
+              return append(params);
+            }
+            return append(params);
+          });
+        try {
+          const persist = () =>
+            persistInternalSourceReply({
+              cfg: {
+                agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+              },
+              sessionKey,
+              expectedSessionId: sessionId,
+              agentId: "main",
+              idempotencyKey: "append-outcome-reply",
+              sourceReplyFinal: true,
+              payload: { text: "Attached proof", mediaUrls: [imagePath], trustedLocalMedia: true },
+            });
+          const persistence =
+            outcome === "lifecycle-drain-failure"
+              ? withOwnedSessionTranscriptWrites(
+                  {
+                    sessionKey,
+                    sessionTarget: scope,
+                    withTranscriptWrite: (run) =>
+                      lifecycle.withTranscriptWrite(async () => {
+                        const result = await run();
+                        // This is an actual nested lifecycle failure after the transcript commits.
+                        void lifecycle
+                          .withTranscriptWrite(() => {
+                            throw new Error("nested drain failed");
+                          })
+                          .catch(() => {});
+                        return result;
+                      }),
+                  },
+                  persist,
+                )
+              : persist();
+          await expect(persistence).rejects.toThrow(
+            outcome === "rejected"
+              ? "session rebound"
+              : outcome === "conflicting-writer"
+                ? "conflicts with the admitted message"
+                : outcome === "lifecycle-drain-failure"
+                  ? "nested drain failed"
+                  : "append failed before commit",
+          );
+        } finally {
+          appendSpy.mockRestore();
+          await lifecycle.dispose();
+        }
+        expect(preparedOriginals).toHaveLength(1);
+        const committed = outcome === "lifecycle-drain-failure";
+        const records = listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
+        expect(records).toHaveLength(committed ? 1 : 0);
+        for (const original of preparedOriginals) {
+          if (committed) {
+            await expect(fs.readFile(original)).resolves.toEqual(
+              Buffer.from(TINY_PNG_BASE64, "base64"),
+            );
+          } else {
+            await expect(fs.stat(original)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        }
+        const assistants = (await loadTranscriptEvents(scope)).filter(
+          (event) => readTranscriptEventMessage(event)?.role === "assistant",
+        );
+        expect(assistants).toHaveLength(committed || outcome === "conflicting-writer" ? 1 : 0);
+        if (committed) {
+          expect(records[0]?.record).toMatchObject({
+            messageId: readTranscriptEventId(assistants[0]),
+            retentionClass: "history",
+          });
+          await expect(
+            resolveManagedOutgoingMediaArtifactDownload({
+              sessionKey,
+              agentId: "main",
+              stateDir: state.stateDir,
+              artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${records[0]?.record.attachmentId}`,
+            }),
+          ).resolves.toMatchObject({ type: "image" });
+        }
+        if (outcome === "conflicting-writer") {
+          expect(assistants[0]).toMatchObject({
+            id: "winning-message",
+            message: { content: [{ type: "text", text: "Already delivered" }] },
+          });
+        }
       },
     );
   });

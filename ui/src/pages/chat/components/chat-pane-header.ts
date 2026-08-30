@@ -19,6 +19,7 @@ import {
   renderStandalonePersonLink,
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
+import { renderSessionColorDot } from "../../../components/session-color.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
@@ -51,6 +52,7 @@ type ChatPaneHeaderProps = {
   ownerViewing?: boolean;
   personActivity?: PersonActivityRouting;
   catalog: boolean;
+  catalogColor?: string;
   editing: boolean;
   renameValue: string;
   workspaceRoot: string | null;
@@ -230,7 +232,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
   }
   return props.catalog || !props.session || props.renameDisabledReason
     ? html`<span class="chat-pane__session-title" title=${props.renameDisabledReason ?? props.title}
-        ><span class="chat-pane__session-title-text">${props.title}</span></span
+        >${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
+          class="chat-pane__session-title-text"
+          >${props.title}</span
+        ></span
       >`
     : html`<button
         class="chat-pane__session-title chat-pane__session-title-button"
@@ -239,7 +244,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
         aria-label=${t("chat.sessionHeader.renameAria", { title: props.title })}
         @click=${props.onBeginRename}
       >
-        <span class="chat-pane__session-title-text">${props.title}</span>
+        ${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
+          class="chat-pane__session-title-text"
+          >${props.title}</span
+        >
       </button>`;
 }
 

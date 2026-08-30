@@ -107,9 +107,6 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const fileName = allocateStagedFileName(source.pathForFileName, usedNames);
-    if (!fileName) {
-      continue;
-    }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
     const relativeDest = path.join(inputDirectory, fileName);
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
@@ -173,6 +170,7 @@ export async function stageSandboxMedia(params: {
         path: stagedPath,
         ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
         workspaceDir: effectiveWorkspaceDir,
+        staged: true,
       };
     }
   }
@@ -357,11 +355,8 @@ async function isAllowedSourcePath(params: {
   }
 }
 
-function allocateStagedFileName(source: string, usedNames: Set<string>): string | null {
+function allocateStagedFileName(source: string, usedNames: Set<string>): string {
   const baseName = stagedInputFileName(path.basename(source));
-  if (!baseName) {
-    return null;
-  }
   const parsed = path.parse(baseName);
   let fileName = baseName;
   let suffix = 1;

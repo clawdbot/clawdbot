@@ -13,11 +13,14 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "auth-profile-v2026-7-2-beta-5",
 ]);
 
-// Registry proof needs its own artifact contract, so broad aliases omit it.
+// Registry proof needs its artifact contract; versioned auth fixtures exercise
+// legacy import rather than native state from every baseline in a broad sweep.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
-  (scenario) => scenario !== "prerelease-plugin-registry",
+  (scenario) =>
+    scenario !== "prerelease-plugin-registry" && scenario !== "auth-profile-v2026-7-2-beta-5",
 );
 const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],

@@ -4,6 +4,7 @@ import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   sessionRow,
   sessionsListResponse,
@@ -49,7 +50,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, olderRows[0]!.key));
       const rows = page.locator(".sidebar-recent-session");
       await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(10);
       const retainedSessionKey = olderRows[5]!.key;

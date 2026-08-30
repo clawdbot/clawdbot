@@ -12,6 +12,9 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
+  # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
+  - "@grammyjs/types@5.0.0"
+  - "grammy@1.46.0"
 
 nodeLinker: hoisted
 # GWTs share node_modules; script commands must not reconcile that shared install.
@@ -19,7 +22,7 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.150.1
+  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.151.0
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
   "@anthropic-ai/sdk": 0.120.0
   "@opentelemetry/core": 2.10.0

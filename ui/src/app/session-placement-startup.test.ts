@@ -42,6 +42,7 @@ function createFakeRuntime() {
       publish();
     }),
     retry: vi.fn(),
+    pause: vi.fn(),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

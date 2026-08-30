@@ -176,6 +176,20 @@ openclaw agent --agent ops --message "Run locally" --local
 - `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` runs receive the same signal but do not send `chat.abort`. A launcher child that terminates from the first forwarded `SIGINT` or `SIGTERM` exits with status 130 or 143, respectively. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), never resolved secret plaintext. Marker writes come from the active source config snapshot, not from resolved runtime secret values.
 
+## JSON failures
+
+Failures keep the [CLI error envelope](/cli#json-failures): `ok: false` and
+`error.type: "cli_error"`. When the Gateway returned a run ID, the envelope also
+includes top-level `runId` and `origin: "gateway"`. This includes cached final
+errors without a fresh acceptance response, and a timeout or lost connection
+after acceptance.
+
+`origin` identifies the run's Gateway ownership; it does not prove the run failed
+or stopped. After transport loss, check the session transcript before retrying.
+Omitted provenance means the CLI observed no Gateway run identity, not that no
+run happened. Local errors and rejections without a Gateway run ID omit these
+fields. A locally generated idempotency key alone is not Gateway provenance.
+
 ## JSON delivery status
 
 With `--json --deliver`, the CLI JSON response includes top-level `deliveryStatus` so scripts can distinguish delivered, suppressed, partial, and failed sends:

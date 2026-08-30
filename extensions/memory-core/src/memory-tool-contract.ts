@@ -74,7 +74,9 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
     agentId: options.agentId,
   });
   const settings = resolveMemorySearchConfig(cfg, agentId);
-  return settings ? { cfg, agentId, sources: resolveMemorySourceContract(settings) } : null;
+  return settings
+    ? { cfg, agentId, settings, sources: resolveMemorySourceContract(settings) }
+    : null;
 }
 
 const SEARCH_CORPUS_OUTCOME_GUIDANCE =

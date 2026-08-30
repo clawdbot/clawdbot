@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { detectChangedScope } from "../scripts/ci-changed-scope.mjs";
 
 type RootPackageJson = {
   scripts: Record<string, string>;
@@ -224,6 +225,13 @@ describe("package scripts", () => {
     expect(scripts["android:lint"]).toContain(":wear:ktlintCheck");
     expect(scripts["android:lint:android"]).toContain(":wear:lintDebug");
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
+  });
+
+  it("routes every declared Windows CI test to its native lane", () => {
+    const missedTargets = readWindowsCiPartScripts()
+      .flatMap(readWindowsCiTargets)
+      .filter((target) => !detectChangedScope([target]).runWindows);
+    expect(missedTargets).toEqual([]);
   });
 
   it("partitions Windows CI coverage into two disjoint explicit test lists", () => {

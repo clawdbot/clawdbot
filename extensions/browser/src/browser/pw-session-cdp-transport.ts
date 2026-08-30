@@ -1,21 +1,49 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import WebSocket from "ws";
 import { formatErrorMessage } from "../infra/errors.js";
-import { openCdpWebSocket } from "./cdp.helpers.js";
+import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 type CdpSocketLookup = typeof dnsLookupCb;
+// Playwright allocates positive command IDs and reserves -9999 for Browser.close.
+// Keep transport-owned replies below that range so Playwright never consumes them.
+const FIRST_INTERNAL_COMMAND_ID = -10_000;
 
-export async function connectOverCdpPinnedTransport(
+// Playwright exempts only the browser target before requiring browserContextId.
+// Release every other contextless target here or its assertion exits the Gateway.
+function contextlessTargetSession(message: Record<string, unknown>): string | undefined {
+  if (readStringField(message, "method") !== "Target.attachedToTarget") {
+    return undefined;
+  }
+  const params = asOptionalRecord(message.params);
+  const targetInfo = asOptionalRecord(params?.targetInfo);
+  if (
+    readStringField(targetInfo, "type") === "browser" ||
+    readStringField(targetInfo, "browserContextId")
+  ) {
+    return undefined;
+  }
+  return readStringField(params, "sessionId");
+}
+
+export async function connectOverCdpTransport(
   connectionUrl: string,
   opts: {
     timeout: number;
     headers: Record<string, string>;
-    lookup: CdpSocketLookup;
+    lookup?: CdpSocketLookup;
+    resolveWebSocketUrl?: () => Promise<string | undefined>;
   },
 ): Promise<Browser> {
-  const ws = openCdpWebSocket(connectionUrl, {
+  const resolvedConnectionUrl = isWebSocketUrl(connectionUrl)
+    ? connectionUrl
+    : await opts.resolveWebSocketUrl?.();
+  if (!resolvedConnectionUrl) {
+    throw new Error("CDP endpoint did not expose a usable WebSocket URL.");
+  }
+  const ws = openCdpWebSocket(resolvedConnectionUrl, {
     headers: opts.headers,
     handshakeTimeoutMs: opts.timeout,
     lookup: opts.lookup,
@@ -33,6 +61,8 @@ export async function connectOverCdpPinnedTransport(
     let pendingCloseReason: string | undefined;
     let transportClosed = false;
     let transportCloseScheduled = false;
+    let nextInternalCommandId = FIRST_INTERNAL_COMMAND_ID;
+    const pendingContextlessTargetResumes = new Map<number, string>();
     const notifyTransportClosed = (reason: string) => {
       if (transportClosed) {
         return;
@@ -63,6 +93,28 @@ export async function connectOverCdpPinnedTransport(
         }
       }, 100);
       terminateTimer.unref?.();
+    };
+    const sendInternalCommand = (
+      method: string,
+      params: Record<string, unknown> | undefined,
+      sessionId?: string,
+    ): number => {
+      const id = nextInternalCommandId--;
+      ws.send(
+        JSON.stringify({
+          id,
+          method,
+          ...(params ? { params } : {}),
+          sessionId,
+        }),
+      );
+      return id;
+    };
+    const releaseContextlessTarget = (sessionId: string) => {
+      // Chrome dispatches session and root commands independently. Wait for the
+      // resume response before detach so the hidden target cannot stay paused.
+      const resumeId = sendInternalCommand("Runtime.runIfWaitingForDebugger", undefined, sessionId);
+      pendingContextlessTargetResumes.set(resumeId, sessionId);
     };
     const scheduleMessage = (message: object) => {
       setImmediate(() => {
@@ -116,7 +168,25 @@ export async function connectOverCdpPinnedTransport(
     };
     ws.on("message", (raw) => {
       try {
-        const parsed = JSON.parse(rawDataToString(raw)) as object;
+        const parsed = asOptionalRecord(JSON.parse(rawDataToString(raw)));
+        if (!parsed) {
+          closeTransportSocket();
+          return;
+        }
+        const id = parsed.id;
+        if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
+          const targetSessionId = pendingContextlessTargetResumes.get(id);
+          if (targetSessionId) {
+            pendingContextlessTargetResumes.delete(id);
+            sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+          }
+          return;
+        }
+        const contextlessSessionId = contextlessTargetSession(parsed);
+        if (contextlessSessionId) {
+          releaseContextlessTarget(contextlessSessionId);
+          return;
+        }
         scheduleMessage(parsed);
       } catch {
         closeTransportSocket();

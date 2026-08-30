@@ -1,5 +1,9 @@
 import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  isSubagentRunQueued,
+} from "../../agents/subagents/registry/subagent-registry-read.js";
+import {
   hasProjectedAgentRunForSession,
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
@@ -200,8 +204,21 @@ export function resolveVisibleActiveSessionRunState(params: {
   const hasTerminalPersistence = matchingTrackedRuns.some((active) => active.terminalPersistence);
   const runIds = matchingTrackedRuns
     .filter((active) => !active.terminalPersistence)
-    .map((active) => active.runId)
-    .toSorted();
+    .map((active) => active.runId);
+  const queuedSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
+  if (
+    queuedSubagent &&
+    isSubagentRunQueued(queuedSubagent) &&
+    isTrackedActiveSessionRunForKey(
+      { sessionKey: queuedSubagent.childSessionKey },
+      params.canonicalKey,
+      resolvedAgentId,
+      params.defaultAgentId,
+    ) &&
+    !runIds.includes(queuedSubagent.runId)
+  ) {
+    runIds.push(queuedSubagent.runId);
+  }
   const hasProjectedRun = hasProjectedAgentRunForSession({
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
@@ -217,14 +234,15 @@ export function resolveVisibleActiveSessionRunState(params: {
     matchingTrackedRuns.some((active) => active.executionStarted) ||
     hasProjectedRun ||
     embeddedRunState === "running";
-  const active = running || matchingTrackedRuns.length > 0 || embeddedRunState === "queued";
+  const active =
+    running || hasTerminalPersistence || runIds.length > 0 || embeddedRunState === "queued";
   // Terminal persistence is history visibility, not operational run identity.
   // Omit the exact set until the persisted terminal projection releases it.
   const identitiesComplete =
     !hasProjectedRun && embeddedRunState === undefined && !hasTerminalPersistence;
   return {
     active,
-    ...(identitiesComplete ? { runIds } : {}),
+    ...(identitiesComplete ? { runIds: runIds.toSorted() } : {}),
     ...(active && !running ? { status: "queued" as const } : {}),
   };
 }

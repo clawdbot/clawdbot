@@ -17,7 +17,6 @@ import {
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
-  persistAuthProfileBatch,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -38,6 +37,8 @@ import {
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { persistProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -285,9 +286,7 @@ export async function agentsAddCommand(
       workspace: workspaceDir,
       agentDir,
     });
-    const stagedAuthProfiles: Array<
-      Parameters<typeof persistAuthProfileBatch>[0]["profiles"][number]
-    > = [];
+    const stagedAuthProfiles: Array<ProviderAuthProfile & { replaceExisting?: boolean }> = [];
     let stagedAuthOrder: AuthProfileStore["order"];
     let reportPortableAuthCopy: (() => Promise<void>) | undefined;
 
@@ -484,6 +483,7 @@ export async function agentsAddCommand(
             profiles: stagedAuthProfiles,
             ...(stagedAuthOrder ? { order: stagedAuthOrder } : {}),
             agentDir,
+            config: nextConfig,
           }
         : undefined;
 
@@ -495,7 +495,7 @@ export async function agentsAddCommand(
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
       const authPersistence = stagedAuthBatch
-        ? await persistAuthProfileBatch(stagedAuthBatch)
+        ? await persistProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
         nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
@@ -528,7 +528,7 @@ export async function agentsAddCommand(
           ...(stagedAuthBatch
             ? {
                 prepareConfigCommit: async () =>
-                  (await persistAuthProfileBatch(stagedAuthBatch)).rollback,
+                  (await persistProviderAuthProfileBatch(stagedAuthBatch)).rollback,
               }
             : {}),
         });

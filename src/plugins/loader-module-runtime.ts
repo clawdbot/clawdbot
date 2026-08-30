@@ -10,6 +10,7 @@ import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
+import { createRuntimeConfig } from "./runtime/runtime-config.js";
 import { createRuntimeState } from "./runtime/runtime-state.js";
 import type {
   CreatePluginRuntimeOptions,
@@ -192,18 +193,23 @@ export function createLazyPluginRuntime(params: {
   };
 
   const cache = getPluginCache();
-  const state = createRuntimeState();
+  const initialRuntime = {
+    version: VERSION,
+    config: createRuntimeConfig(),
+    state: createRuntimeState(),
+  };
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
     resolvedRuntime ??= withPluginCache(cache, () =>
-      resolveCreatePluginRuntime()(params.runtimeOptions, state),
+      resolveCreatePluginRuntime()(params.runtimeOptions, initialRuntime),
     );
     return resolvedRuntime;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
-    // Reading prepared metadata must not initialize runtime services.
-    if (!resolvedRuntime && (prop === "state" || prop === "version")) {
-      return prop === "state" ? state : VERSION;
+    // Registration reads current config without importing every runtime service.
+    // Carry the same capability objects forward when execution materializes the runtime.
+    if (!resolvedRuntime && Object.hasOwn(initialRuntime, prop)) {
+      return Reflect.get(initialRuntime, prop);
     }
     return receiver.length === 0
       ? Reflect.get(resolveRuntime(), prop)

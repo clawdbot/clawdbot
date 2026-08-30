@@ -49,6 +49,12 @@ function stampReplyAttribution(
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
       latestUserSender = item.sender;
+    } else if (
+      item.role === "assistant" &&
+      (item.senderSession || assistantGroupIsForwardedBoundary(item))
+    ) {
+      // Forwarded input starts a turn without a local human reply recipient.
+      latestUserSender = undefined;
     } else if (item.role === "assistant" && latestUserSender) {
       item.replyToSender = latestUserSender;
     }
@@ -112,6 +118,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       splitsRuntimeActivity ||
       (shouldSplitBySender &&
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
+          currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
@@ -123,6 +130,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,

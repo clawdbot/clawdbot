@@ -117,6 +117,8 @@ describe("installTestEnv", () => {
           OPENCLAW_HOME: realHome,
           OPENCLAW_STATE_DIR: path.join(realHome, ".openclaw"),
           OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_AGENT_DIR: path.join(realHome, "caller-agent"),
+          PI_CODING_AGENT_DIR: path.join(realHome, "caller-legacy-agent"),
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_USE_REAL_HOME: undefined,
           OPENCLAW_LIVE_TEST_QUIET: "1",
@@ -161,6 +163,8 @@ describe("installTestEnv", () => {
           const next = installTestEnv();
           cleanupFns.push(next.cleanup);
           expect(next.tempHome).not.toBe(failedHome);
+          expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+          expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
           expect(process.env.ACQUISITION_PROFILE_ADDED).toBe("from-profile");
           expect(process.env.ACQUISITION_PROFILE_EMPTY).toBe("from-profile");
           expect(
@@ -168,6 +172,8 @@ describe("installTestEnv", () => {
           ).toBe("{}\n");
           next.cleanup();
           expect(process.env.HOME).toBe(realHome);
+          expect(process.env.OPENCLAW_AGENT_DIR).toBe(callerEnv.OPENCLAW_AGENT_DIR);
+          expect(process.env.PI_CODING_AGENT_DIR).toBe(callerEnv.PI_CODING_AGENT_DIR);
           expect(process.env.OPENCLAW_TEST_FAST).toBe("from-profile");
           expect(process.env.ACQUISITION_PROFILE_ADDED).toBe("from-profile");
           expect(fs.readdirSync(sandbox)).toEqual([]);
@@ -420,12 +426,21 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_USE_REAL_HOME", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
+    const agentDir = path.join(realHome, "caller-agent");
+    const legacyAgentDir = path.join(realHome, "caller-legacy-agent");
+    setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
+    setTestEnvValue("PI_CODING_AGENT_DIR", legacyAgentDir);
 
     const testEnv = installTestEnv();
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    expect(process.env.OPENCLAW_AGENT_DIR).toBe(agentDir);
+    expect(process.env.PI_CODING_AGENT_DIR).toBe(legacyAgentDir);
+    testEnv.cleanup();
+    expect(process.env.OPENCLAW_AGENT_DIR).toBe(agentDir);
+    expect(process.env.PI_CODING_AGENT_DIR).toBe(legacyAgentDir);
   });
 
   it("keeps hermetic mode isolated when live flags request the real HOME", () => {
@@ -445,6 +460,8 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     setTestEnvValue("OPENCLAW_HOME", realHome);
+    setTestEnvValue("OPENCLAW_AGENT_DIR", path.join(realHome, "caller-agent"));
+    setTestEnvValue("PI_CODING_AGENT_DIR", path.join(realHome, "caller-legacy-agent"));
 
     const testEnv = installTestEnv({ mode: "hermetic" });
     cleanupFns.push(testEnv.cleanup);
@@ -461,27 +478,34 @@ describe("installTestEnv", () => {
     expect(process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR).toBe("1");
     expect(process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBeUndefined();
     expect(process.env.OPENCLAW_HOME).toBeUndefined();
+    expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+    expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
     expect(fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "openclaw.json"))).toBe(false);
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
     ).toBe(false);
   });
 
-  it("clears and restores OPENCLAW_HOME for normal isolated test runs", () => {
-    const realHome = createTempHome();
-    const configuredOpenClawHome = path.join(realHome, "custom-openclaw-home");
-    setTestEnvValue("HOME", realHome);
-    setTestEnvValue("USERPROFILE", realHome);
-    setTestEnvValue("OPENCLAW_HOME", configuredOpenClawHome);
+  it.each(["OPENCLAW_HOME", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"])(
+    "clears and restores %s for normal isolated test runs",
+    (key) => {
+      const realHome = createTempHome();
+      const callerPath = path.join(realHome, "caller-override");
+      setTestEnvValue("HOME", realHome);
+      setTestEnvValue("USERPROFILE", realHome);
+      setTestEnvValue(key, callerPath);
 
-    const testEnv = installTestEnv();
+      const testEnv = installTestEnv();
+      cleanupFns.push(testEnv.cleanup);
 
-    expect(testEnv.tempHome).not.toBe(realHome);
-    expect(process.env.OPENCLAW_HOME).toBeUndefined();
+      expect(testEnv.tempHome).not.toBe(realHome);
+      expect(process.env[key]).toBeUndefined();
+      setTestEnvValue(key, path.join(testEnv.tempHome, "explicit-override"));
 
-    testEnv.cleanup();
-    expect(process.env.OPENCLAW_HOME).toBe(configuredOpenClawHome);
-  });
+      testEnv.cleanup();
+      expect(process.env[key]).toBe(callerPath);
+    },
+  );
 
   it.each([
     "TWILIO_ACCOUNT_SID",

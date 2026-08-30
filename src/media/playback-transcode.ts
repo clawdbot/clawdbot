@@ -203,9 +203,7 @@ function resolvePlaybackMode(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
     createPlaybackTranscodeCacheKey,
-    PLAYBACK_TRANSCODE_POLICY,
     readPlaybackSourceBounded,
-    resolvePlaybackMode,
     getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
   };
 }
@@ -356,13 +354,6 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
 export async function resolvePlaybackModeForSource(
   params: PlaybackSourceParams,
 ): Promise<PlaybackMode | undefined> {
-  const containerMode = resolvePlaybackMode(
-    params.mimeType,
-    PLAYBACK_TRANSCODE_POLICY[params.kind],
-  );
-  if (!containerMode) {
-    return undefined;
-  }
   const inspection = await inspectPlaybackSource(params);
   return inspection.mode === "transcode"
     ? "transcode"

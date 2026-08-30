@@ -15,6 +15,110 @@ type WebRtcSdpResponseFixture = {
   status: number;
 };
 
+export type MicrophoneLossE2eProof = {
+  tracksStopped: number;
+  peerClosed: boolean;
+  trackState: MediaStreamTrackState | null;
+  stage: string;
+  localConnection: RTCPeerConnectionState | null;
+  localIce: RTCIceConnectionState | null;
+  remoteIce: RTCIceConnectionState;
+  remoteGathering: RTCIceGatheringState;
+  endMicrophone: () => void;
+};
+
+export async function installMicrophoneLossWebRtcFixture(page: Page) {
+  await page.addInitScript(() => {
+    const NativePeerConnection = RTCPeerConnection;
+    const remote = new NativePeerConnection();
+    let localConnection = (): RTCPeerConnectionState | null => null;
+    let localIce = (): RTCIceConnectionState | null => null;
+    let microphone: MediaStreamTrack | undefined;
+    const proof: MicrophoneLossE2eProof = {
+      tracksStopped: 0,
+      peerClosed: false,
+      stage: "idle",
+      get localConnection() {
+        return localConnection();
+      },
+      get localIce() {
+        return localIce();
+      },
+      get remoteIce() {
+        return remote.iceConnectionState;
+      },
+      get remoteGathering() {
+        return remote.iceGatheringState;
+      },
+      get trackState() {
+        return microphone?.readyState ?? null;
+      },
+      // Browser fault injection: exercise the native track event boundary,
+      // without claiming a physical microphone removal or permission revocation.
+      endMicrophone: () => microphone?.dispatchEvent(new Event("ended")),
+    };
+    Object.defineProperty(window, "openclawMicrophoneLossE2e", { value: proof });
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      proof.stage = "microphone-requested";
+      const stream = await getUserMedia(constraints);
+      proof.stage = "microphone-acquired";
+      microphone = stream.getAudioTracks()[0];
+      if (microphone) {
+        const stop = microphone.stop.bind(microphone);
+        microphone.stop = () => {
+          proof.tracksStopped += 1;
+          stop();
+        };
+      }
+      return stream;
+    };
+    class ObservedPeerConnection extends NativePeerConnection {
+      constructor() {
+        super();
+        localConnection = () => this.connectionState;
+        localIce = () => this.iceConnectionState;
+      }
+      override close() {
+        proof.peerClosed = true;
+        remote.close();
+        super.close();
+      }
+    }
+    Object.defineProperty(window, "RTCPeerConnection", { value: ObservedPeerConnection });
+    const fetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url !== "https://api.openai.com/v1/realtime/calls") {
+        return fetch(input, init);
+      }
+      if (typeof init?.body !== "string") {
+        throw new Error("Missing local WebRTC SDP offer");
+      }
+      proof.stage = "offer-received";
+      await remote.setRemoteDescription({ type: "offer", sdp: init.body });
+      proof.stage = "offer-applied";
+      await remote.setLocalDescription(await remote.createAnswer());
+      proof.stage = "answer-gathering";
+      if (remote.iceGatheringState !== "complete") {
+        await new Promise<void>((resolve) => {
+          const gathered = () => {
+            if (remote.iceGatheringState === "complete") {
+              remote.removeEventListener("icegatheringstatechange", gathered);
+              resolve();
+            }
+          };
+          remote.addEventListener("icegatheringstatechange", gathered);
+        });
+      }
+      proof.stage = "answer-ready";
+      return new Response(remote.localDescription?.sdp, {
+        headers: { "Content-Type": "application/sdp" },
+      });
+    };
+  });
+}
+
 export function videoTalkCatalog(activeProvider: "google" | "openai") {
   return {
     realtime: {
@@ -39,7 +143,7 @@ export async function installTalkBrowserFixtures(page: Page) {
       inputProcessor: null as InputProcessor | null,
       meterLevel: 0,
     };
-    const track = { stop: () => (state.tracksStopped += 1) };
+    const track = Object.assign(new EventTarget(), { stop: () => (state.tracksStopped += 1) });
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: {
@@ -111,7 +215,7 @@ export async function installTalkBrowserFixtures(page: Page) {
 async function installWebRtcSdpResponseFixture(page: Page, fixture: WebRtcSdpResponseFixture) {
   await page.addInitScript(() => {
     const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
-    const microphoneTrack = { stop() {} };
+    const microphoneTrack = Object.assign(new EventTarget(), { stop() {} });
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: {
@@ -218,6 +322,13 @@ export async function captureComposerProof(page: Page, fileName: string) {
   await page
     .locator(".agent-chat__composer-shell")
     .screenshot({ path: path.join(artifactDir, fileName) });
+}
+
+export async function captureMicrophoneLossProof(page: Page, fileName: string) {
+  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
+  await mkdir(artifactDir, { recursive: true });
+  // The error floats above the composer bounds; retain the real chat context.
+  await page.screenshot({ path: path.join(artifactDir, fileName), fullPage: true });
 }
 
 export async function captureVideoTalkProof(page: Page, fileName: string) {

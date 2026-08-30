@@ -881,7 +881,9 @@ export class ExtensionRelayBridge {
     const result =
       request.method === "Runtime.enable"
         ? await runtime.enable(session, emit, send)
-        : await send();
+        : request.method === "Runtime.addBinding" || request.method === "Runtime.removeBinding"
+          ? await runtime.binding(session, emit, request.method, request.params)
+          : await send();
     if (client.sessions.get(sessionId) !== session) {
       throw new Error(`Session detached: ${sessionId}`);
     }

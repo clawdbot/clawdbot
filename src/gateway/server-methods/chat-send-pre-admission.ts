@@ -19,6 +19,7 @@ import {
 import {
   abortChatRunsForSessionKeyWithPartials,
   createChatAbortOps,
+  descendantAbortError,
 } from "./chat-abort-runtime.js";
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -54,6 +55,7 @@ type ChatSendPreAdmissionParams = {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  assertCurrent?: () => void;
 };
 
 /** Recheck synchronously at reservation: recovery lookups can yield to a competing request. */
@@ -213,18 +215,26 @@ export async function runChatSendPreAdmission(
     const res = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),
-      sessionKey: rawSessionKey,
-      sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+      sessionKey,
+      sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
       agentId: stopOwnerScope.agentId,
       sessionId: entry?.sessionId,
-      persistSessionKey: sessionKey,
+      session: {
+        ok: true,
+        value: { cfg, storePath, entry, canonicalKey: sessionKey, agentId: session.agentId },
+      },
       defaultAgentId: stopOwnerScope.defaultAgentId,
       abortOrigin: "stop-command",
       stopReason: "stop",
       requester: resolveChatAbortRequester(client),
+      assertCurrent: params.assertCurrent,
+      cascadeDescendants: true,
     });
-    if (res.unauthorized) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+    const error = res.unauthorized
+      ? errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized")
+      : (res.error ?? descendantAbortError(res.descendants, "Session"));
+    if (error) {
+      respond(false, undefined, error);
       return false;
     }
     respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });

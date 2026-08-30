@@ -209,6 +209,7 @@ runs:
           node_modules
           ui/node_modules
           packages/*/node_modules
+          extensions/*/node_modules
           examples/*/node_modules
           .cache/openclaw-pnpm-store
         key: ${{ steps.dependency-cache-key.outputs.key }}
@@ -449,9 +450,9 @@ runs:
           # reconciliation validates them without reaching the registry. Later
           # build wrappers can use installed Node entrypoints directly.
           echo "OPENCLAW_BUILD_ALL_NO_PNPM=1" >> "$GITHUB_ENV"
-          # Postinstall intentionally prunes plugin-local node_modules. Pnpm's
-          # redundant pre-run check treats that as stale and can launch unsafe
-          # concurrent implicit installs after CI fans out.
+          # Install and frozen reconciliation own dependency writes. Keep later
+          # shard commands read-only so they cannot launch concurrent implicit
+          # installs after CI fans out.
           # zizmor: ignore[github-env] static pnpm policy owned by this action.
           echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"
         fi

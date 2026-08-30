@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+} from "../../../../src/agents/internal-runtime-context.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type GatewayChatMessage = {
@@ -27,6 +35,46 @@ const HISTORY_RETRY_TIMEOUT_MS = 10_000;
 const HISTORY_RETRY_DEFAULT_MS = 250;
 const HISTORY_RETRY_MIN_MS = 100;
 const HISTORY_RETRY_MAX_MS = 5_000;
+const requestSnapshotsSchema = z.array(
+  z.object({ cursor: z.number().int(), model: z.string(), raw: z.string() }),
+);
+const responsesInputSchema = z.object({
+  input: z.array(
+    z.object({
+      role: z.string().optional(),
+      content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
+    }),
+  ),
+});
+const historyTextSchema = z.union([
+  z.string(),
+  z.array(z.object({ type: z.literal("text"), text: z.string() })).length(1),
+]);
+const runtimeCarrierPrefix = [
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  "",
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  "",
+].join("\n");
+
+function expectWhitespaceInterior(
+  texts: string[],
+  owner: string,
+  marker: string,
+  interior: string,
+) {
+  const begin = `BEGIN_${marker}`;
+  const end = `END_${marker}`;
+  for (const token of [begin, end]) {
+    expect(texts.reduce((count, text) => count + text.split(token).length - 1, 0)).toBe(1);
+  }
+  const start = owner.indexOf(begin);
+  const finish = owner.indexOf(end);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(finish).toBeGreaterThan(start);
+  expect(Buffer.from(owner.slice(start + begin.length, finish))).toEqual(Buffer.from(interior));
+}
 
 let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
@@ -178,7 +226,7 @@ describe("Gateway chat RPCs", () => {
   });
 
   it(
-    "runs chat.send through agent.wait and persists both sides in chat.history",
+    "preserves model-input whitespace independently from canonical chat history",
     { timeout: 120_000 },
     async () => {
       gatewayOwner = createQaLiveLaneGateway();
@@ -195,50 +243,101 @@ describe("Gateway chat RPCs", () => {
         controlUiEnabled: false,
       });
       const { gateway } = harness;
-
-      const expectedReply = "GATEWAY_RPC_CHAT_OK";
-      const prompt = `Gateway chat RPC QA. Reply exactly \`${expectedReply}\`.`;
+      const mock = expectDefined(harness.mock, "mock provider");
       const sessionKey = `agent:qa:gateway-rpc-chat-${randomUUID()}`;
-      const started = (await gateway.call(
-        "chat.send",
-        {
-          sessionKey,
-          message: prompt,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
-        { timeoutMs: 30_000 },
-      )) as GatewayChatRun;
-
-      expect(started.status).toBe("started");
-      expect(typeof started.runId).toBe("string");
-
-      const terminal = (await gateway.call(
-        "agent.wait",
-        {
-          runId: started.runId,
-          timeoutMs: 30_000,
-        },
-        { timeoutMs: 35_000 },
-      )) as GatewayChatRun;
-      expect(terminal.status).toBe("ok");
-
-      const history = await waitForChatHistory({
-        gateway,
-        sessionKey,
-        expectedUser: prompt,
-        expectedAssistant: expectedReply,
+      const turns = ["/think high\n", ""].map((directive, index) => {
+        const marker = randomUUID();
+        const reply = `GATEWAY_RPC_CHAT_OK_${index}`;
+        const interior =
+          "\n```python\nif True:\n    value = 'a  b'\n    if value:\n        print(value)\n\t\t# tabs stay  \n \t \n```\n";
+        return {
+          marker,
+          reply,
+          interior,
+          prompt: `${directive}Gateway chat RPC QA. Reply exactly \`${reply}\`.\nBEGIN_${marker}${interior}END_${marker}`,
+        };
       });
-      const messages = history.messages ?? [];
 
-      expect(
-        messages.some((message) => message.role === "user" && messageContains(message, prompt)),
-      ).toBe(true);
-      expect(
-        messages.some(
-          (message) => message.role === "assistant" && messageContains(message, expectedReply),
-        ),
-      ).toBe(true);
+      for (const [index, turn] of turns.entries()) {
+        const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
+        expect(cursorResponse.ok).toBe(true);
+        const { cursor } = z
+          .object({ cursor: z.number().int() })
+          .parse(await cursorResponse.json());
+        const started = (await gateway.call(
+          "chat.send",
+          {
+            sessionKey,
+            message: turn.prompt,
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          },
+          { timeoutMs: 30_000 },
+        )) as GatewayChatRun;
+        expect(started.status).toBe("started");
+        expect(typeof started.runId).toBe("string");
+        const terminal = (await gateway.call(
+          "agent.wait",
+          { runId: started.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        )) as GatewayChatRun;
+        expect(terminal.status).toBe("ok");
+
+        const response = await fetch(`${mock.baseUrl}/debug/requests?after=${cursor}`);
+        expect(response.ok).toBe(true);
+        const requests = requestSnapshotsSchema.parse(await response.json());
+        // Pin by request identity before checking content: a later retry must not
+        // hide a damaged initial prompt, and mock convenience fields trim text.
+        const request = expectDefined(
+          requests
+            .filter((entry) => entry.model === "gpt-5.6-luna")
+            .toSorted((a, b) => a.cursor - b.cursor)[0],
+          "first provider request",
+        );
+        const { input } = responsesInputSchema.parse(JSON.parse(request.raw));
+        const inputTexts = input.flatMap((item) =>
+          (item.content ?? [])
+            .filter((part) => part.type === "input_text")
+            .map((part) => expectDefined(part.text, "provider input text")),
+        );
+        const userTexts = input
+          .filter((item) => item.role === "user")
+          .map((item) => {
+            expect(item.content).toHaveLength(1);
+            const part = expectDefined(item.content?.[0], "user content");
+            expect(part.type).toBe("input_text");
+            return expectDefined(part.text, "user text");
+          })
+          .filter(
+            (text) =>
+              !(
+                text.startsWith(runtimeCarrierPrefix) &&
+                text.endsWith(`\n${INTERNAL_RUNTIME_CONTEXT_END}`)
+              ),
+          );
+        expect(userTexts).toHaveLength(index + 1);
+        const history = await waitForChatHistory({
+          gateway,
+          sessionKey,
+          expectedUser: `BEGIN_${turn.marker}`,
+          expectedAssistant: turn.reply,
+        });
+        const userMessages = (history.messages ?? []).filter((message) => message.role === "user");
+        expect(userMessages).toHaveLength(index + 1);
+        for (const [turnIndex, expected] of turns.slice(0, index + 1).entries()) {
+          const modelText = expectDefined(userTexts[turnIndex], "model user turn");
+          expectWhitespaceInterior(inputTexts, modelText, expected.marker, expected.interior);
+          const content = historyTextSchema.parse(userMessages[turnIndex]?.content);
+          const recorded =
+            typeof content === "string" ? content : expectDefined(content[0], "history text").text;
+          expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
+        }
+        if (index === 0) {
+          expect(userTexts[0]).not.toContain("/think high");
+        } else {
+          expect(userTexts[0]).toContain("/think high");
+        }
+      }
     },
   );
 });

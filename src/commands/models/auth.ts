@@ -42,6 +42,7 @@ import {
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
+import { prepareProviderAuthProfilesForPersistence } from "../../plugins/provider-auth-persistence.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
@@ -410,25 +411,47 @@ async function persistProviderAuthResult(params: {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   setDefault?: boolean;
-}) {
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderAuthResult["profiles"]> {
   const defaultModel = params.result.defaultModel
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
   const profiles = params.profiles ?? params.result.profiles;
+  const persistedProfiles: ProviderAuthResult["profiles"] = [];
   const shouldUpdateConfig = Boolean(
     params.result.configPatch || (params.setDefault && defaultModel),
   );
 
-  for (const profile of profiles) {
+  for (const candidate of profiles) {
+    const prepared = prepareProviderAuthProfilesForPersistence({
+      profiles: [candidate],
+      config: params.config,
+      env: params.env,
+    });
+    const profile = expectDefined(prepared.profiles[0], "prepared auth profile");
     const configuredSelection = resolveConfiguredAuthSelectionForProvider(
       params.config,
       profile.credential.provider,
     );
-    await upsertAuthProfileAfterLoginWithLockOrThrow({
-      profileId: profile.profileId,
-      credential: profile.credential,
-      agentDir: params.agentDir,
-    });
+    try {
+      await upsertAuthProfileAfterLoginWithLockOrThrow({
+        profileId: profile.profileId,
+        credential: profile.credential,
+        agentDir: params.agentDir,
+      });
+    } catch (error) {
+      try {
+        prepared.rollback();
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Provider auth persistence failed and protected-store rollback could not be confirmed.",
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
+    persistedProfiles.push(profile);
     await promoteAuthProfileInOrder({
       agentDir: params.agentDir,
       provider: profile.credential.provider,
@@ -478,7 +501,7 @@ async function persistProviderAuthResult(params: {
 
   await refreshRunningGatewayAuthState(params.agentId);
 
-  for (const profile of profiles) {
+  for (const profile of persistedProfiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
@@ -493,6 +516,7 @@ async function persistProviderAuthResult(params: {
   if (params.result.notes && params.result.notes.length > 0) {
     await params.prompter.note(params.result.notes.join("\n"), "Provider notes");
   }
+  return persistedProfiles;
 }
 
 function resolveConfiguredAuthSelectionForProvider(
@@ -562,7 +586,7 @@ async function runProviderAuthMethod(params: {
     requestedProfileId: params.profileId,
   });
 
-  await persistProviderAuthResult({
+  const persistedProfiles = await persistProviderAuthResult({
     result,
     profiles,
     config: params.config,
@@ -571,9 +595,10 @@ async function runProviderAuthMethod(params: {
     runtime: params.runtime,
     prompter: params.prompter,
     setDefault: params.setDefault,
+    env: params.env ?? process.env,
   });
 
-  return { result, profiles };
+  return { result, profiles: persistedProfiles };
 }
 
 /** Runs an interactive provider setup-token auth flow. */

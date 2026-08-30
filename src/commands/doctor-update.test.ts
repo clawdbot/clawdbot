@@ -163,6 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   if (originalStdinIsTtyDescriptor) {
     Object.defineProperty(process.stdin, "isTTY", originalStdinIsTtyDescriptor);
@@ -239,7 +240,10 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     mode: "git";
     root: string;
     after?: { version: string; buildId?: string };
-    recovery?: { serviceRestartSafe: false; reason: "source-rollback-failed" };
+    recovery?: {
+      serviceRestartSafe: false;
+      reason: "source-rollback-failed" | "rollback-checkout-dirty";
+    };
   }) {
     mocks.runGatewayUpdate.mockImplementation(
       async ({
@@ -750,7 +754,16 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
   });
 
-  it("does not restart a stopped service when source rollback could not be verified", async () => {
+  it.each([
+    {
+      reason: "source-rollback-failed" as const,
+      guidance: "repair the checkout or installation",
+    },
+    {
+      reason: "rollback-checkout-dirty" as const,
+      guidance: "From the update root shown above",
+    },
+  ])("does not restart a stopped service after $reason", async ({ reason, guidance }) => {
     mockGitCheckout();
     mockManagedService({
       verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
@@ -759,7 +772,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       status: "error",
       mode: "git",
       root: "/repo/link",
-      recovery: { serviceRestartSafe: false, reason: "source-rollback-failed" },
+      recovery: { serviceRestartSafe: false, reason },
     });
 
     await runOffer({ confirm: vi.fn().mockResolvedValue(true) });
@@ -767,6 +780,60 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     expect(mocks.stopGatewayService).toHaveBeenCalledOnce();
     expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).not.toHaveBeenCalled();
     expect(mocks.restartUpdatedGateway).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining(`(${reason})`), "Update");
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining(guidance), "Update");
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("rerun `openclaw update`"),
+      "Update",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Keep the gateway stopped until the update succeeds"),
+      "Update",
+    );
+  });
+
+  it("shows repair guidance without claiming an already-stopped service changed state", async () => {
+    mockGitCheckout();
+    mockManagedService({
+      verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
+      running: false,
+    });
+    mockUpdateResult({
+      status: "error",
+      mode: "git",
+      root: "/repo/link",
+      recovery: { serviceRestartSafe: false, reason: "rollback-checkout-dirty" },
+    });
+
+    await runOffer({ confirm: vi.fn().mockResolvedValue(true) });
+
+    const recoveryNote = mocks.note.mock.calls.find((call) =>
+      String(call[0]).includes("rollback-checkout-dirty"),
+    )?.[0];
+    expect(recoveryNote).toContain("resolve the reported changes");
+    expect(recoveryNote).not.toContain("remains stopped");
+    expect(recoveryNote).not.toContain("Keep the gateway stopped");
+  });
+
+  it("preserves the active profile in unsafe recovery guidance", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    mockGitCheckout();
+    mockManagedService({
+      verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
+    });
+    mockUpdateResult({
+      status: "error",
+      mode: "git",
+      root: "/repo/link",
+      recovery: { serviceRestartSafe: false, reason: "rollback-checkout-dirty" },
+    });
+
+    await runOffer({ confirm: vi.fn().mockResolvedValue(true) });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("rerun `openclaw --profile work update`"),
+      "Update",
+    );
   });
 
   it("leaves a running gateway alone when service repair is externally managed", async () => {

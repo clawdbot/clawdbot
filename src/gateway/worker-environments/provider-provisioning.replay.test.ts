@@ -22,6 +22,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -217,6 +218,7 @@ describe("worker environment service provision replay", () => {
       start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
         environmentId,
         ownerEpoch,
+        measureLaunchTurn,
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
@@ -239,7 +241,7 @@ describe("worker environment service provision replay", () => {
           setupCode: "setup-code",
           setupId: enrolled.nodeSetupId!,
           openclawVersion: "2026.8.19",
-          packageSpecs: ["openclaw@2026.8.19"],
+          nodeBootstrap: { ...support.NODE_BOOTSTRAP, openclawVersion: "2026.8.19" },
           displayName: "Cloud worker replay",
           waitForDeviceId: async () => await enrollmentConnected.promise,
         };
