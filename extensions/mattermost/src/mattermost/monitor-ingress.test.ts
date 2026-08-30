@@ -15,6 +15,21 @@ type MattermostIngressQueue = NonNullable<
 >;
 type MattermostIngressPayload = Parameters<MattermostIngressQueue["enqueue"]>[1];
 type MattermostIngressDispatch = Parameters<typeof createMattermostIngressMonitor>[0]["dispatch"];
+type MattermostIngressInteractionDispatch = Parameters<
+  typeof createMattermostIngressMonitor
+>[0]["dispatchInteraction"];
+
+function buttonClick(params?: { eventId?: string; channelId?: string; postId?: string }) {
+  return {
+    eventId: params?.eventId ?? "click-1",
+    channelId: params?.channelId ?? "channel-1",
+    userId: "user-1",
+    userName: "alice",
+    actionId: "approve",
+    actionName: "Approve",
+    postId: params?.postId ?? "post-1",
+  };
+}
 
 function postedEvent(params?: {
   postId?: string;
@@ -43,11 +58,15 @@ function startMonitor(
     error: vi.fn(),
     log: vi.fn(),
   },
+  dispatchInteraction: MattermostIngressInteractionDispatch = async (_interaction, lifecycle) => {
+    await lifecycle.onAdopted();
+  },
 ) {
   return createMattermostIngressMonitor({
     accountId,
     queue,
     dispatch,
+    dispatchInteraction,
     runtime,
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
@@ -156,6 +175,77 @@ describe("Mattermost durable ingress", () => {
         expect(recoveredDispatch).toHaveBeenCalledTimes(1);
       } finally {
         await recovered.stop();
+      }
+    });
+  });
+
+  it("answers a recorded button click after the process that took it is gone", async () => {
+    await withQueue(async (queue) => {
+      const droppedClick = vi.fn(async (_interaction, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      const accepted = startMonitor(queue, vi.fn(), "default", undefined, droppedClick);
+      await accepted.receiveInteraction(buttonClick({ eventId: "click-restart" }));
+      await accepted.waitForIdle();
+      // The click is durable, so losing this process cannot lose the press.
+      expect(await queue.listClaims()).toHaveLength(1);
+      await accepted.stop();
+
+      const replayed = vi.fn(async (_interaction, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const recovered = startMonitor(queue, vi.fn(), "default", undefined, replayed);
+      try {
+        await recovered.waitForIdle();
+        expect(replayed).toHaveBeenCalledTimes(1);
+        expect(replayed.mock.calls[0]?.[0]).toMatchObject({
+          eventId: "click-restart",
+          actionId: "approve",
+          postId: "post-1",
+        });
+      } finally {
+        await recovered.stop();
+      }
+    });
+  });
+
+  it("keeps a click in its channel's lane so it stays ordered behind that channel's posts", async () => {
+    await withQueue(async (queue) => {
+      const monitor = startMonitor(queue, vi.fn(), "default", undefined, async (_i, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      try {
+        await monitor.receiveInteraction(
+          buttonClick({ eventId: "click-lane", channelId: "channel-raw" }),
+        );
+        await monitor.waitForIdle();
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "click-lane",
+            laneKey: "channel:channel-raw",
+            payload: expect.objectContaining({
+              interaction: expect.objectContaining({ actionId: "approve" }),
+            }),
+          }),
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("surfaces a failed click append so the callback is never answered with success", async () => {
+    await withQueue(async (queue) => {
+      vi.spyOn(queue, "enqueue").mockRejectedValue(new Error("ingress storage unavailable"));
+      const monitor = startMonitor(queue, vi.fn());
+      try {
+        await expect(monitor.receiveInteraction(buttonClick())).rejects.toThrow(
+          "ingress storage unavailable",
+        );
+      } finally {
+        await monitor.stop();
       }
     });
   });

@@ -25,7 +25,10 @@ import {
   type MattermostIngressLifecycle,
   type MattermostIngressPost,
 } from "./monitor-ingress.js";
-import { registerMattermostInteractions } from "./monitor-interactions.js";
+import {
+  createMattermostInteractionDispatch,
+  registerMattermostInteractions,
+} from "./monitor-interactions.js";
 import { createMattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import { createMattermostPostHandler } from "./monitor-posts.js";
 import { createMattermostReactionHandler } from "./monitor-reactions.js";
@@ -214,29 +217,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     logVerboseMessage,
     statusSink: opts.statusSink,
   };
-  const unregisterInteractions = registerMattermostInteractions({
-    monitor,
-    interactionPath,
-    allowedSourceIps:
-      allowedInteractionSourceIps.length > 0 ? allowedInteractionSourceIps : ["127.0.0.1", "::1"],
-    handleModelPickerInteraction: createMattermostModelPickerInteractionHandler(monitor),
-  });
-  try {
-    await registerMattermostMonitorSlashCommands({
-      client,
-      cfg,
-      runtime,
-      account,
-      baseUrl,
-      botUserId,
-    });
-  } catch (error) {
-    // The callback route must exist before remote slash setup, but not outlive failed startup.
-    unregisterInteractions();
-    throw error;
-  }
-  const slashEnabled = getSlashCommandState(account.accountId) != null;
   const handlePost = createMattermostPostHandler(monitor);
+  const dispatchInteraction = createMattermostInteractionDispatch(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
   const debouncer = core.channel.debounce.createInboundDebouncer<{
@@ -321,7 +303,39 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       await debouncer.enqueue({ post, payload, turnAdoptionLifecycle });
       return { kind: "deferred" };
     },
+    dispatchInteraction: async (interaction, turnAdoptionLifecycle) => {
+      // Same contract as a post: the turn's adoption settles the claim, so a click
+      // that never reached adoption is still there for the next process. A refused or
+      // unroutable click reached no turn and is finished, so it settles here instead
+      // of waiting for an adoption that will never come.
+      const outcome = await dispatchInteraction(interaction, turnAdoptionLifecycle);
+      return outcome === "dispatched" ? { kind: "deferred" } : { kind: "completed" };
+    },
   });
+  const unregisterInteractions = registerMattermostInteractions({
+    monitor,
+    interactionPath,
+    allowedSourceIps:
+      allowedInteractionSourceIps.length > 0 ? allowedInteractionSourceIps : ["127.0.0.1", "::1"],
+    handleModelPickerInteraction: createMattermostModelPickerInteractionHandler(monitor),
+    admitInteraction: ingress.receiveInteraction,
+  });
+  try {
+    await registerMattermostMonitorSlashCommands({
+      client,
+      cfg,
+      runtime,
+      account,
+      baseUrl,
+      botUserId,
+    });
+  } catch (error) {
+    // The callback route must exist before remote slash setup, but not outlive failed startup.
+    unregisterInteractions();
+    await ingress.stop();
+    throw error;
+  }
+  const slashEnabled = getSlashCommandState(account.accountId) != null;
   let sequence = 1;
   const connectOnce = createMattermostConnectOnce({
     wsUrl: `${baseUrl.replace(/^http/i, "ws")}/api/v4/websocket`,

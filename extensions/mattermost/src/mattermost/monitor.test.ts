@@ -185,10 +185,20 @@ describe("resolveMattermostInteractionReplyRootId", () => {
   const interactionMessageSid = buildMattermostButtonInteractionMessageSid({
     postId: "source-post-123",
     actionId: "approve",
+    eventId: "click-1",
   });
 
-  it("keeps the established synthetic event identity", () => {
-    expect(interactionMessageSid).toBe("interaction:source-post-123:approve");
+  it("gives each press of one button its own synthetic event identity", () => {
+    // Shared inbound dedupe keys on this value, so two legitimate presses of the same
+    // button must not collapse into one turn.
+    expect(interactionMessageSid).toBe("interaction:source-post-123:approve:click-1");
+    expect(
+      buildMattermostButtonInteractionMessageSid({
+        postId: "source-post-123",
+        actionId: "approve",
+        eventId: "click-2",
+      }),
+    ).not.toBe(interactionMessageSid);
   });
 
   it("maps reply-to-current from the synthetic interaction id to the provider post", () => {

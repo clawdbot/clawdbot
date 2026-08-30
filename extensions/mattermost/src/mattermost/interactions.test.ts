@@ -14,6 +14,7 @@ import {
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
+import type { MattermostIngressInteraction } from "./monitor-ingress.js";
 
 type ButtonAction = {
   id: string;
@@ -860,7 +861,7 @@ describe("createMattermostInteractionHandler", () => {
 
   it("blocks button dispatch when the sender is not allowed for the action", async () => {
     const { context, token } = createActionContext();
-    const dispatchButtonClick = vi.fn();
+    const admitInteraction = vi.fn();
     const handleInteraction = vi.fn();
     const handler = createMattermostInteractionHandler({
       client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
@@ -875,7 +876,7 @@ describe("createMattermostInteractionHandler", () => {
         },
       }),
       handleInteraction,
-      dispatchButtonClick,
+      admitInteraction,
     });
 
     const res = await runHandler(handler, {
@@ -885,51 +886,94 @@ describe("createMattermostInteractionHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain("blocked");
     expect(handleInteraction).not.toHaveBeenCalled();
-    expect(dispatchButtonClick).not.toHaveBeenCalled();
+    expect(admitInteraction).not.toHaveBeenCalled();
   });
 
-  it("forwards fetched post threading metadata to session and button callbacks", async () => {
-    const enqueueSystemEvent = vi.fn();
-    setInteractionRuntime(enqueueSystemEvent);
+  it("records the whole click, with its thread root, before answering Mattermost", async () => {
+    setInteractionRuntime();
     const { context, token } = createActionContext();
-    const resolveSessionKey = vi.fn().mockResolvedValue("session:thread:root-9");
-    const dispatchButtonClick = vi.fn();
+    const answeredAfterAdmission: string[] = [];
+    const admitInteraction = vi.fn(async () => {
+      answeredAfterAdmission.push("admitted");
+    });
     const fetchedPost = createActionPost({ rootId: "root-9" });
     const handler = createMattermostInteractionHandler({
-      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
-        init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
-      ),
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) => {
+        if (init?.method === "PUT") {
+          answeredAfterAdmission.push("post-updated");
+          return { id: "post-1" };
+        }
+        return fetchedPost;
+      }),
       botUserId: "bot",
       accountId: "acct",
-      resolveSessionKey,
-      dispatchButtonClick,
+      admitInteraction,
     });
 
     const res = await runHandler(handler, {
       body: createInteractionBody({ context, token, userName: "alice" }),
     });
+
     expect(res.statusCode).toBe(200);
-    expect(resolveSessionKey).toHaveBeenCalledWith({
-      channelId: "chan-1",
-      userId: "user-1",
-      post: fetchedPost,
-    });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      'Mattermost button click: action="approve" by alice in channel chan-1',
-      {
-        sessionKey: "session:thread:root-9",
-        contextKey: "mattermost:interaction:post-1:approve",
-      },
-    );
-    expect(dispatchButtonClick).toHaveBeenCalledWith({
+    expect(admitInteraction).toHaveBeenCalledWith({
+      eventId: expect.any(String),
       channelId: "chan-1",
       userId: "user-1",
       userName: "alice",
       actionId: "approve",
       actionName: "Approve",
       postId: "post-1",
-      post: fetchedPost,
+      rootId: "root-9",
     });
+    // Nothing may claim the click was taken until it is recoverable.
+    expect(answeredAfterAdmission).toEqual(["admitted", "post-updated"]);
+  });
+
+  it("gives every click its own record so a repeated press is not swallowed", async () => {
+    setInteractionRuntime();
+    const { context, token } = createActionContext();
+    const admitInteraction = vi.fn(async (_interaction: MattermostIngressInteraction) => {});
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
+      ),
+      botUserId: "bot",
+      accountId: "acct",
+      admitInteraction,
+    });
+    const body = createInteractionBody({ context, token, userName: "alice" });
+
+    await runHandler(handler, { body });
+    await runHandler(handler, { body });
+
+    const [first, second] = admitInteraction.mock.calls.map(([interaction]) => interaction.eventId);
+    expect(first).toBeTruthy();
+    expect(second).not.toBe(first);
+  });
+
+  it("refuses the click when it cannot be recorded instead of reporting success", async () => {
+    setInteractionRuntime();
+    const { context, token } = createActionContext();
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        return createActionPost();
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      admitInteraction: async () => {
+        throw new Error("ingress storage unavailable");
+      },
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token, userName: "alice" }),
+    });
+
+    expect(res.statusCode).toBe(500);
+    // The buttons must stay clickable: nothing accepted this press.
+    expect(requestLog.some((entry) => entry.method === "PUT")).toBe(false);
   });
 
   it("lets a custom interaction handler short-circuit generic completion updates", async () => {
@@ -938,7 +982,7 @@ describe("createMattermostInteractionHandler", () => {
     const handleInteraction = vi.fn().mockResolvedValue({
       ephemeral_text: "Only the original requester can use this picker.",
     });
-    const dispatchButtonClick = vi.fn();
+    const admitInteraction = vi.fn();
     const originalPost = createActionPost({
       actionId: "mdlprov",
       actionName: "Browse providers",
@@ -951,7 +995,7 @@ describe("createMattermostInteractionHandler", () => {
       botUserId: "bot",
       accountId: "acct",
       handleInteraction,
-      dispatchButtonClick,
+      admitInteraction,
     });
     const body = createInteractionBody({
       context,
@@ -978,6 +1022,6 @@ describe("createMattermostInteractionHandler", () => {
       context,
       post: originalPost,
     });
-    expect(dispatchButtonClick).not.toHaveBeenCalled();
+    expect(admitInteraction).not.toHaveBeenCalled();
   });
 });

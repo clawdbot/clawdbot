@@ -42,8 +42,11 @@ export function buildMattermostModelPickerSelectMessageSid(params: {
 export function buildMattermostButtonInteractionMessageSid(params: {
   postId: string;
   actionId: string;
+  eventId: string;
 }): string {
-  return `interaction:${params.postId}:${params.actionId}`;
+  // One press is one inbound event. Keying on post and action alone lets shared
+  // inbound dedupe fold a second, legitimate press of the same button into the first.
+  return `interaction:${params.postId}:${params.actionId}:${params.eventId}`;
 }
 
 export function resolveMattermostReplyRootId(params: {

@@ -1,5 +1,5 @@
 // Mattermost plugin module implements interactions behavior.
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -7,8 +7,8 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
+import type { MattermostIngressInteraction } from "./monitor-ingress.js";
 import {
   isTrustedProxyAddress,
   readRequestBodyWithLimit,
@@ -368,11 +368,6 @@ export function createMattermostInteractionHandler(params: {
   allowedSourceIps?: string[];
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  resolveSessionKey?: (params: {
-    channelId: string;
-    userId: string;
-    post: MattermostPost;
-  }) => Promise<string>;
   handleInteraction?: (opts: {
     payload: MattermostInteractionPayload;
     userName: string;
@@ -386,19 +381,11 @@ export function createMattermostInteractionHandler(params: {
     payload: MattermostInteractionPayload;
     post: MattermostPost;
   }) => Promise<MattermostInteractionAuthorizationResult>;
-  dispatchButtonClick?: (opts: {
-    channelId: string;
-    userId: string;
-    userName: string;
-    actionId: string;
-    actionName: string;
-    postId: string;
-    post: MattermostPost;
-  }) => Promise<void>;
+  /** Records the click durably; a rejection must reach the caller before any success reply. */
+  admitInteraction?: (interaction: MattermostIngressInteraction) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { client, accountId, log } = params;
-  const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
     try {
@@ -609,29 +596,30 @@ export function createMattermostInteractionHandler(params: {
       }
     }
 
-    // Dispatch as system event so the agent can handle it.
-    // Wrapped in try/catch — the post update below must still run even if
-    // system event dispatch fails (e.g. missing sessionKey or channel lookup).
-    try {
-      const eventLabel =
-        `Mattermost button click: action="${actionId}" ` +
-        `by ${payload.user_name ?? payload.user_id} ` +
-        `in channel ${payload.channel_id}`;
-
-      const sessionKey = params.resolveSessionKey
-        ? await params.resolveSessionKey({
-            channelId: payload.channel_id,
-            userId: payload.user_id,
-            post: originalPost,
-          })
-        : `agent:main:mattermost:${accountId}:${payload.channel_id}`;
-
-      core.system.enqueueSystemEvent(eventLabel, {
-        sessionKey,
-        contextKey: `mattermost:interaction:${payload.post_id}:${actionId}`,
-      });
-    } catch (err) {
-      log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
+    // Record the click before anything tells the user it was taken. Mattermost
+    // treats the response as final and never redelivers, so an accepted click that
+    // is only in this process is lost to a restart, a crash, or a throwing handler.
+    if (params.admitInteraction) {
+      try {
+        await params.admitInteraction({
+          // No callback field is unique per press, and a post can be clicked again
+          // when the completion update below fails, so admission mints the id.
+          eventId: randomUUID(),
+          channelId: payload.channel_id,
+          userId: payload.user_id,
+          userName,
+          actionId,
+          actionName: clickedButtonName,
+          postId: payload.post_id,
+          ...(originalPost.root_id?.trim() ? { rootId: originalPost.root_id.trim() } : {}),
+        });
+      } catch (err) {
+        log?.(`mattermost interaction: durable admission failed: ${String(err)}`);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Interaction could not be accepted" }));
+        return;
+      }
     }
 
     // Update the post via API to replace buttons with a completion indicator.
@@ -654,22 +642,5 @@ export function createMattermostInteractionHandler(params: {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end("{}");
-
-    // Dispatch a synthetic inbound message so the agent responds to the button click.
-    if (params.dispatchButtonClick) {
-      try {
-        await params.dispatchButtonClick({
-          channelId: payload.channel_id,
-          userId: payload.user_id,
-          userName,
-          actionId,
-          actionName: clickedButtonName,
-          postId: payload.post_id,
-          post: originalPost,
-        });
-      } catch (err) {
-        log?.(`mattermost interaction: dispatchButtonClick failed: ${String(err)}`);
-      }
-    }
   };
 }
