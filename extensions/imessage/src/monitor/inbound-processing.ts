@@ -999,7 +999,13 @@ export async function buildIMessageInboundContext(params: {
   // Async follow-ups need a service-qualified durable origin. Immediate direct replies use the
   // provider's exact chat ID instead, so service auto-detection cannot erase the current binding.
   const imessageFrom = decision.isGroup ? `imessage:group:${chatId ?? "unknown"}` : imessageTo;
-  const replyTarget = !decision.isGroup && chatId != null ? `chat_id:${chatId}` : imessageTo;
+  const replyTarget = decision.isGroup
+    ? imessageTo
+    : chatId != null
+      ? `chat_id:${chatId}`
+      : decision.chatGuid
+        ? `chat_guid:${decision.chatGuid}`
+        : imessageTo;
   const inboundHistory =
     !decision.isGroup && params.dmHistory?.inboundHistory
       ? params.dmHistory.inboundHistory
