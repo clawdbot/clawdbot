@@ -229,8 +229,8 @@ export function createClaudeSessionCatalogRuntime(
       if (resume && !isExactClaudeSessionCursor(resume.row.resumeCursor)) {
         throw new Error("Update the Claude session node to page mixed transcript blocks");
       }
-      // Native byte-end anchors keep partial rows stable across appends and
-      // changed page sizes, including pages cut by the shared byte budget.
+      // Native byte-end anchors use base64url (no colon), so the block prefix is
+      // distinct. Anchors survive appends, changed page sizes, and byte-budget cuts.
       const nextCursor = resume
         ? `block:${resume.skip}:${resume.row.resumeCursor}`
         : page.nextCursor;
