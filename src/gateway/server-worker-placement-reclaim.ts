@@ -3,6 +3,7 @@ import type { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
+  closeSessionWorkAdmissions,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -12,7 +13,7 @@ import {
   resolveWorkerPlacementSessionTarget,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
-import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-dispatch.js";
+import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
 
@@ -49,6 +50,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     const cancelAndDrain = async (
       closeWorkAdmissions: (reason: Error) => void,
       assertCurrent: () => void,
+      assertCancellationCurrent = assertCurrent,
     ) => {
       const reason = createAgentRunDirectAbortError();
       assertCurrent();
@@ -57,7 +59,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         sessionId,
         sessionKeys: lifecycleIdentities,
         agentId,
-        assertCurrent,
+        assertCurrent: assertCancellationCurrent,
       });
       assertCurrent();
       const released = await interruptSessionWorkAdmissions({
@@ -75,6 +77,90 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     };
     return { sessionRuntime, target, lifecycleIdentities, cancelAndDrain };
+  };
+
+  const runReclaimPreparation: WorkerPlacementReclaimBarriers["runReclaimPreparation"] = async ({
+    sessionId,
+    sessionKey,
+    agentId,
+    authorize,
+    beforeDrain,
+    run,
+  }) => {
+    const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } =
+      await resolveLifecycleContext({ sessionId, sessionKey, agentId });
+    const entry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+      target.store,
+      target.storeKeys,
+    );
+    const revision = entry?.lifecycleRevision ?? null;
+    const assertCurrent = () => {
+      authorize?.();
+      const current = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+        cfg: getRuntimeConfig(),
+        key: sessionKey,
+        agentId,
+        clone: false,
+      });
+      const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+        current.store,
+        current.storeKeys,
+      );
+      if (
+        current.storePath !== target.storePath ||
+        current.canonicalKey !== target.canonicalKey ||
+        current.agentId !== target.agentId ||
+        currentEntry?.sessionId !== sessionId ||
+        (currentEntry.lifecycleRevision ?? null) !== revision
+      ) {
+        throw new WorkerDispatchTargetChangedError(
+          `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+        );
+      }
+    };
+    assertCurrent();
+    beforeDrain?.();
+    const placement = params.placements.get(sessionId);
+    if (!placement || placement.state === "local" || placement.state === "reclaimed") {
+      return await run(assertCurrent);
+    }
+    // This lease blocks ingress without a mutex: cancellation recovery must still be able
+    // to acquire lifecycle and placement fences before Stop reserves its teardown turn.
+    const release = closeSessionWorkAdmissions({
+      scope: target.storePath,
+      identities: lifecycleIdentities,
+      reason: createAgentRunDirectAbortError(),
+    });
+    try {
+      if (
+        placement.state === "active" ||
+        placement.state === "draining" ||
+        placement.state === "failed"
+      ) {
+        await cancelAndDrain(
+          () => {},
+          assertCurrent,
+          () => {
+            assertCurrent();
+            const current = params.placements.get(sessionId);
+            if (
+              current?.generation !== placement.generation ||
+              current.state !== placement.state ||
+              current.environmentId !== placement.environmentId ||
+              current.activeOwnerEpoch !== placement.activeOwnerEpoch
+            ) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} cloud worker changed before cancellation. Retry.`,
+              );
+            }
+          },
+        );
+      }
+      assertCurrent();
+      return await run(assertCurrent);
+    } finally {
+      release();
+    }
   };
 
   const runReclaimBarrier: WorkerPlacementReclaimBarriers["runReclaimBarrier"] = async ({
@@ -209,5 +295,5 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       return reclaimedPlacement;
     };
 
-  return { runReclaimBarrier, runFailedReclaimBarrier };
+  return { runReclaimPreparation, runReclaimBarrier, runFailedReclaimBarrier };
 }

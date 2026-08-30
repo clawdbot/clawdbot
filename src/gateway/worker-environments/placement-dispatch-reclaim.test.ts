@@ -456,32 +456,35 @@ describe("worker placement dispatch reclaim", () => {
     expect(restarted.log).not.toContain("placement:reclaimed");
   });
 
-  it("serializes concurrent reclaim of an environment-free failed placement back to clean local state", async () => {
-    const harness = createHarness(placementStore);
-    const requested = placementStore.startDispatch(REQUEST);
-    const failed = placementStore.fail({
-      sessionId: REQUEST.sessionId,
-      expectedGeneration: requested.generation,
-      recoveryError: "device worker is offline",
-    });
+  it.each([false, true])(
+    "serializes concurrent failed reclaim back to local (coordinated=%s)",
+    async (coordinated) => {
+      const harness = createHarness(placementStore);
+      const requested = placementStore.startDispatch(REQUEST);
+      const failed = placementStore.fail({
+        sessionId: REQUEST.sessionId,
+        expectedGeneration: requested.generation,
+        recoveryError: "device worker is offline",
+      });
 
-    const results = await Promise.all([
-      harness.service.reclaim(REQUEST),
-      harness.service.reclaim(REQUEST),
-    ]);
-    expect(results[1]).toEqual(results[0]);
-    expect(results[0]).toMatchObject({
-      state: "local",
-      generation: failed.generation + 1,
-      environmentId: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-    });
+      const service = coordinated
+        ? coordinateWorkerPlacementDispatch(harness.service)
+        : harness.service;
+      const results = await Promise.all([service.reclaim(REQUEST), service.reclaim(REQUEST)]);
+      expect(results[1]).toEqual(results[0]);
+      expect(results[0]).toMatchObject({
+        state: "local",
+        generation: failed.generation + 1,
+        environmentId: null,
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+      });
 
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-  });
+      expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    },
+  );
 
   it("retries pending failed-environment teardown before clearing the placement", async () => {
     const harness = createHarness(placementStore, { failAt: "sync", destroyFails: true });

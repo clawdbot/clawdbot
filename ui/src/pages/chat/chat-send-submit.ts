@@ -402,7 +402,6 @@ export async function handleSendChat(
           const queued = enqueueChatMessage(
             host,
             message,
-            undefined,
             isChatResetCommand(message),
             {
               args: parsed.args,

@@ -564,7 +564,18 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!params.requireVisibleReply &&
-        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload));
+        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload)) ||
+      // Nested requesters and internal sessions observe the final in their transcript.
+      // Unresolved external origins still require delivery evidence.
+      (!requiresMessageToolDelivery &&
+        hasVisibleNonSilentGatewayPayload &&
+        directAnnounceResult?.deliveryStatus?.status !== "suppressed" &&
+        (params.requesterIsSubagent ||
+          [effectiveDirectOrigin, requesterSessionOrigin].every((origin) =>
+            origin?.channel
+              ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
+              : !origin?.to,
+          )));
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (

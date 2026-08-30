@@ -296,9 +296,6 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
     }
   }
   const resolved = candidates[0];
-  if (typeof resolved === "function") {
-    return { register: resolved as OpenClawPluginDefinition["register"] };
-  }
   if (resolved && typeof resolved === "object") {
     const definition = resolved as OpenClawPluginDefinition;
     return { definition, register: definition.register };

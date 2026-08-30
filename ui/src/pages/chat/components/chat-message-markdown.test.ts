@@ -1,32 +1,29 @@
 /* @vitest-environment jsdom */
-// Contract for the full-message fetch flag: the Gateway marks every display-
+// Contract for full-message eligibility: the Gateway marks every display-
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { renderUserMessageMarkdown, resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { renderMessageMarkdown, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
-describe("resolveMessageActionDetails full-message fetch flag", () => {
+describe("resolveMessageActionDetails full-message eligibility", () => {
   it.each([
     { role: "assistant", id: "msg-1", shouldFetch: true },
     { role: "user", id: "msg-1", shouldFetch: false },
     { role: "user", id: "pending:input-1", shouldFetch: true },
-  ])(
-    "role=$role capped by metadata -> shouldFetchFullMessage=$shouldFetch",
-    ({ role, id, shouldFetch }) => {
-      const details = resolveMessageActionDetails({
-        message: { role, content: "Preview\n...(truncated)...", __openclaw: { ...cappedMeta, id } },
-        messageId: "msg-1",
-        canFetchFullMessage: true,
-        onReply: () => {},
-        senderLabel: role,
-      });
-      expect(details?.shouldFetchFullMessage).toBe(shouldFetch);
-    },
-  );
+  ])("role=$role capped by metadata -> eligible=$shouldFetch", ({ role, id, shouldFetch }) => {
+    const details = resolveMessageActionDetails({
+      message: { role, content: "Preview\n...(truncated)...", __openclaw: { ...cappedMeta, id } },
+      messageId: "msg-1",
+      canFetchFullMessage: true,
+      onReply: () => {},
+      senderLabel: role,
+    });
+    expect(details?.fullMessage?.messageId).toBe(shouldFetch ? id : undefined);
+  });
 
   it("expands accepted user text without granting transcript reply or rewind identity", () => {
     const message = {
@@ -64,7 +61,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       canFetchFullMessage: true,
       senderLabel: "assistant",
     });
-    expect(details?.shouldFetchFullMessage).toBe(false);
+    expect(details?.fullMessage).toBeUndefined();
   });
 
   it("does not fetch an untruncated assistant message", () => {
@@ -74,7 +71,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       canFetchFullMessage: true,
       senderLabel: "assistant",
     });
-    expect(details?.shouldFetchFullMessage).toBe(false);
+    expect(details?.fullMessage).toBeUndefined();
   });
 
   it("projects an oversized assistant marker to a notice without disabling recovery", () => {
@@ -91,7 +88,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       senderLabel: "assistant",
     });
 
-    expect(details?.shouldFetchFullMessage).toBe(true);
+    expect(details?.fullMessage?.messageId).toBe("msg-oversized");
     expect(details?.markdown).toBe("This message is too large to display here.");
     expect(details?.replyTarget?.text).toBe("This message is too large to display here.");
 
@@ -108,7 +105,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       senderLabel: "assistant",
     });
 
-    expect(loaded?.shouldFetchFullMessage).toBe(true);
+    expect(loaded?.fullMessage?.messageId).toBe("msg-oversized");
     expect(loaded?.markdown).toBe("Recovered full assistant content.");
     expect(loaded?.replyTarget?.text).toBe("Recovered full assistant content.");
   });
@@ -134,10 +131,10 @@ describe("user message disclosure", () => {
     const container = document.createElement("div");
 
     render(
-      renderUserMessageMarkdown(
+      renderMessageMarkdown(
         markdown,
         "message",
-        { isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
+        { role: "user", isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
         {},
       ),
       container,

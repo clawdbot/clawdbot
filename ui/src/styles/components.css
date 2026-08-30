@@ -5939,6 +5939,11 @@ td.data-table-key-col {
   animation: session-run-spin 1.6s linear infinite;
 }
 
+.session-run-spinner--queued,
+.session-glyph__ring--queued {
+  animation-play-state: paused;
+}
+
 @keyframes session-run-spin {
   to {
     transform: rotate(360deg);

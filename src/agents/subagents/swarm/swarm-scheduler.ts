@@ -9,6 +9,8 @@ type SwarmLaunch = {
 type QueuedSwarmRun = {
   runId: string;
   owner?: object;
+  onCapacityChange?: () => void;
+  reportedCapacityWait?: boolean;
   launch?: SwarmLaunch;
   holds: number;
   retryReady: boolean;
@@ -29,9 +31,30 @@ const runLocations = new Map<
   | { lane: SwarmGroupLane; state: "queued"; item: QueuedSwarmRun }
 >();
 
+function publishCapacityChange(item: QueuedSwarmRun) {
+  if (!item.owner || !item.onCapacityChange) {
+    return;
+  }
+  const waiting = isSwarmRunWaitingForCapacity(item.runId, item.owner);
+  if (waiting !== (item.reportedCapacityWait === true)) {
+    item.reportedCapacityWait = waiting;
+    item.onCapacityChange();
+  }
+}
+
+function publishLaneCapacityChange(lane: SwarmGroupLane, previouslyFull: boolean) {
+  if (previouslyFull !== lane.active.size >= lane.limit) {
+    for (const item of lane.queue) {
+      publishCapacityChange(item);
+    }
+  }
+}
+
 async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch: SwarmLaunch) {
   lane.active.add(item.runId);
   runLocations.set(item.runId, { lane, state: "active", item });
+  publishCapacityChange(item);
+  publishLaneCapacityChange(lane, false);
   try {
     // Acquiring capacity and invoking launch are one synchronous dispatch boundary.
     await launch.start();
@@ -50,13 +73,18 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
       releaseSwarmRun(item.runId);
       return;
     }
+    const previouslyFull = lane.active.size >= lane.limit;
     lane.active.delete(item.runId);
     item.retryReady = false;
     lane.queue.unshift(item);
     runLocations.set(item.runId, { lane, state: "queued", item });
+    publishLaneCapacityChange(lane, previouslyFull);
     const timer = setTimeout(
       () => {
         item.retryReady = true;
+        if (runLocations.get(item.runId)?.item === item) {
+          publishCapacityChange(item);
+        }
         pumpLane(lane);
       },
       isFastTestRuntimeEnv() ? 1 : 1_000,
@@ -95,6 +123,7 @@ function ensureLane(params: {
     queue: [],
     pumpScheduled: false,
   };
+  const previouslyFull = lane.active.size >= lane.limit;
   lanes.set(params.groupId, lane);
   lane.limit = params.maxConcurrent;
   for (const runId of params.activeRunIds) {
@@ -106,6 +135,7 @@ function ensureLane(params: {
     lane.active.add(runId);
     runLocations.set(runId, { lane, state: "active" });
   }
+  publishLaneCapacityChange(lane, previouslyFull);
   return lane;
 }
 
@@ -134,16 +164,35 @@ export function reserveSwarmRun(params: {
 }
 
 /** Bind a committed registration without transferring a retained reservation to a replacement. */
-export function bindSwarmRunReservation(runId: string, owner: object): void {
+export function bindSwarmRunReservation(
+  runId: string,
+  owner: object,
+  onCapacityChange?: () => void,
+): void {
   const item = runLocations.get(runId)?.item;
   if (item && item.owner === undefined) {
     item.owner = owner;
+    item.onCapacityChange = onCapacityChange;
+    publishCapacityChange(item);
   }
 }
 
 /** Includes held/preactivation work and the launch awaiting Gateway acceptance. */
 export function ownsSwarmRunReservation(runId: string, owner: object): boolean {
   return runLocations.get(runId)?.item?.owner === owner;
+}
+
+/** Preparation, cancellation holds, and already-admitted launches are not slot waits. */
+export function isSwarmRunWaitingForCapacity(runId: string, owner: object): boolean {
+  const location = runLocations.get(runId);
+  return Boolean(
+    location?.state === "queued" &&
+    location.item.owner === owner &&
+    location.item.launch &&
+    location.item.retryReady &&
+    location.item.holds === 0 &&
+    location.lane.active.size >= location.lane.limit,
+  );
 }
 
 /** Attach launch work to an existing FIFO reservation. */
@@ -159,6 +208,7 @@ export function activateSwarmRun(params: {
   }
   const { lane, item } = location;
   item.launch = { start: params.start, onStartFailure: params.onStartFailure };
+  publishCapacityChange(item);
   pumpLane(lane);
 }
 
@@ -190,10 +240,15 @@ export function enqueueSwarmRun(params: {
 
 export function releaseSwarmRun(runId: string): boolean {
   const location = runLocations.get(runId);
-  if (!location || location.state !== "active" || !location.lane.active.delete(runId)) {
+  if (!location || location.state !== "active") {
+    return false;
+  }
+  const previouslyFull = location.lane.active.size >= location.lane.limit;
+  if (!location.lane.active.delete(runId)) {
     return false;
   }
   runLocations.delete(runId);
+  publishLaneCapacityChange(location.lane, previouslyFull);
   pumpLane(location.lane);
   deleteLaneIfIdle(location.lane);
   return true;
@@ -210,6 +265,7 @@ export function removeQueuedSwarmRun(runId: string): boolean {
   }
   location.lane.queue.splice(index, 1);
   runLocations.delete(runId);
+  publishCapacityChange(location.item);
   pumpLane(location.lane);
   deleteLaneIfIdle(location.lane);
   return true;
@@ -228,6 +284,7 @@ export function holdQueuedSwarmRun(runId: string) {
   }
   const { lane, item } = location;
   item.holds += 1;
+  publishCapacityChange(item);
   let released = false;
   return {
     release() {
@@ -236,6 +293,9 @@ export function holdQueuedSwarmRun(runId: string) {
       }
       released = true;
       item.holds -= 1;
+      if (runLocations.get(runId) === location) {
+        publishCapacityChange(item);
+      }
       pumpLane(lane);
     },
     withdraw() {
