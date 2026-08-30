@@ -182,12 +182,12 @@ describe("Zalo polling image handling", () => {
       expect(params).toEqual({
         url: stallUrl,
         maxBytes: 5 * 1024 * 1024,
-        responseHeaderTimeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+        timeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
         readIdleTimeoutMs: ZALO_MEDIA_READ_IDLE_TIMEOUT_MS,
       });
       return await saveRemoteMedia({
         ...params,
-        responseHeaderTimeoutMs: headerTimeoutMs,
+        timeoutMs: headerTimeoutMs,
         ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
       });
     };

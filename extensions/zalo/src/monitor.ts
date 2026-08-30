@@ -388,7 +388,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
       const saved = await core.channel.media.saveRemoteMedia({
         url: photo_url,
         maxBytes,
-        responseHeaderTimeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+        timeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
         readIdleTimeoutMs: ZALO_MEDIA_READ_IDLE_TIMEOUT_MS,
       });
       mediaPath = saved.path;

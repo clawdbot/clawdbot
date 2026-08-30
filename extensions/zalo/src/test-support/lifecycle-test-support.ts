@@ -383,7 +383,7 @@ export function expectImageLifecycleDelivery(params: {
   expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
     maxBytes: 5 * 1024 * 1024,
-    responseHeaderTimeoutMs: 120_000,
+    timeoutMs: 120_000,
     readIdleTimeoutMs: 30_000,
   });
   expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
