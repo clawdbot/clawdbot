@@ -493,6 +493,53 @@ describe("chat.history cursor catch-up", () => {
     });
   });
 
+  test("redacts nested tool activity inline images from cursor deltas", async () => {
+    const { context, storePath } = await createCursorSession();
+    const page = await callChat<{ deltaCursor?: string }>(context, "chat.history");
+    const imageUrl = "DATA:image/png;BASE64,bmVzdGVk";
+    await appendTranscriptMessage(currentScope(storePath), {
+      eventId: "nested-inline-image",
+      parentId: "cached",
+      message: createNestedToolActivity({
+        runId: "nested-image-run",
+        scopeId: "nested-image-scope",
+        afterEntryId: "cached",
+        startOrder: 0,
+        parentToolCallId: "cached",
+        toolCallId: "nested-image-call",
+        toolName: "image",
+        input: {},
+        result: { content: [{ type: "input_image", image_url: imageUrl }] },
+        isError: false,
+        startedAt: 1,
+        timestamp: 2,
+      }),
+    });
+
+    const delta = await callChat<{
+      kind?: string;
+      messages?: Array<{ message?: unknown }>;
+    }>(context, "chat.history", { cursor: page.payload?.deltaCursor });
+    expect(delta.ok).toBe(true);
+    expect(delta.payload?.kind).toBe("delta");
+    expect(JSON.stringify(delta.payload?.messages)).not.toContain(imageUrl);
+    expect(delta.payload?.messages?.[0]?.message).toMatchObject({
+      content: [
+        { type: "toolCall", id: "nested-image-call" },
+        {
+          type: "toolResult",
+          content: [
+            {
+              type: "input_image",
+              omitted: true,
+              bytes: Buffer.byteLength(imageUrl, "utf8"),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   test.each(["chat.history", "chat.startup"] as const)(
     "%s returns the active run snapshot with an empty cached delta",
     async (method) => {
