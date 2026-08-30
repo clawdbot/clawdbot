@@ -1276,36 +1276,11 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl(cfg, "search")).toBe("https://plugin.firecrawl.test");
   });
 
-  it("keeps search and fetch credential and endpoint precedence capability-local", () => {
-    const cfg = {
-      plugins: {
-        entries: {
-          firecrawl: {
-            config: {
-              webSearch: {
-                apiKey: "search-key",
-                baseUrl: "https://search.firecrawl.test",
-              },
-              webFetch: {
-                apiKey: "fetch-key",
-                baseUrl: "https://fetch.firecrawl.test",
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveFirecrawlApiKey(cfg, "search")).toBe("search-key");
-    expect(resolveFirecrawlBaseUrl(cfg, "search")).toBe("https://search.firecrawl.test");
-    expect(resolveFirecrawlApiKey(cfg, "fetch")).toBe("fetch-key");
-    expect(resolveFirecrawlBaseUrl(cfg, "fetch")).toBe("https://fetch.firecrawl.test");
-  });
-
   it("dispatches search and fetch with their capability-local credentials and endpoints", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       requests.push({
         url,
         authorization: new Headers(init?.headers).get("Authorization"),
