@@ -16,6 +16,10 @@ import {
 } from "./openclaw-state-db-maintenance.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+const cachedDataVersionStatements = new WeakMap<
+  DatabaseSync,
+  ReturnType<DatabaseSync["prepare"]>
+>();
 const cachedDataVersions = new WeakMap<DatabaseSync, number>();
 type OpenClawStateDatabaseLifecycleEvent =
   | { kind: "opened"; database: OpenClawStateDatabase }
@@ -30,10 +34,14 @@ function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecy
 }
 
 function readSqliteDataVersion(database: DatabaseSync): number {
+  let statement = cachedDataVersionStatements.get(database);
+  if (!statement) {
+    statement = database /* sqlite-allow-raw -- Connection-local schema compatibility counter. */
+      .prepare("PRAGMA data_version");
+    cachedDataVersionStatements.set(database, statement);
+  }
   // SAFETY: SQLite defines this pragma's single-column row; the value is validated below.
-  const row = database.prepare("PRAGMA data_version").get() as
-    | { data_version?: unknown }
-    | undefined;
+  const row = statement.get() as { data_version?: unknown } | undefined;
   if (typeof row?.data_version !== "number") {
     throw new Error("SQLite did not return a numeric PRAGMA data_version");
   }
@@ -152,6 +160,10 @@ function getOpenClawStateDatabaseRuntimeFailure(pathname: string): Error | undef
     return undefined;
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
+    if (isSqliteCorruptionError(failure)) {
+      evictCachedOpenClawStateDatabase(cached);
+      return undefined;
+    }
     if (isSqliteSchemaVersionError(failure)) {
       terminalOpenLatch.record(resolvedPath, failure);
       notifyOpenClawStateDatabaseLifecycle({
