@@ -3570,7 +3570,7 @@ describe("chat voice controls", () => {
     ["connecting", "Connecting voice input..."],
     ["listening", "Listening..."],
     ["thinking", "Asking OpenClaw..."],
-  ] as const)("renders %s voice activity without visible status copy", (status, label) => {
+  ] as const)("renders %s voice activity with the appropriate status region", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
     const container = renderChatView({
@@ -3587,11 +3587,17 @@ describe("chat voice controls", () => {
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
     expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
-    const statusRegion = container.querySelector('[role="status"].agent-chat__voice-status');
+    const statusRegion = container.querySelector(
+      status === "connecting"
+        ? '[role="status"].agent-chat__talk-status'
+        : '[role="status"].agent-chat__voice-status',
+    );
     expect(statusRegion?.getAttribute("aria-live")).toBe("polite");
     expect(statusRegion?.getAttribute("aria-atomic")).toBe("true");
     expect(statusRegion?.textContent?.trim()).toBe(label);
-    expect(container.querySelector(".agent-chat__talk-status")).toBeNull();
+    if (status !== "connecting") {
+      expect(container.querySelector(".agent-chat__talk-status")).toBeNull();
+    }
   });
 
   it("keeps the stop control without a live meter when a running session errors", () => {

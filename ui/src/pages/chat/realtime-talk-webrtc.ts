@@ -44,7 +44,10 @@ const cancelledSetup = Symbol("cancelledSetup");
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
-  private readonly input = new RealtimeTalkInputController((detail) => this.failConnection(detail));
+  private readonly input = new RealtimeTalkInputController(
+    (detail) => this.failConnection(detail),
+    (detail) => this.ctx.callbacks.onStatus?.("connecting", detail),
+  );
   private audio: HTMLAudioElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;

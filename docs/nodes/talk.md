@@ -54,6 +54,13 @@ browser at up to one frame per second, while `describe_view` reports the
 camera-stream state. In both cases, camera frames bypass the Gateway, and
 stopping Talk releases the camera and microphone tracks.
 
+Browser Talk shows startup progress while preparing the session, waiting for
+microphone access, and connecting. Talk and dictation show microphone guidance
+while the browser's capture request is pending: bring the tab to the foreground
+and allow access if prompted. The browser can keep an unanswered permission
+request pending. In Talk, **Stop voice input** cancels startup and releases any
+microphone stream granted after cancellation.
+
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore
 permission if needed, and start Talk again. An unexpected GPT-Live connection

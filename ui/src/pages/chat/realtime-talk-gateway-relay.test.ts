@@ -229,11 +229,12 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const addListener = vi.spyOn(track, "addEventListener");
     getUserMedia.mockResolvedValueOnce({ getTracks: () => [track] });
     const client = createClient();
-    const onStatus = vi.fn(() => {
-      throw new Error("status failed");
-    });
+    const onStatus = vi.fn();
     const transport = createTransport({ client, callbacks: { onStatus } });
     await startTransport(transport);
+    onStatus.mockImplementation(() => {
+      throw new Error("status failed");
+    });
 
     const ended = addListener.mock.calls[0]?.[1];
     expect(() => {
@@ -314,6 +315,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     const start = transport.start();
+    onStatus.mockClear();
     emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
     emitTalkEvent({
       relaySessionId: "relay-1",
@@ -338,7 +340,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
     } as unknown as MediaStream);
     await expect(start).resolves.toBe("ready");
-    expect(onStatus).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith("connecting", undefined);
+    onStatus.mockClear();
     expect(onTranscript).not.toHaveBeenCalled();
 
     transport.activate();
@@ -367,6 +370,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const transport = createTransport({ callbacks: { onStatus }, client });
 
     const start = transport.start();
+    onStatus.mockClear();
     for (let index = 0; index < 33; index += 1) {
       emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
     }
@@ -421,6 +425,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const transport = createTransport({ callbacks: { onStatus }, client });
 
     const start = transport.start();
+    onStatus.mockClear();
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "error",
@@ -442,14 +447,15 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("closes the relay when a provisional callback throws during activation", async () => {
     const client = createClient();
-    const onStatus = vi.fn(() => {
-      throw new Error("consumer failed");
-    });
+    const onStatus = vi.fn();
     const transport = createTransport({ callbacks: { onStatus }, client });
 
     const start = transport.start();
     emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
     await expect(start).resolves.toBe("ready");
+    onStatus.mockImplementation(() => {
+      throw new Error("consumer failed");
+    });
 
     expect(() => transport.activate()).toThrow("consumer failed");
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
@@ -769,6 +775,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const oldTransport = createTransport({ callbacks: { onStatus: oldStatus }, client: oldClient });
 
     await oldTransport.start();
+    oldStatus.mockClear();
     pumpMicrophone(new Float32Array(4096));
     oldTransport.stop();
 
@@ -779,6 +786,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       client: replacementClient,
     });
     await replacement.start();
+    replacementStatus.mockClear();
     pumpMicrophone(new Float32Array(4096));
     rejectOldAppend(new Error("late stale append failure"));
     await Promise.resolve();
@@ -852,9 +860,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       getUserMedia.mockResolvedValue({
         getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
       } as unknown as MediaStream);
-      const throwingCallback = vi.fn(() => {
-        throw new Error("consumer failed");
-      });
+      const throwingCallback = vi.fn();
       const client = createClient();
       const transport = createTransport({
         client,
@@ -865,6 +871,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       });
 
       await startTransport(transport);
+      throwingCallback.mockImplementation(() => {
+        throw new Error("consumer failed");
+      });
       expect(() =>
         emitTalkEvent({
           relaySessionId: "relay-1",

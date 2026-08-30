@@ -136,7 +136,7 @@ describe("RealtimeTalkSession", () => {
     expect(googleStart).toHaveBeenCalledTimes(1);
     expect(webRtcInstances).toHaveLength(0);
     expect(relayInstances).toHaveLength(0);
-    expect(onStatus).toHaveBeenCalledWith("connecting");
+    expect(onStatus).toHaveBeenCalledWith("connecting", "Preparing voice session...");
   });
 
   it("defaults legacy session results without an explicit transport to WebRTC", async () => {

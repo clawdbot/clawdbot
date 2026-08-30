@@ -265,7 +265,10 @@ export class RealtimeTalkInputController {
   private controller: AbortController | null = null;
   private media: MediaStream | null = null;
 
-  constructor(private readonly onEnded: (detail: string) => void) {}
+  constructor(
+    private readonly onEnded: (detail: string) => void,
+    private readonly onConnecting?: (detail?: string) => void,
+  ) {}
 
   get stream(): MediaStream | null {
     return this.media;
@@ -276,6 +279,7 @@ export class RealtimeTalkInputController {
     const controller = new AbortController();
     this.controller = controller;
     try {
+      this.onConnecting?.(t("chat.composer.microphoneAccessPending"));
       const media = await openRealtimeTalkInput(inputDeviceId, { signal: controller.signal });
       if (controller.signal.aborted) {
         media.getTracks().forEach((track) => track.stop());
@@ -293,6 +297,9 @@ export class RealtimeTalkInputController {
       for (const track of media.getTracks()) {
         track.addEventListener("ended", onEnded, { signal: controller.signal });
       }
+      // Only the current, successful acquisition advances the visible startup phase.
+      // Cancellation must not overwrite idle or a replacement's microphone prompt.
+      this.onConnecting?.();
       return media;
     } catch (error) {
       if (this.controller === controller) {

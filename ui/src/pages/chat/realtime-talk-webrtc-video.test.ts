@@ -120,6 +120,40 @@ describe("OpenAI Realtime media lifecycle", () => {
     }
   });
 
+  it("explains pending microphone access and advances to connection setup after acquisition", async () => {
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          resolveMedia = resolve;
+        }),
+    );
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const onStatus = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
+      { client: {} as never, sessionKey: "main", callbacks: { onStatus } },
+    );
+    const starting = transport.start();
+    try {
+      expect(onStatus).toHaveBeenLastCalledWith(
+        "connecting",
+        "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
+      );
+      expect(fetch).not.toHaveBeenCalled();
+      resolveMedia({
+        getTracks: () => [track],
+        getAudioTracks: () => [track],
+      } as unknown as MediaStream);
+      await expect(starting).resolves.toBe("ready");
+      expect(onStatus).toHaveBeenLastCalledWith("connecting", undefined);
+    } finally {
+      transport.stop();
+      await starting;
+    }
+  });
+
   it("starts audio-only, toggles local camera, and reports camera-off tool calls", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();

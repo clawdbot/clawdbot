@@ -81,12 +81,15 @@ function isGemini31LiveModel(model: string | undefined): boolean {
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private readonly input = new RealtimeTalkInputController((detail) => {
-    const ws = this.ws;
-    if (ws) {
-      this.failConnection(ws, detail);
-    }
-  });
+  private readonly input = new RealtimeTalkInputController(
+    (detail) => {
+      const ws = this.ws;
+      if (ws) {
+        this.failConnection(ws, detail);
+      }
+    },
+    (detail) => this.ctx.callbacks.onStatus?.("connecting", detail),
+  );
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
