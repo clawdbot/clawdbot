@@ -75,6 +75,7 @@ export type ResolvedSessionEntryRow = {
   row: SessionEntryRow;
 };
 
+/** Decodes a fresh owned entry, including its nested JSON, owner and participant values. */
 export function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
   row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &

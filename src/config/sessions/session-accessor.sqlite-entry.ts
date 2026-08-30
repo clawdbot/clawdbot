@@ -115,13 +115,8 @@ export function resolveSessionEntry(
     database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   ): ResolvedSqliteSessionEntry => {
     const selected = readSessionEntryRow(database, resolved.sessionKey);
-    const existing = selected?.entry;
     return {
-      existing: existing
-        ? scope.clone === false
-          ? existing
-          : cloneSessionEntry(existing)
-        : undefined,
+      existing: selected?.entry,
       legacyKeys: [],
       normalizedKey: resolved.sessionKey,
     };
@@ -154,9 +149,7 @@ export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEn
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
-  return entry
-    ? { sessionKey, entry: scope.clone === false ? entry : cloneSessionEntry(entry) }
-    : undefined;
+  return entry ? { sessionKey, entry } : undefined;
 }
 
 /** Lists persisted session keys without materializing their entry JSON. */
@@ -190,7 +183,7 @@ export function loadExactSessionEntryReadOnly(
   return result.found && result.value
     ? {
         sessionKey,
-        entry: scope.clone === false ? result.value : cloneSessionEntry(result.value),
+        entry: result.value,
       }
     : undefined;
 }
@@ -220,14 +213,7 @@ export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): Sess
         return [];
       }
       const entry = parseReadableSqliteSessionEntryRow(database, row);
-      return entry
-        ? [
-            {
-              sessionKey: row.session_key,
-              entry: scope.clone === false ? entry : cloneSessionEntry(entry),
-            },
-          ]
-        : [];
+      return entry ? [{ sessionKey: row.session_key, entry }] : [];
     });
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
