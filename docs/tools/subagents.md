@@ -337,9 +337,7 @@ waiting.
 
 Automatic continuation is specific to the plugin runtime API above. Ordinary
 follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester. Explicit `subagents` steering is
-different: it deliberately replaces the yielded run and continues the same
-child session.
+paused run nor announce its requester.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery

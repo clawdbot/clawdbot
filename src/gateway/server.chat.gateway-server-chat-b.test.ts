@@ -269,22 +269,6 @@ afterAll(async () => {
   await harness.close();
 });
 
-const sendReq = (
-  ws: { send: (payload: string) => void },
-  id: string,
-  method: string,
-  params: unknown,
-) => {
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method,
-      params,
-    }),
-  );
-};
-
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
   options?: { headers?: Record<string, string> },
@@ -8061,18 +8045,16 @@ describe("gateway server chat", () => {
         return undefined;
       });
 
-      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 2_000);
-      sendReq(
+      const sendRes = await rpcReq(
         ws,
-        "send-abort-1",
         "chat.send",
         makeChatSendParams({
           idempotencyKey: "idem-abort-1",
           timeoutMs: 30_000,
         }),
+        2_000,
       );
 
-      const sendRes = await sendResP;
       expect(sendRes.ok).toBe(true);
       await waitForFast(() => {
         expect(spy.mock.calls.length).toBeGreaterThan(0);

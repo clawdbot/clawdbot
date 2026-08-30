@@ -2114,6 +2114,21 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
   });
 
+  it("keeps error emoji in live run state for the WebUI presentation owner", () => {
+    const diagnostic = "⚠️ 🛠️ Exec failed (exit 1): command failed.";
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: diagnostic,
+      }),
+    ).toBe("error");
+    expect(state.chatRunError).toEqual({ summary: diagnostic, runId: "run-1" });
+  });
+
   it("uses server guidance when an error follows a source-reply final", () => {
     const state = createState({
       sessionKey: "main",

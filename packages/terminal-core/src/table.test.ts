@@ -180,6 +180,18 @@ console.log(JSON.stringify({ rows: output.split("\\n").filter(line => line === "
     expect(visibleWidth(firstLine)).toBe(width);
   });
 
+  it("stops flex growth at the cap when a fractional width rounds up", () => {
+    const out = renderTable({
+      width: 20,
+      border: "ascii",
+      padding: 0,
+      columns: [{ key: "V", header: "V", minWidth: 7.999999999999999, maxWidth: 9, flex: true }],
+      rows: [{ V: "x" }],
+    });
+
+    expect(out).toBe("+---------+\n|V        |\n+---------+\n|x        |\n+---------+\n");
+  });
+
   it("wraps ANSI-colored cells without corrupting escape sequences", () => {
     const out = renderTable({
       width: 36,

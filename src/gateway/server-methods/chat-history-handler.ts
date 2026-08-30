@@ -478,17 +478,24 @@ async function handleChatHistoryRequest({
   if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
     sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
   }
-  const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
-    agentId: sessionAgentId,
-    allowPluginNormalization: false,
-    providerPolicySource: "active",
-  });
+  // Cursor responses publish sessionInfo only; the default-model projection is unused.
+  const defaults =
+    cursor === undefined
+      ? getSessionDefaults(cfg, defaultModelCatalog, {
+          agentId: sessionAgentId,
+          allowPluginNormalization: false,
+          providerPolicySource: "active",
+        })
+      : undefined;
   // Unprepared catalog facts are unknown, not an Off default or a smaller profile.
   // Omission lets clients retain richer same-identity metadata; authored defaults still apply.
   for (const [projection, catalog] of [
     [sessionInfo, sessionModelCatalog],
     [defaults, defaultModelCatalog],
   ] as const) {
+    if (!projection) {
+      continue;
+    }
     const provider = projection.modelProvider;
     const model = projection.model;
     const catalogEntry =

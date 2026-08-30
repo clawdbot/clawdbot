@@ -7,15 +7,14 @@ import {
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import {
+  makePluginMetadataIndex as makeIndex,
+  makePluginMetadataManifestRegistry as makeManifestRegistry,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import {
-  loadPluginManifestRegistryCore,
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -57,54 +56,6 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
       loadPluginManifestRegistryForInstalledIndex(params),
   };
 });
-
-function makeIndex(pluginId = "demo"): InstalledPluginIndex {
-  const rootDir = `/plugins/${pluginId}`;
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
-    installRecords: {},
-    diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        manifestPath: `${rootDir}/openclaw.plugin.json`,
-        manifestHash: `${pluginId}-manifest`,
-        rootDir,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-  };
-}
-
-function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
-  const plugin: PluginManifestRecord = {
-    id: pluginId,
-    name: pluginId,
-    channels: [],
-    providers: [pluginId],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    commandAliases: [{ name: `${pluginId}-command` }],
-    rootDir: `/plugins/${pluginId}`,
-    source: `/plugins/${pluginId}/index.js`,
-    manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
-    origin: "global",
-  };
-  return { plugins: [plugin], diagnostics: [] };
-}
 
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {

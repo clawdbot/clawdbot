@@ -540,11 +540,16 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
         break;
       }
       const parts = decoder.decode(buffer.subarray(0, bytesRead), { stream: true }).split("\n");
-      for (let index = 0; index < parts.length - 1; index++) {
-        fragments.push(parts[index]!);
-        lineNumber += 1;
-        const text = fragments.join("").trim();
+      // Only the first complete line can span chunks. Keep unterminated giant
+      // records fragmented until a newline arrives instead of repeatedly joining them.
+      if (parts.length > 1 && fragments.length > 0) {
+        fragments.push(parts[0]!);
+        parts[0] = fragments.join("");
         fragments = [];
+      }
+      for (let index = 0; index < parts.length - 1; index++) {
+        lineNumber += 1;
+        const text = parts[index]!.trim();
         if (text) {
           yield { lineNumber, text };
         }

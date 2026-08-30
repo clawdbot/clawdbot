@@ -1377,18 +1377,54 @@ async function runGatewaySample(options: {
   }
 }
 
-function summarizeRuns(runs: readonly BenchmarkRun[]) {
+function summarizeRuns(
+  runs: readonly BenchmarkRun[],
+  options: Pick<CliOptions, "maxControlMs" | "maxHandshakeMs"> = {},
+) {
+  const controlUi = runs.flatMap((run) => run.controlUi);
   const readyz = runs.flatMap((run) => run.readyz);
+  const sessionsList = runs.flatMap((run) => run.sessionsList);
   const history = runs.flatMap((run) => run.history);
   const subscriptions = runs.flatMap((run) => run.messageSubscriptions);
   const subscriptionsDuringLoad = runs.flatMap((run) => run.messageSubscriptionsDuringLoad);
   const sessionUpdates = runs.flatMap((run) => run.sessionUpdates);
+  // Setup subscriptions and warmup probes are not load-phase measurements.
+  const budgetViolations = [
+    {
+      name: "fresh Gateway connection",
+      maxMs: options.maxHandshakeMs,
+      samples: runs.map((run) => run.freshConnection),
+    },
+    ...(
+      [
+        ["readyz", readyz],
+        ["Control UI", controlUi],
+        ["sessions.list", sessionsList],
+        ["chat.history", history],
+        ["sessions.messages.subscribe", subscriptionsDuringLoad],
+        ["sessions.patch", sessionUpdates],
+      ] as const
+    ).map(([name, samples]) => ({
+      name: `Gateway ${name} probe`,
+      maxMs: options.maxControlMs,
+      samples,
+    })),
+  ].flatMap(({ name, maxMs, samples }) => {
+    if (maxMs === undefined) {
+      return [];
+    }
+    const violation = samples.find((sample) => !sample.ok || sample.latencyMs > maxMs);
+    return violation
+      ? [
+          `${name} exceeded ${maxMs}ms: ok=${violation.ok} ` +
+            `latencyMs=${violation.latencyMs.toFixed(1)} error=${violation.error ?? "none"}`,
+        ]
+      : [];
+  });
   return {
-    controlUiFailedSamples: runs.flatMap((run) => run.controlUi).filter((sample) => !sample.ok)
-      .length,
-    controlUiLatencyMs: summarizeNumbers(
-      runs.flatMap((run) => run.controlUi.map((sample) => sample.latencyMs)),
-    ),
+    budgetViolations,
+    controlUiFailedSamples: controlUi.filter((sample) => !sample.ok).length,
+    controlUiLatencyMs: summarizeNumbers(controlUi.map((sample) => sample.latencyMs)),
     cpuCoreRatio: summarizeNumbers(
       readyz.flatMap((sample) => (sample.cpuCoreRatio == null ? [] : [sample.cpuCoreRatio])),
     ),
@@ -1429,12 +1465,8 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
     readyzFailedSamples: readyz.filter((sample) => !sample.ok).length,
     sampleCount: readyz.length,
     sessionSeedDurationMs: summarizeNumbers(runs.map((run) => run.sessionSeedDurationMs)),
-    sessionsListLatencyMs: summarizeNumbers(
-      runs.flatMap((run) => run.sessionsList.map((sample) => sample.latencyMs)),
-    ),
-    sessionsListFailedSamples: runs
-      .flatMap((run) => run.sessionsList)
-      .filter((sample) => !sample.ok).length,
+    sessionsListLatencyMs: summarizeNumbers(sessionsList.map((sample) => sample.latencyMs)),
+    sessionsListFailedSamples: sessionsList.filter((sample) => !sample.ok).length,
     sessionUpdateFailedSamples: sessionUpdates.filter((sample) => !sample.ok).length,
     sessionUpdateLatencyMs: summarizeNumbers(sessionUpdates.map((sample) => sample.latencyMs)),
     sessionUpdateSampleCount: sessionUpdates.length,
@@ -1496,7 +1528,7 @@ async function main(): Promise<void> {
     sessionUpdates: options.sessionUpdates,
     streamChunkDelayMs: options.streamChunkDelayMs,
     subscribers: options.subscribers,
-    summary: summarizeRuns(runs),
+    summary: summarizeRuns(runs, options),
     toolEvents: options.toolEvents,
     visibleObserver: options.visibleObserver,
     workspaceFanout: options.workspaceFanout,
@@ -1508,37 +1540,8 @@ async function main(): Promise<void> {
   if (options.json || !options.output) {
     console.log(JSON.stringify(payload, null, 2));
   }
-  if (options.maxHandshakeMs !== undefined) {
-    const violation = runs.find(
-      (run) => !run.freshConnection.ok || run.freshConnection.latencyMs > options.maxHandshakeMs!,
-    );
-    if (violation) {
-      throw new Error(
-        `fresh Gateway connection exceeded ${options.maxHandshakeMs}ms: ` +
-          `ok=${violation.freshConnection.ok} ` +
-          `latencyMs=${violation.freshConnection.latencyMs.toFixed(1)} ` +
-          `error=${violation.freshConnection.error ?? "none"}`,
-      );
-    }
-  }
-  if (options.maxControlMs !== undefined) {
-    const controlSamples: Array<{ name: string; sample: TimedProbe }> = [];
-    for (const run of runs) {
-      controlSamples.push(
-        ...run.readyz.map((sample) => ({ name: "readyz", sample })),
-        ...run.sessionsList.map((sample) => ({ name: "sessions.list", sample })),
-      );
-    }
-    const violation = controlSamples.find(
-      ({ sample }) => !sample.ok || sample.latencyMs > options.maxControlMs!,
-    );
-    if (violation) {
-      throw new Error(
-        `Gateway ${violation.name} probe exceeded ${options.maxControlMs}ms: ` +
-          `ok=${violation.sample.ok} latencyMs=${violation.sample.latencyMs.toFixed(1)} ` +
-          `error=${violation.sample.error ?? "none"}`,
-      );
-    }
+  if (payload.summary.budgetViolations.length > 0) {
+    throw new Error(payload.summary.budgetViolations.join("\n"));
   }
 }
 

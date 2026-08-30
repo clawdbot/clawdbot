@@ -262,7 +262,7 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
     expect(testConfig.include).toContain("src/sessions/session-lifecycle-events.test.ts");
-    expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
     expect(testConfig.include).not.toEqual(expect.arrayContaining(unitFastIsolatedTestFiles));
   });
 
@@ -275,7 +275,7 @@ describe("unit-fast vitest lane", () => {
     );
 
     const testConfig = requireTestConfig(config);
-    expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
   });
 
@@ -355,8 +355,8 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("routes unit-fast source files to their unit-fast sibling tests", () => {
-    expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/provider-entry.ts")).toBe(
-      "src/plugin-sdk/provider-entry.test.ts",
+    expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/text-chunking.ts")).toBe(
+      "src/plugin-sdk/text-chunking.test.ts",
     );
     expect(resolveUnitFastTestIncludePattern("src/commands/status-overview-values.ts")).toBe(
       "src/commands/status-overview-values.test.ts",
@@ -485,10 +485,8 @@ describe("unit-fast vitest lane", () => {
     const pluginSdkLight = createPluginSdkLightVitestConfig({});
     const commandsLight = createCommandsLightVitestConfig({});
 
-    expect(unitFastTestFiles).toContain("src/plugin-sdk/provider-entry.test.ts");
-    expect(requireTestConfig(pluginSdkLight).exclude).toContain(
-      "plugin-sdk/provider-entry.test.ts",
-    );
+    expect(unitFastTestFiles).toContain("src/plugin-sdk/text-chunking.test.ts");
+    expect(requireTestConfig(pluginSdkLight).exclude).toContain("plugin-sdk/text-chunking.test.ts");
     expect(requireTestConfig(commandsLight).exclude).toContain("status-overview-values.test.ts");
   });
 });

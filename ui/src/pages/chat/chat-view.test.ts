@@ -1108,6 +1108,40 @@ describe("chat run error", () => {
     ).not.toBeNull();
   });
 
+  it.each(["run", "request"])(
+    "strips only the decorative prefix from a %s error display and copies the raw diagnostic",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const diagnostic =
+        "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const renderedDiagnostic =
+        "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const container = renderChatView(
+        source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+      );
+
+      const alert = requireElement(container, ".chat-error", "chat run error");
+      expect(alert.getAttribute("role")).toBe("alert");
+      const details = requireElement(alert, "details", "error disclosure");
+      expect(details.hasAttribute("open")).toBe(false);
+      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(
+        renderedDiagnostic,
+      );
+      expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
+      expect(alert.textContent).toContain("🧭");
+      expect(alert.querySelector("img")).toBeNull();
+      alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+      await waitForFast(() => expect(writeText).toHaveBeenCalledWith(diagnostic));
+      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
+        source === "request",
+      );
+      expect(
+        alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+      ).not.toBeNull();
+    },
+  );
+
   it("keeps dismiss on the error state owned by its callback", () => {
     const onDismissError = vi.fn();
     const container = renderChatView({ error: "Request failed", onDismissError });
@@ -1119,21 +1153,30 @@ describe("chat run error", () => {
     expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
   });
 
-  it.each([false, true])("keeps startup Retry owned by retryable=%s", (retryable) => {
+  it.each([false, true])("keeps startup Retry owned by retryable=%s", async (retryable) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
     const onRetrySessionPlacementStartup = vi.fn();
     const container = renderChatView({
       placementStartup: {
         sessionKey: "agent:main:startup",
         phase: "failed",
         startedAt: 1,
-        error: "Provisioning failed\nFinal diagnostic line",
+        error: "⚠️ Provisioning failed\n  Final diagnostic line  ",
         retryable,
       },
       onRetrySessionPlacementStartup,
     });
     const alert = requireElement(container, ".chat-error", "startup error");
-    expect(requireElement(alert, "pre", "startup diagnostic").textContent).toContain(
-      "Provisioning failed\nFinal diagnostic line",
+    expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
+      "The session was created, but runner startup failed:  Provisioning failed\n  Final diagnostic line  ",
+    );
+    expect(alert.textContent).not.toContain("⚠");
+    alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+    await waitForFast(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        "The session was created, but runner startup failed: ⚠️ Provisioning failed\n  Final diagnostic line  ",
+      ),
     );
     alert.querySelector<HTMLElement>("summary")?.click();
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
