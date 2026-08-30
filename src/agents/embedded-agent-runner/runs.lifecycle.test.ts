@@ -16,6 +16,7 @@ import {
   isEmbeddedRunAbandoned,
   markEmbeddedRunRecoveringTimeout,
   markActiveEmbeddedRunAbandoned,
+  resolveEmbeddedRunAbandonment,
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunOwnerByRunId,
   restoreEmbeddedRunTimeoutAbandonment,
@@ -207,6 +208,54 @@ describe("embedded-agent runner run lifecycle", () => {
     }
   });
 
+  it("does not let a marker from another module instance restore a replacement recovery", async () => {
+    const runsA = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=recovery-a",
+    );
+    const runsB = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=recovery-b",
+    );
+    const sessionId = "session-cross-module-recovery";
+    const sessionKey = "agent:main:cross-module-recovery";
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    runsA.setActiveEmbeddedRun(sessionId, firstHandle, sessionKey);
+    expect(
+      runsA.markActiveEmbeddedRunAbandoned({
+        sessionId,
+        handle: firstHandle,
+        sessionKey,
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    const staleMarker = runsA.markEmbeddedRunRecoveringTimeout({
+      sessionId,
+      runId: "run-first",
+    });
+    expect(staleMarker).toBeDefined();
+
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    runsB.setActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
+    expect(
+      runsB.markActiveEmbeddedRunAbandoned({
+        sessionId,
+        handle: replacementHandle,
+        sessionKey,
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    const currentMarker = runsB.markEmbeddedRunRecoveringTimeout({
+      sessionId,
+      runId: "run-second",
+    });
+    expect(currentMarker).toBeDefined();
+
+    expect(runsA.restoreEmbeddedRunTimeoutAbandonment(staleMarker!)).toBe(false);
+    expect(runsB.resolveEmbeddedRunAbandonment({ sessionId })).toBe("recovering_timeout");
+    expect(runsB.restoreEmbeddedRunTimeoutAbandonment(currentMarker!)).toBe(true);
+  });
+
   it("tracks actual embedded handles separately from reply-operation ownership", () => {
     const handle = createRunHandle();
 
@@ -293,6 +342,9 @@ describe("embedded-agent runner run lifecycle", () => {
     const recoveryMarker = markEmbeddedRunRecoveringTimeout({ sessionId: "session-recovering" });
     expect(recoveryMarker).toMatchObject({ sessionId: "session-recovering" });
     expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovering" })).toBe(
+      "recovering_timeout",
+    );
     expect(restoreEmbeddedRunTimeoutAbandonment(recoveryMarker!)).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionId: "session-recovering" })).toBe(true);
   });

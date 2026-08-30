@@ -12,7 +12,7 @@ import {
   getSubagentAnnounceRuntimeConfig,
   getSubagentRequesterSessionActivity,
   isEmbeddedAgentRunActive,
-  isSubagentRequesterSessionAbandoned,
+  resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   queueSubagentAnnounceMessage,
   resolveQueueSettings,
@@ -212,7 +212,7 @@ export async function maybeSteerSubagentAnnounce(params: {
     params.requesterSessionKey,
     requesterAgentId,
   );
-  if (isSubagentRequesterSessionAbandoned(canonicalKey, sessionId)) {
+  if (resolveSubagentRequesterSessionAbandonment(canonicalKey, sessionId)) {
     return { status: "none" };
   }
   if (!sessionId || !isActive) {

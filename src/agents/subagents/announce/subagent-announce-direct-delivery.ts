@@ -57,7 +57,7 @@ import {
 import {
   dispatchSubagentAnnounceAgent,
   getSubagentAnnounceRuntimeConfig,
-  isSubagentRequesterSessionAbandoned,
+  resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
@@ -200,15 +200,27 @@ export async function sendSubagentAnnounceDirectly(params: {
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
-    if (
-      params.expectsCompletionMessage &&
-      isSubagentRequesterSessionAbandoned(canonicalRequesterSessionKey, requesterActivity.sessionId)
-    ) {
+    const requesterAbandonment = params.expectsCompletionMessage
+      ? resolveSubagentRequesterSessionAbandonment(
+          canonicalRequesterSessionKey,
+          requesterActivity.sessionId,
+        )
+      : undefined;
+    if (requesterAbandonment === "timeout") {
       return {
         delivered: false,
         path: "none",
         reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
+      };
+    }
+    if (requesterAbandonment === "recovering_timeout") {
+      return {
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_pending",
+        error: "requester timeout recovery is still settling",
+        disposition: "retryable",
       };
     }
     const isCompletionDeliveryAllowed = () =>

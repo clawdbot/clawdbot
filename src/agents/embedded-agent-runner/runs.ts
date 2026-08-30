@@ -86,10 +86,8 @@ type EmbeddedAgentQueueFailureReason =
 
 export type EmbeddedRunTimeoutRecoveryMarker = {
   sessionId: string;
-  recoveryId: number;
+  recoveryToken: symbol;
 };
-
-let nextEmbeddedRunTimeoutRecoveryId = 0;
 
 export type EmbeddedAgentQueueMessageOutcome =
   | {
@@ -306,34 +304,39 @@ export function markActiveEmbeddedRunAbandoned(params: {
   return true;
 }
 
+export function resolveEmbeddedRunAbandonment(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+}): AbandonedEmbeddedRun["reason"] | undefined {
+  const normalizedSessionId = params.sessionId?.trim();
+  const normalizedSessionKey = params.sessionKey?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
+  const sessionIds = [
+    normalizedSessionId,
+    normalizedSessionKey
+      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
+      : undefined,
+    normalizedSessionFile
+      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile)
+      : undefined,
+  ];
+  const reasons = sessionIds.map((sessionId) =>
+    sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason : undefined,
+  );
+  return reasons.includes("timeout")
+    ? "timeout"
+    : reasons.includes("recovering_timeout")
+      ? "recovering_timeout"
+      : undefined;
+}
+
 export function isEmbeddedRunAbandoned(params: {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
 }): boolean {
-  const normalizedSessionId = params.sessionId?.trim();
-  if (normalizedSessionId) {
-    const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(normalizedSessionId);
-    if (abandoned?.reason === "timeout") {
-      return true;
-    }
-  }
-  const normalizedSessionKey = params.sessionKey?.trim();
-  if (normalizedSessionKey) {
-    const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
-    const abandoned = sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId) : undefined;
-    if (abandoned?.reason === "timeout") {
-      return true;
-    }
-  }
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
-  if (!normalizedSessionFile) {
-    return false;
-  }
-  const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
-  return Boolean(
-    sessionId && ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason === "timeout",
-  );
+  return resolveEmbeddedRunAbandonment(params) === "timeout";
 }
 
 /**
@@ -352,10 +355,10 @@ export function markEmbeddedRunRecoveringTimeout(params: {
   ) {
     return undefined;
   }
-  const recoveryId = ++nextEmbeddedRunTimeoutRecoveryId;
+  const recoveryToken = Symbol("openclaw.embeddedRunTimeoutRecovery");
   abandoned.reason = "recovering_timeout";
-  abandoned.recoveryId = recoveryId;
-  return { sessionId: abandoned.sessionId, recoveryId };
+  abandoned.recoveryToken = recoveryToken;
+  return { sessionId: abandoned.sessionId, recoveryToken };
 }
 
 /** Restores terminal-timeout suppression when recovery cannot continue. */
@@ -366,12 +369,12 @@ export function restoreEmbeddedRunTimeoutAbandonment(
   if (
     !abandoned ||
     abandoned.reason !== "recovering_timeout" ||
-    abandoned.recoveryId !== marker.recoveryId
+    abandoned.recoveryToken !== marker.recoveryToken
   ) {
     return false;
   }
   abandoned.reason = "timeout";
-  delete abandoned.recoveryId;
+  delete abandoned.recoveryToken;
   return true;
 }
 
