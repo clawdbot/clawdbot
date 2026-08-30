@@ -116,10 +116,21 @@ describe("xAI doctor contract", () => {
         media: {
           models: [
             { provider: "xai", model: "grok-4-fast", capabilities: ["image"] },
-            { provider: "xai", model: "grok-3", capabilities: ["image", "audio"] },
+            { provider: "x-ai", model: "grok-4-fast", capabilities: ["image"] },
+            {
+              provider: "xai",
+              model: "grok-4-fast-non-reasoning",
+              capabilities: ["image"],
+            },
             { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
             { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
             { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
+            {
+              provider: "xai",
+              model: "grok-4-fast",
+              command: "vision",
+              capabilities: ["image"],
+            },
             { provider: "xai", model: "custom-vision", capabilities: ["image"] },
             { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
             { provider: "xai", model: "grok-4-fast" },
@@ -140,10 +151,21 @@ describe("xAI doctor contract", () => {
     expect(result.config).not.toBe(config);
     expect(result.config.tools?.media?.models).toEqual([
       { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
-      { provider: "xai", model: "grok-4.3", capabilities: ["image", "audio"] },
+      { provider: "x-ai", model: "grok-4.3", capabilities: ["image"] },
+      {
+        provider: "xai",
+        model: "grok-4-fast-non-reasoning",
+        capabilities: ["image"],
+      },
       { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
       { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
       { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
+      {
+        provider: "xai",
+        model: "grok-4-fast",
+        command: "vision",
+        capabilities: ["image"],
+      },
       { provider: "xai", model: "custom-vision", capabilities: ["image"] },
       { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
       { provider: "xai", model: "grok-4-fast" },
@@ -190,7 +212,7 @@ describe("xAI doctor contract", () => {
       { type: "provider", provider: "xai", model: "custom-stt" },
       { type: "provider", provider: "openai", model: "grok-stt" },
       { type: "cli", provider: "xai", model: "grok-stt", command: "whisper" },
-      { provider: "x-ai", model: "grok-stt" },
+      { provider: "x-ai" },
       { provider: "xai" },
     ]);
     expect(config.tools?.media?.models?.[0]).toHaveProperty("model", " GROK-STT ");
