@@ -1176,7 +1176,6 @@ export async function handleOpenAiHttpRequest(
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let streamedAssistantText = "";
-  let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
@@ -1285,7 +1284,6 @@ export async function handleOpenAiHttpRequest(
       // If the provider ignores `tool_choice`, no partial text should leak
       // before the stream fails with an OpenAI-compatible error payload.
       if (toolChoiceConstraint) {
-        bufferedAssistantContent += content;
         return;
       }
 
@@ -1405,9 +1403,10 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, streamIdentity);
         }
         if (!sawAssistantDelta) {
+          // Final payloads own held prose; snapshots may replace provisional deltas.
           const commentary =
-            bufferedAssistantContent ||
             resolveAgentResponseCommentary(result) ||
+            streamedAssistantText ||
             bufferedReplaceableAssistantContent;
           if (commentary) {
             sawAssistantDelta = true;

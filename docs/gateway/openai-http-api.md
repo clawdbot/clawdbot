@@ -203,6 +203,8 @@ When the agent calls tools, the response uses:
 
 When `stream: true`, tool calls arrive as incremental SSE chunks: an initial assistant role delta, optional assistant commentary deltas, one or more `delta.tool_calls` chunks carrying tool identity and argument fragments, then a final chunk with `finish_reason: "tool_calls"` and `data: [DONE]`.
 
+For required or function-pinned tool choices, prose is held until the matching call is confirmed. When the run returns finalized prose, the stream uses that text instead of provisional deltas.
+
 If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
 
 ### Tool follow-up loop
