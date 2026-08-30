@@ -1,6 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
@@ -728,32 +729,18 @@ function isDirectRun() {
 
 /**
  * @param {string[]} argv
- * @param {number} index
- * @param {string} optionName
- * @returns {string}
- */
-function readRefValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
-/**
- * @param {string[]} argv
  * @returns {{ base: string; head: string; mergeHeadFirstParent: boolean }}
  */
 export function parseArgs(argv) {
   const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
-      args.base = readRefValue(argv, i, "--base");
+      args.base = requireOptionArgument(argv, i, "--base");
       i += 1;
       continue;
     }
     if (argv[i] === "--head") {
-      args.head = readRefValue(argv, i, "--head");
+      args.head = requireOptionArgument(argv, i, "--head");
       i += 1;
       continue;
     }

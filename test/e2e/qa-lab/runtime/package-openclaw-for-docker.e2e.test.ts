@@ -504,6 +504,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/npm-runner.mts",
       "scripts/pnpm-runner.mts",
       "scripts/windows-cmd-helpers.mjs",
+      "scripts/lib/arg-utils.runtime.mjs",
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
       "scripts/lib/error-format.mts",
