@@ -135,8 +135,15 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
     botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
   const handle = botUsername ? `@${botUsername}` : accountId;
   const timing = elapsedMs != null ? `${elapsedMs}ms` : "ok";
+  // Multi-account status collapses to these tokens instead of the single-probe
+  // line, so a metered channel reports its allowance here too; without it an
+  // exhausted account reads as plain timing while it can no longer send.
+  const quota = asNullableRecord(probe.quota);
+  const used = quota && typeof quota.used === "number" ? quota.used : null;
+  const limit = quota && typeof quota.limit === "number" ? quota.limit : null;
+  const allowance = used !== null && limit !== null ? `:${used}/${limit}` : "";
 
-  return `${handle}:${accountId}:${timing}`;
+  return `${handle}:${accountId}:${timing}${allowance}`;
 };
 
 const isProbeFailure = (summary: ChannelAccountHealthSummary): boolean => {

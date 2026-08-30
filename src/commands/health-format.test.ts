@@ -127,6 +127,35 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toStrictEqual(["LINE: ok (41ms) - quota 200/200"]);
   });
 
+  it("keeps the allowance in the per-account status view operators actually get", () => {
+    // `openclaw status` asks for every account, which collapses to per-account
+    // tokens instead of the single-probe line; the allowance has to survive that
+    // path too or the promise is empty where operators actually read it.
+    const probe = {
+      ok: true,
+      elapsedMs: 41,
+      quota: { kind: "limited", limit: 200, used: 200 },
+    };
+    const summary = createHealthSummary({
+      channels: {
+        line: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          healthState: "healthy",
+          probe,
+          accounts: { default: { accountId: "default", configured: true, probe } },
+        },
+      },
+      channelOrder: ["line"],
+      channelLabels: { line: "LINE" },
+    });
+
+    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
+      "LINE: ok (default:default:41ms:200/200)",
+    ]);
+  });
+
   it("says nothing about an allowance a channel does not meter", () => {
     const summary = createHealthSummary({
       channels: {

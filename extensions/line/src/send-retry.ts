@@ -53,7 +53,7 @@ const pushErrorsWithAmbiguousAttempt = new WeakSet<object>();
  * cases stay apart without matching provider error text. An unreadable quota
  * keeps the plain verdict, so a rate limit stays retryable exactly as before.
  */
-export async function resolveLineRefusalRetryable(params: {
+async function resolveLineRefusalRetryable(params: {
   error: unknown;
   readQuota: () => Promise<LineMessageQuota | undefined>;
 }): Promise<boolean | undefined> {
