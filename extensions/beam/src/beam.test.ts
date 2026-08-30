@@ -180,7 +180,7 @@ describe("Beam receiver", () => {
       createBeamRequestHandler({
         store,
         resolveClient: () => ({ ...writeClient(), profileId }),
-        resolveControlUiTarget: mainControlUiTarget,
+        resolveControlUiBasePath: rootControlUiBasePath,
       }),
     );
     const upload = (body = sampleUpload()) =>
