@@ -236,6 +236,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[fish-audio-speech](/plugins/reference/fish-audio-speech)** (`@openclaw/fish-audio-speech`) - npm or ClawHub: `clawhub:@openclaw/fish-audio-speech`. Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
 
+- **[gandr](/plugins/reference/gandr)** (`@openclaw/gandr-speech`) - npm or ClawHub: `clawhub:@openclaw/gandr-speech`. Gandr OpenAI compatible text-to-speech (MP3, WAV, PCM telephony).
+
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm or ClawHub: `clawhub:@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 
 - **[google-meet](/plugins/reference/google-meet)** (`@openclaw/google-meet`) - npm or ClawHub. OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.

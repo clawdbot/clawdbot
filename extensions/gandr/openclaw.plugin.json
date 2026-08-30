@@ -1,0 +1,47 @@
+{
+  "id": "gandr",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "Gandr",
+  "description": "Gandr OpenAI compatible text-to-speech (MP3, WAV, PCM telephony).",
+  "setup": {
+    "providers": [
+      {
+        "id": "gandr",
+        "envVars": ["GANDR_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "speechProviders": ["gandr"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Gandr API key, sent as Authorization: Bearer <apiKey>. Falls back to GANDR_API_KEY env var. Keys are issued at https://gandr.ai; the free tier is 50,000 tokens."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Override Gandr API base URL (default https://tts.gandr.ai/v1)."
+      },
+      "voiceId": {
+        "type": "string",
+        "description": "Voice identifier (default gandr-mia). Stock voices: gandr-mia, gandr-ava, gandr-jenny, gandr-dane, gandr-leo, gandr-lewis."
+      },
+      "modelId": {
+        "type": "string",
+        "description": "TTS model id (default tts-1)."
+      },
+      "responseFormat": {
+        "type": "string",
+        "enum": ["mp3", "wav"],
+        "description": "Audio attachment format (default mp3). Telephony always uses PCM."
+      }
+    }
+  }
+}

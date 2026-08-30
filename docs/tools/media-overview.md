@@ -73,6 +73,7 @@ inbound media through their reply model; see the full provider list in
 | DeepInfra         |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
 | ElevenLabs        |       |       |       |  ✓  |  ✓  |                |                     |
 | fal               |   ✓   |   ✓   |   ✓   |     |     |                |                     |
+| Gandr             |       |       |       |  ✓  |     |                |                     |
 | Google            |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |       ✓        |          ✓          |
 | Gradium           |       |       |       |  ✓  |     |                |                     |
 | Inworld           |       |       |       |  ✓  |     |                |                     |

@@ -64,6 +64,7 @@ speech.
 | **DeepInfra**     | `DEEPINFRA_API_KEY`                                                                                              | OpenAI-compatible TTS. Defaults to `hexgrad/Kokoro-82M`.                                    |
 | **ElevenLabs**    | `ELEVENLABS_API_KEY` or `XI_API_KEY`                                                                             | Voice cloning, multilingual, deterministic via `seed`; streamed for Discord voice playback. |
 | **Fish Audio**    | `FISH_API_KEY` or `FISH_AUDIO_API_KEY`                                                                           | S2.1 hosted TTS, expressive tags, voice discovery, streaming, and telephony.                |
+| **Gandr**         | `GANDR_API_KEY`                                                                                                  | OpenAI compatible speech API. MP3, WAV, and PCM output; 2000 character cap per request.     |
 | **Google Gemini** | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                                                                             | Gemini API batch TTS; persona-aware via `promptTemplate: "audio-profile-v1"`.               |
 | **Gradium**       | `GRADIUM_API_KEY`                                                                                                | Voice-note and telephony output.                                                            |
 | **Inworld**       | `INWORLD_API_KEY`                                                                                                | Streaming TTS API. Native Opus voice-note and PCM telephony.                                |
@@ -152,6 +153,24 @@ or blank, it keeps the base TTS voice.
         model: "s2.1-pro",
         speakerVoiceId: "802e3bc2b27e49c2995d23ef70e6ac89",
         latency: "balanced",
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="Gandr">
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "gandr",
+    maxTextLength: 2000,
+    providers: {
+      gandr: {
+        apiKey: "${GANDR_API_KEY}",
+        modelId: "tts-1",
+        speakerVoiceId: "gandr-mia",
       },
     },
   },
@@ -847,6 +866,7 @@ Per-provider notes:
 - **MiniMax:** MP3 (`speech-2.8-hd` model, 32 kHz sample rate) for normal audio attachments; transcoded to 48 kHz Opus with `ffmpeg` for channel-advertised voice-note targets.
 - **Xiaomi MiMo:** MP3 by default, or WAV when configured; transcoded to 48 kHz Opus with `ffmpeg` for channel-advertised voice-note targets.
 - **Local CLI:** uses the configured `outputFormat`. Voice-note targets are converted to Ogg/Opus and telephony output is converted to raw 16 kHz mono PCM with `ffmpeg`.
+- **Gandr:** MP3 for normal audio attachments, or WAV when `responseFormat` is `wav`; transcoded to Opus for channel-advertised voice-note targets when `ffmpeg` is available; raw headerless PCM at 24000 Hz for Talk/telephony.
 - **Google Gemini:** returns raw 24 kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48 kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
 - **Gradium:** WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
 - **Inworld:** MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
@@ -975,6 +995,14 @@ and resolved values still fail startup or reject the update.
     <ParamField path="languageCode" type="string">2-letter ISO 639-1 (e.g. `en`, `de`).</ParamField>
     <ParamField path="seed" type="number">Integer `0..4294967295` for best-effort determinism.</ParamField>
     <ParamField path="baseUrl" type="string">Override ElevenLabs API base URL.</ParamField>
+  </Accordion>
+
+  <Accordion title="Gandr">
+    <ParamField path="apiKey" type="string">Env: `GANDR_API_KEY`. Sent as `Authorization: Bearer <apiKey>`.</ParamField>
+    <ParamField path="baseUrl" type="string">Default `https://tts.gandr.ai/v1`.</ParamField>
+    <ParamField path="modelId" type="string">Default `tts-1`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `gandr-mia`. Also: `gandr-ava`, `gandr-jenny`, `gandr-dane`, `gandr-leo`, `gandr-lewis`. Legacy alias: `voiceId`.</ParamField>
+    <ParamField path="responseFormat" type='"mp3" | "wav"'>Default `mp3`. Applies to audio attachments; telephony always uses PCM at 24000 Hz.</ParamField>
   </Accordion>
 
   <Accordion title="Google Gemini">
@@ -1126,6 +1154,7 @@ provider default.
 - [Azure Speech REST text-to-speech](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
+- [Gandr](/providers/gandr)
 - [Gradium](/providers/gradium)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
