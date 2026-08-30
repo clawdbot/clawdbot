@@ -334,10 +334,13 @@ export type SubagentRunReadRecord = Pick<
   | "accumulatedRuntimeMs"
   | "runTimeoutSeconds"
   | "endedReason"
-  // Both cleanup facts: completed delete cleanup means the child session is
-  // gone while the row waits out its archive deadline (see child-link liveness).
+  // Delete-cleanup facts: once sessions.delete is dispatched the child session
+  // is gone while the row waits out its archive deadline. Both stamps ship so
+  // this projection suppresses child links exactly like the full-record
+  // surfaces do (see child-link liveness).
   | "cleanup"
   | "cleanupCompletedAt"
+  | "deleteCleanupDispatchedAt"
   | "delivery"
 > & {
   execution: Pick<SubagentExecutionState, "status" | "startedAt" | "endedAt" | "outcome">;

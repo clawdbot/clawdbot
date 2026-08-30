@@ -37,6 +37,7 @@ type SubagentRunReadSqliteRow = Pick<
   ended_reason: string | null;
   cleanup: string | null;
   cleanup_completed_at: number | null;
+  delete_cleanup_dispatched_at: number | null;
   generation: number | null;
   outcome_status: string | null;
   delivery_status: string | null;
@@ -291,6 +292,9 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         subagentPayloadJsonValue<string | null>("$.endedReason").as("ended_reason"),
         subagentPayloadJsonValue<string | null>("$.cleanup").as("cleanup"),
         subagentPayloadJsonValue<number | null>("$.cleanupCompletedAt").as("cleanup_completed_at"),
+        subagentPayloadJsonValue<number | null>("$.deleteCleanupDispatchedAt").as(
+          "delete_cleanup_dispatched_at",
+        ),
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
@@ -352,6 +356,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       endedReason: row.ended_reason || undefined,
       cleanup: row.cleanup === "delete" ? "delete" : "keep",
       cleanupCompletedAt: normalizeFiniteNumber(row.cleanup_completed_at),
+      deleteCleanupDispatchedAt: normalizeFiniteNumber(row.delete_cleanup_dispatched_at),
       delivery: deliveryStatus
         ? {
             status: deliveryStatus,

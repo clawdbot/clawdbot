@@ -369,7 +369,7 @@ describe("session list subagent metadata", () => {
     expect(failed?.runtimeMs).toBe(5_000);
   });
 
-  test("does not link a retained delete-cleanup run whose child session is gone", () => {
+  test("does not link a retained delete-cleanup run whose child session is gone", async () => {
     const now = Date.now();
     const parentKey = "agent:main:main";
     const childSessionKey = "agent:main:subagent:deleted-child";
@@ -394,25 +394,30 @@ describe("session list subagent metadata", () => {
       startedAt: now - 4_000,
       endedAt: now - 1_000,
       outcome: { status: "ok" },
+      deleteCleanupDispatchedAt: now - 600,
       cleanupCompletedAt: now - 500,
       archiveAtMs: now + 30 * 60 * 1_000,
     });
 
-    const parent = listSessionsFromStore({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    }).sessions.find((session) => session.key === parentKey);
-    // No expandable toggle, because expanding it resolves to nothing.
-    expect(parent?.childSessions).toBeUndefined();
-    expect(
-      listSessionsFromStore({
+    const parent = (
+      await listSessionsFromStoreAsync({
         cfg,
         storePath: "/tmp/sessions.json",
         store,
-        opts: { spawnedBy: parentKey },
-      }).sessions,
+        opts: {},
+      })
+    ).sessions.find((session) => session.key === parentKey);
+    // No expandable toggle, because expanding it resolves to nothing.
+    expect(parent?.childSessions).toBeUndefined();
+    expect(
+      (
+        await listSessionsFromStoreAsync({
+          cfg,
+          storePath: "/tmp/sessions.json",
+          store,
+          opts: { spawnedBy: parentKey },
+        })
+      ).sessions,
     ).toEqual([]);
   });
 

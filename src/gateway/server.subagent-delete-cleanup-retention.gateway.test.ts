@@ -2,7 +2,12 @@
 // ephemeral gateway (which activates the subagent registry), then drives the
 // live completion path: lifecycle end, retained listing, SQLite restart, expiry.
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { reconcileOrphanedRestoredRuns } from "../agents/subagents/registry/subagent-registry-helpers.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  loadSubagentSessionListRunsFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   getSubagentRunByRunId,
   listSubagentRunsForRequester,
@@ -10,6 +15,7 @@ import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { callGateway } from "./call.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -133,6 +139,33 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     const afterRestart = loadSubagentRegistryFromSqlite().get(RUN_ID);
     expect(afterRestart?.archiveAtMs).toBe(retained.archiveAtMs);
     expect(afterRestart?.cleanupCompletedAt).toBe(cleanupCompletedAt);
+    expect(afterRestart?.deleteCleanupDispatchedAt).toBeTypeOf("number");
+
+    // Interrupted handoff: the process can stop after the live gateway accepted
+    // sessions.delete and before cleanup bookkeeping lands. Rebuild exactly that
+    // on-disk shape from the real persisted row — dispatch stamp kept, completion
+    // stamp gone, child session already deleted — and run the real restore path.
+    const interrupted = loadSubagentRegistryFromSqlite();
+    const interruptedRow = interrupted.get(RUN_ID);
+    expect(interruptedRow).toBeDefined();
+    const dispatchedAt = interruptedRow!.deleteCleanupDispatchedAt as number;
+    interruptedRow!.cleanupCompletedAt = undefined;
+    interruptedRow!.requesterSettleWake = undefined;
+    saveSubagentRegistryToSqlite(interrupted);
+
+    const restored = loadSubagentRegistryFromSqlite();
+    expect(restored.get(RUN_ID)?.cleanupCompletedAt).toBeUndefined();
+    reconcileOrphanedRestoredRuns({ runs: restored, resumedRuns: new Set() });
+    const recovered = restored.get(RUN_ID);
+    expect(recovered).toBeDefined();
+    expect(recovered?.archiveAtMs).toBe(retained.archiveAtMs);
+    expect(recovered?.cleanupCompletedAt).toBe(dispatchedAt);
+
+    // The interrupted row must not relink the deleted child in the session list.
+    saveSubagentRegistryToSqlite(restored);
+    const interruptedProjection = loadSubagentSessionListRunsFromSqlite().get(RUN_ID);
+    expect(interruptedProjection).toBeDefined();
+    expect(shouldKeepSubagentRunChildLink(interruptedProjection!)).toBe(false);
 
     // Expire the live map row the sweeper reads. Listing snapshots are clones.
     const live = getSubagentRunByRunId(RUN_ID);
@@ -165,6 +198,13 @@ describe("delete-cleanup archive retention through a real gateway", () => {
         spawnedByChildren: spawnedChildren.payload?.sessions.length ?? -1,
       },
       restartRecovery: { present: Boolean(afterRestart) },
+      interruptedHandoff: {
+        dispatchStampPersisted: true,
+        completionStampMissingOnDisk: true,
+        prunedByRestore: false,
+        repairedCleanupCompletedAt: recovered?.cleanupCompletedAt ?? null,
+        childLinkAfterRestore: false,
+      },
       expiry: { presentAfterSweep: false },
     };
     // Printed so the exact-head PR body can cite the isolated-gateway output.

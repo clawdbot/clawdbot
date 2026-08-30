@@ -358,6 +358,19 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("projects the delete dispatch stamp so an interrupted cleanup stays unlinked", async () => {
+    await withTempStateEnv(async () => {
+      // A restart between sessions.delete dispatch and the completion stamp
+      // leaves only this column to tell the session list the child is gone.
+      const run = createRun({ cleanup: "delete", deleteCleanupDispatchedAt: 300 });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      expect(
+        loadSubagentSessionListRunsFromSqlite().get(run.runId)?.deleteCleanupDispatchedAt,
+      ).toBe(300);
+    });
+  });
+
   it("writes only named registry mutations", async () => {
     await withTempStateEnv(async () => {
       const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });

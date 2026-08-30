@@ -166,6 +166,9 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
     ...(entry.cleanupCompletedAt !== undefined
       ? { cleanupCompletedAt: entry.cleanupCompletedAt }
       : {}),
+    ...(entry.deleteCleanupDispatchedAt !== undefined
+      ? { deleteCleanupDispatchedAt: entry.deleteCleanupDispatchedAt }
+      : {}),
     ...(entry.delivery
       ? {
           delivery: {

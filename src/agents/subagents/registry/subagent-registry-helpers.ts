@@ -28,7 +28,7 @@ import {
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { hasCompletedDeleteCleanup } from "./subagent-run-liveness.js";
+import { hasDispatchedDeleteCleanup } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -341,16 +341,6 @@ export function reconcileOrphanedRestoredRuns(params: {
       continue;
     }
     if (
-      hasCompletedDeleteCleanup(entry) &&
-      typeof entry.archiveAtMs === "number" &&
-      entry.archiveAtMs > now
-    ) {
-      // Completed delete-cleanup rows are session-less on purpose until their
-      // archive deadline. Pruning them here would hide finished runs from
-      // recent-run listings early; the sweeper retires them at expiry.
-      continue;
-    }
-    if (
       entry.killReconciliation ||
       entry.killIntent ||
       entry.execution.restartRecovery ||
@@ -366,6 +356,22 @@ export function reconcileOrphanedRestoredRuns(params: {
       now,
     });
     if (!orphanReason) {
+      continue;
+    }
+    if (
+      hasDispatchedDeleteCleanup(entry) &&
+      typeof entry.archiveAtMs === "number" &&
+      entry.archiveAtMs > now
+    ) {
+      // Cleanup submitted sessions.delete, so the orphan reason confirms that
+      // deletion instead of reporting a lost session. The dispatch stamp is
+      // durable but the completion stamp is written after the gateway call, so
+      // finish the bookkeeping a restart may have interrupted; the row stays
+      // session-less on purpose until the sweeper archives it at its deadline.
+      if (entry.cleanupCompletedAt === undefined) {
+        entry.cleanupCompletedAt = entry.deleteCleanupDispatchedAt;
+        changed = true;
+      }
       continue;
     }
     if (

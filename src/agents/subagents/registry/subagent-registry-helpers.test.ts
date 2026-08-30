@@ -202,10 +202,13 @@ describe("reconcileOrphanedRestoredRuns", () => {
   });
 
   it("keeps completed delete-cleanup rows until their archive deadline expires", () => {
+    // A real delete stamps dispatch before the gateway call and completion
+    // after it, so a finished row carries both.
     const entry = createRunEntry({
       cleanup: "delete",
       execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
       cleanupHandled: true,
+      deleteCleanupDispatchedAt: 2_000,
       cleanupCompletedAt: 2_000,
       archiveAtMs: Date.now() + 60_000,
     });
@@ -215,11 +218,60 @@ describe("reconcileOrphanedRestoredRuns", () => {
     expect(runs.get(entry.runId)).toBe(entry);
   });
 
+  it("prunes a delete-mode row whose cleanup finished without dispatching a delete", () => {
+    // Suppressed session effects finish cleanup bookkeeping without handing the
+    // child to sessions.delete. A missing session is then a real orphan, so the
+    // archive-deadline exemption must not cover it.
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      cleanupHandled: true,
+      cleanupCompletedAt: 2_000,
+      archiveAtMs: Date.now() + 60_000,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("finishes bookkeeping for a dispatched delete-cleanup row interrupted by restart", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      deleteCleanupDispatchedAt: 2_000,
+      archiveAtMs: Date.now() + 60_000,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    // The repaired stamp has to persist, so the first restore reports a change.
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(true);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(entry.cleanupCompletedAt).toBe(2_000);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+  });
+
+  it("prunes a dispatched delete-cleanup row once its archive deadline passed", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      deleteCleanupDispatchedAt: 2_000,
+      archiveAtMs: Date.now() - 1,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
   it("prunes a completed delete-cleanup row once its archive deadline passed", () => {
     const entry = createRunEntry({
       cleanup: "delete",
       execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
       cleanupHandled: true,
+      deleteCleanupDispatchedAt: 2_000,
       cleanupCompletedAt: 2_000,
       archiveAtMs: Date.now() - 1,
     });
