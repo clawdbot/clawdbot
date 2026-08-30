@@ -3,7 +3,9 @@ import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
+  captureMicrophoneLossProof,
   captureVideoTalkProof,
+  dispatchOpenAiTalkEvent,
   installBlockedMicrophoneFixture,
   installBlockedVideoTalkFixture,
   installTalkBrowserFixtures,
@@ -446,6 +448,21 @@ suite.define(() => {
         ).openclawVideoTalkE2e?.peer.channel;
         channel?.dispatchEvent(new Event("open"));
       });
+      await dispatchOpenAiTalkEvent(page, {
+        type: "conversation.item.input_audio_transcription.failed",
+        item_id: "unintelligible-input",
+        error: { message: "The audio could not be transcribed." },
+      });
+      await captureMicrophoneLossProof(page, "input-transcription-error.png");
+      const transcriptionError = page.getByRole("alert").filter({
+        hasText: "The audio could not be transcribed.",
+      });
+      await expect.poll(() => transcriptionError.isVisible()).toBe(true);
+      expect(await page.getByRole("button", { name: "Stop voice input" }).isVisible()).toBe(true);
+      await dispatchOpenAiTalkEvent(page, {
+        type: "input_audio_buffer.speech_started",
+        item_id: "next-input",
+      });
       const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
       await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
       await turnCameraOn.click();
@@ -465,33 +482,22 @@ suite.define(() => {
       );
       await captureVideoTalkProof(page, "02-live-camera-preview.png");
 
-      await page.evaluate(() => {
-        const channel = (
-          window as Window & {
-            openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
-          }
-        ).openclawVideoTalkE2e?.peer.channel;
-        channel?.dispatchEvent(
-          new MessageEvent("message", {
-            data: JSON.stringify({
-              type: "response.done",
-              response: {
-                id: "response-camera",
-                status: "completed",
-                output: [
-                  {
-                    type: "function_call",
-                    id: "item-camera",
-                    status: "completed",
-                    call_id: "call-camera",
-                    name: "describe_view",
-                    arguments: "{}",
-                  },
-                ],
-              },
-            }),
-          }),
-        );
+      await dispatchOpenAiTalkEvent(page, {
+        type: "response.done",
+        response: {
+          id: "response-camera",
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              id: "item-camera",
+              status: "completed",
+              call_id: "call-camera",
+              name: "describe_view",
+              arguments: "{}",
+            },
+          ],
+        },
       });
       await expect
         .poll(() =>

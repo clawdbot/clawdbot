@@ -417,11 +417,16 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       case "error":
-        this.responseCreateInFlight = false;
+      case "conversation.item.input_audio_transcription.failed":
+        // ASR runs independently; its failure cannot settle a pending response request.
+        if (event.type === "error") {
+          this.responseCreateInFlight = false;
+        }
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
         this.emitTalkEvent({
           type: "session.error",
           final: true,
+          itemId: event.item_id,
           payload: { message: this.extractErrorDetail(event.error) },
         });
 
@@ -480,10 +485,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private extractErrorDetail(error: unknown): string {
-    if (!error || typeof error !== "object") {
-      return "Realtime provider error";
-    }
-    const record = error as Record<string, unknown>;
+    const record = isRecord(error) ? error : {};
     const message = typeof record.message === "string" ? record.message.trim() : "";
     const code = typeof record.code === "string" ? record.code.trim() : "";
     const type = typeof record.type === "string" ? record.type.trim() : "";

@@ -2,6 +2,18 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 
+export async function dispatchOpenAiTalkEvent(page: Page, event: unknown) {
+  await page.evaluate((payload) => {
+    const channel = (
+      window as Window & { openclawVideoTalkE2e?: { peer: { channel: EventTarget } } }
+    ).openclawVideoTalkE2e?.peer.channel;
+    if (!channel) {
+      throw new Error("Expected the browser Talk data channel");
+    }
+    channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+  }, event);
+}
+
 export type WebRtcSdpE2eProof = {
   bodyCancelCount: number;
   bodyCancelResolvedCount: number;
