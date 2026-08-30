@@ -1092,6 +1092,7 @@ jobs:
           CHILD_WORKFLOW_KIND: plugin-prerelease
           PHASE: independent
           TARGET_REF: ${{ inputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -1117,6 +1118,7 @@ jobs:
           CHILD_WORKFLOW_KIND: plugin-prerelease
           PHASE: candidate
           TARGET_REF: ${{ inputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
