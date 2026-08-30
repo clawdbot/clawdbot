@@ -186,6 +186,7 @@ Review invariants; full doctrine: `docs/gateway/audit.md`.
 ## Validation
 
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote-environment, isolation, and clean-machine E2E proof.
+- The Crabbox skill is a snapshot of `https://github.com/openclaw/agent-skills/tree/main/skills/crabbox`; edit that source, then sync the snapshot. OpenClaw-specific setup lives in `docs/reference/test.md#crabbox-repository-setup`, outside the shared skill.
 - Proof routing: source trust first, required environment second. Trusted development tests, changed gates, typecheck/lint, builds, and full suites run locally with scope proportional to the touched contract. Use Crabbox/Testbox only when the environment is part of the proof: clean-machine, install/package, Docker, E2E, live, desktop, cross-OS, CI parity, or explicit operator-requested remote work. Do not use it merely as generic compute offload. Lease/procedure mechanics: `$crabbox`.
 - Untrusted (contributor/fork) source: never run its scripts, tests, checks, wrappers, config, or package hooks locally, regardless of proof size, and never fall back to local. Use secretless fork CI or the sanitized direct AWS Crabbox procedure in `$crabbox`, never a credential-hydrated Testbox. Maintainer approval of credentialed execution after review makes it trusted; an explicit owner/maintainer instruction to land named, reviewed PRs is that approval — do not ask twice.
 - Visual proof: use a real isolated browser/desktop on the current host when capable; otherwise use Crabbox. Set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
@@ -328,7 +329,7 @@ Mechanics only; policy lives above.
 
 - Commit with standard Git commands; stage intended files only.
 - Commits: conventional-ish, concise, grouped.
-- No manual stash/autostash unless explicit. Branch switches ok when useful; no new worktrees unless requested.
+- No manual stash/autostash unless explicit. Branch switches and task-owned worktrees are allowed when useful; preserve user-managed checkouts and unrelated work.
 - `main`: no merge commits; rebase on latest `origin/main` before push. After one green run plus clean rebase sanity, do not chase moving `main` with repeated full gates.
 - User says `commit`: your changes only; `commit all`: all changes in grouped chunks; `push`: may `git pull --rebase` first; `ship it`: commit intended changes, pull --rebase, push.
 - Do not delete/rename unexpected files; ask if blocking, else ignore.
