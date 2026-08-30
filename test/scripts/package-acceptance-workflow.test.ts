@@ -280,9 +280,7 @@ describe("package acceptance workflow", () => {
     expect(setupPnpmAction).toContain("PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}");
     expect(setupPnpmAction).toContain('case "$package_manager" in');
     expect(setupPnpmAction).toContain('corepack prepare "$package_manager" --activate');
-    expect(setupPnpmAction).toContain(
-      "if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
-    );
+    expect(setupPnpmAction).toContain("CACHE_MODE: ${{ inputs.cache-mode }}");
     expect(setupPnpmAction).toContain(
       "key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}",
     );
@@ -294,7 +292,7 @@ describe("package acceptance workflow", () => {
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
-    expect(setupNodeAction).toContain("use-actions-cache: ${{ inputs.use-actions-cache }}");
+    expect(setupNodeAction).toContain("cache-mode: ${{ inputs.cache-mode");
 
     for (const workflowPath of workflowPaths()) {
       const workflowText = readFileSync(workflowPath, "utf8");
@@ -2117,7 +2115,7 @@ describe("package artifact reuse", () => {
       ".github/workflows/openclaw-npm-release.yml",
       "publish_openclaw_npm",
     );
-    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
     const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
     const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
 
@@ -2151,43 +2149,37 @@ describe("package artifact reuse", () => {
     expect(trustedTooling.run).toContain("scripts/lib/plain-gh.mjs");
     expect(validateManifest.env).toMatchObject({
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
-      TRUSTED_MAIN_REF: "refs/remotes/origin/main",
       VALIDATOR_FILE:
         "${{ runner.temp }}/release-validation-tooling/validate-full-release-validation-evidence.mjs",
       STRICT_VALIDATOR_FILE: "${{ runner.temp }}/release-validation-tooling/release-ci-summary.mjs",
     });
-    expect(validateManifest.run).toContain(
-      'MANIFEST_FILE="$manifest" node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"',
-    );
+    expect(validateManifest.run).toContain('MANIFEST_FILE="$manifest"');
+    expect(validateManifest.run).toContain('node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"');
     expect(publishDownload.with?.name).toBe(
       "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
     expect(publishOrchestration.run).not.toContain("--full-release-validation-workflow-ref");
     expect(publishOrchestration.run).not.toContain("--full-release-validation-run");
-    expect(publishOrchestration.run).toContain('pnpm "${verify_args[@]}"');
+    expect(publishOrchestration.run).toContain('"${verify_args[@]}"');
     expect(publishOrchestration.run).toContain(".workflowRuns += [");
-    expect(publishOrchestration.run).toContain('label: "Full Release Validation"');
-    expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
+    expect(publishOrchestration.run).toContain('run_label="Full Release Validation"');
+    expect(publishOrchestration.run).toContain('"${target_sha}" != "${TARGET_SHA}"');
     expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
     expect(publishOrchestration.run).toContain(
       '-f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
     );
-    expect(npmFullRun.id).toBe("full_run");
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(npmFullRun.run).toContain(
-      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
-    );
-    expect(npmFullRun.run).toContain('"$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"');
+    expect(npmFullRun.run).toContain("validate-full-release-validation-evidence.mjs");
     expect(npmDownload.with?.name).toBe(
-      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
     );
     expect(npmTarget.env).toMatchObject({
-      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
-      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
+      RELEASE_TAG: "${{ inputs.tag }}",
+      RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
     });
     expect(workflow).toContain(
       "Full release validation must run rerun_group=all before npm publish",
@@ -2197,7 +2189,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("preflight-manifest.json");
     expect(npmWorkflow).toContain("preflight-manifest.json");
-    expect(npmWorkflow).toContain("Verify full release validation run metadata");
+    expect(npmWorkflow).toContain("Verify full release validation evidence");
     expect(npmWorkflow).toContain("Verify full release validation target");
     expect(npmWorkflow).not.toContain("Build and smoke test final Docker runtime image");
     expect(fullReleaseWorkflow).toContain("docker_runtime_assets_preflight");
@@ -2231,7 +2223,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Checkout release SHA");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
     expect(workflow).toContain("render_github_release_notes()");
-    expect(workflow).toContain("node scripts/render-github-release-notes.mjs");
+    expect(workflow).toContain("node --import tsx scripts/render-github-release-notes.mts");
     expect(workflow).toContain('--tag "${RELEASE_TAG}"');
     expect(workflow).toContain('--repository "${GITHUB_REPOSITORY}"');
     expect(workflow).toContain('render_args+=(--verification-file "${verification_file}")');
@@ -2361,11 +2353,9 @@ describe("package artifact reuse", () => {
       "\n            create_or_update_github_release\n",
     );
     const promoteWindowsCall = releaseWorkflow.lastIndexOf(
-      "\n            if ! promote_windows_release_assets; then\n",
+      "\n              if promote_windows_release_assets; then\n",
     );
-    const publishReleaseCall = releaseWorkflow.lastIndexOf(
-      "\n              publish_github_release\n",
-    );
+    const publishReleaseCall = releaseWorkflow.lastIndexOf("\n  finalize_github_release:\n");
     expect(createDraftCall).toBeGreaterThan(-1);
     expect(promoteWindowsCall).toBeGreaterThan(createDraftCall);
     expect(publishReleaseCall).toBeGreaterThan(promoteWindowsCall);
@@ -2480,7 +2470,7 @@ describe("package artifact reuse", () => {
     expect(androidWorkflow).toContain("must exceed ${previous_tag} versionCode");
     expect(androidWorkflow).toContain("standalone channel bootstrap");
     expect(releaseWorkflow).toContain(
-      'dispatch_workflow_at_ref "${RELEASE_TAG}" android-release.yml',
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
     );
     expect(releaseWorkflow).toContain('-f release_target_sha="${TARGET_SHA}"');
     expect(releaseWorkflow).toContain("verify_android_release_asset_contract");
@@ -2491,11 +2481,9 @@ describe("package artifact reuse", () => {
       "\n            create_or_update_github_release\n",
     );
     const promoteAndroidCall = releaseWorkflow.lastIndexOf(
-      "\n            if ! promote_android_release_asset; then\n",
+      "\n              if promote_android_release_asset; then\n",
     );
-    const publishReleaseCall = releaseWorkflow.lastIndexOf(
-      "\n              publish_github_release\n",
-    );
+    const publishReleaseCall = releaseWorkflow.lastIndexOf("\n  finalize_github_release:\n");
     expect(createDraftCall).toBeGreaterThan(-1);
     expect(promoteAndroidCall).toBeGreaterThan(createDraftCall);
     expect(publishReleaseCall).toBeGreaterThan(promoteAndroidCall);
@@ -2709,7 +2697,7 @@ describe("package artifact reuse", () => {
     );
     expect(releaseWorkflow).toContain("registry tarball");
     expect(releaseWorkflow).toContain("openclawNpmTarball");
-    expect(releaseWorkflow).not.toContain('npm view "openclaw@${release_version}" dist.tarball');
+    expect(releaseWorkflow).toContain('npm view "openclaw@${release_version}" dist.tarball');
     expect(releaseWorkflow).toContain("release SHA");
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");
@@ -2717,7 +2705,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain('conclusion" == "skipped"');
     expect(releaseWorkflow).toContain("approve_child_publish_environment");
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
-    expect(releaseWorkflow).toContain("release:verify-beta");
+    expect(releaseWorkflow).toContain("scripts/release-verify-beta.ts");
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain("--skip-github-release");
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
@@ -2732,7 +2720,7 @@ describe("package artifact reuse", () => {
     expect(postpublishEvidenceUpload.with?.["if-no-files-found"]).toBe("error");
     expect(releaseWorkflow).toContain("Failed child job summary");
     expect(releaseWorkflow).toContain("Workflow completion waits for ClawHub");
-    expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
+    expect(releaseWorkflow).toContain("Workflow does not wait for ClawHub");
     expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
     expect(releaseWorkflow).toContain(
       '[[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]',
@@ -2741,7 +2729,7 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
-    expect(pluginNpmWorkflow).toContain("Check npm package version");
+    expect(pluginNpmWorkflow).toContain("Check OIDC npm package version");
     expect(pluginNpmWorkflow).toContain("already_published=true");
     expect(pluginNpmWorkflow).toContain(
       "steps.npm_package_version.outputs.already_published != 'true'",
@@ -2819,7 +2807,7 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
-    expect(releaseWorkflow).toContain('--release-publish-branch "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('--release-publish-branch "${PARENT_WORKFLOW_BRANCH}"');
     expect(releaseWorkflow).toContain('--release-publish-run-id "${GITHUB_RUN_ID}"');
     expect(releaseWorkflow).toContain("jq -r '.normal.ref' \"${clawhub_plan_path}\"");
     expect(releaseWorkflow).toContain("jq -r '.normal.workflow' \"${clawhub_plan_path}\"");
@@ -2835,8 +2823,8 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       "has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}",
     );
-    expect(releaseWorkflow.lastIndexOf("verify_published_release")).toBeLessThan(
-      releaseWorkflow.lastIndexOf("create_or_update_github_release"),
+    expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
+      releaseWorkflow.lastIndexOf("verify_published_release"),
     );
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
       releaseWorkflow.lastIndexOf("append_release_proof_to_github_release"),

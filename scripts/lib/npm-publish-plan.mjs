@@ -4,6 +4,12 @@ import {
   parseReleaseVersion,
 } from "./release-version.mjs";
 
+export {
+  collectReleaseVersionFloorErrors,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./release-version.mjs";
+
 /**
  * @typedef {object} NpmPublishPlan
  * @property {"stable" | "alpha" | "beta"} channel

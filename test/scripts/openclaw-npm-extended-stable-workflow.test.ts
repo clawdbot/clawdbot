@@ -121,7 +121,7 @@ describe("minimal npm extended-stable workflow", () => {
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
     expect(step(preflight, "Verify release contents").env).toMatchObject({
       OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
-        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
+        "${{ steps.core_package_tarballs.outputs.dir }}",
     });
     expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
     expect(plugins.env).toMatchObject({
@@ -129,7 +129,7 @@ describe("minimal npm extended-stable workflow", () => {
     });
     expect(plugins.run).toContain("--selection-mode all-publishable");
     expect(plugins.run).toContain("--npm-dist-tag extended-stable");
-    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mts");
     expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
     expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
     expect(plugins.run).not.toContain("--publish");
@@ -142,20 +142,14 @@ describe("minimal npm extended-stable workflow", () => {
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,conclusion,url");
     const fullValidationRun = step(
       parsed.jobs?.publish_openclaw_npm,
-      "Verify full release validation run metadata",
+      "Verify full release validation evidence",
     );
     expect(fullValidationRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(fullValidationRun.run).toContain(
-      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
-    );
-    expect(fullValidationRun.run).toContain(
-      '"$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
-    );
-    expect(fullValidationRun.run).toContain('echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"');
-    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(3);
-    expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
+    expect(fullValidationRun.run).toContain("validate-full-release-validation-evidence.mjs");
+    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(2);
+    expect(raw).toContain("validate-full-release-validation-evidence.mjs");
   });
 
   it("requires and authenticates the plugin npm run before an extended-stable core publish", () => {

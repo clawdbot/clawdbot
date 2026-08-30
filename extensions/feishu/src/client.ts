@@ -93,11 +93,6 @@ function setRequestUserAgent(req: unknown) {
 
 export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
 
-type FeishuHttpInstanceLike = Pick<
-  typeof feishuClientSdk.defaultHttpInstance,
-  "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
->;
-
 async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
@@ -127,7 +122,9 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * indefinite hangs and set a standardized User-Agent per OAPI best practices.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
-  const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
+  // The SDK's response interceptor unwraps Axios responses to payloads, which is
+  // the HttpInstance contract even though Axios 1.20's declarations cannot express it.
+  const base = feishuClientSdk.defaultHttpInstance as Lark.HttpInstance;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;

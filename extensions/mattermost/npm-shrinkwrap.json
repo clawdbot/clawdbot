@@ -8,7 +8,7 @@
       "name": "@openclaw/mattermost",
       "version": "2026.7.33",
       "dependencies": {
-        "ws": "8.21.0",
+        "ws": "8.21.3",
         "zod": "4.4.3"
       },
       "peerDependencies": {
@@ -21,9 +21,9 @@
       }
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.3",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz",
+      "integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

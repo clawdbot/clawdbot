@@ -1656,9 +1656,9 @@
       }
     },
     "node_modules/tar": {
-      "version": "7.5.19",
-      "resolved": "https://registry.npmjs.org/tar/-/tar-7.5.19.tgz",
-      "integrity": "sha512-4LeEWl96twnS2Q7Bz4MGqgazLqO+hJN63GZxXoIqh1T3VweYD997gbU1ItNsQafqqXTXd5WFyFdReLtwvRBNiw==",
+      "version": "7.5.22",
+      "resolved": "https://registry.npmjs.org/tar/-/tar-7.5.22.tgz",
+      "integrity": "sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==",
       "license": "BlueOak-1.0.0",
       "optional": true,
       "dependencies": {

@@ -1414,9 +1414,9 @@
       }
     },
     "node_modules/fast-uri": {
-      "version": "3.1.2",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.2.tgz",
-      "integrity": "sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==",
+      "version": "3.1.5",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.5.tgz",
+      "integrity": "sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==",
       "funding": [
         {
           "type": "github",
@@ -1625,9 +1625,9 @@
       "license": "ISC"
     },
     "node_modules/ip-address": {
-      "version": "10.2.0",
-      "resolved": "https://registry.npmjs.org/ip-address/-/ip-address-10.2.0.tgz",
-      "integrity": "sha512-/+S6j4E9AHvW9SWMSEY9Xfy66O5PWvVEJ08O0y5JGyEKQpojb0K0GKpz/v5HJ/G0vi3D2sjGK78119oXZeE0qA==",
+      "version": "10.7.0",
+      "resolved": "https://registry.npmjs.org/ip-address/-/ip-address-10.7.0.tgz",
+      "integrity": "sha512-BGFsyJd5mpXp3rK6jIdADLNgpJUK1jnjzvYF8lK+VyDab9JAmqN0YOKDdP17HlgKb2+ehPgDc8EtnRLbGCAMhA==",
       "license": "MIT",
       "engines": {
         "node": ">= 12"

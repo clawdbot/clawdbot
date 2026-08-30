@@ -12,7 +12,7 @@
     "@tencent-connect/qqbot-connector": "1.1.0",
     "mpg123-decoder": "1.0.3",
     "silk-wasm": "3.7.1",
-    "ws": "8.21.0",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

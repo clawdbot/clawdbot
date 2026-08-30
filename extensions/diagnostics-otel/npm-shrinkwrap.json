@@ -429,12 +429,12 @@
       }
     },
     "node_modules/@opentelemetry/propagator-jaeger": {
-      "version": "2.8.0",
-      "resolved": "https://registry.npmjs.org/@opentelemetry/propagator-jaeger/-/propagator-jaeger-2.8.0.tgz",
-      "integrity": "sha512-Xnz9zZvvQzUw+9DrOn0MomR7BxFCkA2pcfXBQuHC28ndJpSbjLs7knzYb05kw5SyCjSsEWombkZMgGcJSk8JVg==",
+      "version": "2.10.0",
+      "resolved": "https://registry.npmjs.org/@opentelemetry/propagator-jaeger/-/propagator-jaeger-2.10.0.tgz",
+      "integrity": "sha512-yw/IX8DL470dSMZJoE82ScfYGp7JWZ/G8kFJo35ZILUVTB2jFPTOaioN+8s09pH0RHsWNhweVZb+ZnjJJpCChg==",
       "license": "Apache-2.0",
       "dependencies": {
-        "@opentelemetry/core": "2.8.0"
+        "@opentelemetry/core": "2.10.0"
       },
       "engines": {
         "node": "^18.19.0 || >=20.6.0"

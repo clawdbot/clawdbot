@@ -12,8 +12,8 @@
         "discord-api-types": "0.38.49",
         "libopus-wasm": "0.2.0",
         "typebox": "1.3.3",
-        "undici": "8.5.0",
-        "ws": "8.21.0"
+        "undici": "8.10.0",
+        "ws": "8.21.3"
       },
       "peerDependencies": {
         "openclaw": ">=2026.7.33"
@@ -399,9 +399,9 @@
       "license": "MIT"
     },
     "node_modules/undici": {
-      "version": "8.5.0",
-      "resolved": "https://registry.npmjs.org/undici/-/undici-8.5.0.tgz",
-      "integrity": "sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==",
+      "version": "8.10.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.10.0.tgz",
+      "integrity": "sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ==",
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"
@@ -414,9 +414,9 @@
       "license": "MIT"
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.3",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz",
+      "integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"
