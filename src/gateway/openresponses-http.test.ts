@@ -2777,44 +2777,55 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(text).toContain("[DONE]");
   });
 
-  it("emits the tool call when a streaming required tool_choice is satisfied", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "Calling " } });
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "the tool." } });
-      return {
-        payloads: [{ text: "Calling the tool." }],
-        meta: {
-          stopReason: "tool_calls",
-          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
-        },
-      };
-    }) as never);
+  it.each([
+    { name: "required", toolChoice: "required" },
+    { name: "pinned", toolChoice: { type: "function", name: "get_weather" } },
+  ] as const)(
+    "uses final result text when a streaming $name tool_choice is satisfied",
+    async ({ toolChoice }) => {
+      const port = enabledPort;
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "Working..." } });
+        return {
+          payloads: [{ text: "Done." }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
+            ],
+          },
+        };
+      }) as never);
 
-    const res = await postResponses(port, {
-      stream: true,
-      model: "openclaw",
-      input: "check the weather",
-      tools: WEATHER_TOOL,
-      tool_choice: "required",
-    });
+      const res = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+        tool_choice: toolChoice,
+      });
 
-    expect(res.status).toBe(200);
-    const events = parseSseEvents(await res.text());
-    const delta = findSseEvent(events, "response.output_text.delta");
-    expect((parseSseData(delta) as { delta?: string }).delta).toBe("Calling the tool.");
-    const completed = findSseEvent(events, "response.completed");
-    const response = (
-      parseSseData(completed) as {
-        response?: { status?: string; output?: Array<Record<string, unknown>> };
-      }
-    ).response;
-    expect(response?.status).toBe("completed");
-    expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
-    expect(response?.output?.[1]?.name).toBe("get_weather");
-  });
+      expect(res.status).toBe(200);
+      const events = parseSseEvents(await res.text());
+      const delta = findSseEvent(events, "response.output_text.delta");
+      expect((parseSseData(delta) as { delta?: string }).delta).toBe("Done.");
+      const completed = findSseEvent(events, "response.completed");
+      const response = (
+        parseSseData(completed) as {
+          response?: { status?: string; output?: Array<Record<string, unknown>> };
+        }
+      ).response;
+      expect(response?.status).toBe("completed");
+      expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+      expect(
+        (((response?.output?.[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
+          ?.text as string | undefined) ?? "",
+      ).toBe("Done.");
+      expect(response?.output?.[1]?.name).toBe("get_weather");
+    },
+  );
 
   it.each([
     { name: "an initial replacement", previousDelta: undefined, replacementDelta: undefined },

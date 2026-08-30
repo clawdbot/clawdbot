@@ -1236,8 +1236,11 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls.length > 0
       ) {
         const usage = finalUsage ?? createEmptyUsage();
-        const finalText =
-          accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
+        // Held constrained prose can use the final payload; already-emitted
+        // Responses deltas cannot be replaced without contradicting the stream.
+        const finalText = sawAssistantDelta
+          ? accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent
+          : resultPayloadText || accumulatedText || bufferedReplaceableAssistantContent;
 
         if (finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
