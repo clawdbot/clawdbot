@@ -499,7 +499,7 @@ describe("session state events", () => {
     ).toEqual({ count: 1 });
   });
 
-  it("keeps legacy bare target cursors receiving and acknowledging notices", () => {
+  it("ignores legacy bare target cursors without an owning agent", () => {
     const database = createDatabaseOptions();
     openOpenClawStateDatabase(database)
       .db.prepare(
@@ -521,13 +521,10 @@ describe("session state events", () => {
       database,
     );
 
-    expect(readCursor(database, watcher, "global")).toMatchObject({ material_sequence: 1 });
-    expect(peekSystemEventEntries(watcher)).toHaveLength(2);
+    expect(readCursor(database, watcher, "global")).toBeUndefined();
+    expect(peekSystemEventEntries(watcher)).toHaveLength(0);
     acknowledgeSessionStateNotices(watcher, ["global"], database);
-    expect(readCursor(database, watcher, "global")).toMatchObject({
-      last_seen_sequence: 0,
-      notified_sequence: 1,
-    });
+    expect(readCursor(database, watcher, "global")).toBeUndefined();
   });
 
   it("acks only drained session-state entries and ignores ordinary events", async () => {

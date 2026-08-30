@@ -12,10 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import {
-  encodeSessionStateWatchTarget,
-  isLegacySessionStateWatchTarget,
-} from "./session-watch-target.js";
+import { encodeSessionStateWatchTarget } from "./session-watch-target.js";
 
 type SessionUpstreamDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -251,51 +248,17 @@ export function listWatchedSessionUpstreamLinks(
           .distinct(),
       ).rows.map((row) => row.target_session_key),
     );
-    const legacyWatchedKeys = new Set(
-      [...watchedTargetKeys].filter(isLegacySessionStateWatchTarget),
+    const links = linkRows.map(rowToSessionUpstreamLink).filter((link) =>
+      watchedTargetKeys.has(
+        encodeSessionStateWatchTarget({
+          sessionKey: link.sessionKey,
+          agentId: link.agentId,
+        }),
+      ),
     );
-    const links = linkRows.map(rowToSessionUpstreamLink).filter(
-      (link) =>
-        watchedTargetKeys.has(
-          encodeSessionStateWatchTarget({
-            sessionKey: link.sessionKey,
-            agentId: link.agentId,
-          }),
-        ) ||
-        (isLegacySessionStateWatchTarget(link.sessionKey) &&
-          watchedTargetKeys.has(link.sessionKey)),
-    );
-    // Keep the duplicate-key guard for legacy rows that may still be visible while
-    // an older runtime is draining; never probe an arbitrary agent's upstream.
-    const keyCounts = new Map<string, number>();
-    const legacyKeyCounts = new Map<string, number>();
+    // Each qualified target owns one link; duplicate visible keys are split by the
+    // monitor before consuming the provider's key-only activity outcome contract.
     for (const link of links) {
-      const targetKey = encodeSessionStateWatchTarget({
-        sessionKey: link.sessionKey,
-        agentId: link.agentId,
-      });
-      keyCounts.set(targetKey, (keyCounts.get(targetKey) ?? 0) + 1);
-      if (legacyWatchedKeys.has(link.sessionKey)) {
-        legacyKeyCounts.set(link.sessionKey, (legacyKeyCounts.get(link.sessionKey) ?? 0) + 1);
-      }
-    }
-    for (const link of links) {
-      const targetKey = encodeSessionStateWatchTarget({
-        sessionKey: link.sessionKey,
-        agentId: link.agentId,
-      });
-      if ((keyCounts.get(targetKey) ?? 0) > 1) {
-        log.warn(
-          `skipping ambiguous upstream links for ${link.sessionKey}: multiple agents adopt the same key`,
-        );
-        continue;
-      }
-      if ((legacyKeyCounts.get(link.sessionKey) ?? 0) > 1) {
-        log.warn(
-          `skipping ambiguous legacy upstream links for ${link.sessionKey}: multiple agents adopt the same key`,
-        );
-        continue;
-      }
       const catalogLinks = grouped.get(link.catalogId) ?? [];
       catalogLinks.push(link);
       grouped.set(link.catalogId, catalogLinks);

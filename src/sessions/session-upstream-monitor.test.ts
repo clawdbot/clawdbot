@@ -38,14 +38,15 @@ function createLink(
   catalogId: string,
   database: ReturnType<typeof createDatabaseOptions>,
   watched = true,
+  agentId = "main",
 ) {
   upsertSessionUpstreamLink(
     {
       sessionKey,
-      agentId: "main",
+      agentId,
       catalogId,
       hostId: "gateway:local",
-      threadId: `thread-${catalogId}`,
+      threadId: `thread-${agentId}-${catalogId}`,
       upstreamKind: catalogId === "claude" ? "claude-cli" : "codex-app-server",
       upstreamRef: { source: catalogId },
       marker: { offset: 0 },
@@ -53,7 +54,10 @@ function createLink(
     database,
   );
   if (watched) {
-    registerSessionStateWatch({ watcherSessionKey, targetSessionKey: sessionKey }, database);
+    registerSessionStateWatch(
+      { watcherSessionKey, targetSessionKey: sessionKey, targetAgentId: agentId },
+      database,
+    );
   }
 }
 
@@ -141,7 +145,7 @@ describe("session upstream monitor", () => {
       .get(watched) as { dedupe_key: string };
     // Source identity is hashed into the dedupe key so a rebased source cannot
     // collide with a prior source's activity id.
-    expect(dedupeRow.dedupe_key).toMatch(new RegExp(`^upstream:${watched}:[0-9a-f]{16}:8$`));
+    expect(dedupeRow.dedupe_key).toMatch(new RegExp(`^upstream:${watched}:[0-9a-f]{16}:8:main$`));
   });
 
   it("records one upstream-missing event after three misses and removes the link", async () => {
@@ -905,5 +909,47 @@ describe("session upstream monitor", () => {
     });
 
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toHaveLength(1);
+  });
+
+  it("processes duplicate bare session keys as independent agent probes", async () => {
+    const database = createDatabaseOptions();
+    createLink("global", "claude", database, true, "main");
+    createLink("global", "claude", database, true, "ops");
+    const check = vi.fn(async (probes: SessionUpstreamProbe[]) =>
+      probes.map((probe) => ({
+        kind: "activity" as const,
+        sessionKey: probe.sessionKey,
+        occurredAt: 2_000,
+        humanTurns: 1,
+        nextMarker: { agent: probe.agentId },
+        dedupeId: "same-upstream-event",
+      })),
+    );
+
+    await runSessionUpstreamMonitorTick({
+      ...database,
+      providers: [provider("claude", check)],
+      loadEntry: ({ agentId }: { agentId?: string }) =>
+        ({ sessionId: `session-${agentId}` }) as never,
+      isRunActive: () => false,
+      loadOwnRecentUserTexts: async () => [],
+    });
+
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(check.mock.calls.map(([probes]) => probes.map((probe) => probe.agentId))).toEqual(
+      expect.arrayContaining([["main"], ["ops"]]),
+    );
+    expect(listSessionStateEventsSince("global", "main", 0, 20, database).events).toEqual([
+      expect.objectContaining({ agentId: "main", kind: "human_direct_message" }),
+    ]);
+    expect(listSessionStateEventsSince("global", "ops", 0, 20, database).events).toEqual([
+      expect.objectContaining({ agentId: "ops", kind: "human_direct_message" }),
+    ]);
+    expect(readSessionUpstreamLink("global", "main", database)).toEqual(
+      expect.objectContaining({ marker: { agent: "main" } }),
+    );
+    expect(readSessionUpstreamLink("global", "ops", database)).toEqual(
+      expect.objectContaining({ marker: { agent: "ops" } }),
+    );
   });
 });
