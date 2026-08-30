@@ -258,8 +258,9 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
   <Accordion title="Claude models through the Anthropic Messages endpoint">
     Neon also exposes the [Anthropic Messages API](https://neon.com/docs/ai-gateway/anthropic-messages)
     under `/anthropic`, where the Anthropic SDK appends `/v1/messages`. This dialect is Claude only, and
-    it supports native Anthropic features such as prompt caching and extended thinking that the
-    OpenAI-compatible `/v1` path cannot express. Reach it with a second provider entry using the
+    it reaches native Anthropic features that the OpenAI-compatible `/v1` path cannot express, such
+    as extended thinking and opt-in prompt caching. Prompt caching here is not automatic; you enable it
+    with `cacheRetention`, as the configuration below shows. Reach it with a second provider entry using the
     `anthropic-messages` API and the `/anthropic` base URL, the same shape as the bundled
     Anthropic-compatible provider examples:
 
@@ -301,11 +302,10 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
     zeros are the beta rate, and you take `contextWindow` from the
     [Neon model catalog](https://neon.com/docs/ai-gateway/models).
 
-    Prompt caching stays off until you ask for it. OpenClaw seeds a default `cacheRetention` only for
-    direct Anthropic routes, so on a custom `anthropic-messages` endpoint like Neon you set
-    `params.cacheRetention` yourself under `agents.defaults.models`, as the example above does. Use
-    `"short"` for the 5-minute cache or `"long"` for the 1-hour TTL; `"none"` disables it. See
-    [Prompt caching](/reference/prompt-caching).
+    OpenClaw seeds a default `cacheRetention` only for direct Anthropic routes, so on a custom
+    `anthropic-messages` endpoint like Neon you set `params.cacheRetention` yourself under
+    `agents.defaults.models`, as the example above does. Use `"short"` for the 5-minute cache or
+    `"long"` for the 1-hour TTL; `"none"` disables it. See [Prompt caching](/reference/prompt-caching).
 
     Two behaviors matter here:
 
@@ -388,7 +388,7 @@ For general provider configuration and failover behavior, see [Model Providers](
     How to choose and configure models.
   </Card>
   <Card title="Anthropic Messages API" href="https://neon.com/docs/ai-gateway/anthropic-messages" icon="robot">
-    Native Claude dialect with prompt caching and extended thinking.
+    Native Claude dialect with extended thinking and opt-in prompt caching.
   </Card>
   <Card title="Troubleshooting" href="https://neon.com/docs/ai-gateway/troubleshooting" icon="wrench">
     Common Neon AI Gateway errors and how to resolve them.
