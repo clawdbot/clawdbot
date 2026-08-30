@@ -1275,6 +1275,13 @@ describe("tool-loop-detection", () => {
         afterExitCode: 1,
         afterOutput: "errno 113 at 12:00:39",
       },
+      {
+        label: "calendar date",
+        beforeExitCode: 1,
+        beforeOutput: () => "certificate becomes valid on 2026-08-30",
+        afterExitCode: 1,
+        afterOutput: "certificate becomes valid on 2026-08-31",
+      },
     ])(
       "resets a drifting terminal-failure streak after a new $label",
       ({ beforeExitCode, beforeOutput, afterExitCode, afterOutput }) => {

@@ -174,7 +174,6 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
 // diagnostic token so a new error, exit code, or cause resets the streak.
 const VOLATILE_EXEC_FAILURE_PATTERNS = [
   /\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:z|[+-]\d{2}:\d{2})?/giu,
-  /\d{4}-\d{2}-\d{2}/gu,
   /\d{1,2}:\d{2}:\d{2}(?:\.\d{1,6})?/gu,
   /\b(?:attempt|retry)\b[\s#:=]*\d+/giu,
   /\b\d+(?:\.\d+)?\s?(?:ns|us|ms|seconds?|minutes?|hours?)\b/giu,
