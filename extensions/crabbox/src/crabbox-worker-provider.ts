@@ -432,13 +432,8 @@ export function createCrabboxWorkerProvider(
         });
       }
       if (project && warmImages.lookupLease(leaseId)?.phase !== "enrolled") {
-        let runtime: Awaited<
-          ReturnType<
-            NonNullable<
-              NonNullable<Parameters<WorkerProvider["provision"]>[2]>["prepareNodeRuntime"]
-            >
-          >
-        >;
+        let preparationFailed = false;
+        let captured: boolean;
         try {
           await prepareCrabboxProjectFiles({
             ...context,
@@ -448,51 +443,68 @@ export function createCrabboxWorkerProvider(
             runCommand,
             timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
           });
-          if (!options?.prepareNodeRuntime) {
-            throw new Error("Crabbox project snapshots require node runtime preparation");
-          }
-          runtime = await options.prepareNodeRuntime();
-        } catch (error) {
-          project.signal.throwIfAborted();
-          return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
-        }
-        const setup = createCrabboxNodeRuntimeSetup({
-          nodeBootstrap: runtime.nodeBootstrap,
-          leaseId,
-        });
-        inspectedParams.inspect = await runProvisionSetupAndWaitReady({
-          ...inspectedParams,
-          phase: "node runtime preparation",
-          setup: setup.command,
-          forwardedEnv: setup.forwardedEnv,
-          timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
-          signal: runtime.signal,
-          sleep,
-        });
-        try {
           project.assertCurrent();
-          runtime.signal?.throwIfAborted();
           warmImages.markPrepared(leaseId, project.baseCommit);
-          await warmImages.capture({
-            ...context,
-            id: leaseId,
-            profile: parsed,
-            signal: runtime.signal,
-            assertCurrent: project.assertCurrent,
-          });
-          runtime.signal?.throwIfAborted();
+          captured = await warmImages.capture(
+            {
+              ...context,
+              id: leaseId,
+              profile: parsed,
+              signal: project.signal,
+              assertCurrent: project.assertCurrent,
+            },
+            async () => {
+              try {
+                let runtime;
+                try {
+                  if (!options?.prepareNodeRuntime) {
+                    throw new Error("Crabbox project snapshots require node runtime preparation");
+                  }
+                  runtime = await options.prepareNodeRuntime();
+                } catch (error) {
+                  project.signal.throwIfAborted();
+                  return await failProvisionAfterCleanup(
+                    { ...context, id: leaseId, stopLease },
+                    error,
+                  );
+                }
+                const setup = createCrabboxNodeRuntimeSetup({
+                  nodeBootstrap: runtime.nodeBootstrap,
+                  leaseId,
+                });
+                inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+                  ...inspectedParams,
+                  phase: "node runtime preparation",
+                  setup: setup.command,
+                  forwardedEnv: setup.forwardedEnv,
+                  timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
+                  signal: runtime.signal,
+                  sleep,
+                });
+                runtime.signal?.throwIfAborted();
+              } catch (error) {
+                // Setup already owns cleanup; an indeterminate readiness error deliberately
+                // keeps the lease for replay. Neither outcome permits a second stop here.
+                preparationFailed = true;
+                throw error;
+              }
+            },
+          );
         } catch (error) {
           project.signal.throwIfAborted();
-          runtime.signal?.throwIfAborted();
+          if (preparationFailed) {
+            throw error;
+          }
           return await failProvisionAfterCleanup({ ...context, id: leaseId, stopLease }, error);
         }
-        // Native capture can restart the source and change SSH; enrollment uses the new lease.
-        inspectedParams.inspect = await waitForProvisionReady({
-          ...inspectedParams,
-          signal: runtime.signal,
-          refresh: true,
-          sleep,
-        });
+        // Only native capture can have restarted the source since preparation returned.
+        if (captured) {
+          inspectedParams.inspect = await waitForProvisionReady({
+            ...inspectedParams,
+            refresh: true,
+            sleep,
+          });
+        }
       }
       const beginNodeEnrollment = options?.beginNodeEnrollment;
       if (!beginNodeEnrollment) {

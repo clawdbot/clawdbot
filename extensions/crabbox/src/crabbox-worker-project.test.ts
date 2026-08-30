@@ -91,14 +91,45 @@ describe("Crabbox project snapshot provisioning", () => {
     await provider.provision(PROFILE, "project-second", current.options);
     expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
     expect(calls.some(({ argv }) => argv[1] === "warmup" || argv[2] === "create")).toBe(false);
-    expect(events).toEqual([
-      "project-prepared",
-      "runtime-granted",
-      "runtime-install",
-      "enrollment-begun",
-      "enrollment-install",
-    ]);
+    expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+    // Allocation and normal enrollment each inspect once; a cache hit causes no native restart.
+    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(2);
   });
+
+  it.each(["setup", "readiness"] as const)(
+    "preserves runtime %s failure ownership without starting capture or enrollment",
+    async (failure) => {
+      const events: string[] = [];
+      const { options, observe } = projectOptions(events);
+      let installed = false;
+      const { provider, calls } = createWarmProvider((call) => {
+        observe(call);
+        if (call.argv[1] === "run" && call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
+          installed = true;
+          if (failure === "setup") {
+            return commandResult({ code: 7, stderr: "runtime setup failed" });
+          }
+        }
+        if (installed && failure === "readiness" && call.argv[1] === "inspect") {
+          return commandResult({ termination: "timeout", code: null, killed: true });
+        }
+        return undefined;
+      });
+      await expect(provider.provision(PROFILE, `runtime-${failure}`, options)).rejects.toThrow();
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(
+        failure === "setup" ? 1 : 0,
+      );
+      expect(listCrabboxWarmImages().every((image) => !image.capture)).toBe(true);
+      if (failure === "readiness") {
+        expect(
+          listCrabboxWarmImages()[0]?.allocations[operationLeaseId(`runtime-${failure}`)],
+        ).toMatchObject({ phase: "prepared", choice: { kind: "cold" } });
+      }
+    },
+  );
 
   it.each(["aborted", "uncertain"] as const)(
     "does not enroll after an %s native capture",

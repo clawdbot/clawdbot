@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
@@ -9,6 +8,11 @@ import {
   type parseCrabboxProfile,
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
+import {
+  parseCheckpointAvailability,
+  parseCheckpointJson,
+  parseCreatedCheckpoint,
+} from "./crabbox-worker-warm-image-checkpoint.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   assertCrabboxWarmImageMigrationReady,
@@ -50,7 +54,6 @@ const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
 const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
 // Machine0 image save stops the source and waits for image availability even with --wait=false.
 const WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS = 600_000;
-const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 const checkpointCaptureTimeoutMs = (provider: string) =>
   provider === "machine0" ? WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS : WARM_IMAGE_CAPTURE_TIMEOUT_MS;
@@ -82,59 +85,6 @@ export function resolveCrabboxWarmImageProfileKey(
       }),
     )
     .digest("hex");
-}
-
-function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error(`Crabbox checkpoint ${action} returned invalid JSON`);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(`Crabbox checkpoint ${action} returned an invalid record`);
-  }
-  return parsed;
-}
-
-function parseCreatedCheckpoint(
-  stdout: string,
-  leaseId: string,
-): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> {
-  const record = parseCheckpointJson(stdout, "create");
-  const checkpointId = nonEmptyString(record.id);
-  const kind = nonEmptyString(record.kind);
-  const nativeState = isRecord(record.native) ? nonEmptyString(record.native.state) : undefined;
-  if (
-    !checkpointId ||
-    !CHECKPOINT_ID_PATTERN.test(checkpointId) ||
-    !kind ||
-    record.leaseId !== leaseId ||
-    !nativeState
-  ) {
-    throw new Error("Crabbox checkpoint create returned an invalid native checkpoint");
-  }
-  return { checkpointId, kind, state: nativeState === "available" ? "available" : "pending" };
-}
-
-function parseCheckpointAvailability(stdout: string): "available" | "pending" | "missing" {
-  const record = parseCheckpointJson(stdout, "inspect");
-  if (!nonEmptyString(record.localState) || !nonEmptyString(record.nextAction)) {
-    throw new Error("Crabbox checkpoint inspect returned an invalid verification record");
-  }
-  if (record.providerState === undefined || record.providerState === "missing") {
-    return "missing";
-  }
-  if (typeof record.providerState !== "string") {
-    throw new Error("Crabbox checkpoint inspect returned an invalid provider state");
-  }
-  // Provider states are native (for example Machine0 ACTIVE); verified fork actions
-  // carry readiness. Docker reports available/delete, so retain that positive state.
-  return record.providerState === "available" ||
-    record.nextAction === "fork_or_delete" ||
-    record.nextAction === "fork_restore_or_delete"
-    ? "available"
-    : "pending";
 }
 
 export function createCrabboxWarmImageManager(dependencies: {
@@ -497,13 +447,18 @@ export function createCrabboxWarmImageManager(dependencies: {
       deleteEmptyProfile(owner.key);
     },
 
-    async capture(context: LeaseContext & { profile: CrabboxProfile }) {
+    async capture(
+      context: LeaseContext & { profile: CrabboxProfile },
+      prepareSource?: () => Promise<void>,
+    ): Promise<boolean> {
       assertCurrent(context);
       const captureId = randomUUID();
       const owner = lookupLease(context.id);
       const key = owner?.key;
       let claimed = false;
       let creating = false;
+      let preparing = false;
+      let captured = false;
       const attemptCapture = async () => {
         try {
           await collectImages(context, "teardown");
@@ -568,6 +523,12 @@ export function createCrabboxWarmImageManager(dependencies: {
           if (!claimed) {
             return;
           }
+          // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
+          // credential artifacts afterward, before any native image can include them.
+          assertCurrent(context);
+          preparing = true;
+          await prepareSource?.();
+          preparing = false;
           await checkpointCommand(
             context,
             "scrub",
@@ -609,6 +570,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             ),
             context.id,
           );
+          captured = true;
           const published = openStore().update(key, (current) => {
             if (current?.operation?.type !== "capture" || current.operation.id !== captureId) {
               return undefined;
@@ -661,6 +623,9 @@ export function createCrabboxWarmImageManager(dependencies: {
               // Keep persisted ownership recoverable; physical lease cleanup still belongs to stop.
             }
           }
+          if (preparing) {
+            throw error;
+          }
           warnOnce(
             "capture",
             creating
@@ -679,6 +644,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         );
       }
       assertCurrent(context);
+      return captured;
     },
 
     async allocate(context: AllocationContext): Promise<void> {
