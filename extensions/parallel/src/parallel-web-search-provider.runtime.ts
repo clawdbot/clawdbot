@@ -22,7 +22,6 @@ import {
   normalizeParallelObjective,
   normalizeParallelResults,
   normalizeParallelSearchQueries,
-  normalizeParallelSessionId,
   type ParallelSearchResponse,
   resolveParallelSearchCount,
 } from "./parallel-search-normalize.js";
@@ -218,7 +217,6 @@ export const testing = {
   normalizeParallelObjective,
   normalizeParallelResults,
   normalizeParallelSearchQueries,
-  normalizeParallelSessionId,
   resolveParallelApiKey,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
