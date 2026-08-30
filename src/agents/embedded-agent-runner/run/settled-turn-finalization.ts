@@ -104,6 +104,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
+  // Silent helper runs may consume a real finalizer answer internally, but a
+  // host fallback would turn their semantic failure into synthetic success.
+  const terminalFallbackAllowed = input.finalization.preparedAttempt.silentExpected !== true;
   log.warn(
     `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
@@ -142,7 +145,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     if (finalization.outcome === "empty") {
       log.warn(
         `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} attempts=${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS} — using terminal fallback reply`,
+          `provider=${errorContext.provider}/${errorContext.model} attempts=${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving silent helper failure"}`,
       );
     }
   } catch (error) {
@@ -160,10 +163,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     }
     log.warn(
       `settled-turn finalization failed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — using terminal fallback reply`,
+        `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving silent helper failure"}`,
     );
   }
-  if (finalizationOutcome !== "answered") {
+  if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       attempt: input.finalization.preparedAttempt,
       sessionId: initial.sessionIdUsed,

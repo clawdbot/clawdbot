@@ -352,6 +352,30 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.agentMeta).toMatchObject({ assistantTurns: 3 });
   });
 
+  it("preserves exhausted silent helper failure without synthesizing a fallback", async () => {
+    const attempt = settledFailedAttempt();
+    const emptyAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "" }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValue({
+      outcome: "empty",
+      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+    });
+    const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.silentExpected = true;
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("completed-empty");
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+    expect(result.attempt.assistantTexts).toEqual([""]);
+    expect(result.attempt.toolMetas).toBe(attempt.toolMetas);
+    expect(result.prepared.payloadsWithToolMedia).not.toEqual([
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+    ]);
+  });
+
   it("delivers a host fallback when isolated finalization fails", async () => {
     const attempt = settledFailedAttempt();
     backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));
