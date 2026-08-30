@@ -38,9 +38,7 @@ import { renderMessageImages, resolveRenderableMessageImages } from "./chat-mess
 import {
   detectJson,
   jsonSummaryLabel,
-  renderAssistantMessageMarkdown,
-  renderMarkdownText,
-  renderUserMessageMarkdown,
+  renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
@@ -383,7 +381,6 @@ export function renderGroupedMessage(
       ? html`${assistantViewBlocks.map(
           (block) => html`<div class="chat-tool-card__widget-host">
             ${renderToolPreview(block.preview, "chat_message", {
-              onOpenSidebar,
               rawText: block.rawText ?? null,
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               boardProvider: opts.boardProvider,
@@ -455,29 +452,13 @@ export function renderGroupedMessage(
           <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
         </details>`
       : bodyMarkdown
-        ? !isStandaloneToolMessage && normalizedRole === "user"
-          ? renderUserMessageMarkdown(
-              bodyMarkdown,
-              messageKey,
-              opts,
-              markdownRenderOptions,
-              duplicateSuffix,
-            )
-          : !isStandaloneToolMessage && normalizedRole === "assistant"
-            ? renderAssistantMessageMarkdown(
-                bodyMarkdown,
-                opts.isStreaming,
-                opts.assistantMessageDisclosure,
-                markdownRenderOptions,
-                duplicateSuffix,
-                opts.isStreaming ? messageKey : undefined,
-              )
-            : renderMarkdownText(
-                bodyMarkdown,
-                opts.isStreaming,
-                markdownRenderOptions,
-                duplicateSuffix,
-              )
+        ? renderMessageMarkdown(
+            bodyMarkdown,
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
+            duplicateSuffix,
+          )
         : nothing}
     ${hasToolCards
       ? isStandaloneToolMessage && expandsSingleToolCard && singleToolCard

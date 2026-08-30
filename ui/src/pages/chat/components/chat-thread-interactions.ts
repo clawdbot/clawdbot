@@ -316,39 +316,28 @@ export function toggleTranscriptSearch(
   requestUpdate();
 }
 
-let activeReplyContextMenu: HTMLElement | null = null;
-let activeReplyContextMenuPaneId: string | null = null;
-let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
-let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
-let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
+let activeReplyContextMenu: {
+  element: HTMLElement;
+  paneId: string;
+  listeners: AbortController;
+} | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
-  if (paneId && paneId !== activeReplyContextMenuPaneId) {
+  const owner = activeReplyContextMenu;
+  if (paneId && paneId !== owner?.paneId) {
     return;
   }
-  if (activeReplyContextMenu) {
-    dismissConfirmedActionPopovers(activeReplyContextMenu);
-    activeReplyContextMenu.remove();
+  if (owner) {
+    dismissConfirmedActionPopovers(owner.element);
+    owner.element.remove();
   }
   activeReplyContextMenu = null;
-  activeReplyContextMenuPaneId = null;
   const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
   if (fallbackMenu) {
     dismissConfirmedActionPopovers(fallbackMenu);
     fallbackMenu.remove();
   }
-  if (contextMenuDocumentClickHandler) {
-    document.removeEventListener("click", contextMenuDocumentClickHandler);
-    contextMenuDocumentClickHandler = null;
-  }
-  if (contextMenuDocumentContextMenuHandler) {
-    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
-    contextMenuDocumentContextMenuHandler = null;
-  }
-  if (contextMenuKeydownHandler) {
-    document.removeEventListener("keydown", contextMenuKeydownHandler);
-    contextMenuKeydownHandler = null;
-  }
+  owner?.listeners.abort();
 }
 
 function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
@@ -587,8 +576,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     focusCandidates.push(action.button);
   }
   document.body.appendChild(menu);
-  activeReplyContextMenu = menu;
-  activeReplyContextMenuPaneId = props.paneId;
+  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController() };
+  activeReplyContextMenu = owner;
 
   const menuRect = menu.getBoundingClientRect();
   let left = event.clientX;
@@ -603,15 +592,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   menu.style.top = `${Math.max(0, top)}px`;
   focusCandidates.find((button) => !button.disabled)?.focus();
   requestAnimationFrame(() => {
-    if (!menu.isConnected || activeReplyContextMenu !== menu) {
+    if (!menu.isConnected || activeReplyContextMenu !== owner) {
       return;
     }
-    contextMenuDocumentClickHandler = (nextEvent: MouseEvent) => {
-      if (!menu.contains(nextEvent.target as Node | null)) {
-        removeReplyContextMenu();
-      }
-    };
-    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+    const handleOutsideEvent = (nextEvent: MouseEvent) => {
       if (!menu.contains(nextEvent.target as Node | null)) {
         removeReplyContextMenu();
       }
@@ -624,10 +608,10 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         props.onFocusComposer?.();
       }
     };
-    contextMenuKeydownHandler = handleKeydown;
-    document.addEventListener("click", contextMenuDocumentClickHandler);
+    const { signal } = owner.listeners;
+    document.addEventListener("click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
-    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
-    document.addEventListener("keydown", handleKeydown);
+    document.addEventListener("contextmenu", handleOutsideEvent, { capture: true, signal });
+    document.addEventListener("keydown", handleKeydown, { signal });
   });
 }

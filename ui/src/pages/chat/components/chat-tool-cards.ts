@@ -33,11 +33,7 @@ import {
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  formatToolDetail,
-  resolveToolDisplay,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -840,12 +836,8 @@ export function renderToolApprovalReviews(card: ToolCard) {
 
 type ToolCardRenderOptions = {
   runActive?: boolean;
-  sessionKey?: string;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-  canvasPluginSurfaceUrl?: string | null;
-  embedSandboxMode?: EmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
 };
 
 export function renderToolCard(
@@ -930,15 +922,7 @@ export function renderToolCard(
 
 export function renderExpandedToolCardContent(
   card: ToolCard,
-  {
-    sessionKey,
-    onOpenSidebar,
-    canvasPluginSurfaceUrl,
-    embedSandboxMode = "scripts",
-    allowExternalEmbedUrls = false,
-    runActive,
-    onOpenWorkspaceFile,
-  }: ToolCardRenderOptions,
+  { onOpenSidebar, runActive, onOpenWorkspaceFile }: ToolCardRenderOptions,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -966,17 +950,6 @@ export function renderExpandedToolCardContent(
     buildSidebarContent(buildToolCardSidebarContent(card), {
       rawText: card.outputText ?? null,
     });
-  const visiblePreview =
-    card.preview?.kind === "canvas"
-      ? renderToolPreview(card.preview, "chat_tool", {
-          onOpenSidebar,
-          rawText: card.outputText,
-          canvasPluginSurfaceUrl,
-          embedSandboxMode,
-          allowExternalEmbedUrls,
-          sessionKey,
-        })
-      : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
@@ -1069,7 +1042,7 @@ export function renderExpandedToolCardContent(
         : nothing}
       ${hasOutput
         ? card.preview?.kind === "canvas"
-          ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
+          ? renderRawOutputToggle(card.outputText!)
           : renderToolDataBlock({
               ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
               text: card.outputText!,
