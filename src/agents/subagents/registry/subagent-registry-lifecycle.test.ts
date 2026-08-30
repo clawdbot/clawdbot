@@ -5424,6 +5424,15 @@ describe("requester settle wake trigger", () => {
         settledEntry: entry,
       }),
     );
+    const completeBatch = firstCallArg(settleWake).completeBatch as NonNullable<
+      Parameters<LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
+    >["completeBatch"];
+    completeBatch([entry.runId], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
   });
 
   it("fires the settle wake exactly once for a non-suspending announce give-up", async () => {

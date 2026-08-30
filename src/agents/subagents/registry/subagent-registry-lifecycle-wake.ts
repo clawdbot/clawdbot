@@ -91,7 +91,7 @@ const completeRequesterSettleWakeBatch = (
     if (
       outcome &&
       entry.expectsCompletionMessage === true &&
-      entry.delivery?.status !== "delivered"
+      ["pending", "in_progress"].includes(entry.delivery?.status ?? "pending")
     ) {
       if (outcome.delivered) {
         const delivery = ensureDeliveryState(entry);
