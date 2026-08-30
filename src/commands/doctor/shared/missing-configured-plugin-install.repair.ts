@@ -8,11 +8,13 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import type { PluginNpmInstallArtifactPrecommitHandler } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
+import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -45,6 +47,7 @@ import {
   describeVersionBoundRuntimeReleaseCohort,
   preserveExactVersionBoundRuntimeSelector,
   versionBoundRuntimeInstallRecordMatchesReleaseCohort,
+  versionBoundRuntimeNpmArtifactMatchesReleaseCohort,
 } from "./missing-configured-plugin-install.runtime-package.js";
 import {
   isLegacyPackageUpdateDoctorPass,
@@ -188,6 +191,22 @@ async function repairMissingPluginInstallsWithLease(
   });
   const cohortFailure = (pluginId: string) =>
     `Failed to converge version-bound configured plugin "${pluginId}" to the ${cohortDescription} release cohort. Existing install records were retained.`;
+  const validateVersionBoundRuntimeNpmArtifact: PluginNpmInstallArtifactPrecommitHandler = async (
+    artifact,
+  ) => {
+    if (
+      await versionBoundRuntimeNpmArtifactMatchesReleaseCohort({
+        npmResolution: artifact.npmResolution,
+        stagedArtifactDir: artifact.stagedArtifactDir,
+        env,
+        currentVersion: compatibilityHostVersion,
+        updateChannel,
+      })
+    ) {
+      return;
+    }
+    throw new ManagedPluginLifecycleError(cohortFailure(artifact.pluginId));
+  };
   const pinFailure = (pluginId: string) =>
     `Failed to preserve the exact npm selector for version-bound configured plugin "${pluginId}". Existing install records were retained.`;
   const freshGenerationFailure = (pluginId: string) =>
@@ -355,6 +374,13 @@ async function repairMissingPluginInstallsWithLease(
           return npmSpec ? [[pluginId, npmSpec] as const] : [];
         }),
       );
+      const versionBoundRuntimePluginIds = new Set(Object.keys(versionBoundToCoreSpecOverrides));
+      const validateVersionBoundRuntimeUpdateArtifact: PluginNpmInstallArtifactPrecommitHandler =
+        async (artifact) => {
+          if (versionBoundRuntimePluginIds.has(artifact.pluginId)) {
+            await validateVersionBoundRuntimeNpmArtifact(artifact);
+          }
+        };
       let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
       try {
         updateResult = await updateNpmInstalledPlugins({
@@ -370,7 +396,10 @@ async function repairMissingPluginInstallsWithLease(
           updateChannel,
           coreVersion: compatibilityHostVersion,
           specOverrides: versionBoundToCoreSpecOverrides,
-          versionBoundToCorePluginIds: new Set(Object.keys(versionBoundToCoreSpecOverrides)),
+          versionBoundToCorePluginIds: versionBoundRuntimePluginIds,
+          ...(versionBoundRuntimePluginIds.size > 0
+            ? { onBeforeNpmPluginArtifactCommit: validateVersionBoundRuntimeUpdateArtifact }
+            : {}),
           logger: {
             terminalLinks: false,
             warn: (message) => {
@@ -393,7 +422,6 @@ async function repairMissingPluginInstallsWithLease(
 
       const completedDependencyRepairPluginIds = new Set<string>();
       const acceptedUpdateRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
-      const versionBoundRuntimePluginIds = new Set(Object.keys(versionBoundToCoreSpecOverrides));
       for (const outcome of updateResult.outcomes) {
         if (outcome.status === "updated" || outcome.status === "unchanged") {
           const retainedInstallPath = retainedDependencyRepairInstallPaths.get(outcome.pluginId);
@@ -516,6 +544,9 @@ async function repairMissingPluginInstallsWithLease(
         })
       : null;
     const previousRecords = nextRecords;
+    const enforceVersionBoundRuntimeCohort =
+      candidate.versionBoundToOpenClaw === true &&
+      candidate.trustedSourceLinkedOfficialInstall === true;
     let installed = await installCandidate({
       candidate,
       config: params.cfg,
@@ -528,10 +559,10 @@ async function repairMissingPluginInstallsWithLease(
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+      ...(enforceVersionBoundRuntimeCohort
+        ? { onBeforeNpmPluginArtifactCommit: validateVersionBoundRuntimeNpmArtifact }
+        : {}),
     });
-    const enforceVersionBoundRuntimeCohort =
-      candidate.versionBoundToOpenClaw === true &&
-      candidate.trustedSourceLinkedOfficialInstall === true;
     if (!installed.failedPluginId && enforceVersionBoundRuntimeCohort) {
       const accepted = await acceptVersionBoundRuntimeRecord({
         pluginId: candidate.pluginId,

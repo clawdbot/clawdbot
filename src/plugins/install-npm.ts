@@ -41,6 +41,7 @@ import {
   type InstallPluginResult,
   type PluginInstallArtifactConsentHandler,
   type PluginInstallLogger,
+  type PluginNpmInstallArtifactPrecommitHandler,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
@@ -60,6 +61,7 @@ export async function installPluginFromNpmSpec(
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    onBeforeNpmPluginArtifactCommit?: PluginNpmInstallArtifactPrecommitHandler;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -255,6 +257,15 @@ export async function installPluginFromNpmSpec(
     await fs.rm(policyTempDir, { recursive: true, force: true });
   }
 
+  const onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler | undefined =
+    params.onBeforeNpmPluginArtifactCommit || params.onBeforePluginArtifactCommit
+      ? async (artifact) => {
+          // Reject npm-specific policy failures before asking for capability consent;
+          // the managed installer still owns rollback for either callback.
+          await params.onBeforeNpmPluginArtifactCommit?.({ ...artifact, npmResolution });
+          await params.onBeforePluginArtifactCommit?.(artifact);
+        }
+      : undefined;
   const result = await installPluginFromManagedNpmRoot(
     copyPluginInstallTransactionRequest(params, {
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -282,7 +293,7 @@ export async function installPluginFromNpmSpec(
       skipPolicyPreflight: true,
       expectedPluginId,
       expectedReplacementPluginId: params.expectedReplacementPluginId,
-      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      onBeforePluginArtifactCommit,
       npmResolution,
       ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),

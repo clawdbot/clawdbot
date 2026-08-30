@@ -85,6 +85,10 @@ export type PluginInstallArtifactConsentHandler = (
   request: PluginInstallArtifactConsentRequest,
 ) => Promise<void>;
 
+export type PluginNpmInstallArtifactPrecommitHandler = (
+  request: PluginInstallArtifactConsentRequest & { npmResolution: NpmSpecResolution },
+) => Promise<void>;
+
 export type PackageInstallCommonParams = InstallSafetyOverrides & {
   extensionsDir?: string;
   npmDir?: string;

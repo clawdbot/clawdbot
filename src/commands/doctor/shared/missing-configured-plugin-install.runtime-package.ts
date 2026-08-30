@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import type { NpmSpecResolution } from "../../../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
   parseRegistryNpmSpec,
@@ -120,12 +121,11 @@ export function describeVersionBoundRuntimeReleaseCohort(params: {
   return currentBase ? `${currentBase} beta` : currentCohortVersion;
 }
 
-async function readInstalledRuntimePayloadVersion(params: {
-  record: PluginInstallRecord | undefined;
+async function readRuntimePackageVersion(params: {
+  installPath: string | undefined;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const installPath =
-    params.record?.source === "npm" ? params.record.installPath?.trim() : undefined;
+  const installPath = params.installPath?.trim();
   if (!installPath) {
     return undefined;
   }
@@ -143,13 +143,36 @@ async function readInstalledRuntimePayloadVersion(params: {
   }
 }
 
+export async function versionBoundRuntimeNpmArtifactMatchesReleaseCohort(params: {
+  npmResolution: NpmSpecResolution;
+  stagedArtifactDir: string;
+  env: NodeJS.ProcessEnv;
+  currentVersion: string;
+  updateChannel: UpdateChannel;
+}): Promise<boolean> {
+  const payloadVersion = await readRuntimePackageVersion({
+    installPath: params.stagedArtifactDir,
+    env: params.env,
+  });
+  return [params.npmResolution.version, payloadVersion].every((version) =>
+    versionBoundRuntimePackageVersionMatchesReleaseCohort({
+      version,
+      currentVersion: params.currentVersion,
+      updateChannel: params.updateChannel,
+    }),
+  );
+}
+
 export async function versionBoundRuntimeInstallRecordMatchesReleaseCohort(params: {
   record: PluginInstallRecord | undefined;
   env: NodeJS.ProcessEnv;
   currentVersion: string;
   updateChannel: UpdateChannel;
 }): Promise<boolean> {
-  const payloadVersion = await readInstalledRuntimePayloadVersion(params);
+  const payloadVersion = await readRuntimePackageVersion({
+    installPath: params.record?.source === "npm" ? params.record.installPath?.trim() : undefined,
+    env: params.env,
+  });
   return [params.record?.version, params.record?.resolvedVersion, payloadVersion].every((version) =>
     versionBoundRuntimePackageVersionMatchesReleaseCohort({
       version,

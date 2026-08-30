@@ -26,7 +26,10 @@ import {
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
-import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
+import {
+  isUnavailableNpmTarget,
+  type PluginNpmInstallArtifactPrecommitHandler,
+} from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -92,6 +95,7 @@ export async function installCandidate(params: {
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onBeforeNpmPluginArtifactCommit?: PluginNpmInstallArtifactPrecommitHandler;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -299,6 +303,7 @@ async function installCandidatePackage(
       expectedPluginId: candidate.pluginId,
       expectedIntegrity: candidate.expectedIntegrity,
       onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+      onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
       ...(candidate.trustedSourceLinkedOfficialInstall
         ? { trustedSourceLinkedOfficialInstall: true }
         : {}),

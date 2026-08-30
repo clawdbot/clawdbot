@@ -17,6 +17,7 @@ import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import type { PluginNpmInstallArtifactPrecommitHandler } from "./install-types.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -107,6 +108,7 @@ export async function updateNpmInstalledPlugins(params: {
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onBeforeNpmPluginArtifactCommit?: PluginNpmInstallArtifactPrecommitHandler;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -494,6 +496,7 @@ export async function updateNpmInstalledPlugins(params: {
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+          onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
           expectedIntegrity,
           npmSpecs,
           clawhubSpecs,
