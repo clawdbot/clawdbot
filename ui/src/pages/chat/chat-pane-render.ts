@@ -151,7 +151,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       client: state.connected ? state.client : null,
       sessionKey: catalogKey ? null : state.sessionKey || null,
       agentId: currentAgentId || null,
-      onTitlesChanged: () => state.requestUpdate?.(),
     });
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
