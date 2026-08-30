@@ -1,13 +1,13 @@
-// Exercises sanitizer selection and the recorded transport output through real outbound delivery.
+// Root-owned integration combines shared delivery with public plugin surfaces.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { telegramOutbound } from "../../../extensions/telegram/api.js";
-import { createDirectTextMediaOutbound } from "../../channels/plugins/outbound/direct-text-media.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { deliverOutboundPayloadsCore } from "./deliver-core.js";
-import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
+import { telegramOutbound } from "../extensions/telegram/api.js";
+import { createDirectTextMediaOutbound } from "../src/channels/plugins/outbound/direct-text-media.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { deliverOutboundPayloadsCore } from "../src/infra/outbound/deliver-core.js";
+import { prepareOutboundPayloadBatch } from "../src/infra/outbound/deliver-prepare.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../src/test-utils/channel-plugins.js";
 
 const literalCode = '`<p class="literal">code</p>`';
 const payloads = [
