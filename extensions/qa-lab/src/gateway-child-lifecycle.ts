@@ -127,12 +127,12 @@ export class QaGatewayChildLifecycle {
           : new Error(message, { cause: error });
       if (result.errors.length) {
         // AggregateError retains the primary failure as cause and every cleanup failure in errors.
-        // oxlint-disable-next-line preserve-caught-error -- the rule does not inspect AggregateError options.
-        throw new AggregateError(
+        const aggregate = new AggregateError(
           [primary, ...result.errors],
           "qa gateway startup and cleanup failed",
-          { cause: error },
         );
+        aggregate.cause = error;
+        throw aggregate;
       }
       throw primary;
     } finally {
