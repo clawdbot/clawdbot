@@ -20,6 +20,7 @@ import {
   appendBlockReplyChunk,
   buildAssistantStreamData,
   copyPartialBlockState,
+  emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
@@ -102,9 +103,7 @@ export function handleMessageUpdate(
         delta: "",
         content: commentaryText,
       }));
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
-      );
+      emitAssistantCommentaryStreamData(ctx, msg);
     }
     return;
   }
