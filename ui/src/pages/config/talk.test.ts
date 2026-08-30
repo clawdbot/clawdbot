@@ -26,7 +26,7 @@ type TalkMutationHarnessOptions = {
   openAIProviderModel?: string;
   provider?: string | null;
   transport?: string | null;
-  transports?: string[];
+  transports?: TalkCatalogResult["transports"];
   unavailable?: boolean;
 };
 
@@ -37,6 +37,11 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       })
     : vi.fn(async () => {
         return {
+          modes: ["realtime"],
+          transports: ["gateway-relay", "webrtc"],
+          brains: ["agent-consult"],
+          speech: { providers: [] },
+          transcription: { providers: [] },
           realtime: {
             ready: true,
             activeProvider: options.activeProvider ?? "openai",
@@ -64,7 +69,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
               },
             ],
           },
-        } as TalkCatalogResult;
+        } satisfies TalkCatalogResult;
       });
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as GatewayBrowserClient,

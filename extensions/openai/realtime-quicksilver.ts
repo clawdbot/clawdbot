@@ -22,9 +22,9 @@ export const OPENAI_GPT_LIVE_DEFAULT_VOICE: OpenAIGptLiveVoice = "cove";
 export function resolveOpenAIQuicksilverVoice(value: unknown): OpenAIGptLiveVoice {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    if (OPENAI_GPT_LIVE_VOICES.includes(normalized as OpenAIGptLiveVoice)) {
-      return normalized as OpenAIGptLiveVoice;
-    }
+    return (
+      OPENAI_GPT_LIVE_VOICES.find((voice) => voice === normalized) ?? OPENAI_GPT_LIVE_DEFAULT_VOICE
+    );
   }
   return OPENAI_GPT_LIVE_DEFAULT_VOICE;
 }
