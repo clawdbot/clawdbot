@@ -21,12 +21,7 @@ import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
-import {
-  MAX_BUFFERED_BYTES,
-  MAX_PAYLOAD_BYTES,
-  MAX_PREAUTH_PAYLOAD_BYTES,
-  WEBSOCKET_OPEN_READY_STATE,
-} from "../server-constants.js";
+import * as serverConstants from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import {
@@ -119,7 +114,7 @@ function attachGatewayWsMessageHandlerOnDemand(
 ): void {
   const queued: RawData[] = [];
   const queueMessage = (data: RawData) => {
-    if (queued.length >= 16) {
+    if (queued.length >= serverConstants.MAX_QUEUED_GATEWAY_PREAUTH_FRAMES) {
       params.setCloseCause("message-handler-loading-overflow", {
         queuedFrames: queued.length,
       });
@@ -343,20 +338,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (closed) {
         return { kind: "unavailable" } as const;
       }
-      if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+      if (socket.readyState !== serverConstants.WEBSOCKET_OPEN_READY_STATE) {
         close();
         return { kind: "unavailable" } as const;
       }
-      if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+      if (socket.bufferedAmount > serverConstants.MAX_BUFFERED_BYTES) {
         logRejectedLargePayload({
           surface: "gateway.ws.outbound_buffer",
           bytes: socket.bufferedAmount,
-          limitBytes: MAX_BUFFERED_BYTES,
+          limitBytes: serverConstants.MAX_BUFFERED_BYTES,
           reason: "ws_send_buffer_close",
         });
         setCloseCause("outbound-buffer-exceeded", {
           bytes: socket.bufferedAmount,
-          limitBytes: MAX_BUFFERED_BYTES,
+          limitBytes: serverConstants.MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
         socket.terminate();
@@ -396,8 +391,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
             connectionKind === "worker"
               ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
               : client
-                ? MAX_PAYLOAD_BYTES
-                : MAX_PREAUTH_PAYLOAD_BYTES,
+                ? serverConstants.MAX_PAYLOAD_BYTES
+                : serverConstants.MAX_PREAUTH_PAYLOAD_BYTES,
           reason: client ? "ws_frame_limit" : "preauth_frame_limit",
         });
       }

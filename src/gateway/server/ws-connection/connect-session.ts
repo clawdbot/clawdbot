@@ -414,7 +414,6 @@ export async function attachAuthenticatedGatewayConnect(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
     );
   }
-  clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
     connect: connectParams,
@@ -481,8 +480,6 @@ export async function attachAuthenticatedGatewayConnect(
       expiresAtMs: entry.expiresAtMs,
     });
   }
-  setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
-
   // Version mismatch: kick the local node host so the OS supervisor restarts it.
   // Only applies when the connecting node is the same-install local node (verified by
   // matching instanceId against the local node-host config row). SSH-tunneled remote
@@ -559,6 +556,9 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
+  // Keep the preauth watchdog and payload cap until this socket owns the admitted client.
+  clearHandshakeTimer();
+  setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
   logWs("in", "connect", {

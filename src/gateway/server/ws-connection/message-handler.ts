@@ -39,7 +39,10 @@ import {
 import { isWebchatClient } from "../../../utils/message-channel.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import {
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
+} from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
@@ -169,25 +172,32 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     void runWithGatewayIndependentRootWorkAdmission(run).catch(onError);
   };
 
+  const rejectOversizedPreauthFrame = (data: RawData): boolean => {
+    const payloadBytes = rawDataByteLength(data);
+    if (payloadBytes <= MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    logRejectedLargePayload({
+      surface: "gateway.ws.preauth",
+      bytes: payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      reason: "preauth_frame_limit",
+    });
+    setHandshakeState("failed");
+    setCloseCause("preauth-payload-too-large", {
+      payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    close(1009, "preauth payload too large");
+    return true;
+  };
+
   const handleMessage = async (data: RawData) => {
     if (isClosed()) {
       return;
     }
 
-    const preauthPayloadBytes = !getClient() ? rawDataByteLength(data) : undefined;
-    if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
-      logRejectedLargePayload({
-        surface: "gateway.ws.preauth",
-        bytes: preauthPayloadBytes,
-        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-        reason: "preauth_frame_limit",
-      });
-      setHandshakeState("failed");
-      setCloseCause("preauth-payload-too-large", {
-        payloadBytes: preauthPayloadBytes,
-        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-      });
-      close(1009, "preauth payload too large");
+    if (!getClient() && rejectOversizedPreauthFrame(data)) {
       return;
     }
 
@@ -343,7 +353,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         };
 
         const phaseContext = {
-          handler: params,
+          handler: {
+            ...params,
+            setClient: (nextClient) => {
+              if (!params.setClient(nextClient)) {
+                return false;
+              }
+              // Finish registration before replaying work that now has an authenticated owner.
+              queueMicrotask(flushQueuedHandshakeFrames);
+              return true;
+            },
+          },
           frame,
           connectParams,
           configSnapshot,
@@ -466,10 +486,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   };
 
   const handleIncomingMessage = async (data: RawData) => {
-    if (getClient()) {
-      await handleMessage(data);
-      return;
-    }
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
       if (
@@ -515,9 +531,53 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
-  socket.on("message", (data) => {
+  let queuedHandshakeFrames: RawData[] | undefined;
+  function flushQueuedHandshakeFrames() {
+    const frames = queuedHandshakeFrames?.splice(0) ?? [];
+    queuedHandshakeFrames = undefined;
+    if (isClosed()) {
+      return;
+    }
+    for (const frame of frames) {
+      onMessage(frame);
+    }
+  }
+
+  const onMessage = (data: RawData): void => {
+    if (isClosed()) {
+      return;
+    }
+    if (queuedHandshakeFrames) {
+      // Keep the preauth cap authoritative for pipelined frames until this
+      // connection actually owns an admitted client.
+      if (rejectOversizedPreauthFrame(data)) {
+        queuedHandshakeFrames.length = 0;
+        return;
+      }
+      if (queuedHandshakeFrames.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES - 1) {
+        setHandshakeState("failed");
+        setCloseCause("handshake-message-overflow", {
+          queuedFrames: queuedHandshakeFrames.length,
+        });
+        queuedHandshakeFrames.length = 0;
+        close(1008, "too many pending handshake frames");
+        return;
+      }
+      queuedHandshakeFrames.push(data);
+      return;
+    }
+
+    if (getClient()) {
+      void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
+      return;
+    }
+
+    // Reserve the first handshake only; flush later frames after hello so normal RPCs stay parallel.
+    queuedHandshakeFrames = [];
     void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
       handleIncomingMessage(data),
-    );
-  });
+    ).finally(flushQueuedHandshakeFrames);
+  };
+
+  socket.on("message", onMessage);
 }
