@@ -1,8 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type {
-  SessionParticipant,
-  SessionParticipantIdentity,
-} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
@@ -54,8 +51,6 @@ export function renderSessionLeadingState(
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
-  participants?: readonly SessionParticipant[],
-  participantCount?: number,
   avatarAuth?: SessionAvatarAuth,
 ): {
   running: boolean;
@@ -63,6 +58,7 @@ export function renderSessionLeadingState(
   trailingIndicator: TemplateResult | typeof nothing;
   renderedIdentities?: readonly SessionParticipantIdentity[];
 } {
+  const { participants, participantCount } = session;
   const running = sessionHasRunningWork(session);
   const queued = session.hasActiveRun && session.status === "queued";
   const trailingIndicator = session.isChild ? nothing : renderSessionState(session, false);
@@ -137,17 +133,16 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
-  const ownerChip =
-    !session.isChild && ownerActor?.id?.trim()
-      ? renderSessionOwnerChip(
-          ownerActor,
-          "row",
-          attribution,
-          ownerViewing,
-          participants,
-          participantCount,
-        )
-      : undefined;
+  const ownerChip = ownerActor?.id?.trim()
+    ? renderSessionOwnerChip(
+        ownerActor,
+        "row",
+        attribution,
+        ownerViewing,
+        participants,
+        participantCount,
+      )
+    : undefined;
   if (session.channelAvatarUrl) {
     ensureChannelAvatarElement();
     return {

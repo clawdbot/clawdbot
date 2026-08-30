@@ -229,8 +229,6 @@ export function renderRecentSession(params: {
       leadingOwner,
       ownerAttribution,
       ownerViewing,
-      session.participants,
-      session.participantCount,
       channelAvatarAuth,
     );
   const trailingDescription = session.isChild

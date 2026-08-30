@@ -160,6 +160,10 @@ The Docker setup uses three config files on the host. The container never stores
 
 **Do NOT** put API keys or bot tokens in `openclaw.json`. Use `~/.openclaw/.env` for all secrets.
 
+`clawdock-show-config` displays JSON5 structure and `.env` key names with all values redacted and comments omitted. It requires Docker and the built OpenClaw image; temporary containers use the image's Node, JSON5, and dotenv without starting dependencies or requiring host parsers. Processing failures withhold the affected file's contents and return a failure with guidance. Ambiguous `.env` values beginning with a literal quote are also withheld to protect unterminated multiline content. Source files are unchanged.
+
+`clawdock-fix-token` checks both config writes and reports success or failure without showing tokens or prefixes. Use `clawdock-token` only when you explicitly want the full token printed.
+
 ### Initial Setup
 
 `./scripts/docker/setup.sh` handles first-time Docker configuration:
@@ -333,9 +337,8 @@ clawdock-fix-token
 This will:
 
 1. Read the token from your `.env` file
-2. Configure it in the OpenClaw config
-3. Restart the gateway
-4. Verify the configuration
+2. Configure both token values through the validated OpenClaw config setters
+3. Restart the gateway only after both writes succeed
 
 ### Permission Denied
 
