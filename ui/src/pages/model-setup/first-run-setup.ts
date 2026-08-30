@@ -435,7 +435,7 @@ export class FirstRunSetup {
         this.finishVerified(outcome.value.modelRef);
         return;
       }
-      if (this.pending) {
+      if (this.pending || outcome.value.status === "unavailable") {
         return;
       }
     }

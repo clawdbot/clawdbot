@@ -1699,7 +1699,7 @@ export async function runMemoryFlushIfNeeded(params: {
           storePath: fact.target.storePath,
           expectedSession: fact.target,
           amount: fact.count,
-          tokensAfter: fact.currentContextTokens,
+          tokensAfter: fact.currentContextSnapshot?.tokens,
         });
         if (count === undefined) {
           continue;

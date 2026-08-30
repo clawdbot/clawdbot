@@ -1412,7 +1412,7 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}
-      telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
+      telegram_advisory: true
       shared_image_artifact_namespace: release-package
       candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}
       shared_image_policy: no-push-artifact
@@ -2259,12 +2259,16 @@ jobs:
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
       OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
-  # The dispatched child owns Telegram evidence/status artifacts; this blocking job
-  # carries its exact conclusion into the parent summary without copying secrets or artifacts.
+  # The child owns Telegram evidence/status artifacts. Preserve its actual outcome
+  # while release policy treats this pool-dependent test attempt as advisory.
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    continue-on-error: true
+    outputs:
+      conclusion: ${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}
+      identity_verified: ${{ steps.dispatch.outputs.identity_verified }}
     runs-on: ubuntu-24.04
     timeout-minutes: 210
     permissions:
@@ -2272,6 +2276,7 @@ jobs:
       contents: read
     steps:
       - name: Dispatch and await trusted Telegram QA
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_REF: ${{ github.ref_name }}
@@ -2360,22 +2365,43 @@ jobs:
           fi
 
           child_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "identity_verified=true" >> "$GITHUB_OUTPUT"
           echo "Dispatched trusted Telegram QA: ${child_url}"
+          echo "child_url=${child_url}" >> "$GITHUB_OUTPUT"
           for _ in $(seq 1 1080); do
             run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
             status="$(jq -r .status <<<"$run_json")"
             if [[ "$status" == "completed" ]]; then
               conclusion="$(jq -r .conclusion <<<"$run_json")"
+              echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
               if [[ "$conclusion" != "success" ]]; then
-                echo "Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
+                echo "::warning::Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
                 exit 1
               fi
               exit 0
             fi
             sleep 10
           done
-          echo "Timed out awaiting trusted Telegram QA: ${child_url}" >&2
+          echo "::warning::Timed out awaiting trusted Telegram QA: ${child_url}" >&2
           exit 1
+
+      - name: Summarize Telegram attempt
+        if: always()
+        env:
+          CHILD_URL: ${{ steps.dispatch.outputs.child_url }}
+          CONCLUSION: ${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Telegram release QA (advisory)"
+            echo
+            echo "- Telegram attempt: ${CONCLUSION}"
+            [[ -z "$CHILD_URL" ]] || echo "- Child evidence: ${CHILD_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$CONCLUSION" != "success" ]]; then
+            echo "::warning::Telegram attempt: ${CONCLUSION}; release testing is best effort."
+          fi
 
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
@@ -2831,8 +2857,9 @@ jobs:
           RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
           QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result }}
           QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_buzz_release_checks.result }}
-          QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
+          QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.outputs.conclusion || needs.qa_live_telegram_release_checks.result }}
           QA_LIVE_TELEGRAM_SELECTED: ${{ needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
+          QA_LIVE_TELEGRAM_IDENTITY_VERIFIED: ${{ needs.qa_live_telegram_release_checks.outputs.identity_verified }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
           QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
           QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
@@ -2966,13 +2993,19 @@ jobs:
             else
               result="$raw_result"
             fi
-            require_success=false
-            if [[ "$name" == "qa_live_telegram_release_checks" &&
-                  "$QA_LIVE_TELEGRAM_SELECTED" == "true" ]]; then
-              require_success=true
+            if [[ "$name" == "qa_live_telegram_release_checks" ]]; then
+              # Only an identified child execution is advisory; dispatch provenance remains a gate.
+              if [[ "$result" != "skipped" && "$QA_LIVE_TELEGRAM_IDENTITY_VERIFIED" != "true" ]]; then
+                echo "::error::Telegram dispatch identity was not verified"
+                failed=1
+                continue
+              fi
+              if [[ "$result" != "success" && "$QA_LIVE_TELEGRAM_SELECTED" == "true" ]]; then
+                echo "::warning::${name} ended with ${result}; Telegram release testing is best effort and does not block release validation."
+              fi
+              continue
             fi
-            if [[ "$result" != "success" &&
-                  ( "$result" != "skipped" || "$require_success" == "true" ) ]]; then
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
               if [[ "$tideclaw_alpha" == "true" ]]; then
                 case "$name" in
                   resolve_target|prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;

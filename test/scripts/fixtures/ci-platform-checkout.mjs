@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { getFileLockProcessStartTime } from "../../../src/shared/pid-alive.ts";
 
 const [mode, root, policyScenario, ...args] = process.argv.slice(2);
 const linux = policyScenario.startsWith("linux:");
@@ -19,6 +18,12 @@ const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
+// Resolve identity support before cancellation can enter its cleanup handshake.
+// Ordinary fixture actors do not need the TypeScript module.
+const getFileLockProcessStartTime =
+  options.cancelDuringCleanup && ["supervise", "git"].includes(mode)
+    ? (await import("../../../src/shared/pid-alive.ts")).getFileLockProcessStartTime
+    : undefined;
 const refsFile = path.join(root, "refs.json");
 
 function resolveRef(cwd, ref) {

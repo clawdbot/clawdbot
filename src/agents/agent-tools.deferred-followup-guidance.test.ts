@@ -231,6 +231,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
       { name: "sessions_history", description: "history" },
     ] as AnyAgentTool[]);
 
+    expect(tool?.description).toContain("Search visible past sessions");
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).toContain(`${sessionLinkBase}/chat/<agentId>`);
     expect(tool?.description.indexOf("Follow up with sessions_history")).toBeLessThan(

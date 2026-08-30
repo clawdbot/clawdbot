@@ -62,6 +62,7 @@ interface ParentTuple {
 
 interface ChildTuple {
   conclusion: string;
+  policyPassed?: boolean;
   dispatchNonce: string;
   displayTitle: string;
   event: string;
@@ -351,6 +352,7 @@ function normalizedEvidence(options: {
       Object.assign(
         {
           conclusion: "success",
+          policyPassed: true,
           dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           event: "workflow_dispatch",
@@ -837,6 +839,40 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
+  it.each(["beta", "stable", "full"])(
+    "reuses %s Telegram failures only when the strict verifier accepted their policy",
+    (releaseProfile) => {
+      const { clone, priorSha } = getSharedRepo();
+      const validationInputs = {
+        ...DEFAULT_INPUTS,
+        npmTelegramPackageSpec: "openclaw@2026.7.1",
+      };
+      const record = normalizedEvidence({ targetSha: priorSha, validationInputs, releaseProfile });
+      for (const child of record.children) {
+        if (
+          ["npmTelegram", "releaseChecksIndependent", "releaseChecksCandidate"].includes(child.role)
+        ) {
+          child.conclusion = "failure";
+          record.conclusions.children[child.role] = "failure";
+        }
+      }
+      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+      const result = runResolver({
+        binDir,
+        fixtures,
+        inputs: validationInputs,
+        releaseProfile,
+        repoDir: clone,
+        targetSha: priorSha,
+        validatorPath,
+      });
+
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+    },
+  );
+
   it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
     const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
@@ -1062,9 +1098,23 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
-      label: "failed child",
+      label: "child rejected by canonical policy",
       mutate(record: NormalizedEvidence) {
-        expectDefined(record.children[0], "failed reusable release child").conclusion = "failure";
+        const child = expectDefined(record.children[0], "failed reusable release child");
+        child.conclusion = "failure";
+        child.policyPassed = false;
+      },
+    },
+    {
+      label: "successful child rejected by canonical policy",
+      mutate(record: NormalizedEvidence) {
+        expectDefined(record.children[0], "reusable release child").policyPassed = false;
+      },
+    },
+    {
+      label: "child without canonical policy evidence",
+      mutate(record: NormalizedEvidence) {
+        delete expectDefined(record.children[0], "reusable release child").policyPassed;
       },
     },
     {

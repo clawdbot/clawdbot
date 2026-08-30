@@ -353,7 +353,7 @@ for ((index = 0; index < run_count; index += 1)); do
         | .reportPublication] == ["artifact-only"])
       and all(.children[];
         .status == "completed"
-        and .conclusion == "success"
+        and .policyPassed == true
         and .workflowSha == $record.root.workflowSha
         and (.sourceParentRunId | tostring) == $run_id
       )

@@ -225,23 +225,27 @@ describe("Codex app-server startup retry", () => {
       });
       const commandSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessCommand")
-        .mockImplementation(async (pid, deadline) => {
-          if (pid !== firstChild?.pid) {
-            return readCommand(pid, deadline);
+        .mockImplementation(async (observed, deadline) => {
+          if (observed.pid !== firstChild?.pid) {
+            return readCommand(observed, deadline);
           }
           await expect
             .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
             .toBe("ready");
-          expect(await readCommand(pid, deadline)).toBeDefined();
+          expect(await readCommand(observed, deadline)).toBeDefined();
           firstChild.kill("SIGUSR2");
           // Keep Node's event loop occupied until the OS has exited the real child.
           // Inspection then refuses registration before JS can deliver exit or stderr.
           const exitedBy = Date.now() + 5_000;
           let exited = false;
           while (Date.now() < exitedBy) {
-            const inspected = childProcess.spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
-              encoding: "utf8",
-            });
+            const inspected = childProcess.spawnSync(
+              "ps",
+              ["-o", "stat=", "-p", String(observed.pid)],
+              {
+                encoding: "utf8",
+              },
+            );
             if (inspected.status === 1 || inspected.stdout.trim().startsWith("Z")) {
               exited = true;
               break;

@@ -174,7 +174,7 @@ export async function runCiGitStep(options: {
   const clock = {
     ...options,
     realDrain:
-      options.realDrain || options.cancelDuringCleanup || options.scenario?.startsWith("cancel-"),
+      options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || options.realDrain,
   };
   const step: (Step & { run: string }) | undefined = options.action
     ? (
@@ -475,7 +475,7 @@ ${run}`;
       console.log(
         `${typeof options.workflow === "object" ? `${options.workflow.file}/${options.workflow.job}/${options.workflow.step}` : `${options.workflow ?? options.action ?? options.job}/${options.step ?? "Checkout"}`}: ${JSON.stringify(report)}`,
       );
-      expect(result, stderr).toEqual({ code: 0, signal: null });
+      expect(result, `${stderr}\n${report.error ?? ""}`).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
       expectCiCheckoutCleanup(report);
       if (docsAgent) {

@@ -1,4 +1,6 @@
+import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -7,6 +9,8 @@ import "./web-awesome-tabs.ts";
 // Upgrade the real element: the floating layout once regressed because a base
 // class stamped inline `display: contents`, which only a live upgrade reveals.
 import "./sidebar-attention.ts";
+import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
+import { renderSidebarAttentionPanel } from "./sidebar-attention-panel.runtime.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -18,6 +22,75 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
+  it("keeps the header and tabs fixed when the selected category is empty", async () => {
+    const entry: SidebarInboxEntry = {
+      type: "attention",
+      category: "system",
+      dismissal: { kind: "modelAuthExpired", signature: "expired-profile" },
+      requiresAction: true,
+      severity: "warning",
+      kind: "modelAuthExpired",
+      icon: "plug",
+      label: "Auth expired",
+      detail: "Reconnect the provider.",
+      action: { kind: "navigate", routeId: "config" },
+      signature: "expired-profile",
+    };
+    const context = {
+      basePath: "",
+      gateway: { snapshot: undefined },
+    } as unknown as ApplicationContext;
+
+    for (const mobile of [false, true]) {
+      const shell = document.createElement("div");
+      shell.className = mobile ? "shell shell--mobile-nav" : "shell";
+      document.body.append(shell);
+      const renderPanel = (selectedTab: "all" | "approvals") => {
+        render(
+          renderSidebarAttentionPanel({
+            context,
+            entries: [entry],
+            onApprovalDecision: () => {},
+            onClose: () => {},
+            onDismiss: () => {},
+            onKeydown: () => {},
+            onNavigate: () => {},
+            onOpen: () => {},
+            onScroll: () => {},
+            onSelectTab: () => {},
+            overflowAbove: false,
+            overflowBelow: false,
+            panelPosition: { left: 0, anchor: "top", top: 0 },
+            selectedTab,
+          }),
+          shell,
+        );
+      };
+
+      renderPanel("all");
+      await customElements.whenDefined("wa-tab-group");
+      const populatedHeader = shell.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
+      const populatedTabs = shell.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
+      const headerHeight = populatedHeader.getBoundingClientRect().height;
+      const tabsTop = populatedTabs.getBoundingClientRect().top;
+
+      renderPanel("approvals");
+      const placeholder = shell.querySelector<HTMLButtonElement>(
+        ".sidebar-issues-panel__dismiss-shown",
+      )!;
+      expect(placeholder.disabled).toBe(true);
+      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+      expect(getComputedStyle(placeholder).visibility).toBe("hidden");
+      expect(
+        shell.querySelector(".sidebar-issues-panel__header")!.getBoundingClientRect().height,
+      ).toBe(headerHeight);
+      expect(shell.querySelector(".sidebar-issues-panel__tabs")!.getBoundingClientRect().top).toBe(
+        tabsTop,
+      );
+      shell.remove();
+    }
+  });
+
   it("positions collapsed sidebar attention beyond chrome controls", () => {
     const shell = document.createElement("div");
     shell.className = "shell shell--nav-collapsed";

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 type TooltipElement = HTMLElement & {
@@ -671,6 +672,52 @@ describe("title tooltips", () => {
     expect(webAwesomeTooltip(delegated!)?.open).toBe(false);
     expect(webAwesomeTooltip(explicit.tooltip)?.open).toBe(true);
   });
+
+  it.each(["pointer", "focus"] as const)(
+    "yields a %s title tooltip to a rich card without restoring the native title",
+    async (input) => {
+      const trigger = document.createElement("a");
+      trigger.href = "https://example.com/item";
+      trigger.title = trigger.href;
+      trigger.textContent = "Item";
+      document.body.append(trigger);
+      const activate = () =>
+        input === "pointer" ? dispatchMousePointer(trigger, "pointerover") : focusTrigger(trigger);
+      activate();
+      const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+      await tooltip.updateComplete;
+      vi.advanceTimersByTime(150);
+      expectOpenCount(1);
+
+      const hovercard = new PortaledHovercardController(() => hovercard.reset());
+      hovercard.markTrigger(trigger);
+      await Promise.resolve();
+      await tooltip.updateComplete;
+      expectOpenCount(1);
+
+      hovercard.mount(trigger, createPortaledHovercard("item-preview", "preview"), "vertical");
+      await Promise.resolve();
+      await tooltip.updateComplete;
+      expectOpenCount(0);
+      expect(trigger.title).toBe("");
+      activate();
+      await tooltip.updateComplete;
+      vi.advanceTimersByTime(150);
+      expectOpenCount(0);
+
+      hovercard.reset();
+      await Promise.resolve();
+      await tooltip.updateComplete;
+      expectOpenCount(0);
+      dispatchMousePointer(trigger, "pointerleave");
+      trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      expect(trigger.title).toBe(trigger.href);
+      activate();
+      await tooltip.updateComplete;
+      vi.advanceTimersByTime(150);
+      expectOpenCount(1);
+    },
+  );
 
   it("tracks dynamic titles and restores the latest title and accessible name", async () => {
     const trigger = document.createElement("button");

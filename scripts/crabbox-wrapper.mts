@@ -3765,9 +3765,7 @@ function injectRemoteTestboxBootstrap(commandArgs: string[], providerName: strin
   if (invocation.start < 0) {
     return commandArgs;
   }
-  const snapshot = hasOption(commandArgs, "--no-sync")
-    ? ""
-    : `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; `;
+  const snapshot = `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; `;
   return replaceRunCommandWithShell(
     invocation,
     `${snapshot}export CI=true; ${renderRunShellCommand(invocation)}`,
@@ -3924,6 +3922,14 @@ if (provider && !isProviderAdvertised(provider, providers)) {
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  // Testbox owns sync; reject before lease or checkout side effects.
+  if (normalizedArgs[0] === "run" && hasOption(normalizedArgs, "--no-sync")) {
+    console.error(
+      "[crabbox] provider=blacksmith-testbox does not support --no-sync. Omit the flag only when source synchronization is intended.",
+    );
+    process.exit(2);
+  }
+
   if (isWindowsRemoteTarget(normalizedArgs)) {
     console.error(
       [

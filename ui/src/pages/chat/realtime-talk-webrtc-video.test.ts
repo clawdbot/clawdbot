@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
 class FakeDataChannel extends EventTarget {
@@ -104,7 +105,12 @@ describe("OpenAI Realtime media lifecycle", () => {
     const onStatus = vi.fn();
     const transport = new WebRtcSdpRealtimeTalkTransport(
       { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
-      { client: {} as never, sessionKey: "main", callbacks: { onStatus } },
+      {
+        input: await prepareRealtimeTalkTestInput(),
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus },
+      },
     );
     try {
       await transport.start();
@@ -172,6 +178,7 @@ describe("OpenAI Realtime media lifecycle", () => {
         clientSecret: "test-client-secret",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onStatus, onTalkEvent, onVideoStream },
@@ -290,6 +297,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     const transport = new WebRtcSdpRealtimeTalkTransport(
       { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onVideoStream },
@@ -327,6 +335,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     const transport = new WebRtcSdpRealtimeTalkTransport(
       { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onStatus, onVideoStream },
@@ -367,6 +376,7 @@ describe("OpenAI Realtime media lifecycle", () => {
         clientSecret: "test-client-secret",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: {},
@@ -420,6 +430,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
     const context = {
+      input: await prepareRealtimeTalkTestInput(),
       client: {} as never,
       sessionKey: "main",
       callbacks: { onVideoStream },
@@ -482,6 +493,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
     const context = {
+      input: await prepareRealtimeTalkTestInput(),
       client: {} as never,
       sessionKey: "main",
       callbacks: { onVideoStream },

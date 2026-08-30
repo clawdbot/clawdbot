@@ -38,6 +38,13 @@ export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Authentication failed (provider returned HTTP 401). " +
   "Your provider token may have expired — try the request again in a moment. " +
   "If the failure persists, re-authenticate this provider.";
+const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
+  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
+  code === "selected_auth_profile_unavailable"
+    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+    : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =

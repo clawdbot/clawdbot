@@ -118,8 +118,6 @@ export type SettingsScope = "global" | "project";
 export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
 
 export interface SettingsStorage {
-  // Optional so shipped custom backends can keep serving reads through withLock.
-  readSettingsScope?(scope: SettingsScope): string | undefined;
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
 }
 
@@ -138,36 +136,29 @@ export class FileSettingsStorage implements SettingsStorage {
     };
   }
 
-  readSettingsScope(scope: SettingsScope): string | undefined {
-    const path = this.paths[scope];
-    if (!existsSync(path)) {
-      return undefined;
-    }
-    const release = acquireFileLockSyncWithRetry(path);
-    try {
-      return readFileSync(path, "utf-8");
-    } finally {
-      release();
-    }
-  }
-
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
     const path = this.paths[scope];
     const dir = dirname(path);
 
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    // Lock before reading, or concurrent first writers can merge from the same empty state.
-    const release = acquireFileLockSyncWithRetry(path);
+    let release: (() => void) | undefined;
     try {
+      const directoryExists = existsSync(dir);
+      if (directoryExists) {
+        release = acquireFileLockSyncWithRetry(path);
+      }
+      // Missing-directory reads stay side-effect free. Concurrent external first creators
+      // remain unsupported because they can derive writes before a lock path exists.
       const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
+        if (!directoryExists) {
+          mkdirSync(dir, { recursive: true });
+          release = acquireFileLockSyncWithRetry(path);
+        }
         writeFileSync(path, next, "utf-8");
       }
     } finally {
-      release();
+      release?.();
     }
   }
 }

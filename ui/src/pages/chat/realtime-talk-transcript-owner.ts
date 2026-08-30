@@ -96,13 +96,9 @@ export function retireUncommittedRealtimeTalkTransport(params: {
   nextTransport: RealtimeTalkTransport | null;
   transport: string;
   owner: ClientVoiceSessionOwner;
-  reusesExistingOwner: boolean;
   closeVoiceSession: () => void;
 }): void {
   params.nextTransport?.stop({ emitClosed: false });
-  if (params.reusesExistingOwner) {
-    return;
-  }
   if (params.transport === "gateway-relay" && params.nextTransport) {
     // The relay transport owns server close once constructed; release browser ownership.
     params.owner.release();

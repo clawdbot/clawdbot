@@ -775,6 +775,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/frv-proof-broker.test.ts",
         "test/scripts/frv.test.ts",
+        "test/scripts/full-release-artifact-contract.test.ts",
         "test/scripts/full-release-validation-continuation-workflow.test.ts",
         "test/scripts/openclaw-performance-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
@@ -887,6 +888,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-source-preflight.test.ts",
+        "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-plan-producer.test.ts",
       ],
     );

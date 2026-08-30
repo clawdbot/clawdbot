@@ -35,9 +35,9 @@ export function createCommandCompactionAccounting(params: {
       return accounting;
     },
     beginCandidate() {
-      if (accounting) {
+      if (accounting?.currentContextSnapshot) {
         // Only an ordered fact from this candidate can restore current context.
-        accounting = { ...accounting, currentContextTokens: undefined };
+        accounting = { ...accounting, currentContextSnapshot: { tokens: undefined } };
       }
       let candidateFact: CompactionAccountingFact | undefined;
       return {
@@ -52,7 +52,7 @@ export function createCommandCompactionAccounting(params: {
           }
           candidateFact = fact;
           if (fact?.kind === "durable") {
-            // The first model-only fact binds finalization; later unrelated zeros cannot rebind it.
+            // The first writer fact binds finalization; later unrelated zeros cannot rebind it.
             params.onDurableFact(fact);
           }
         },
@@ -64,7 +64,12 @@ export function createCommandCompactionAccounting(params: {
           const carriedCount = hasSameCompactionWriter(accounting?.target, fact.target)
             ? (accounting?.count ?? 0)
             : 0;
-          accounting = { ...fact, count: carriedCount + fact.count };
+          accounting = {
+            ...fact,
+            count: carriedCount + fact.count,
+            currentContextSnapshot:
+              fact.currentContextSnapshot ?? accounting?.currentContextSnapshot,
+          };
           if (fact.count > 0 && params.persistCounts) {
             await incrementCompactionCount({
               agentId: fact.target.agentId,
@@ -74,7 +79,7 @@ export function createCommandCompactionAccounting(params: {
               storePath: fact.target.storePath,
               expectedSession: fact.target,
               amount: fact.count,
-              tokensAfter: fact.currentContextTokens,
+              tokensAfter: fact.currentContextSnapshot?.tokens,
             });
             params.refreshSessionEntry(fact.target.sessionKey);
           }

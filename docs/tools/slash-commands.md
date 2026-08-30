@@ -13,7 +13,7 @@ Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
-the OpenClaw command handler, and `/status` plus `/unfocus` stay local whenever
+the OpenClaw command handler, and `/status` plus `/session` stay local whenever
 command handling is enabled for the surface.
 
 ## Three command types
@@ -166,7 +166,6 @@ Gateway callers with explicit scopes still need `operator.admin` to reset.
 Commands come from three sources:
 
 - **Core built-ins:** `src/auto-reply/commands-registry.shared.ts`
-- **Generated dock commands:** `src/auto-reply/commands-registry.data.ts`
 - **Plugin commands:** plugin `registerCommand()` calls
 
 Availability depends on config flags, channel surface, and installed/enabled
@@ -286,8 +285,7 @@ plugins.
     | --- | --- |
     | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
     | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
-    | `/focus <target>` | Bind the current Discord thread or Telegram topic to a session target |
-    | `/unfocus` | Remove the current thread binding |
+    | `/session unbind` | Detach the current conversation without closing its agent session |
     | `/agents` | List thread-bound agents for the current session |
   </Accordion>
 
@@ -312,21 +310,6 @@ plugins.
     | `!stop [sessionId]` | Stop a background bash job |
   </Accordion>
 </AccordionGroup>
-
-### Dock commands
-
-Dock commands switch the active session's reply route to another linked channel.
-See [Channel docking](/concepts/channel-docking) for setup and troubleshooting.
-
-Generated from channel plugins with native-command support:
-
-- `/dock-discord` (alias: `/dock_discord`)
-- `/dock-mattermost` (alias: `/dock_mattermost`)
-- `/dock-slack` (alias: `/dock_slack`)
-- `/dock-telegram` (alias: `/dock_telegram`)
-
-Dock commands require `session.identityLinks`. The source sender and target peer
-must be in the same identity group.
 
 ### Bundled plugin commands
 

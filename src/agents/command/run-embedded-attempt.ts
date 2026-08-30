@@ -670,7 +670,7 @@ export async function runEmbeddedAgentAttempt(params: {
         ? { aborted: true as const, stopReason: "aborted" as const }
         : resolveAgentRunErrorLifecycleFields(err, params.opts.abortSignal);
       lifecycle.emitBasicError(
-        err instanceof Error ? err.message : "Agent run failed",
+        err instanceof Error ? err : new Error("Agent run failed"),
         errorLifecycleFields,
       );
       await fallbackTrajectoryRecorder?.flush();

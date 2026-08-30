@@ -22,6 +22,7 @@ type CurrentPluginMetadataCacheState = {
 
 export type PluginCacheMetadata = {
   metadata: {
+    bundledPluginsDir?: { key: string; value: string | undefined };
     bundledDiscoveryMode?: { value: "compat" | "allowlist" | undefined };
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;

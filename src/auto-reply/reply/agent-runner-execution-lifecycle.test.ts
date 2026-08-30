@@ -58,7 +58,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const fact: CompactionAccountingFact = {
       kind: "durable",
       count: 1,
-      currentContextTokens: 40,
+      currentContextSnapshot: { tokens: 40 },
       target: { ...compactionTarget, sessionId: "accepted-successor" },
     };
     const sessionId = "session";
@@ -538,36 +538,37 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   );
 
   it.each([
-    { name: "same-owner model", owner: "same", currentContextTokens: 120 },
-    { name: "same-owner zero", owner: "same", currentContextTokens: 0 },
-    { name: "same-owner unknown", owner: "same", currentContextTokens: undefined },
-    { name: "unrelated writer", owner: "different", currentContextTokens: 999 },
-    { name: "opaque candidate", owner: "opaque", currentContextTokens: undefined },
+    { name: "same-owner model", owner: "same", currentContextSnapshot: { tokens: 120 } },
+    { name: "same-owner zero", owner: "same", currentContextSnapshot: { tokens: 0 } },
+    { name: "same-owner unknown", owner: "same", currentContextSnapshot: { tokens: undefined } },
+    { name: "same-owner custody-only", owner: "same", currentContextSnapshot: undefined },
+    { name: "unrelated writer", owner: "different", currentContextSnapshot: { tokens: 999 } },
+    { name: "opaque candidate", owner: "opaque", currentContextSnapshot: undefined },
   ] as const)(
     "aggregates fallback counts without borrowing $name context",
-    async ({ owner, currentContextTokens }) => {
+    async ({ owner, currentContextSnapshot }) => {
       const first: CompactionAccountingFact = {
         kind: "durable",
         count: 1,
-        currentContextTokens: 80,
+        currentContextSnapshot: { tokens: 80 },
         target: compactionTarget,
       };
       const successor: CompactionAccountingFact = {
         kind: "durable",
         count: 3,
-        currentContextTokens: 40,
+        currentContextSnapshot: { tokens: 40 },
         target: { ...compactionTarget, sessionId: "successor" },
       };
       const otherWriter: CompactionAccountingFact = {
         kind: "durable",
         count: 1,
-        currentContextTokens: 20,
+        currentContextSnapshot: { tokens: 20 },
         target: { ...compactionTarget, sessionId: "successor", activeWriterRunId: "other-writer" },
       };
       const latest: CompactionAccountingFact = {
         kind: "durable",
         count: 1,
-        currentContextTokens: 10,
+        currentContextSnapshot: { tokens: 10 },
         target: { ...compactionTarget, sessionId: "latest-successor" },
       };
       const modelOnly: CompactionAccountingFact | undefined =
@@ -576,14 +577,14 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
           : {
               kind: "durable",
               count: 0,
-              currentContextTokens,
+              ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
               target: {
                 ...latest.target,
                 activeWriterRunId:
                   owner === "different" ? "unrelated-writer" : compactionTarget.activeWriterRunId,
               },
             };
-      const facts = [first, undefined, successor, otherWriter, latest, modelOnly];
+      const facts = [first, undefined, successor, otherWriter, latest, undefined, modelOnly];
       for (const [index, fact] of facts.entries()) {
         state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
           if (fact) {
@@ -616,7 +617,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
               fallbackAttemptOptions(params, "unknown"),
             );
           }
-          return { result, provider: "anthropic", model: "fallback-5", attempts: [] };
+          return { result, provider: "anthropic", model: "fallback-6", attempts: [] };
         },
       );
 
@@ -627,11 +628,14 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       expect(result.outcome.compaction).toEqual({
         count: 8,
         durable: [
-          { ...otherWriter, currentContextTokens: undefined },
+          { ...otherWriter, currentContextSnapshot: { tokens: undefined } },
           {
             ...latest,
             count: 5,
-            currentContextTokens: owner === "same" ? currentContextTokens : undefined,
+            currentContextSnapshot:
+              owner === "same" && currentContextSnapshot
+                ? currentContextSnapshot
+                : { tokens: undefined },
           },
         ],
       });

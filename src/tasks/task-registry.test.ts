@@ -541,7 +541,11 @@ describe("task-registry", () => {
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
-      killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
+      killSubagentRunAdmin: async (params) => {
+        const result = await hoisted.killSubagentRunAdminMock(params);
+        params.onResult?.(result);
+        return result;
+      },
     });
   });
 

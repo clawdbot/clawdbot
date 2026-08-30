@@ -954,6 +954,35 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
+  it.each(["run", "request"])(
+    "does not offer redundant details for a short %s error",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const message = "Failed to open the plugin state database.";
+      for (const diagnostic of [
+        message,
+        ` \n ${message.replaceAll(" ", "  \t")} \n `,
+        `${message}\n${message}`,
+        `${message}\n  ${message.replaceAll(" ", "  \t")} \n `,
+      ]) {
+        const container = renderChatView(
+          source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+        );
+        const alert = requireElement(container, ".chat-error", "chat error");
+        expect(alert.getAttribute("role")).toBe("alert");
+        expect(alert.querySelector("strong")?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+          message,
+        );
+        expect(alert.querySelector("details")).toBeNull();
+        expect(alert.textContent).not.toContain("Error details");
+        alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+        await Promise.resolve();
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+      }
+    },
+  );
+
   it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
     vi.mocked(chatMessage.renderMessageGroup).mockRestore();
@@ -1044,30 +1073,40 @@ describe("chat run error", () => {
     },
   );
 
-  it.each(["run", "request"])(
-    "exposes the complete %s error as selectable text and a copy action",
-    (source) => {
-      const diagnostic =
-        "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line";
-      const container = renderChatView(
-        source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
-      );
+  it.each([
+    ["run", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
+    ["request", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
+    ["run", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
+    ["request", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
+  ])("exposes the complete %s error as selectable text and a copy action", (source, diagnostic) => {
+    const container = renderChatView(
+      source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+    );
 
-      const alert = requireElement(container, ".chat-error", "chat run error");
-      expect(alert.getAttribute("role")).toBe("alert");
-      const details = requireElement(alert, "details", "error disclosure");
-      expect(details.hasAttribute("open")).toBe(false);
-      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(diagnostic);
-      expect(alert.querySelector("img")).toBeNull();
-      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
-      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
-        source === "request",
-      );
-      expect(
-        alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
-      ).not.toBeNull();
-    },
-  );
+    const alert = requireElement(container, ".chat-error", "chat run error");
+    expect(alert.getAttribute("role")).toBe("alert");
+    const details = requireElement(alert, "details", "error disclosure");
+    expect(details.hasAttribute("open")).toBe(false);
+    const preview = requireElement(details, "strong", "error preview").textContent ?? "";
+    expect(preview).not.toContain("Final diagnostic line");
+    expect(preview.length).toBeLessThanOrEqual(120);
+    if (diagnostic.includes("\n")) {
+      expect(preview).toBe("Error: gateway disconnected");
+    } else {
+      expect(preview).toMatch(/^Request failed: .+…$/u);
+    }
+    const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
+    expect(fullDiagnostic.textContent).toBe(diagnostic);
+    expect(fullDiagnostic.getAttribute("tabindex")).toBe("0");
+    expect(alert.querySelector("img")).toBeNull();
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
+      source === "request",
+    );
+    expect(
+      alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+    ).not.toBeNull();
+  });
 
   it("keeps dismiss on the error state owned by its callback", () => {
     const onDismissError = vi.fn();
@@ -1076,6 +1115,7 @@ describe("chat run error", () => {
     container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
 
     expect(onDismissError).toHaveBeenCalledOnce();
+    expect(container.querySelector(".chat-error details")).toBeNull();
     expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
   });
 
@@ -3570,7 +3610,7 @@ describe("chat voice controls", () => {
     ["connecting", "Connecting voice input..."],
     ["listening", "Listening..."],
     ["thinking", "Asking OpenClaw..."],
-  ] as const)("renders %s voice activity without visible status copy", (status, label) => {
+  ] as const)("renders %s voice activity with the appropriate status region", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
     const container = renderChatView({
@@ -3587,11 +3627,17 @@ describe("chat voice controls", () => {
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
     expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
-    const statusRegion = container.querySelector('[role="status"].agent-chat__voice-status');
+    const statusRegion = container.querySelector(
+      status === "connecting"
+        ? '[role="status"].agent-chat__talk-status'
+        : '[role="status"].agent-chat__voice-status',
+    );
     expect(statusRegion?.getAttribute("aria-live")).toBe("polite");
     expect(statusRegion?.getAttribute("aria-atomic")).toBe("true");
     expect(statusRegion?.textContent?.trim()).toBe(label);
-    expect(container.querySelector(".agent-chat__talk-status")).toBeNull();
+    if (status !== "connecting") {
+      expect(container.querySelector(".agent-chat__talk-status")).toBeNull();
+    }
   });
 
   it("keeps the stop control without a live meter when a running session errors", () => {

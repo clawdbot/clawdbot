@@ -425,7 +425,11 @@ export async function runEmbeddedFallbackCandidate(
     const accounting: CompactionAccountingFact | undefined =
       compactionAccounting ??
       (attemptCompactionCount > 0
-        ? { kind: "presentation-only", count: attemptCompactionCount }
+        ? {
+            kind: "presentation-only",
+            count: attemptCompactionCount,
+            currentContextSnapshot: { tokens: undefined },
+          }
         : undefined);
     params.onCompactionFacts({ accounting, postCompactionModelAttempted });
     revokeMessageActionTurnCapability(messageActionTurnCapability);

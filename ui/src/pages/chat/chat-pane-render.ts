@@ -55,6 +55,7 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
   openSessionWorkspaceFile,
@@ -442,7 +443,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
-        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
+        : this.composerCapabilities.props(
+            this.context,
+            state,
+            selectedSession,
+            currentAgentId,
+            getChatComposerState(this.presentationId).capabilityMenuView.startsWith("tools:"),
+          ),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,

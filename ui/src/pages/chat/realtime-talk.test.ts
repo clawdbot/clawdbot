@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./realtime-talk-gateway-relay.ts";
 import * as googleLiveTransport from "./realtime-talk-google-live.ts";
+import { useRealtimeTalkMicrophoneFixture } from "./realtime-talk-input.test-support.ts";
 import { createRealtimeTalkEventEmitter } from "./realtime-talk-shared.ts";
 import type {
   RealtimeTalkTransport,
@@ -49,6 +50,8 @@ function transportContext(transport: object | undefined): RealtimeTalkTransportC
   }
   return (transport as { ctx: RealtimeTalkTransportContext }).ctx;
 }
+
+useRealtimeTalkMicrophoneFixture();
 
 describe("RealtimeTalkSession", () => {
   beforeEach(() => {
@@ -136,7 +139,7 @@ describe("RealtimeTalkSession", () => {
     expect(googleStart).toHaveBeenCalledTimes(1);
     expect(webRtcInstances).toHaveLength(0);
     expect(relayInstances).toHaveLength(0);
-    expect(onStatus).toHaveBeenCalledWith("connecting");
+    expect(onStatus).toHaveBeenCalledWith("connecting", "Preparing voice session...");
   });
 
   it("defaults legacy session results without an explicit transport to WebRTC", async () => {
@@ -565,7 +568,7 @@ describe("RealtimeTalkSession", () => {
       requestTimeoutOptions,
     );
     expect(transportContext(webRtcInstances[0])).toEqual(
-      expect.objectContaining({ inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" }),
+      expect.objectContaining({ videoDeviceId: "desk-camera" }),
     );
   });
 

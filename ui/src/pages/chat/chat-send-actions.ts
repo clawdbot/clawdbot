@@ -41,8 +41,6 @@ import { formatConnectError } from "./connect-error.ts";
 import {
   activeQueuedMessageEdit,
   isQueuedMessageBeingEdited,
-  isQueuedMessageRetryBlocked,
-  isQueuedMessageReorderBlocked,
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
@@ -174,7 +172,7 @@ export function moveQueuedChatMessage(
   if (!item || !isMovableChatQueueItem(item)) {
     return "noop";
   }
-  if (isQueuedMessageReorderBlocked(host, id)) {
+  if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
     return "rejected";
   }
@@ -235,7 +233,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
   const retriesUnconfirmed =
     item?.sendState === "unconfirmed" && Boolean(item.sendRunId) && !item.localCommandName;
-  if (isQueuedMessageRetryBlocked(host, id)) {
+  if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
     return;
   }

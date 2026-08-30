@@ -98,6 +98,9 @@ function fixtureFiles(): Record<string, string> {
     path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
   );
   const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
+  const workAdmissionPath = JSON.stringify(
+    path.join(repoRoot, "src", "process", "gateway-work-admission.ts"),
+  );
   const activeSessionsPath = JSON.stringify(
     path.join(repoRoot, "src", "gateway", "active-sessions-shutdown-tracker.ts"),
   );
@@ -211,11 +214,15 @@ function fixtureFiles(): Record<string, string> {
       "",
     ].join("\n"),
     "05-a-agent-run.test.ts": [
+      `import { getActiveGatewayRootWorkCount, markGatewayRestartDraining, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
       `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
       `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
       `import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${activeSessionsPath};`,
       'import { expect, it } from "vitest";',
       'it("seeds process-global run contexts", () => {',
+      "  expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();",
+      "  expect(getActiveGatewayRootWorkCount()).toBe(1);",
+      "  markGatewayRestartDraining();",
       '  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });',
       "  expect(listActiveSessionsForShutdown()).toHaveLength(1);",
       '  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });',
@@ -232,11 +239,16 @@ function fixtureFiles(): Record<string, string> {
       "",
     ].join("\n"),
     "05-b-agent-run.test.ts": [
+      `import { getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
       `import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
       `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
       `import { listActiveSessionsForShutdown } from ${activeSessionsPath};`,
       'import { expect, it } from "vitest";',
       'it("clears agent run registry state", () => {',
+      "  expect(getActiveGatewayRootWorkCount()).toBe(0);",
+      "  const admission = tryBeginGatewayRootWorkAdmission();",
+      "  expect(admission).not.toBeNull();",
+      "  admission?.release();",
       "  expect(listActiveSessionsForShutdown()).toEqual([]);",
       '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
       "  let sequence;",

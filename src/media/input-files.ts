@@ -387,7 +387,6 @@ export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
   config?: OpenClawConfig;
-  classification?: AttachmentClassification;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
   const filename = source.filename || "file";
@@ -427,6 +426,28 @@ export async function extractFileContentFromSource(params: {
     buffer = result.buffer;
   }
 
+  return await extractFileContentFromBuffer({
+    buffer,
+    filename,
+    mimeType,
+    charset,
+    limits,
+    config: params.config,
+  });
+}
+
+/** Extracts owned bytes after shared size and MIME checks; no source encoding is required. */
+export async function extractFileContentFromBuffer(params: {
+  buffer: Buffer;
+  filename?: string;
+  mimeType?: string;
+  charset?: string;
+  limits: InputFileLimits;
+  config?: OpenClawConfig;
+  classification?: AttachmentClassification;
+}): Promise<InputFileExtractResult> {
+  const { buffer, limits } = params;
+  const filename = params.filename || "file";
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
@@ -434,9 +455,10 @@ export async function extractFileContentFromSource(params: {
   // Direct input_file callers declare their content type; the filename is
   // display metadata and must not override an explicitly allowlisted MIME.
   const classification =
-    params.classification ?? (await classifyAttachmentBytes({ buffer, declaredMime: mimeType }));
-  mimeType = classification.mime;
-  charset = classification.charset ?? charset;
+    params.classification ??
+    (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
+  const mimeType = classification.mime;
+  const charset = classification.charset ?? params.charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");

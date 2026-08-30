@@ -188,7 +188,7 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
     queueDepth: 0,
   };
   diagnosticSessionStates.set(key, created);
-  pruneDiagnosticSessionStates(Date.now(), true);
+  pruneDiagnosticSessionStates();
   return created;
 }
 

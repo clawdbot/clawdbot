@@ -328,7 +328,7 @@ export function formatGoogleChatTextChunks(
   return renderMarkdownIRChunksWithinLimit<string>({
     ir: prepared.ir,
     limit: Math.min(limit, GOOGLE_CHAT_FORMAT_PROFILE.chunk.limit),
-    measureRendered: (rendered: string) => new TextEncoder().encode(rendered).byteLength,
+    measureRendered: (rendered: string) => Buffer.byteLength(rendered, "utf8"),
     renderChunk: (chunk) => renderGoogleChatIR(chunk, prepared.markers),
   }).map((chunk) => chunk.rendered);
 }

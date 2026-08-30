@@ -186,8 +186,9 @@ openclaw sessions --all-agents tail --follow
 progress lines. Without `--session-key`, it tails running sessions first, then
 the latest stored session. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
-`--follow` keeps watching the selected SQLite-backed session or an explicit
-legacy trajectory file.
+`--follow` keeps watching the selected SQLite-backed sessions. Session keys use
+fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
+so CJK characters, combining accents, and joined emoji keep progress lines aligned.
 
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with

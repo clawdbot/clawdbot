@@ -878,6 +878,7 @@ describe("grouped chat rendering", () => {
     ({ state, label, actionLabel }) => {
       const container = document.createElement("div");
       const onRetryQueuedMessage = vi.fn();
+      const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
         container,
         createUserMessage("Attempted message", {
@@ -891,6 +892,7 @@ describe("grouped chat rendering", () => {
         "user",
         {
           onRetryQueuedMessage,
+          onDiscardQueuedMessage,
           queuedMessageAction: actionLabel
             ? { id: "attempted-send", label: actionLabel }
             : undefined,
@@ -901,13 +903,26 @@ describe("grouped chat rendering", () => {
       expect(status.dataset.sendState).toBe(state);
       expect(status.title).toBe("Delivery diagnostic");
       expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(
-        `· ${label} · ${actionLabel ?? "Retry"}`,
+        `· ${label} · ${actionLabel ?? "Retry"}${state === "unconfirmed" && !actionLabel ? " · Discard" : ""}`,
       );
       expect(status.querySelector("button")?.getAttribute("aria-label")).toBe(
         actionLabel ?? "Retry queued message",
       );
       status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
       expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+      const discard = status.querySelector<HTMLButtonElement>(".chat-send-status__discard");
+      if (state === "unconfirmed" && !actionLabel) {
+        expect(discard?.title).toBe(
+          "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
+        );
+        discard?.click();
+        expect(onDiscardQueuedMessage).toHaveBeenCalledWith("attempted-send");
+        discard?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+        expect(onDiscardQueuedMessage).toHaveBeenCalledTimes(1);
+        expect(onRetryQueuedMessage).toHaveBeenCalledTimes(1);
+      } else {
+        expect(discard).toBeNull();
+      }
     },
   );
 
@@ -3236,6 +3251,7 @@ describe("grouped chat rendering", () => {
 
   it("keeps top-level tool-name results collapsed", () => {
     const container = document.createElement("div");
+    markdownRenderMock.mockClear();
     renderAssistantMessage(
       container,
       createAssistantMessage("A long tool result that should stay behind the disclosure.", {
@@ -3248,6 +3264,21 @@ describe("grouped chat rendering", () => {
     expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
     expect(container.querySelector(".chat-text")).toBeNull();
+    expect(markdownRenderMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["user", "assistant"])("preserves a %s JSON disclosure across rerenders", (role) => {
+    const container = document.createElement("div");
+    const message = { role, content: '{"ok":true}', timestamp: 1 };
+    renderGroupedMessage(container, message, role, { autoExpandToolCalls: true });
+    const disclosure = expectElement(container, ".chat-json-collapse", HTMLDetailsElement);
+    expect(disclosure.open).toBe(false);
+    disclosure.open = true;
+
+    renderGroupedMessage(container, message, role, { autoExpandToolCalls: false });
+
+    expect(container.querySelector(".chat-json-collapse")).toBe(disclosure);
+    expect(disclosure.open).toBe(true);
   });
 
   it("omits normalized duplicate names from standalone tool results", () => {
