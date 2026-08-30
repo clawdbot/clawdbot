@@ -43,8 +43,9 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
     EMPTY_HTML_ELEMENT_RE,
   )
     .replace(/<br\s*\/?>/gi, "\n")
-    // Block elements → newlines
-    .replace(/<\/?(p|div)>/gi, "\n")
+    // Block elements → newlines (attributed openers included)
+    .replace(/<\/?(?:p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, "\n")
+    // Bold → selected lightweight markup
     .replace(/<(b|strong)>(.*?)<\/\1>/gi, `${boldMarker}$2${boldMarker}`)
     .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
     .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, `${strikeMarker}$2${strikeMarker}`)
