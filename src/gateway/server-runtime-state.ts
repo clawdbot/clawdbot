@@ -48,6 +48,7 @@ import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
+import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -126,6 +127,7 @@ export async function createGatewayHttpTransport(params: {
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
@@ -333,6 +335,8 @@ export async function createGatewayHttpTransport(params: {
       rateLimiter: params.rateLimiter,
       joinRateLimiter: params.joinRateLimiter,
       handleNodeWorkerBundleTransferRequest: params.handleNodeWorkerBundleTransferRequest,
+      handleWorkerBootstrapArtifactTransferRequest:
+        params.handleWorkerBootstrapArtifactTransferRequest,
       handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,

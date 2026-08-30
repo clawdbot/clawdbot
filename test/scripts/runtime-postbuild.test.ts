@@ -17,6 +17,7 @@ import {
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -304,11 +305,19 @@ describe("runtime postbuild static assets", () => {
       const params = {
         chunks: [{ dest: sentinelDest, contents: "selected root only\n" }],
         cwd: rootDir,
-        env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+        env: {
+          OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+          OPENCLAW_CONTROL_UI_BUILD_ID: "source-runtime-build",
+        },
         timings: false,
       };
       runRuntimePostBuild(params);
 
+      expect(
+        readBuildIdFromBuildInfoForModuleUrl(
+          pathToFileURL(path.join(rootDir, "dist/entry.js")).href,
+        ),
+      ).toBe("source-runtime-build");
       await expect(
         fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
       ).resolves.toBe("<html></html>\n");

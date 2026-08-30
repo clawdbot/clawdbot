@@ -8,6 +8,7 @@ import {
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, vi } from "vitest";
+import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
@@ -149,7 +150,7 @@ export async function provisionWarmProfile(
       setupCode: "setup-code",
       setupId: "setup-id",
       openclawVersion: "2026.8.1",
-      packageSpecs: ["openclaw@2026.8.1"],
+      nodeBootstrap: createNodeBootstrapFixture(),
       displayName: "Warm cloud worker",
       waitForDeviceId: async () => "device-1",
     }),

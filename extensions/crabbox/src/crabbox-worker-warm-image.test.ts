@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -196,8 +197,7 @@ describe("Crabbox profile warm images", () => {
     const scrub = calls[0];
     expect(scrub?.argv).toContain("--script-stdin");
     expect(scrub?.options.input).toContain("$HOME/.openclaw/cloud-workers");
-    expect(scrub?.options.input).toContain("kill -TERM");
-    expect(scrub?.options.input).toContain("kill -KILL");
+
     expect(scrub?.options.input).toContain('rm -rf "$worker_root"');
     expect(scrub?.options.input).toContain('rm -rf "$HOME/.openclaw-worker/workspaces"');
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
@@ -223,16 +223,64 @@ describe("Crabbox profile warm images", () => {
     fs.mkdirSync(workspace, { recursive: true });
     fs.mkdirSync(path.dirname(npmCache), { recursive: true });
     fs.mkdirSync(bin);
-    fs.writeFileSync(path.join(bin, "ps"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     fs.writeFileSync(path.join(workspace, "private.txt"), "session workspace bytes");
     fs.writeFileSync(npmCache, "reusable npm package");
     for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, file);
     }
-    execFileSync("/bin/sh", ["-c", String(scrub?.options.input)], {
-      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
-    });
+    const runtime = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
+    fs.mkdirSync(runtime, { recursive: true });
+    const state = path.join(home, ".openclaw", "cloud-workers", LEASE_ID);
+    fs.symlinkSync(runtime, path.join(state, "runtime"));
+    const node =
+      process.platform === "linux"
+        ? spawn(
+            process.execPath,
+            [
+              "-e",
+              'process.title = "openclaw-node"; process.stdout.write("ready"); setInterval(() => {}, 60000);',
+            ],
+            {
+              cwd: runtime,
+              env: { ...process.env, OPENCLAW_STATE_DIR: state },
+              detached: true,
+              stdio: ["ignore", "pipe", "ignore"],
+            },
+          )
+        : undefined;
+    const nodeClosed = node ? once(node, "close") : undefined;
+    if (node) {
+      await once(node.stdout!, "data");
+      fs.writeFileSync(path.join(state, "node.pid"), String(node.pid));
+    }
+    const stopNode = async () => {
+      if (node?.pid && node.exitCode === null && node.signalCode === null) {
+        try {
+          process.kill(-node.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
+        }
+        await nodeClosed;
+      }
+    };
+    try {
+      execFileSync("/bin/sh", ["-c", String(scrub?.options.input)], {
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+      if (nodeClosed) {
+        expect((await nodeClosed)[1]).toBe("SIGTERM");
+      }
+    } finally {
+      await stopNode();
+    }
+    expect(fs.existsSync(runtime)).toBe(true);
     expect(fs.existsSync(path.join(home, ".openclaw", "cloud-workers"))).toBe(false);
     expect(fs.existsSync(sshWorkspace)).toBe(false);
     expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
@@ -278,7 +326,9 @@ describe("Crabbox profile warm images", () => {
       "image",
     ]);
     expect(create?.options.timeoutMs).toBe(600_000);
-    const scrub = calls.find(({ options }) => options.input?.toString().includes("kill -TERM"));
+    const scrub = calls.find(({ options }) =>
+      options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
+    );
     expect(scrub?.options.timeoutMs).toBe(180_000);
   });
 

@@ -183,8 +183,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     );
   };
 
-  const finishNodeProvisioning = createWorkerNodeProvisioning({
-    ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
+  const nodeProvisioning = createWorkerNodeProvisioning({
+    ...options,
     commitReady,
     failBootstrap: async (record, leaseId, provider, error, patch) =>
       await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
@@ -227,6 +227,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   ) => {
     let lease: WorkerLease;
     let executionMode: WorkerExecutionMode | undefined;
+    let enrollmentOperation: ReturnType<typeof nodeProvisioning.createEnrollmentOperation>;
     try {
       const profile = requireWorkerProfile(record.profileSnapshot.settings);
       const requestedExecutionMode = record.profileSnapshot.executionMode;
@@ -252,18 +253,13 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         typeof record.profileSnapshot.machineClass === "string"
           ? record.profileSnapshot.machineClass
           : undefined;
-      const prepareNodeEnrollment = options.prepareNodeEnrollment;
-      if (provider.requiresNodeEnrollment === true && !prepareNodeEnrollment) {
-        throw new Error("Worker node enrollment runtime is unavailable");
-      }
+      enrollmentOperation = nodeProvisioning.createEnrollmentOperation(record, provider);
       const provisionOptions =
-        machineClass || executionMode || provider.requiresNodeEnrollment === true
+        machineClass || executionMode || enrollmentOperation
           ? {
               ...(machineClass ? { machineClass } : {}),
               ...(executionMode ? { executionMode } : {}),
-              ...(provider.requiresNodeEnrollment === true && prepareNodeEnrollment
-                ? { beginNodeEnrollment: async () => await prepareNodeEnrollment(record) }
-                : {}),
+              ...(enrollmentOperation ? { beginNodeEnrollment: enrollmentOperation.begin } : {}),
             }
           : undefined;
       lease = requireWorkerLease(
@@ -287,6 +283,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       }
       saveError(record, error);
       throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
+    } finally {
+      enrollmentOperation?.close();
     }
     // A timeout can happen after allocation; retain the same operation id for safe replay.
     const patch = {
@@ -313,7 +311,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       );
     }
     if (lease.node) {
-      return await finishNodeProvisioning(record, lease, provider, patch);
+      return await nodeProvisioning.finish(record, lease, provider, patch);
     }
     const bootstrapping = move(record, "bootstrapping", patch);
     let installation = preparedInstallation;
@@ -334,6 +332,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     provider = providerFor(record.providerId),
   ) => {
     let installation: WorkerInstallationArtifact | undefined;
+    await nodeProvisioning.prepare(record, provider);
     if (
       record.state === "requested" &&
       record.destroyRequestedAtMs === null &&

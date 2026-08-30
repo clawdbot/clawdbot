@@ -341,7 +341,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
         expect(
           calls.some(
             ({ argv, options }) =>
-              argv[1] === "run" && options.input?.toString().includes("kill -TERM"),
+              argv[1] === "run" && options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
           ),
         ).toBe(true),
       );

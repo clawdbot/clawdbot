@@ -19,6 +19,7 @@ import {
 } from "./lib/static-extension-assets.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
+import { writeBuildInfo } from "./write-build-info.ts";
 import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mts";
 
 type RuntimePostBuildParams = {
@@ -332,6 +333,7 @@ export function listCoreRuntimePostBuildOutputs(
   params: RuntimeFsParams & { chunks?: LegacyCliExitCompatChunk[] } = {},
 ) {
   return [
+    "dist/build-info.json",
     ...listHookMetadataOutputs(params),
     ...listOfficialChannelCatalogOutputs(),
     ...listExportHtmlTemplateOutputs(params),
@@ -733,6 +735,9 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
   runPhase("built plugin control-plane loads", () =>
     verifyBuiltPluginControlPlaneModules(phaseParams),
   );
+  // Source runners launch directly after postbuild, without the full UI build's
+  // final metadata step. Publish identity only after the runtime is complete.
+  runPhase("build provenance", () => writeBuildInfo({ rootDir, env: params.env }));
   logSummary();
 }
 
