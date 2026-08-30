@@ -145,10 +145,36 @@ async function createHttpFixture() {
       }
       requests.push({ method: request.method, headers: request.headers, body });
       order.push("mcp");
-      const message = body ? (JSON.parse(body) as { id?: number }) : undefined;
+      const message = body
+        ? (JSON.parse(body) as {
+            id?: number;
+            method?: string;
+            params?: { protocolVersion: string };
+          })
+        : undefined;
+      // This JSON-only endpoint declines the SDK's optional SSE stream.
+      if (request.method === "GET" && request.headers.accept === "text/event-stream") {
+        response.statusCode = 405;
+        response.setHeader("allow", "POST");
+        response.end();
+        return;
+      }
+      if (message?.method && message.id === undefined) {
+        response.statusCode = 202;
+        response.end();
+        return;
+      }
+      const result =
+        message?.method === "initialize"
+          ? {
+              protocolVersion: message.params?.protocolVersion,
+              capabilities: {},
+              serverInfo: { name: "mcp-proof", version: "1.0.0" },
+            }
+          : {};
       response.end(
         JSON.stringify(
-          message?.id === undefined ? { ok: true } : { jsonrpc: "2.0", id: message.id, result: {} },
+          message?.id === undefined ? { ok: true } : { jsonrpc: "2.0", id: message.id, result },
         ),
       );
     })().catch((error: unknown) => {
@@ -327,6 +353,7 @@ async function runRefreshScenario(root: string): Promise<void> {
   const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
   const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
     await import("./mcp-auth-profile.js");
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StreamableHTTPClientTransport } =
     await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
   const endpoint = await createHttpFixture();
@@ -370,26 +397,27 @@ async function runRefreshScenario(root: string): Promise<void> {
     fetch: wrapped,
     requestInit: { headers: { "X-Request": "keep", Authorization: "Bearer stale-sdk-not-real" } },
   });
-  const received: unknown[] = [];
-  // MCP transports use callback properties, not EventTarget listeners.
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener
-  transport.onmessage = (message) => received.push(message);
+  const client = new Client({ name: "mcp-auth-proof", version: "1.0.0" });
+  // Optional SSE GETs are independent of the ordered RPC POSTs under test.
+  const mcpPosts = () => endpoint.requests.filter((request) => request.method === "POST");
   try {
-    await transport.start();
-    await transport.send({ jsonrpc: "2.0", id: 1, method: "ping" });
-    await transport.send({ jsonrpc: "2.0", id: 2, method: "ping" });
+    await client.connect(transport);
+    assert.deepEqual(await client.ping(), {});
+    assert.deepEqual(await client.ping(), {});
     assert.deepEqual(endpoint.refreshInputs, ["stored-refresh-not-real"]);
-    assert.deepEqual(endpoint.order, ["refresh", "mcp", "mcp"]);
-    assert.deepEqual(received, [
-      { jsonrpc: "2.0", id: 1, result: {} },
-      { jsonrpc: "2.0", id: 2, result: {} },
-    ]);
+    assert.equal(endpoint.order[0], "refresh");
+    assert.deepEqual(
+      mcpPosts().map((request) => (JSON.parse(request.body) as { method: string }).method),
+      ["initialize", "notifications/initialized", "ping", "ping"],
+    );
     for (const request of endpoint.requests) {
-      assert.equal(request.method, "POST");
       assert.equal(request.headers.authorization, "Bearer rotated-access-not-real");
       assert.equal(request.headers["x-trace"], "keep");
       assert.equal(request.headers["x-request"], "keep");
-      assert.equal(request.headers.accept, "application/json, text/event-stream");
+      assert.equal(
+        request.headers.accept,
+        request.method === "POST" ? "application/json, text/event-stream" : "text/event-stream",
+      );
     }
     const stored = loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[STORED_PROFILE];
     assert(stored?.type === "oauth");
@@ -440,9 +468,9 @@ async function runRefreshScenario(root: string): Promise<void> {
     }
     seed();
     endpoint.behavior.rejectRefresh = true;
-    const sent = endpoint.requests.length;
+    const sent = mcpPosts().length;
     await assert.rejects(
-      () => transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
+      () => client.ping(),
       (error: unknown) => {
         assert(error instanceof Error);
         assert.match(error.message, /fixture refresh denied/u);
@@ -451,11 +479,11 @@ async function runRefreshScenario(root: string): Promise<void> {
         return true;
       },
     );
-    assert.equal(endpoint.requests.length, sent);
+    assert.equal(mcpPosts().length, sent);
     assert(providerEvents.some((event) => event.kind === "refresh"));
     assert(providerEvents.some((event) => event.kind === "refreshed"));
   } finally {
-    await transport.close();
+    await client.close();
     await endpoint.close();
   }
 }
