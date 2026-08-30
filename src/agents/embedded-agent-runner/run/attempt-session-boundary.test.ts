@@ -16,7 +16,10 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "../../../config/sessions/session-transcript-reconcile.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../../config/sessions/session-transcript-reconcile.worker.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -109,13 +112,19 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           input.attempt.onUserMessagePersistenceInvalidated = invalidated;
           if (reason === "aborted") {
             input.abortSignal = AbortSignal.abort(new Error("cancel before repair"));
-          } else {
-            input.sessionManager = SessionManager.openBounded(
-              { ...target, expectedWriterRunId: "replaced-owner" },
-              { maxBytes: 4096, maxEvents: 20 },
-            ) as ReturnType<typeof guardSessionManager>;
           }
-          await expect(prepareEmbeddedAttemptSessionBoundary(input)).rejects.toThrow(
+          const prepare = () => prepareEmbeddedAttemptSessionBoundary(input);
+          const preparing =
+            reason === "rebound-writer"
+              ? withOwnedSessionTranscriptWrites(
+                  {
+                    sessionTarget: { ...target, expectedWriterRunId: "replaced-owner" },
+                    withTranscriptWrite: async (operation) => await operation(),
+                  },
+                  prepare,
+                )
+              : prepare();
+          await expect(preparing).rejects.toThrow(
             reason === "aborted"
               ? "cancel before repair"
               : SessionTranscriptWriterClaimReboundError,
