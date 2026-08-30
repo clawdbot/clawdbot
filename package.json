@@ -184,7 +184,7 @@
     "!dist/plugin-sdk/provider-web-search-contract.d.ts",
     "!dist/plugin-sdk/qa-runner-runtime.d.ts",
     "!dist/plugin-sdk/realtime-bootstrap-context.d.ts",
-    "!dist/plugin-sdk/realtime-transcription.d.ts",
+    "!dist/plugin-sdk/realtime-transcription-runtime.d.ts",
     "!dist/plugin-sdk/realtime-voice-audio-queue.d.ts",
     "!dist/plugin-sdk/realtime-voice-activation.d.ts",
     "!dist/plugin-sdk/realtime-voice.d.ts",
@@ -1183,7 +1183,11 @@
       "default": "./dist/plugin-sdk/reply-history.js"
     },
     "./plugin-sdk/realtime-transcription": {
+      "types": "./dist/plugin-sdk/realtime-transcription.d.ts",
       "default": "./dist/plugin-sdk/realtime-transcription.js"
+    },
+    "./plugin-sdk/realtime-transcription-runtime": {
+      "default": "./dist/plugin-sdk/realtime-transcription-runtime.js"
     },
     "./plugin-sdk/realtime-bootstrap-context": {
       "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"

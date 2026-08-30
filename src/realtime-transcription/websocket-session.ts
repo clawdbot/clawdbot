@@ -41,6 +41,7 @@ export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
   onOpen?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
   parseMessage?: (payload: Buffer) => Event;
   providerId: string;
+  protocols?: string | string[];
   readyOnOpen?: boolean;
   reconnectDelayMs?: number;
   reconnectLimitMessage?: string;
@@ -311,11 +312,15 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
 
         this.currentUrl = connection.url;
         try {
-          socket = new WebSocket(this.currentUrl, {
+          const socketOptions: WebSocket.ClientOptions = {
             headers: connection.headers,
             maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
             ...(proxyAgent ? { agent: proxyAgent } : {}),
-          });
+          };
+          socket =
+            this.options.protocols === undefined
+              ? new WebSocket(this.currentUrl, socketOptions)
+              : new WebSocket(this.currentUrl, this.options.protocols, socketOptions);
           socket.binaryType = "nodebuffer";
           this.ws = socket;
           this.transport = transport;
