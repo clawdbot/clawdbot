@@ -181,6 +181,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     sessions: SessionsListResult | null;
+    selectedSession?: GatewaySessionRow;
     toolOverrides?: SessionToolOverrides;
     capabilityMenu?: CapabilityMenuProps;
     swarmSessions?: readonly GatewaySessionRow[];

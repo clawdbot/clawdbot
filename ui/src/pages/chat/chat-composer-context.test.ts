@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
@@ -14,22 +15,48 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
+  it.each([
+    { name: "renders the owner-selected global alias", sessionKey: "agent:work:main", owned: true },
+    {
+      name: "does not reuse a global row owned by another agent",
+      sessionKey: "global",
+      owned: false,
+    },
+  ])("$name", ({ sessionKey, owned }) => {
+    const session: GatewaySessionRow = {
+      key: "global",
+      kind: "global",
+      updatedAt: null,
+      totalTokens: 46_000,
+      contextTokens: 200_000,
+    };
+    const container = renderComposer({
+      sessionKey,
+      currentAgentId: "work",
+      selectedSession: owned ? session : undefined,
+      sessions: { sessions: [session], defaults: { contextTokens: 200_000 } } as never,
+    });
+
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label") ?? null).toBe(
+      owned ? "Session context usage: 46k of 200k (23%)" : null,
+    );
+  });
+
   it("renders only the current session provider's plan usage", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 46_000,
+        contextTokens: 200_000,
+        model: "gateway-injected",
+        modelProvider: "openai",
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 46_000,
-            contextTokens: 200_000,
-            model: "gateway-injected",
-            modelProvider: "openai",
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
       providerUsage: {
@@ -134,21 +161,20 @@ describe("renderChatComposer context usage", () => {
     };
     const container = renderComposer({
       messages: [{ role: "user", content: "hi" }],
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        inputTokens: 2,
+        outputTokens: 3,
+        totalTokens: 78_700,
+        contextTokens: 1_000_000,
+        estimatedCostUsd: 0.02,
+        model: "claude-fable-5",
+        modelProvider: "anthropic",
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            inputTokens: 2,
-            outputTokens: 3,
-            totalTokens: 78_700,
-            contextTokens: 1_000_000,
-            estimatedCostUsd: 0.02,
-            model: "claude-fable-5",
-            modelProvider: "anthropic",
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 1_000_000 },
       } as never,
       providerUsage: {
@@ -211,6 +237,7 @@ describe("renderChatComposer context usage", () => {
           responseModel: "gpt-5.5",
         },
       ],
+      selectedSession: session,
       sessions: {
         sessions: [session],
         defaults: { contextTokens: 200_000 },
@@ -260,20 +287,19 @@ describe("renderChatComposer context usage", () => {
 
   it("keeps context, token, and cost details when only unrelated plan usage exists", () => {
     const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        inputTokens: 800,
+        outputTokens: 200,
+        totalTokens: 46_000,
+        contextTokens: 200_000,
+        estimatedCostUsd: 0.03,
+        modelProvider: "openai",
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            inputTokens: 800,
-            outputTokens: 200,
-            totalTokens: 46_000,
-            contextTokens: 200_000,
-            estimatedCostUsd: 0.03,
-            modelProvider: "openai",
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
       providerUsage: {
@@ -325,16 +351,15 @@ describe("renderChatComposer context usage", () => {
           },
         },
       ],
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 1_000,
+        contextTokens: 200_000,
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 1_000,
-            contextTokens: 200_000,
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
     });
@@ -354,17 +379,16 @@ describe("renderChatComposer context usage", () => {
           responseModel: "gpt-5.5",
         },
       ],
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 1_000,
+        contextTokens: 200_000,
+        modelProvider: "anthropic",
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 1_000,
-            contextTokens: 200_000,
-            modelProvider: "anthropic",
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
       providerUsage: {
@@ -411,16 +435,15 @@ describe("renderChatComposer context usage", () => {
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {
     let container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 190_000,
+        contextTokens: 200_000,
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 190_000,
-            contextTokens: 200_000,
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
     });
@@ -432,17 +455,16 @@ describe("renderChatComposer context usage", () => {
     expect(container.textContent).not.toContain("Compact");
 
     container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 190_000,
+        totalTokensFresh: false,
+        contextTokens: 200_000,
+      },
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 190_000,
-            totalTokensFresh: false,
-            contextTokens: 200_000,
-          },
-        ],
+        sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
     });
