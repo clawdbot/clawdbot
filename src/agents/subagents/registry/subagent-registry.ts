@@ -442,10 +442,17 @@ const subagentRunManager = createSubagentRunManager({
   persistOrThrow: persistSubagentRunsOrThrow,
   callGateway: async <T>(request: Parameters<typeof callGateway>[0]) => {
     if (request.method === "agent.wait") {
-      const gatewayRuntime = activeGatewayContextResolver?.()?.recoveryRuntime;
+      // Registry waits are Gateway-owned lifecycle work. Keep them on the run's
+      // retained owner binding when one resolves — a replacement Gateway does
+      // not know the old runIds — and on the registry-owning instance
+      // otherwise; standalone processes authenticate normally.
+      // SAFETY: agent.wait params are only consulted for the optional runId lookup; any other shape falls back to the registry-global resolver.
+      const runId = (request.params as { runId?: string } | undefined)?.runId;
+      const runEntry = runId ? subagentRuns.get(runId) : undefined;
+      const boundResolver = runEntry ? getGatewayContextResolver(runEntry) : undefined;
+      const gatewayRuntime =
+        boundResolver?.()?.recoveryRuntime ?? activeGatewayContextResolver?.()?.recoveryRuntime;
       if (gatewayRuntime) {
-        // Registry waits are Gateway-owned lifecycle work. Keep them on the
-        // owning instance when one exists; standalone processes authenticate normally.
         return await gatewayRuntime.waitForAgent<T>(
           (request.params ?? {}) as AgentWaitParams,
           request.timeoutMs ?? undefined,

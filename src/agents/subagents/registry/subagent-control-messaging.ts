@@ -13,6 +13,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
@@ -72,6 +73,9 @@ function recordSubagentControllerParticipant(params: {
 
 type GatewayCaller = typeof callGateway;
 
+// Standalone default for unbound rows: dispatch through the process-global
+// runtime (whatever instance registered most recently), then the generic
+// transport. Registered runs never use this — see resolveSubagentRunGatewayCaller.
 const callSubagentControlGateway: GatewayCaller = async (request) => {
   const gatewayRuntime = getGatewayRecoveryRuntime();
   if (gatewayRuntime && request.method === "agent") {
@@ -88,6 +92,45 @@ const callSubagentControlGateway: GatewayCaller = async (request) => {
   }
   return await callGateway(request);
 };
+
+/**
+ * Resolves the dispatch path for control calls on a registered run. Runs carry
+ * a retained binding to the Gateway instance that registered them (fenced at
+ * registration), and a replacement Gateway does not know their runIds — so a
+ * bound run must dispatch through its own binding, and fail closed once that
+ * binding stops resolving (owner closed), matching
+ * dispatchGatewayLifecycleMethod. Unbound rows (standalone processes) keep the
+ * default dispatch chain.
+ */
+function resolveSubagentRunGatewayCaller(entry: SubagentRunRecord): GatewayCaller {
+  const boundResolver = getGatewayContextResolver(entry);
+  if (!boundResolver) {
+    return callSubagentControlGateway;
+  }
+  return async (request) => {
+    const boundRuntime = boundResolver()?.recoveryRuntime;
+    if (!boundRuntime) {
+      throw new Error(
+        `Subagent registry owner Gateway is stale; refusing to dispatch ${request.method} to a replacement Gateway`,
+      );
+    }
+    if (request.method === "agent") {
+      return await boundRuntime.dispatchAgent(
+        // SAFETY: control requests are built by this module with the gateway agent-dispatch param shape.
+        request.params as Parameters<typeof boundRuntime.dispatchAgent>[0],
+        request.timeoutMs ?? undefined,
+      );
+    }
+    if (request.method === "agent.wait") {
+      return await boundRuntime.waitForAgent(
+        // SAFETY: control requests are built by this module with the gateway agent-wait param shape.
+        request.params as Parameters<typeof boundRuntime.waitForAgent>[0],
+        request.timeoutMs ?? undefined,
+      );
+    }
+    return await callGateway(request);
+  };
+}
 
 const subagentMessagingRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
@@ -241,8 +284,12 @@ export async function steerControlledSubagentRun(params: {
     );
   }
 
+  // Dispatch through the run's retained owner binding when one exists; a
+  // replacement Gateway does not know this run's runIds.
+  const runGatewayCaller = resolveSubagentRunGatewayCaller(currentEntry);
+
   try {
-    await callSubagentControlGateway({
+    await runGatewayCaller({
       method: "agent.wait",
       params: {
         runId: params.entry.runId,
@@ -277,7 +324,7 @@ export async function steerControlledSubagentRun(params: {
   }
   try {
     const steerLifecycleGeneration = getAgentEventLifecycleGeneration();
-    const response = await callSubagentControlGateway<{ runId: string }>({
+    const response = await runGatewayCaller<{ runId: string }>({
       method: "agent",
       params: {
         message: params.message,
@@ -313,7 +360,7 @@ export async function steerControlledSubagentRun(params: {
         gatewayRunId: runId,
         expectedSessionId: acceptedSessionEntry?.sessionId,
         expectedLifecycleRevision: acceptedSessionEntry?.lifecycleRevision,
-        callGateway: callSubagentControlGateway,
+        callGateway: runGatewayCaller,
         timeoutMs: 10_000,
       });
     if (!isAgentEventLifecycleGenerationCurrent(steerLifecycleGeneration)) {
@@ -427,14 +474,17 @@ export async function sendControlledSubagentMessage(params: {
 
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
+  // Dispatch through the run's retained owner binding when one exists; a
+  // replacement Gateway does not know this run's runIds.
+  const runGatewayCaller = resolveSubagentRunGatewayCaller(currentEntry);
   try {
     const baselineReply = await readLatestAssistantReplySnapshot({
       sessionKey: targetSessionKey,
       limit: SUBAGENT_REPLY_HISTORY_LIMIT,
-      callGateway: callSubagentControlGateway,
+      callGateway: runGatewayCaller,
     });
 
-    const response = await callSubagentControlGateway<{ runId: string }>({
+    const response = await runGatewayCaller<{ runId: string }>({
       method: "agent",
       params: {
         message: params.message,
@@ -460,7 +510,7 @@ export async function sendControlledSubagentMessage(params: {
       timeoutMs: 30_000,
       limit: SUBAGENT_REPLY_HISTORY_LIMIT,
       baseline: baselineReply,
-      callGateway: callSubagentControlGateway,
+      callGateway: runGatewayCaller,
     });
     if (result.status === "timeout") {
       return { status: "timeout" as const, runId };
