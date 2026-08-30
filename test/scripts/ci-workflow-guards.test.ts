@@ -7782,6 +7782,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       changedPath: ".github/workflows/docs-agent.yml",
       selectedJobs: ["macos-node", "checks-windows"],
     },
+    ...[
+      ".github/workflows/openclaw-performance.yml",
+      "test/scripts/openclaw-performance-workflow.test-support.ts",
+      "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+      "test/scripts/openclaw-performance-workflow.test.ts",
+    ].map((changedPath) => ({
+      label: `Performance owner ${changedPath}`,
+      changedPath,
+      selectedJobs: ["macos-node", "checks-windows"],
+    })),
     {
       label: "Git-owner fixture",
       changedPath: "test/scripts/fixtures/ci-platform-checkout.mjs",
@@ -11510,4 +11520,71 @@ it("pins generated publisher and maturity owners before credentials and selected
     expect(publishers, file).toHaveLength(1);
     expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
   }
+});
+
+it("pins every Performance Git owner before checkout and preserves Git deadlines", () => {
+  const source = readFileSync(".github/workflows/openclaw-performance.yml", "utf8");
+  const workflow = parse(source);
+  const targets = [
+    ["resolve_target", "Checkout target metadata", undefined, 10],
+    ["kova", "Checkout OpenClaw", "Decide lane", 240],
+    ["source_performance", "Checkout OpenClaw source target", undefined, 120],
+    ["publish", "Checkout performance publisher helper", "Decide report publication lane", 30],
+  ] as const;
+  for (const [jobId, checkout, decision, timeout] of targets) {
+    const job = workflow.jobs[jobId];
+    const steps = job.steps as WorkflowStep[];
+    const index = steps.findIndex(({ name }) => name === "Prepare Git owner");
+    expect(index).toBe(decision ? 1 : 0);
+    expect(steps[index + 1]?.name).toBe(checkout);
+    if (decision) expect(steps[index - 1]?.name).toBe(decision);
+    expect(steps[index]).toEqual({
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+      ...(decision ? { if: "steps.lane.outputs.run == 'true'" } : {}),
+    });
+    expect(job["timeout-minutes"]).toBe(timeout);
+    const bodies = steps.map(({ run }) => run ?? "").join("\n");
+    expect(bodies).not.toMatch(/(?:^|[\s(])git\s/mu);
+    expect(bodies).not.toMatch(/timeout[^\n]*git/u);
+    const ownerDeadlines = [...bodies.matchAll(/--(?:checkout-)?git (\d+)/gu)].map((match) =>
+      Number(match[1]),
+    );
+    expect(ownerDeadlines.every((deadline) => deadline === 0)).toBe(true);
+    if (jobId !== "publish") expect(bodies).not.toMatch(/timeout=\d+/u);
+    else {
+      expect(bodies.match(/timeout=120/g)).toHaveLength(3);
+      expect(bodies).not.toMatch(/timeout=(?!120)\d+/u);
+      expect(bodies.match(/for attempt in range\(1, 6\)/gu)).toHaveLength(1);
+      expect(bodies.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
+      expect(bodies).toContain('"push", "origin", "HEAD:main", timeout=120, reclaim_locks=True');
+      expect(
+        bodies.match(/"fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True/gu),
+      ).toHaveLength(2);
+      expect(bodies).toContain("if error.code != 1:");
+      expect(bodies).toContain(
+        '"ls-tree", "--name-only", "FETCH_HEAD", "--", f"{dest}/report.json"',
+      );
+    }
+  }
+  expect(workflow.on.schedule).toEqual([{ cron: "11 5 * * *" }]);
+  expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual([
+    "target_ref",
+    "profile",
+    "repeat",
+    "deep_profile",
+    "live_openai_candidate",
+    "fail_on_regression",
+    "publish_reports",
+    "kova_ref",
+    "kova_config_contract",
+    "dispatch_id",
+  ]);
+  expect(workflow.permissions).toEqual({ contents: "read" });
+  expect(workflow.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });
+  expect(workflow.concurrency).toEqual({
+    group:
+      "${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}",
+    "cancel-in-progress": false,
+  });
 });
