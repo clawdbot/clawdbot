@@ -5,9 +5,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  classifySessionFileEntry,
   migrateSessionFileEntryToCurrentVersion,
   normalizeLoadedFileEntry,
-  partitionSessionFileEntries,
   type SessionFileEntryMigrationState,
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
@@ -112,13 +112,6 @@ function readTranscriptEventsForImport(
   // through commit and archive. Fingerprints catch non-cooperating external edits.
   const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
   assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-  const classificationHeader = {
-    id: sessionId,
-    type: "session",
-    version: plan.sourceVersion,
-    timestamp: "",
-    cwd: "",
-  } satisfies FileEntry;
   // V1 compactions refer to original row indexes. Stable index-derived IDs let
   // the second pass resolve those links without retaining the transcript.
   const idPrefix = createHash("sha256")
@@ -143,6 +136,9 @@ function readTranscriptEventsForImport(
         allowMalformedPrefix,
       )) {
         let event = loadedEvent;
+        if (plan.sourceVersion >= 2) {
+          recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
+        }
         let recognizedEvent: FileEntry | undefined;
         if (originalIndex === plan.headerIndex) {
           const canonicalHeader = {
@@ -156,15 +152,15 @@ function readTranscriptEventsForImport(
           event = canonicalHeader;
           recognizedEvent = event;
         } else {
-          // Reuse the runtime partition contract one row at a time. The
-          // synthetic header carries the source version without being emitted.
-          recognizedEvent = partitionSessionFileEntries([classificationHeader, event])
-            .fileEntriesByOriginalIndex[1];
+          const classified = classifySessionFileEntry(event, plan.sourceVersion);
+          // Runtime retains normalized opaque rows; import preserves their loaded bytes.
+          recognizedEvent = classified.recognized ? classified.entry : undefined;
         }
 
         if (recognizedEvent) {
           migrateSessionFileEntryToCurrentVersion(recognizedEvent, originalIndex, migrationState);
           if (
+            plan.sourceVersion < 2 &&
             recognizedEvent.type !== "session" &&
             plan.compactionTargetIndexes.has(originalIndex)
           ) {
@@ -240,26 +236,32 @@ function planTranscriptImport(
     if (plan.headerIndex < 0 && isRecord(event) && event.type === "session") {
       plan.headerIndex = originalIndex;
       plan.sourceVersion = typeof event.version === "number" ? event.version : 1;
-    }
-    if (
-      isRecord(event) &&
-      event.type === "compaction" &&
-      Number.isInteger(event.firstKeptEntryIndex) &&
-      Number(event.firstKeptEntryIndex) >= 0
-    ) {
-      const targetIndex = Number(event.firstKeptEntryIndex);
-      if (
-        !plan.compactionTargetIndexes.has(targetIndex) &&
-        plan.compactionTargetIndexes.size >= MAX_LEGACY_COMPACTION_TARGETS
-      ) {
-        throw new TranscriptImportLimitError(
-          `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
-        );
+      // Only v1 needs future row indexes before migration. Newer files validate
+      // the same target limit while streaming, before any canonical write.
+      if (plan.sourceVersion >= 2) {
+        return plan;
       }
-      plan.compactionTargetIndexes.add(targetIndex);
     }
+    recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
   }
   return plan;
+}
+
+function recordLegacyCompactionTarget(event: FileEntry, targets: Set<number>): void {
+  if (
+    isRecord(event) &&
+    event.type === "compaction" &&
+    Number.isInteger(event.firstKeptEntryIndex) &&
+    Number(event.firstKeptEntryIndex) >= 0
+  ) {
+    const targetIndex = Number(event.firstKeptEntryIndex);
+    if (!targets.has(targetIndex) && targets.size >= MAX_LEGACY_COMPACTION_TARGETS) {
+      throw new TranscriptImportLimitError(
+        `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
+      );
+    }
+    targets.add(targetIndex);
+  }
 }
 
 function* iterateTranscriptEvents(
