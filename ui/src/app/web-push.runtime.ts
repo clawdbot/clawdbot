@@ -247,19 +247,28 @@ export function createWebPushCapabilityRuntime(params: {
       if (!client) {
         return Promise.resolve();
       }
+      const isCurrentClient = () =>
+        params.gateway.snapshot.phase === "connected" && params.gateway.snapshot.client === client;
       if (!operation) {
         params.publish({ loading: true, error: null });
       }
       const previous = operation;
       const actionRun = (previous ?? Promise.resolve())
         .then(async () => {
-          params.publish({ error: null });
-          if (params.gateway.snapshot.client !== client) {
+          if (!isCurrentClient()) {
             throw new Error("Gateway changed before the notification change could be saved.");
           }
-          params.publish(await runWebPushCapabilityAction(client, action));
+          params.publish({ error: null });
+          const patch = await runWebPushCapabilityAction(client, action);
+          if (isCurrentClient()) {
+            params.publish(patch);
+          }
         })
-        .catch((error: unknown) => params.publish({ error: formatUiError(error) }));
+        .catch((error: unknown) => {
+          if (isCurrentClient()) {
+            params.publish({ error: formatUiError(error) });
+          }
+        });
       const next = actionRun.finally(() => {
         if (operation === next) {
           operation = null;

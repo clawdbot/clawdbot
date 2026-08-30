@@ -435,6 +435,111 @@ describe("web push Gateway reconciliation", () => {
     capability.dispose();
   });
 
+  it("ignores a stale preference action after switching Gateways", async () => {
+    const firstSave = createDeferred();
+    const stalePreferences = notificationPreferences(true);
+    const currentPreferences = notificationPreferences(false);
+    const firstRequest = vi.fn(async (method: string) => {
+      if (method === "push.web.vapidPublicKey") {
+        return { vapidPublicKey: encodedVapidKey([4, 1, 2, 3]) };
+      }
+      if (method === "push.web.subscribe") {
+        return { subscriptionId: "subscription-1" };
+      }
+      if (method === "push.web.preferences.set") {
+        await firstSave.promise;
+        return { scope: "user", preferences: stalePreferences };
+      }
+      if (method === "push.web.preferences.get") {
+        return preferenceResult(stalePreferences);
+      }
+      return {};
+    });
+    const secondRequest = vi.fn(async (method: string) => {
+      if (method === "push.web.vapidPublicKey") {
+        return { vapidPublicKey: encodedVapidKey([4, 1, 2, 3]) };
+      }
+      if (method === "push.web.subscribe") {
+        return { subscriptionId: "subscription-1" };
+      }
+      if (method === "push.web.preferences.get") {
+        return preferenceResult(currentPreferences);
+      }
+      return {};
+    });
+    const harness = gatewayHarness();
+    const capability = createWebPushCapability(harness.gateway);
+    harness.connect({ request: firstRequest } as unknown as GatewayBrowserClient);
+    await vi.waitFor(() => expect(capability.snapshot.preferences?.user).toEqual(stalePreferences));
+
+    const action = capability.run({
+      kind: "set",
+      scope: "user",
+      preferences: stalePreferences,
+    });
+    await vi.waitFor(() =>
+      expect(firstRequest).toHaveBeenCalledWith(
+        "push.web.preferences.set",
+        expect.objectContaining({ preferences: stalePreferences }),
+      ),
+    );
+    harness.connect({ request: secondRequest } as unknown as GatewayBrowserClient);
+    await vi.waitFor(() =>
+      expect(capability.snapshot.preferences?.user).toEqual(currentPreferences),
+    );
+
+    firstSave.resolve();
+    await action;
+
+    expect(capability.snapshot.preferences?.user).toEqual(currentPreferences);
+    expect(capability.snapshot.error).toBeNull();
+    capability.dispose();
+  });
+
+  it("keeps the current Gateway error when a queued stale action begins", async () => {
+    const firstSave = createDeferred();
+    const preferences = notificationPreferences(true);
+    let saveCount = 0;
+    const firstRequest = vi.fn(async (method: string) => {
+      if (method === "push.web.vapidPublicKey") {
+        return { vapidPublicKey: encodedVapidKey([4, 1, 2, 3]) };
+      }
+      if (method === "push.web.subscribe") {
+        return { subscriptionId: "subscription-1" };
+      }
+      if (method === "push.web.preferences.set") {
+        saveCount += 1;
+        if (saveCount === 1) {
+          await firstSave.promise;
+        }
+        return { scope: "user", preferences };
+      }
+      if (method === "push.web.preferences.get") {
+        return preferenceResult(preferences);
+      }
+      return {};
+    });
+    const second = gatewayClient(Promise.resolve(encodedVapidKey([4, 9, 8, 7])));
+    const harness = gatewayHarness();
+    const capability = createWebPushCapability(harness.gateway);
+    harness.connect({ request: firstRequest } as unknown as GatewayBrowserClient);
+    await vi.waitFor(() => expect(capability.snapshot.preferences).toBeTruthy());
+
+    const firstAction = capability.run({ kind: "set", scope: "user", preferences });
+    await vi.waitFor(() => expect(saveCount).toBe(1));
+    const queuedAction = capability.run({ kind: "set", scope: "user", preferences });
+    await Promise.resolve();
+    harness.connect(second.client);
+    await vi.waitFor(() => expect(capability.snapshot.error).toContain("another Gateway"));
+
+    firstSave.resolve();
+    await Promise.all([firstAction, queuedAction]);
+
+    expect(capability.snapshot.error).toContain("another Gateway");
+    expect(capability.snapshot.subscription).toBe("vapid-mismatch");
+    capability.dispose();
+  });
+
   it.each(["reconnect", "enable"] as const)(
     "resets a mismatched browser subscription detected during %s from Settings before enabling the new Gateway",
     async (source) => {
