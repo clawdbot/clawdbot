@@ -16,7 +16,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import type { FollowupRun, InternalFollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -31,14 +31,6 @@ import {
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-
-type InternalFollowupRun = FollowupRun & {
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: {
-    slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
-    suppressedFactIndexes: number[];
-  };
-};
 
 installQueueRuntimeErrorSilencer();
 
@@ -2016,6 +2008,38 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.images).toEqual([firstImage, secondImage]);
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
+  });
+
+  it("carries inherited-image provenance across collected batches", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-image-notes-${Date.now()}`,
+    );
+    const keptImage = { type: "image" as const, data: "kept", mimeType: "image/png" };
+    const laterImage = { type: "image" as const, data: "later", mimeType: "image/png" };
+    const adaNote = "[Recent image 1 from Ada, message m-a, attached as media.]";
+    const graceNote = "[Recent image 1 from Grace, message m-g, attached as media.]";
+
+    for (const [prompt, image, historyImageNotes] of [
+      ["one", keptImage, adaNote],
+      ["two", laterImage, graceNote],
+    ] as const) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
+        currentTurnImagesPrepared: true,
+        images: [image],
+        imageOrder: ["inline"],
+        historyImageNotes,
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.images).toEqual([keptImage, laterImage]);
+    // Every inherited image the batch sends keeps the note that places it; a
+    // batch that drops provenance hands the model bytes it cannot attribute.
+    expect(collected?.historyImageNotes).toBe(`${adaNote}\n${graceNote}`);
   });
 
   it("preserves prepared empty image state across collected batches", async () => {

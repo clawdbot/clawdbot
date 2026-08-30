@@ -44,14 +44,8 @@ import {
   isFollowupRunDeferredError,
   retireFollowupRunCancellation,
   type FollowupRun,
+  type InternalFollowupRun,
 } from "./types.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  /** Admission-owned layout; fact indexes are relative to this run's media array. */
-  mediaImageLayout?: MediaImageLayout;
-};
 
 function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
@@ -439,12 +433,18 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
 function collectQueuedPromptMedia(
   items: FollowupRun[],
 ): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
-  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
+  Pick<
+    InternalFollowupRun,
+    "currentTurnImagesPrepared" | "mediaImageLayout" | "historyImageNotes"
+  > {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
   const mediaImageSlots: MediaImageLayout["slots"] = [];
   const suppressedFactIndexes: number[] = [];
+  // Provenance is ordered with the images it explains, so it is collected in the
+  // same item order the image and media arrays are concatenated in.
+  const historyImageNoteBlocks: string[] = [];
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
@@ -474,6 +474,10 @@ function collectQueuedPromptMedia(
     if (item.media) {
       media.push(...item.media);
     }
+    const itemHistoryImageNotes = internalItem.historyImageNotes?.trim();
+    if (itemHistoryImageNotes) {
+      historyImageNoteBlocks.push(itemHistoryImageNotes);
+    }
   }
   const mediaImageLayout =
     mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
@@ -485,6 +489,9 @@ function collectQueuedPromptMedia(
     ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
+    ...(historyImageNoteBlocks.length > 0
+      ? { historyImageNotes: historyImageNoteBlocks.join("\n") }
+      : {}),
   };
 }
 

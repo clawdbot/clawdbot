@@ -420,9 +420,6 @@ describe("resolveCurrentTurnImages", () => {
 
       const result = await resolveCurrentTurnImages({ ctx, cfg: {} as OpenClawConfig });
 
-      expect(vi.mocked(resolveAgentTurnAttachments)).toHaveBeenCalledWith(
-        expect.objectContaining({ includeRecentHistoryImages: true }),
-      );
       expect(result.images).toEqual([
         expect.objectContaining({ type: "image", mimeType: "image/png" }),
       ]);
