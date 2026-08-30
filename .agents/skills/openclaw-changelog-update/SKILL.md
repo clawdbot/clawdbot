@@ -173,9 +173,11 @@ every human `Thanks @...` attribution.
      its verified user-facing breaking change and migration guidance with the
      original PR ref and credit. Keep other internal contributions only in the
      complete PR record
-   - classify internal-only work from conventional prefixes and clear title
-     signals such as `QA`, `test`, `docs`, `refactor`, `lint`, or `CI`; an
-     untyped title is not automatically editorial
+   - classify conventional titles from their declared type and scope, not
+     incidental words such as `doc` or `build` in their descriptions. For
+     untyped titles, retain internal-work signals such as `QA`, `test`, `docs`,
+     `refactor`, `lint`, or `CI`; eligibility never replaces the source audit
+     that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`

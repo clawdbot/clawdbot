@@ -434,16 +434,16 @@ function githubHandleFromNoreply(email) {
 }
 
 function editorialClassification(subject) {
-  const conventional = subject.match(/^\s*([a-z]+)(?:\([^)]*\))?(!)?:/i);
+  const conventional = subject.match(/^\s*([a-z]+)(?:\(([^)]*)\))?(!)?:/i);
   const type = conventional?.[1]?.toLowerCase();
   return {
-    // A declared breaking API change needs migration notes even when its
-    // conventional type describes a refactor or other internal work.
+    // Declared type/scope outrank ambiguous prose such as "doc" or "build".
+    // Breaking changes still need migration notes even for internal scopes.
     editorialEligible:
-      Boolean(conventional?.[2]) ||
+      Boolean(conventional?.[3]) ||
       ((Boolean(type) || editorialTitlePattern.test(subject)) &&
         !nonEditorialTypes.has(type) &&
-        !nonEditorialTitlePattern.test(subject)),
+        !nonEditorialTitlePattern.test(conventional ? (conventional[2] ?? "") : subject)),
     type: type ?? "other",
   };
 }
