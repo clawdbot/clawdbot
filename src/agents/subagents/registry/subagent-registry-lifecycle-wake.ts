@@ -334,17 +334,20 @@ export function scheduleRequesterSettleWake(
   // Wake turns outlive their spawning attempt; clear its owner before both
   // dispatch and chained re-arms so transcript writes acquire a fresh lock.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithGatewayIndependentRootWorkContinuation(() =>
-      params.maybeWakeRequesterAfterAllChildrenSettled({
-        requesterSessionKey,
-        requesterOrigin: entry.requesterOrigin,
-        settledEntry: entry,
-        transitionBatch: (runIds, state) =>
-          transitionRequesterSettleWakeBatch(context, runIds, state),
-        completeBatch: (runIds, rearmGeneration, outcome) =>
-          completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
-      }),
-    )
+    void context
+      .runRequesterSettleWake(runId, () =>
+        runWithGatewayIndependentRootWorkContinuation(() =>
+          params.maybeWakeRequesterAfterAllChildrenSettled({
+            requesterSessionKey,
+            requesterOrigin: entry.requesterOrigin,
+            settledEntry: entry,
+            transitionBatch: (runIds, state) =>
+              transitionRequesterSettleWakeBatch(context, runIds, state),
+            completeBatch: (runIds, rearmGeneration, outcome) =>
+              completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
+          }),
+        ),
+      )
       .catch((error: unknown) => {
         params.warn("requester settle wake failed", {
           error: buildSafeLifecycleErrorMeta(error),

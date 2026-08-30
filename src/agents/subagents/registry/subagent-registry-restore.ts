@@ -176,16 +176,19 @@ export function createSubagentRegistryRestorer(config: {
         if (!firstEntry) {
           continue;
         }
-        settleRequesterTurn({
-          requesterSessionKey: firstEntry.requesterSessionKey,
-          requesterAgentId: resolveRequesterAgentId(firstEntry),
-          requesterTurnRunId,
-          requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
-          acceptedSessionSpawns: entries.map((entry) => ({
-            runId: entry.taskRunId ?? entry.runId,
-            childSessionKey: entry.childSessionKey,
-          })),
-        });
+        settleRequesterTurn(
+          {
+            requesterSessionKey: firstEntry.requesterSessionKey,
+            requesterAgentId: resolveRequesterAgentId(firstEntry),
+            requesterTurnRunId,
+            requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
+            acceptedSessionSpawns: entries.map((entry) => ({
+              runId: entry.taskRunId ?? entry.runId,
+              childSessionKey: entry.childSessionKey,
+            })),
+          },
+          "restore",
+        );
       }
     }
     if (runs.size === 0) {

@@ -1,3 +1,4 @@
+import pLimit from "p-limit";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
@@ -27,10 +28,18 @@ import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 
+// Restored rows can arrive in a large burst. Limit only that startup catch-up
+// so ordinary live settles keep their existing latency and concurrency.
+const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
+
 export class SubagentLifecycleController {
   private readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
   private readonly pendingRequesterSettleWakeRearms = new Set<string>();
   private readonly scheduledRequesterSettleWakeRuns = new Set<string>();
+  private readonly restoredRequesterSettleWakeRuns = new Set<string>();
+  private readonly restoredRequesterSettleWakeLimit = pLimit(
+    RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY,
+  );
   private readonly scheduledRequesterSettleWakeTimers = new Map<
     string,
     ScheduledRequesterSettleWake
@@ -151,6 +160,10 @@ export class SubagentLifecycleController {
     this.scheduledRequesterSettleWakeRuns.has(runId);
   markRequesterSettleWakeRunScheduled = (runId: string): void =>
     void this.scheduledRequesterSettleWakeRuns.add(runId);
+  runRequesterSettleWake = (runId: string, run: () => Promise<unknown>): Promise<unknown> =>
+    this.restoredRequesterSettleWakeRuns.delete(runId)
+      ? this.restoredRequesterSettleWakeLimit(run)
+      : run();
   unmarkRequesterSettleWakeRunScheduled = (runId: string): void =>
     void this.scheduledRequesterSettleWakeRuns.delete(runId);
   markRequesterSettleWakeRearm = (runId: string): void =>
@@ -218,16 +231,27 @@ export class SubagentLifecycleController {
   refreshFrozenResultFromSession = (sessionKey: string) =>
     refreshFrozenResultFromSession(this, sessionKey);
 
-  resumeRequesterSettleWake = (runId: string, entry: SubagentRunRecord) =>
+  resumeRequesterSettleWake = (
+    runId: string,
+    entry: SubagentRunRecord,
+    source: "live" | "restore" = "live",
+  ) => {
+    if (source === "restore" && !this.hasScheduledRequesterSettleWakeRun(runId)) {
+      this.restoredRequesterSettleWakeRuns.add(runId);
+    }
     scheduleRequesterSettleWake(this, runId, entry);
+  };
 
-  settleRequesterTurnAfterSessionSpawns = (args: {
-    requesterSessionKey: string;
-    requesterAgentId?: string;
-    requesterTurnRunId: string;
-    requesterYielded: boolean;
-    acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
-  }) =>
+  settleRequesterTurnAfterSessionSpawns = (
+    args: {
+      requesterSessionKey: string;
+      requesterAgentId?: string;
+      requesterTurnRunId: string;
+      requesterYielded: boolean;
+      acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+    },
+    source: "live" | "restore" = "live",
+  ) =>
     settleRequesterTurnAfterSessionSpawns({
       ...args,
       runs: this.options.runs,
@@ -236,6 +260,9 @@ export class SubagentLifecycleController {
         if (this.hasScheduledRequesterSettleWakeRun(runId)) {
           this.markRequesterSettleWakeRearm(runId);
           return;
+        }
+        if (source === "restore") {
+          this.restoredRequesterSettleWakeRuns.add(runId);
         }
         scheduleRequesterSettleWake(this, runId, entry);
       },
