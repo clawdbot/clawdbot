@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -119,13 +120,16 @@ function createPreparedRuntimeLease(input: {
   agentId?: string;
   workspaceDir?: string;
 }) {
-  const prepared = createModelGenerationFixture({ config: input.config, label: "cli" });
+  const prepared = createModelGenerationFixture({
+    config: input.config,
+    label: "cli",
+    agentDir: input.agentDir,
+    workspaceDir: expectDefined(input.workspaceDir, "compaction fixture workspace"),
+  });
   return {
     snapshot: {
       ...prepared.preparedModelRuntime,
       ...(input.agentId ? { agentId: input.agentId } : {}),
-      agentDir: input.agentDir,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     },
     pluginGeneration: {
       configuredCatalogEntries: [],

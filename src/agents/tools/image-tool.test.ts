@@ -17,6 +17,10 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   createModelGenerationFixture,
@@ -2700,21 +2704,24 @@ describe("image tool data URL support", () => {
 
 describe("image tool MiniMax VLM routing", () => {
   const priorFetch = global.fetch;
+  let state: OpenClawTestState;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "minimax-vlm", applyEnv: false });
     installImageUnderstandingProviderStubs(minimaxProvider);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     global.fetch = priorFetch;
     imageProviderHarness.reset();
     testing.setProviderDepsForTest();
+    await state.cleanup();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
     const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
+    const agentDir = state.agentDir();
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
@@ -3188,43 +3195,50 @@ describe("image compression policy", () => {
   });
 
   it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
-    const provider = "prepared-image-provider";
-    const model = "prepared-image-model";
-    const cfg = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({
-      config: cfg,
-      label: "image-a",
-      provider,
-      requestProvider: provider,
-      modelId: model,
-      runtimeAugment: true,
-      staticImagePolicy: {
-        maxBytes: 1_000_000,
-        preferredSidePx: 1_280,
-        tokenMode: "detail",
-      },
-      runtimeImagePolicy: { maxSidePx: 1_440 },
-    });
-    const generationB = createModelGenerationFixture({
-      config: cfg,
-      label: "image-b",
-      provider,
-      requestProvider: provider,
-      modelId: model,
-      runtimeAugment: true,
-      staticImagePolicy: {
-        maxBytes: 2_000_000,
-        preferredSidePx: 2_560,
-        tokenMode: "provider",
-      },
-      runtimeImagePolicy: { maxSidePx: 2_880 },
-    });
-    installImageUnderstandingProviderDeps([], {
-      useDefaultResolveModelAsync: true,
-    });
-    publishCurrentModelGeneration(generationB);
-
+    const state = await createOpenClawTestState({ label: "image-model-generation" });
     try {
+      const provider = "prepared-image-provider";
+      const model = "prepared-image-model";
+      const cfg = {} satisfies OpenClawConfig;
+      const generationA = createModelGenerationFixture({
+        agentDir: state.agentDir("prepared"),
+        workspaceDir: state.workspaceDir,
+        config: cfg,
+        label: "image-a",
+        provider,
+        requestProvider: provider,
+        modelId: model,
+        runtimeAugment: true,
+        staticImagePolicy: {
+          maxBytes: 1_000_000,
+          preferredSidePx: 1_280,
+          tokenMode: "detail",
+        },
+        runtimeImagePolicy: { maxSidePx: 1_440 },
+      });
+      const generationB = createModelGenerationFixture({
+        agentDir: state.agentDir("prepared"),
+        workspaceDir: state.workspaceDir,
+        config: cfg,
+        label: "image-b",
+        provider,
+        requestProvider: provider,
+        modelId: model,
+        runtimeAugment: true,
+        staticImagePolicy: {
+          maxBytes: 2_000_000,
+          preferredSidePx: 2_560,
+          tokenMode: "provider",
+        },
+        runtimeImagePolicy: { maxSidePx: 2_880 },
+      });
+      installImageUnderstandingProviderDeps([], {
+        useDefaultResolveModelAsync: true,
+      });
+      publishCurrentModelGeneration(generationB);
+
+      // Compression deliberately omits agentDir: real resolution uses the default
+      // agent, not the distinct "prepared" agent stored in the snapshot.
       await expect(
         testing.resolveImageCompressionPolicy({
           cfg,
@@ -3248,6 +3262,7 @@ describe("image compression policy", () => {
       expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
     } finally {
       resetModelGenerationFixtureState();
+      await state.cleanup();
     }
   });
 
