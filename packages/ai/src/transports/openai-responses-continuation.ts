@@ -35,11 +35,18 @@ function jsonValuesEqual(left: object, right: object): boolean {
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
-  // Instructions are rebuilt and sent on every request; exclude them from history matching.
+  // Instructions are rebuilt and sent on every request; exclude them from
+  // history matching. `tools` gets the same treatment: the agent's available
+  // tool surface legitimately changes turn to turn (tool-search activation,
+  // MCP servers connecting/disconnecting) independent of whether the prior
+  // turn's server-side state is still a valid continuation baseline --
+  // comparing it here would turn an ordinary tool-availability change into a
+  // permanent request_changed false positive for the rest of the connection.
   const {
     input: _input,
     previous_response_id: _previousResponseId,
     instructions: _instructions,
+    tools: _tools,
     ...rest
   } = request;
   if (!isRecord(rest.metadata)) {

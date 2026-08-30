@@ -312,6 +312,40 @@ describe("OpenAI Responses continuation", () => {
     expect({ state, request }).toEqual(before);
   });
 
+  it("still continues when the available tool list changed between turns, and keeps the current turn's tools on the wire", () => {
+    // Real shape: the agent's model-visible tool surface legitimately shifts
+    // turn to turn (tool-search activation, session-scoped gating, MCP
+    // servers connecting/disconnecting), independent of whether the prior
+    // turn's server-side response state is still a valid continuation
+    // baseline. Before this fixed, an ordinary tool-list change turned into
+    // a permanent request_changed false positive, silently disabling
+    // continuation for the rest of the connection's life -- reproduced live
+    // against a real OpenAI-Responses-compatible endpoint.
+    const priorState: ResponsesContinuationState = {
+      ...continuationState(),
+      lastRequest: {
+        ...continuationState().lastRequest,
+        tools: [{ type: "function", name: "read", parameters: {} }],
+      },
+    };
+    const currentRequest: ResponsesContinuationRequest = {
+      ...nextRequest(),
+      tools: [
+        { type: "function", name: "read", parameters: {} },
+        { type: "function", name: "web_fetch", parameters: {} },
+      ],
+    };
+
+    const resolved = resolveResponsesContinuationRequest(priorState, currentRequest);
+
+    expect(resolved.continuationStatus).toBe("continued");
+    expect(resolved.request.previous_response_id).toBe("resp_1");
+    expect(resolved.request.tools).toEqual([
+      { type: "function", name: "read", parameters: {} },
+      { type: "function", name: "web_fetch", parameters: {} },
+    ]);
+  });
+
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
     first?.commit(continuationState().lastRequest, {
