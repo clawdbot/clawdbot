@@ -6,6 +6,7 @@ export function hasExactOwnKeys(
   const allowed = new Set([...required, ...optional]);
   return (
     required.every((key) => Object.hasOwn(value, key)) &&
+    optional.every((key) => Object.hasOwn(value, key) || !Reflect.has(value, key)) &&
     Object.keys(value).every((key) => allowed.has(key))
   );
 }

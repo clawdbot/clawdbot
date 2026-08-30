@@ -346,6 +346,17 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
     descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
     expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    const { computer, ...assignmentFields } = descriptor.assignment;
+    const inheritedComputerAssignment = Object.assign(
+      Object.create({ computer }),
+      assignmentFields,
+    );
+    expect(() =>
+      parseWorkerLaunchDescriptor({
+        ...descriptor,
+        assignment: inheritedComputerAssignment,
+      }),
+    ).toThrow("invalid worker launch descriptor");
     const { nodeId, ...computerFields } = descriptor.assignment.computer;
     const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
     for (const computer of [

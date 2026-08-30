@@ -72,12 +72,19 @@ describe("worker connection endpoint", () => {
     });
   });
 
-  it("rejects endpoint kinds inherited from the prototype", () => {
+  it("rejects endpoint fields inherited from the prototype", () => {
     const endpoint = Object.assign(Object.create({ kind: "unix" }) as Record<string, unknown>, {
       socketPath: "/tmp/openclaw-worker/gateway.sock",
     });
 
     expect(parseWorkerConnectionEndpoint(endpoint)).toBeUndefined();
+
+    const websocketEndpoint = Object.assign(Object.create({ tlsFingerprint: fingerprint }), {
+      kind: "websocket",
+      url: "wss://gateway.example/__openclaw__/worker",
+    });
+
+    expect(parseWorkerConnectionEndpoint(websocketEndpoint)).toBeUndefined();
   });
 
   it.each([
