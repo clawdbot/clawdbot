@@ -38,7 +38,7 @@ const TELEGRAM_RICH_FORMAT_PROFILE = FormatCapabilityProfile.define({
   chunk: { limit: 32_768, unit: "chars" },
 });
 
-const INLINE_STYLE_RANK: Record<string, number> = {
+const INLINE_STYLE_RANK: Record<InlineStyleKind, number> = {
   spoiler: 0,
   bold: 1,
   italic: 2,
