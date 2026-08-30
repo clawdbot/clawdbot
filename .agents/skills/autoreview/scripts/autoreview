@@ -4299,6 +4299,10 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     model,
                     force_file_auth=file_auth_linked,
                 )
+                if index:
+                    # The initial send was scanned by run_reviewer; a retry is
+                    # a new provider invocation even with the same frozen pack.
+                    scan_outgoing_review_pack(repo, prompt)
                 result = run_with_heartbeat(
                     cmd,
                     review_root,

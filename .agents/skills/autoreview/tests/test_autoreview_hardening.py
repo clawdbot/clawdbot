@@ -231,6 +231,21 @@ def init_repo(tempdir: Path) -> Path:
     return repo
 
 
+def posix_process_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    result = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    state = result.stdout.strip()
+    return result.returncode == 0 and bool(state) and not state.startswith("Z")
+
+
 def installed_java() -> str | None:
     java = shutil.which("java")
     if java is None:
@@ -4446,8 +4461,10 @@ Path(__file__).with_name("scan.json").write_text(json.dumps({
         self.assertIn("streaming-reviewer engine timed out after 0.5s", result.stderr)
         self.assertLess(elapsed, 5)
         child_pid = int(result.stdout.splitlines()[0])
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child_pid, 0)
+        deadline = time.monotonic() + 1
+        while posix_process_is_running(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(posix_process_is_running(child_pid))
 
     @unittest.skipUnless(os.name == "posix", "detached process groups require POSIX")
     def test_deadline_bounds_drain_when_descendant_retains_pipe(self) -> None:
