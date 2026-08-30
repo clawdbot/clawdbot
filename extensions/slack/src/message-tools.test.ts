@@ -222,6 +222,10 @@ describe("Slack message tools", () => {
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
     const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
+      actions: ["conversation-open"],
+      visibility: "all-configured",
+    });
     for (const propertyName of ["forceDocument", "asDocument"]) {
       const entries = schemas.filter((entry) => propertyName in entry.properties);
       expect(entries.map((entry) => entry.actions)).toEqual([["send"], ["upload-file"]]);

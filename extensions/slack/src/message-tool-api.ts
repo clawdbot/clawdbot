@@ -98,6 +98,7 @@ export function describeSlackMessageTool({
   if (actions.includes("conversation-open")) {
     schema.push({
       actions: ["conversation-open"],
+      visibility: "all-configured",
       properties: {
         userIds: Type.Optional(
           Type.Array(Type.String({ pattern: "^[UW][A-Z0-9]+$" }), {
