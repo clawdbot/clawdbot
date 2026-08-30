@@ -54,18 +54,15 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
     },
     config,
   });
-  return {
-    ...report,
-    drifts: report.drifts.map((entry) => ({
-      ...entry,
-      targetResolution: {
-        status: "resolved" as const,
-        packageName: "@openclaw/codex",
-        requestedTarget: gatewayVersion,
-        version: gatewayVersion,
-      },
-    })),
-  };
+  for (const entry of report.drifts) {
+    entry.targetResolution = {
+      status: "resolved",
+      packageName: "@openclaw/codex",
+      requestedTarget: gatewayVersion,
+      version: gatewayVersion,
+    };
+  }
+  return report;
 }
 
 describe("official Codex plugin version drift doctor evidence", () => {
