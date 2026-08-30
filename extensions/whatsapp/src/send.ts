@@ -2,7 +2,6 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import {
   convertMarkdownTables,
@@ -98,10 +97,9 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
   const listener =
     getRegisteredWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
   if (!listener) {
-    const cause = new Error(
+    throw new Error(
       `No active WhatsApp Web listener (account: ${resolvedAccountId}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${resolvedAccountId}`)}.`,
     );
-    throw new PlatformMessageNotDispatchedError(cause.message, { cause });
   }
   return { accountId: resolvedAccountId, listener };
 }

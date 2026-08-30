@@ -4,7 +4,6 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -327,19 +326,27 @@ describe("web outbound", () => {
 
   it("throws a helpful error when no active listener exists", async () => {
     hoisted.controllerListeners.clear();
-    const error = await sendMessageWhatsApp("+1555", "hi", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      accountId: "work",
-    }).catch((err: unknown) => err);
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({
-      code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
-      message: expect.stringMatching(
-        /No active WhatsApp Web listener.*channels login.*account work/,
-      ),
-    });
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        accountId: "work",
+      }),
+    ).rejects.toThrow(/No active WhatsApp Web listener/);
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        accountId: "work",
+      }),
+    ).rejects.toThrow(/channels login/);
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        accountId: "work",
+      }),
+    ).rejects.toThrow(/account: work/);
   });
 
   it("maps audio to PTT with opus mime when ogg", async () => {
