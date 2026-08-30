@@ -129,9 +129,11 @@ function renderUserNotificationPreferences(
           ? html`
               ${renderSettingsRow({
                 title: t("configView.notifications.quietHoursWindow"),
-                control: html`<span>
+                control: html`
                   <input
+                    class="settings-input"
                     type="time"
+                    aria-label=${t("configView.notifications.quietHoursWindow")}
                     .value=${minutesToTime(preferences.quietHours.startMinute)}
                     @change=${(event: Event) =>
                       patch({
@@ -146,7 +148,9 @@ function renderUserNotificationPreferences(
                   />
                   –
                   <input
+                    class="settings-input"
                     type="time"
+                    aria-label=${t("configView.notifications.quietHoursWindow")}
                     .value=${minutesToTime(preferences.quietHours.endMinute)}
                     @change=${(event: Event) =>
                       patch({
@@ -159,12 +163,14 @@ function renderUserNotificationPreferences(
                         },
                       })}
                   />
-                </span>`,
+                `,
               })}
               ${renderSettingsRow({
                 title: t("configView.notifications.timeZone"),
                 control: html`<input
+                  class="settings-input"
                   type="text"
+                  aria-label=${t("configView.notifications.timeZone")}
                   .value=${preferences.quietHours.timeZone}
                   @change=${(event: Event) =>
                     patch({
@@ -180,7 +186,9 @@ function renderUserNotificationPreferences(
         ${renderSettingsRow({
           title: t("configView.notifications.onlyAgents"),
           control: html`<input
+            class="settings-input"
             type="text"
+            aria-label=${t("configView.notifications.onlyAgents")}
             .value=${preferences.agentIds.join(", ")}
             @change=${(event: Event) =>
               patch({
@@ -216,8 +224,10 @@ function renderDeviceNotificationPreferences(
         ${renderSettingsRow({
           title: t("configView.notifications.notificationLabel"),
           control: html`<input
+            class="settings-input"
             type="text"
             maxlength="80"
+            aria-label=${t("configView.notifications.notificationLabel")}
             .value=${preferences.label}
             @change=${(event: Event) => patch({ label: inputTarget(event).value })}
           />`,
@@ -275,9 +285,11 @@ function renderDeviceNotificationPreferences(
           ? html`
               ${renderSettingsRow({
                 title: t("configView.notifications.quietHoursWindow"),
-                control: html`<span>
+                control: html`
                   <input
+                    class="settings-input"
                     type="time"
+                    aria-label=${t("configView.notifications.quietHoursWindow")}
                     .value=${minutesToTime(deviceQuietHours.startMinute)}
                     @change=${(event: Event) =>
                       patch({
@@ -292,7 +304,9 @@ function renderDeviceNotificationPreferences(
                   />
                   –
                   <input
+                    class="settings-input"
                     type="time"
+                    aria-label=${t("configView.notifications.quietHoursWindow")}
                     .value=${minutesToTime(deviceQuietHours.endMinute)}
                     @change=${(event: Event) =>
                       patch({
@@ -305,12 +319,14 @@ function renderDeviceNotificationPreferences(
                         },
                       })}
                   />
-                </span>`,
+                `,
               })}
               ${renderSettingsRow({
                 title: t("configView.notifications.timeZone"),
                 control: html`<input
+                  class="settings-input"
                   type="text"
+                  aria-label=${t("configView.notifications.timeZone")}
                   .value=${deviceQuietHours.timeZone}
                   @change=${(event: Event) =>
                     patch({
@@ -342,7 +358,9 @@ function renderDeviceNotificationPreferences(
           ? renderSettingsRow({
               title: t("configView.notifications.onlyAgents"),
               control: html`<input
+                class="settings-input"
                 type="text"
+                aria-label=${t("configView.notifications.onlyAgents")}
                 .value=${preferences.agentIds.join(", ")}
                 @change=${(event: Event) =>
                   patch({

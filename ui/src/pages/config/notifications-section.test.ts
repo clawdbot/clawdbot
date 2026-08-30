@@ -14,7 +14,7 @@ const userPreferences = {
     backgroundTaskFailed: false,
   },
   detailLevel: "private" as const,
-  quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+  quietHours: { enabled: true, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
   agentIds: [],
 };
 
@@ -88,7 +88,12 @@ describe("Web Push preference saves", () => {
           preferences: {
             durableIdentity: true,
             user: userPreferences,
-            device: { enabled: true, label: "phone" },
+            device: {
+              enabled: true,
+              label: "phone",
+              quietHours: { enabled: true, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+              agentIds: [],
+            },
             effective: { ...userPreferences, enabled: true, label: "phone" },
           },
         },
@@ -100,7 +105,13 @@ describe("Web Push preference saves", () => {
     const preferenceGroup = expectDefined(preferences, "notification preferences group");
     expect(preferenceGroup.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(7);
     expect(preferenceGroup.querySelectorAll("select.settings-select")).toHaveLength(9);
+    expect(preferenceGroup.querySelectorAll("input.settings-input")).toHaveLength(9);
     expect(preferenceGroup.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(
+      [...preferenceGroup.querySelectorAll('input[type="text"], input[type="time"]')].every(
+        (input) => input.classList.contains("settings-input") && input.hasAttribute("aria-label"),
+      ),
+    ).toBe(true);
     expect(
       [...preferenceGroup.querySelectorAll("select.settings-select")].every((select) =>
         select.hasAttribute("aria-label"),
