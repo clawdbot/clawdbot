@@ -2,6 +2,7 @@
 import { spinner } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
@@ -95,16 +96,23 @@ function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
 
   if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
-    hints.push(
-      "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
-    );
-    hints.push(
-      "If you recover with sudo/manual package install on a managed Gateway, stop the Gateway first so it does not load files while the package tree is being replaced.",
-    );
-    hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
-    hints.push(
-      "System install outline: openclaw gateway stop -> sudo <system-npm> i -g openclaw@latest -> openclaw gateway install --force -> openclaw gateway restart.",
-    );
+    if (isContainerEnvironment()) {
+      hints.push("Detected package update permission failure (EACCES) inside a container.");
+      hints.push(
+        "Container package updates are not durable. Pull or build an OpenClaw image with the target version, then recreate or redeploy the container.",
+      );
+    } else {
+      hints.push(
+        "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
+      );
+      hints.push(
+        "If you recover with sudo/manual package install on a managed Gateway, stop the Gateway first so it does not load files while the package tree is being replaced.",
+      );
+      hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+      hints.push(
+        "System install outline: openclaw gateway stop -> sudo <system-npm> i -g openclaw@latest -> openclaw gateway install --force -> openclaw gateway restart.",
+      );
+    }
   }
 
   if (

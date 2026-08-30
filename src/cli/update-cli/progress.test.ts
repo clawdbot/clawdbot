@@ -1,8 +1,13 @@
 // Update progress tests cover progress event formatting for update operations.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
+
+vi.mock("../../infra/container-environment.js", () => ({
+  isContainerEnvironment: vi.fn(() => false),
+}));
 
 function makeResult(
   stepName: string,
@@ -39,6 +44,7 @@ function renderResult(result: UpdateRunResult): string {
 describe("update failure hints", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(isContainerEnvironment).mockReturnValue(false);
   });
 
   it("explains capacity exhaustion without blaming candidate commits", () => {
@@ -101,6 +107,19 @@ describe("update failure hints", () => {
     expect(output).toContain("<system-npm>");
     expect(output).toContain("gateway install --force");
     expect(output).toContain("gateway restart");
+  });
+
+  it("returns image redeploy guidance for package permission failures inside containers", () => {
+    const result = makeResult(
+      "global install stage",
+      "EACCES: permission denied, mkdtemp '/usr/local/lib/node_modules/.openclaw-update-stage-'",
+    );
+    vi.mocked(isContainerEnvironment).mockReturnValue(true);
+    const output = renderResult(result);
+    expect(output).toContain("inside a container");
+    expect(output).toContain("recreate or redeploy the container");
+    expect(output).not.toContain("sudo");
+    expect(output).not.toContain("npm config set prefix");
   });
 
   it("returns native optional dependency hint for node-gyp failures", () => {
