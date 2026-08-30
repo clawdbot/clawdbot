@@ -593,12 +593,19 @@ export function resolveEffectiveModelFallbacks(params: {
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }
-  const canUseConfiguredFallbacks =
-    params.modelOverrideSource === "auto" ||
-    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
-  if (!canUseConfiguredFallbacks) {
-    return [];
-  }
+  // A session model override keeps the pinned model as the *primary* candidate
+  // (it is always attempted first, preserving user intent), but still inherits
+  // the configured fallback chain as a terminal safety net. This ensures a
+  // provider outage — rate limit, auth cooldown, or quota exhaustion — fails
+  // over to the next healthy provider instead of hard-failing the session with
+  // "all models rate-limited". This holds for both auto-selected overrides and
+  // explicit user pins; previously user pins returned [] and were left with no
+  // recovery path when their provider went down.
+  //
+  // Operators who want a strictly exclusive pin (no substitution, e.g. for cost
+  // control or model-specific evaluation) opt out by configuring an empty
+  // fallbacks list (agents.defaults.model.fallbacks: [] or per-agent
+  // model.fallbacks: []), which resolves to [] here and is respected.
   const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
     ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
     : undefined;

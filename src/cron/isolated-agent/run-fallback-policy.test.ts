@@ -48,6 +48,25 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["openai/gpt-5.4", "google/gemini-3-pro"]);
   });
 
+  it("keeps an isolated cron job resilient when its pinned provider is down", () => {
+    // Recovery invariant (parallels the session-pin safety net in
+    // resolveEffectiveModelFallbacks): a scheduled job pinned to a model whose
+    // provider is temporarily unavailable must still inherit the configured
+    // fallback chain — including the local terminal fallback — so the run fails
+    // over to a healthy provider instead of dying with "all models rate-limited".
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: makeConfig(["anthropic/claude-sonnet-4-6", "ollama/qwen3:8b", "local/free-chat"]),
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "nightly report",
+          model: "openai/gpt-5.5", // pinned to a provider that may be usage-capped
+        }),
+      }),
+    ).toEqual(["anthropic/claude-sonnet-4-6", "ollama/qwen3:8b", "local/free-chat"]);
+  });
+
   it("returns an empty override for payload model overrides without configured fallbacks", () => {
     expect(
       resolveCronFallbacksOverride({
