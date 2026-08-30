@@ -55,17 +55,28 @@ function resolveCurrentWebPushTarget(params: {
   if (cfg.gateway?.roles && !rolePolicy) {
     return null;
   }
-  const allowedRoleScopes = rolePolicy ? new Set<string>(rolePolicy.scopes) : null;
-  const scopes = allowedRoleScopes
-    ? operatorToken.scopes.filter((scope) => allowedRoleScopes.has(scope))
-    : [...operatorToken.scopes];
-  return roleScopesAllow({
+  const tokenAllows = roleScopesAllow({
     role: OPERATOR_ROLE,
     requestedScopes: params.requiredScopes,
-    allowedScopes: scopes,
-  })
-    ? { subscription, scopes, userProfileId }
-    : null;
+    allowedScopes: operatorToken.scopes,
+  });
+  const profileAllows =
+    !rolePolicy ||
+    roleScopesAllow({
+      role: OPERATOR_ROLE,
+      requestedScopes: params.requiredScopes,
+      allowedScopes: rolePolicy.scopes,
+    });
+  if (!tokenAllows || !profileAllows) {
+    return null;
+  }
+  return {
+    subscription,
+    // Project only the authority required by this delivery. This preserves
+    // scope implications without widening the synthetic visibility client.
+    scopes: [...new Set(params.requiredScopes)],
+    userProfileId,
+  };
 }
 
 /** Reads every mutable authority fact in the caller's network-I/O continuation. */

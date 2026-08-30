@@ -320,6 +320,50 @@ describe("approval Web Push delivery", () => {
     );
   });
 
+  it.each([
+    {
+      label: "device admin and granular profile",
+      tokenScopes: ["operator.admin"],
+      profileScopes: ["operator.read", "operator.approvals"],
+    },
+    {
+      label: "granular device and profile admin",
+      tokenScopes: ["operator.read", "operator.approvals"],
+      profileScopes: ["operator.admin"],
+    },
+  ])("honors implied scopes across $label", async ({ tokenScopes, profileScopes }) => {
+    const record = new ExecApprovalManager().create(
+      { command: "echo ok" },
+      60_000,
+      "exec:implied-role-scopes",
+    );
+    const current = boundSubscription("current-device", "profile-current");
+    listBoundWebPushSubscriptionsMock.mockReturnValue([current]);
+    listDevicePairingMock.mockReturnValue({
+      pending: [],
+      paired: [pairedOperator("current-device", tokenScopes)],
+    });
+    resolveOperatorRolePolicyForProfileMock.mockReturnValue({
+      sessions: { others: "none" },
+      agents: [],
+      scopes: profileScopes,
+    });
+    isApprovalRecordVisibleToClientMock.mockReturnValue(true);
+    preparedWebPushSendMock.mockResolvedValue([
+      { ok: true, subscriptionId: current.subscriptionId, statusCode: 201 },
+    ]);
+
+    const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+    const delivery = createApprovalWebPushDelivery({
+      getRuntimeConfig: () => ({ gateway: { roles: { definitions: {} } } }),
+    });
+
+    await expect(delivery.handleRequested(record)).resolves.toBe(true);
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriptions: [current] }),
+    );
+  });
+
   it("prepares the transport before rereading current approval authority", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:authority-race");

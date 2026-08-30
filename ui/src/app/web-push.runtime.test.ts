@@ -142,6 +142,30 @@ describe("web push service worker readiness", () => {
     });
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
+
+  it("unsubscribes locally when the Gateway no longer owns the subscription row", async () => {
+    const subscription = existingSubscription([4, 1, 2, 3]);
+    const unsubscribe = vi.fn().mockResolvedValue(true);
+    subscription.unsubscribe = unsubscribe;
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        getRegistration: async () => ({
+          pushManager: { getSubscription: async () => subscription },
+        }),
+      },
+    });
+    const request = vi.fn().mockRejectedValue(new Error("FORBIDDEN"));
+
+    await expect(
+      unsubscribeFromWebPush({ request } as unknown as GatewayBrowserClient),
+    ).resolves.toBeUndefined();
+
+    expect(request).toHaveBeenCalledWith("push.web.unsubscribe", {
+      endpoint: subscription.endpoint,
+    });
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
 });
 
 describe("web push Gateway identity", () => {
