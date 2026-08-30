@@ -16,24 +16,19 @@ import { missingSessionRouteData } from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
-  const matchPath = (pathname: string) =>
-    matchControlUiCatalogSharePath({ pathname, basePath: context.basePath });
   const search = new URLSearchParams(location.search);
   const internalPath = search.get(INTERNAL_SESSION_PATH_PARAM);
-  if (!internalPath) {
-    const target = matchPath(location.pathname);
+  const pathname = internalPath || location.pathname;
+  const target = matchControlUiCatalogSharePath({ pathname, basePath: context.basePath });
+  if (!target || !internalPath) {
     return target ? { target, location } : null;
   }
-  const pathname = internalPath;
-  const target = matchPath(pathname);
   search.delete(INTERNAL_SESSION_PATH_PARAM);
   const serializedSearch = search.toString();
-  return target
-    ? {
-        target,
-        location: { ...location, pathname, search: serializedSearch ? `?${serializedSearch}` : "" },
-      }
-    : null;
+  return {
+    target,
+    location: { ...location, pathname, search: serializedSearch ? `?${serializedSearch}` : "" },
+  };
 }
 
 function routeError(message: string): Extract<ChatRouteData, { kind: "route-error" }> {

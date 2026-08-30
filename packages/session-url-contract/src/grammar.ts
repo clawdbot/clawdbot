@@ -7,16 +7,15 @@ const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "session
 const SESSION_SLUG_MAX_LENGTH = 48;
 
 export function controlUiSessionSlug(displayName: string | undefined | null): string {
-  const tokens = (displayName ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .split("-")
-    .filter(Boolean);
-  while (tokens.length > 0 && /^[0-9a-f]+$/u.test(tokens.at(-1) ?? "")) {
-    tokens.pop();
-  }
-  return tokens.join("-").slice(0, SESSION_SLUG_MAX_LENGTH).replace(/-+$/gu, "");
+  // Hex-only trailing tokens would look like the URL's id suffix. Keep through
+  // the last token with a non-hex letter, before truncating the display slug.
+  const slug =
+    (displayName ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .match(/^.*[g-z][a-z0-9]*/u)?.[0] ?? "";
+  return slug.slice(0, SESSION_SLUG_MAX_LENGTH).replace(/-+$/gu, "");
 }
 
 export function normalizeControlUiBasePath(basePath?: string): string {
