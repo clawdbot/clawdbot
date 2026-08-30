@@ -257,7 +257,7 @@ describe("Crabbox profile warm images", () => {
     const stopNode = async () => {
       if (node?.pid && node.exitCode === null && node.signalCode === null) {
         try {
-          process.kill(-node.pid, "SIGKILL");
+          process.kill(-node.pid, "SIGTERM");
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
             throw error;

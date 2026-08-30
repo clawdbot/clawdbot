@@ -75,7 +75,7 @@ function testHome() {
     if (fs.existsSync(pidFile)) {
       const pid = Number(fs.readFileSync(pidFile, "utf8"));
       try {
-        process.kill(-pid, "SIGKILL");
+        process.kill(-pid, "SIGTERM");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
           throw error;
