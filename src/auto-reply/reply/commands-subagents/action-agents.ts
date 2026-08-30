@@ -53,7 +53,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const { latest, active, recent } = buildSubagentRunView({
     runs,
     recentMinutes: RECENT_WINDOW_MINUTES,
-    countPendingDescendantRuns: readIndex.countPendingDescendantRuns,
+    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
   });
   const indexByChildSessionKey = new Map(
     [...active, ...recent].map((entry, idx) => [entry.childSessionKey, idx + 1] as const),

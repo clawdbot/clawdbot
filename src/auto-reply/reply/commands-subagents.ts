@@ -60,15 +60,15 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
       restTokens,
     };
 
-    switch (action) {
-      case "agents":
-        return (await actionAgentsLoader.load()).handleSubagentsAgentsAction(ctx);
-      case "list":
-        return (await actionListLoader.load()).handleSubagentsListAction(ctx);
-      case "info":
-        return (await actionInfoLoader.load()).handleSubagentsInfoAction(ctx);
-      case "log":
-        return await (await actionLogLoader.load()).handleSubagentsLogAction(ctx);
+    if (action === "agents") {
+      return (await actionAgentsLoader.load()).handleSubagentsAgentsAction(ctx);
     }
+    if (action === "list") {
+      return (await actionListLoader.load()).handleSubagentsListAction(ctx);
+    }
+    if (action === "info") {
+      return (await actionInfoLoader.load()).handleSubagentsInfoAction(ctx);
+    }
+    return await (await actionLogLoader.load()).handleSubagentsLogAction(ctx);
   },
 );

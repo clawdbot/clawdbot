@@ -1115,4 +1115,3 @@ describe("subagent registry steer restarts", () => {
     expect(parent?.cleanupHandled).toBe(false);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -38,11 +38,11 @@ export function resolveSubagentEntryForToken(
   if (!trimmed) {
     return fail("Missing subagent id.");
   }
-  const { countPendingDescendantRuns } = buildSubagentRunReadIndex();
+  const readIndex = buildSubagentRunReadIndex();
   const { latest, active, recent } = buildSubagentRunView({
     runs,
     recentMinutes: RECENT_WINDOW_MINUTES,
-    countPendingDescendantRuns,
+    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
   });
   if (trimmed === "last") {
     const entry = latest[0];

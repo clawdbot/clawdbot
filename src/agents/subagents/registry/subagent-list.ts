@@ -67,7 +67,7 @@ function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSession
 }
 
 /** Resolve persisted session metadata for a session key, caching per store path. */
-export function resolveSessionEntryForKey(params: {
+function resolveSessionEntryForKey(params: {
   cfg: OpenClawConfig;
   key: string;
   cache: Map<string, Record<string, SessionEntry>>;
@@ -189,7 +189,7 @@ export function buildSubagentList(params: {
   const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
   const pendingDescendantCount = (sessionKey: string) =>
     readIndex.countPendingDescendantRuns(sessionKey);
-  const view = buildSubagentRunView({
+  const runView = buildSubagentRunView({
     runs: params.runs,
     recentMinutes: params.recentMinutes,
     countPendingDescendantRuns: pendingDescendantCount,
@@ -234,14 +234,14 @@ export function buildSubagentList(params: {
     index += 1;
     return view;
   };
-  const active = view.active.map((entry) =>
+  const active = runView.active.map((entry) =>
     buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0),
   );
-  const recent = view.recent.map((entry) =>
+  const recent = runView.recent.map((entry) =>
     buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.execution.endedAt ?? now) ?? 0),
   );
   return {
-    total: view.latest.length,
+    total: runView.latest.length,
     active,
     recent,
     text: buildListText({ active, recent, recentMinutes: params.recentMinutes }),
