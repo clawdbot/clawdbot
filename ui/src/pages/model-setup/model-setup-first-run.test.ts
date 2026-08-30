@@ -293,31 +293,53 @@ describe("ModelSetupPage first-run inference", () => {
     });
   });
 
-  it("does not replace a configured model after ambiguous first-run verification failure", async () => {
-    const { context, client, request } = createFirstRunContext();
-    request.mockRejectedValue(new Error("Gateway verification connection dropped"));
+  it.each(["transport", "unavailable"])(
+    "keeps the selected model through verification recovery: %s",
+    async (failure) => {
+      const { context, client, request } = createFirstRunContext();
+      const error = "Gateway settings are saved but not active yet. Retry after the restart.";
+      if (failure === "transport") {
+        request.mockRejectedValue(new Error(error));
+      } else {
+        request.mockResolvedValue({ ok: false, status: "unavailable", error });
+      }
 
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          configuredModel: "openai/existing",
-          setupComplete: true,
-          candidates: [candidate("anthropic-api-key", "anthropic/replacement", true)],
+      const { page } = await mountPage(context, {
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            configuredModel: "openai/existing",
+            setupComplete: true,
+            candidates: [candidate("anthropic-api-key", "anthropic/replacement", true)],
+          },
         },
-      },
-      client,
-      firstRun: true,
-    });
+        client,
+        firstRun: true,
+      });
 
-    await waitForFast(() => {
-      expect(page.textContent).toContain("Gateway verification connection dropped");
-    });
-    expect(page.textContent).not.toContain("Continue setup");
-    expect(request).toHaveBeenCalledOnce();
-    expect(context.navigate).not.toHaveBeenCalled();
-  });
+      await waitForFast(() => {
+        expect(page.textContent).toContain(error);
+      });
+      expect(page.textContent).not.toContain("Continue setup");
+      expect(request).toHaveBeenCalledOnce();
+      expect(context.navigate).not.toHaveBeenCalled();
+      const retry = page.querySelector<HTMLButtonElement>(".model-setup__current button")!;
+      expect(retry.disabled).toBe(false);
+      request.mockResolvedValueOnce({ ok: true, modelRef: "openai/existing", latencyMs: 31 });
+      retry.click();
+      await waitForFast(() => expect(page.querySelector(".model-setup__verified")).not.toBeNull());
+      const continueSetup = [...page.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+        button.textContent?.includes("Continue setup"),
+      )!;
+      continueSetup.click();
+      expect(context.navigate).toHaveBeenCalledWith("chat");
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "openclaw.setup.verify",
+        "openclaw.setup.verify",
+      ]);
+    },
+  );
 
   it("keeps a successfully committed first-run setup visible when config refresh fails", async () => {
     const { context, client, request } = createFirstRunContext(
