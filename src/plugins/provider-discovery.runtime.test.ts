@@ -890,8 +890,8 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       { scope: "selected", expectedFullIds: ["broken", "healthy"] },
       { scope: "unscoped", expectedFullIds: ["healthy"] },
       { scope: "entries-only", expectedFullIds: [] },
-    ].flatMap((scenario) =>
-      ["first", "last"].map((failurePosition) => ({ ...scenario, failurePosition })),
+    ].flatMap(({ scope, expectedFullIds }) =>
+      ["first", "last"].map((failurePosition) => ({ scope, expectedFullIds, failurePosition })),
     ),
   )(
     "recovers discarded discovery entries with $scope scope when failure is $failurePosition",
