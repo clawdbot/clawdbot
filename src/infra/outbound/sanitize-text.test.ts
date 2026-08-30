@@ -61,6 +61,20 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("<p>paragraph</p>")).toBe("\nparagraph\n");
   });
 
+  it("converts attributed <p> and <div> to newlines without leaking attributes", () => {
+    expect(
+      sanitizeForPlainText(
+        '<p class="lead" id="p1">paragraph one</p><p data-x="p2">paragraph two</p>',
+      ),
+    ).toBe("\nparagraph one\n\nparagraph two\n");
+    expect(sanitizeForPlainText('<div class="container" id="main">block text</div>')).toBe(
+      "\nblock text\n",
+    );
+    expect(sanitizeForPlainText('<p title="p>">text with bracket in attr</p>')).toBe(
+      "\ntext with bracket in attr\n",
+    );
+  });
+
   it("converts headings to bold text with newlines", () => {
     expect(sanitizeForPlainText("<h1>Title</h1>")).toBe("\n*Title*\n");
     expect(sanitizeForPlainText("<h3>Section</h3>")).toBe("\n*Section*\n");
