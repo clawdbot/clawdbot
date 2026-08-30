@@ -306,7 +306,7 @@ export function renderMarkdownWithMarkers(
 
   const points = [...boundaries].toSorted((a, b) => a - b);
   // Links and styles share one stack so equal-end spans close in exact reverse open order.
-  const stack: { close: string; end: number }[] = [];
+  const stack: { open: string; close: string; end: number }[] = [];
   type OpeningItem =
     | { end: number; open: string; close: string; kind: "annotation"; index: number }
     | { end: number; open: string; close: string; kind: "link"; index: number }
@@ -321,11 +321,19 @@ export function renderMarkdownWithMarkers(
   let out = "";
 
   for (const [i, pos] of points.entries()) {
-    // Close all elements at this boundary before opening replacements at the same offset.
-    while (stack.length && stack[stack.length - 1]?.end === pos) {
-      const item = stack.pop();
-      if (item) {
+    // Range spans may cross (for example, a spoiler can outlive bold text).
+    // Close the ending ancestor and reopen its live children to keep valid nesting.
+    const firstClosingIndex = stack.findIndex((item) => item.end === pos);
+    if (firstClosingIndex !== -1) {
+      const closing = stack.splice(firstClosingIndex);
+      for (const item of closing.toReversed()) {
         out += item.close;
+      }
+      for (const item of closing) {
+        if (item.end > pos) {
+          out += item.open;
+          stack.push(item);
+        }
       }
     }
 
@@ -401,7 +409,7 @@ export function renderMarkdownWithMarkers(
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
       for (const item of openingItems) {
         out += item.open;
-        stack.push({ close: item.close, end: item.end });
+        stack.push({ open: item.open, close: item.close, end: item.end });
       }
     }
 

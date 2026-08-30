@@ -274,6 +274,61 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectUrls(text)).toEqual([]);
   });
 
+  it.each([
+    {
+      markdown: "**A ||B** C|| D",
+      text: [
+        { type: "bold", text: ["A ", { type: "spoiler", text: "B" }] },
+        { type: "spoiler", text: " C" },
+        " D",
+      ],
+    },
+    {
+      markdown: "||A **B|| C** D",
+      text: [
+        { type: "spoiler", text: ["A ", { type: "bold", text: "B" }] },
+        { type: "bold", text: " C" },
+        " D",
+      ],
+    },
+    {
+      markdown: "[A ||B](https://example.com) C|| D",
+      text: [
+        {
+          type: "url",
+          url: "https://example.com",
+          text: ["A ", { type: "spoiler", text: "B" }],
+        },
+        { type: "spoiler", text: " C" },
+        " D",
+      ],
+    },
+  ])("preserves crossing inline ranges in $markdown", ({ markdown, text }) => {
+    const result = markdownToTelegramRichBlocks(markdown);
+    expect(result.blocks).toEqual([{ type: "paragraph", text }]);
+    expect(result.plainText).toBe("A B C D");
+  });
+
+  it.each([
+    {
+      markdown: "**user[Thu] trailing**",
+      trailing: { type: "bold", text: " trailing" },
+    },
+    {
+      markdown: "[user[Thu] trailing](https://example.com)",
+      trailing: { type: "url", url: "https://example.com", text: " trailing" },
+    },
+  ])(
+    "preserves formatting outside a transcript annotation in $markdown",
+    ({ markdown, trailing }) => {
+      const result = markdownToTelegramRichBlocks(markdown);
+      expect(result.blocks).toEqual([
+        { type: "paragraph", text: [{ type: "code", text: "user[Thu]" }, trailing] },
+      ]);
+      expect(result.plainText).toBe("user[Thu] trailing");
+    },
+  );
+
   it("leaves bare URL query separators to Telegram entity detection", () => {
     const url = "https://example.com/wp-admin/post.php?post=100&action=edit";
     const { blocks } = markdownToTelegramRichBlocks(url);

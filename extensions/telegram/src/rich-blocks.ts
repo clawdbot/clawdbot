@@ -156,161 +156,76 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     return "";
   }
 
-  const dominantAnnotationRanges = (slice.annotations ?? [])
-    .filter((span) => span.type === "assistant_transcript_role")
-    .map((span) => ({ start: span.start, end: span.end }));
-
-  const suppressed = (start: number, end: number) =>
-    dominantAnnotationRanges.some((range) => start < range.end && end > range.start);
-
-  const styleSpans = slice.styles.filter(
-    (span) => isInlineStyle(span.style) && !suppressed(span.start, span.end),
+  type Active = { start: number; end: number } & (
+    | { kind: "style"; style: InlineStyleKind }
+    | { kind: "annotation" }
+    | { kind: "link"; target: { kind: "url"; href: string } | { kind: "anchor"; name: string } }
   );
-  const annotationSpans = (slice.annotations ?? []).filter(
-    (span) => span.type === "assistant_transcript_role",
+  const spans: Active[] = [];
+  for (const span of slice.styles) {
+    if (isInlineStyle(span.style)) {
+      spans.push({ start: span.start, end: span.end, kind: "style", style: span.style });
+    }
+  }
+  for (const span of slice.annotations ?? []) {
+    spans.push({ start: span.start, end: span.end, kind: "annotation" });
+  }
+  for (const link of collectTelegramLinkActions(slice)) {
+    spans.push(
+      link.action.kind === "code"
+        ? { start: link.start, end: link.end, kind: "style", style: "code" }
+        : { start: link.start, end: link.end, kind: "link", target: link.action },
+    );
+  }
+  const rank = (span: Active) =>
+    span.kind === "style" ? INLINE_STYLE_RANK[span.style] : span.kind === "link" ? 50 : 0;
+  spans.sort(
+    (left, right) => left.start - right.start || right.end - left.end || rank(left) - rank(right),
   );
-  const links = collectTelegramLinkActions({
-    text,
-    styles: [],
-    links: slice.links.filter((link) => !suppressed(link.start, link.end)),
-  });
-
-  const boundaries = new Set<number>([0, text.length]);
-  for (const span of styleSpans) {
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-  }
-  for (const span of annotationSpans) {
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-  }
-  for (const link of links) {
-    boundaries.add(link.start);
-    boundaries.add(link.end);
-  }
-  const points = [...boundaries].toSorted((a, b) => a - b);
-
-  type Active =
-    | { kind: "style"; style: InlineStyleKind; end: number }
-    | { kind: "annotation"; end: number }
-    | {
-        kind: "link";
-        target: { kind: "url"; href: string } | { kind: "anchor"; name: string };
-        end: number;
-      };
-
+  const points = [
+    ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
+  ].toSorted((left, right) => left - right);
   const stack: Active[] = [];
   const root: RichText[] = [];
   const frameStack: RichText[][] = [root];
 
-  const pushNode = (node: RichText) => {
-    frameStack.at(-1)?.push(node);
-  };
-
-  const openStyleNode = (style: InlineStyleKind, end: number) => {
-    const container: RichText[] = [];
-    pushNode({ type: style, text: container });
-    stack.push({ kind: "style", style, end });
-    frameStack.push(container);
-  };
-
-  const openAnnotationNode = (end: number) => {
-    const container: RichText[] = [];
-    pushNode({ type: "code", text: container });
-    stack.push({ kind: "annotation", end });
-    frameStack.push(container);
-  };
-
-  const openLinkNode = (
-    target: { kind: "url"; href: string } | { kind: "anchor"; name: string },
-    end: number,
-  ) => {
-    const container: RichText[] = [];
-    pushNode(
-      target.kind === "url"
-        ? { type: "url", text: container, url: target.href }
-        : { type: "anchor_link", text: container, anchor_name: target.name },
-    );
-    stack.push({ kind: "link", target, end });
-    frameStack.push(container);
-  };
-
   for (let i = 0; i < points.length - 1; i += 1) {
     const start = points[i] ?? 0;
     const end = points[i + 1] ?? start;
-    while (stack.length > 0 && (stack.at(-1)?.end ?? 0) <= start) {
-      stack.pop();
-      frameStack.pop();
+    const covering = spans.filter((span) => span.start <= start && span.end > start);
+    const annotation = covering.find((span) => span.kind === "annotation");
+    const codeIndex = covering.findIndex((span) => span.kind === "style" && span.style === "code");
+    // Dominance applies only to the covered range. Surrounding formatting resumes
+    // after a transcript header or code span instead of being discarded wholesale.
+    const active = annotation
+      ? [annotation]
+      : codeIndex === -1
+        ? covering
+        : covering.slice(0, codeIndex + 1);
+    let shared = 0;
+    while (shared < stack.length && stack[shared] === active[shared]) {
+      shared += 1;
     }
-
-    const opening: Active[] = [];
-    for (const span of annotationSpans) {
-      if (span.start === start) {
-        opening.push({ kind: "annotation", end: span.end });
-      }
+    // Retain unchanged containers; rebuild the suffix when an ancestor expires,
+    // even if its child continues, so crossed ranges cannot leak formatting.
+    stack.length = shared;
+    frameStack.length = shared + 1;
+    for (const item of active.slice(shared)) {
+      const container: RichText[] = [];
+      const node: RichText =
+        item.kind === "link"
+          ? item.target.kind === "url"
+            ? { type: "url", text: container, url: item.target.href }
+            : { type: "anchor_link", text: container, anchor_name: item.target.name }
+          : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+      frameStack.at(-1)?.push(node);
+      stack.push(item);
+      frameStack.push(container);
     }
-    for (const link of links) {
-      if (link.start !== start) {
-        continue;
-      }
-      if (link.action.kind === "url" || link.action.kind === "anchor") {
-        opening.push({ kind: "link", target: link.action, end: link.end });
-      } else {
-        opening.push({ kind: "style", style: "code", end: link.end });
-      }
-    }
-    for (const span of styleSpans) {
-      if (span.start === start && isInlineStyle(span.style)) {
-        opening.push({ kind: "style", style: span.style, end: span.end });
-      }
-    }
-    opening.sort((left, right) => {
-      if (left.end !== right.end) {
-        return right.end - left.end;
-      }
-      const leftRank =
-        left.kind === "style"
-          ? (INLINE_STYLE_RANK[left.style] ?? 99)
-          : left.kind === "link"
-            ? 50
-            : 0;
-      const rightRank =
-        right.kind === "style"
-          ? (INLINE_STYLE_RANK[right.style] ?? 99)
-          : right.kind === "link"
-            ? 50
-            : 0;
-      return leftRank - rightRank;
-    });
-
-    const inCode =
-      stack.some((entry) => entry.kind === "style" && entry.style === "code") ||
-      stack.some((entry) => entry.kind === "annotation");
-
-    for (const item of opening) {
-      if (item.kind === "annotation") {
-        openAnnotationNode(item.end);
-      } else if (item.kind === "link") {
-        if (!inCode && !stack.some((entry) => entry.kind === "link")) {
-          openLinkNode(item.target, item.end);
-        }
-      } else if (!inCode || item.style === "code") {
-        if (!(item.style === "code" && inCode)) {
-          openStyleNode(item.style, item.end);
-        }
-      }
-    }
-
     if (end > start) {
-      // Unlike Bot API html mode, blocks preserve bare `\n` inside paragraph
-      // RichText verbatim (live-verified 2026-07-15 via sendRichMessage echo).
-      pushNode(text.slice(start, end));
+      // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
+      frameStack.at(-1)?.push(text.slice(start, end));
     }
-  }
-
-  while (stack.length > 0) {
-    stack.pop();
-    frameStack.pop();
   }
 
   return normalizeRichText(applyInlineHtmlIslands(root));
