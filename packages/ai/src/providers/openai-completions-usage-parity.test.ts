@@ -72,6 +72,16 @@ const scenarios: UsageScenario[] = [
     expectedCost: 0.00012125,
   },
   {
+    name: "compatible top-level cached tokens fallback",
+    usage: {
+      prompt_tokens: 177,
+      completion_tokens: 5,
+      total_tokens: 182,
+      cached_tokens: 128,
+    },
+    expectedUsage: { input: 49, output: 5, cacheRead: 128, cacheWrite: 0, totalTokens: 182 },
+  },
+  {
     name: "authoritative provider-billed zero cost",
     usage: {
       prompt_tokens: 100,
