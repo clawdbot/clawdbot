@@ -46,12 +46,50 @@ import {
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
+  derivePromptTokens,
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
   type NormalizedUsage,
   type UsageLike,
 } from "./usage.js";
+
+/**
+ * Records the call-scoped context fact on an assistant message that already carries provider
+ * token totals.
+ *
+ * Provider totals win for the message's own buckets, but for a tool-loop run those totals can
+ * cover every model call in the attempt instead of the final one. The message then reaches the
+ * transcript with no `contextUsage`, so every later reader -- the session context snapshot and
+ * the memory-flush prompt estimate -- has to infer the prompt size from cumulative buckets and
+ * overstates it by roughly one multiple per tool-call round trip.
+ *
+ * `pendingUsage` is the stream-captured snapshot for this assistant message and is still the
+ * final-call value at this point: `handleMessageEnd` only replaces it with the message's own
+ * usage after this function runs. Stamping it leaves the provider's buckets untouched and
+ * mirrors how the CLI path fills `contextUsage` in `resolveCliTranscriptUsage`.
+ */
+function stampCallScopedContextUsage(
+  message: AssistantMessage,
+  messageUsage: NormalizedUsage,
+  pendingUsage: NormalizedUsage,
+): void {
+  if (messageUsage.contextUsage !== undefined) {
+    return;
+  }
+  const promptTokens = derivePromptTokens(pendingUsage);
+  if (promptTokens === undefined) {
+    return;
+  }
+  message.usage = {
+    ...message.usage,
+    contextUsage: {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + (pendingUsage.output ?? 0),
+    },
+  };
+}
 
 export function preservePendingAssistantUsage(
   message: AssistantMessage,
@@ -65,6 +103,7 @@ export function preservePendingAssistantUsage(
   }
   const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
   if (hasNonzeroUsage(messageUsage)) {
+    stampCallScopedContextUsage(message, messageUsage, pendingUsage);
     return message;
   }
 
