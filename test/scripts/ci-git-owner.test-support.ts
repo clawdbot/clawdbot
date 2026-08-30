@@ -161,6 +161,13 @@ export async function runCiGitStep(options: {
   const docsAgent =
     typeof options.workflow === "object" &&
     options.workflow.file === ".github/workflows/docs-agent.yml";
+  const releaseAdmission =
+    typeof options.workflow === "object" &&
+    [
+      ".github/workflows/linux-app-release.yml",
+      ".github/workflows/macos-release.yml",
+      ".github/workflows/npm-placeholder-bootstrap.yml",
+    ].includes(options.workflow.file);
   const publisher = options.action === "publish-generated-pr";
   const externalOwner =
     options.workflow || options.action === "mantis-validate-trusted-ref" || publisher;
@@ -284,7 +291,10 @@ export async function runCiGitStep(options: {
           readFileSync(`.github/actions/${action}/${name}`, "utf8"),
           clock,
         );
-        if (action === "git-owner" && (publisher || maturity || options.performance)) {
+        if (
+          action === "git-owner" &&
+          (publisher || maturity || releaseAdmission || options.performance)
+        ) {
           source = source.replace(
             "def main():",
             `def fixture_file_boundary(event, args):
@@ -373,6 +383,7 @@ def main():`,
           docsAgent,
           docsPublish,
           maturity,
+          releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
           consumers: Boolean(options.prepare || externalOwner),

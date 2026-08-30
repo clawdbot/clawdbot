@@ -11522,6 +11522,85 @@ it("pins generated publisher and maturity owners before credentials and selected
   }
 });
 
+it("pins simple release admission owners before selected checkout and preserves Git contracts", () => {
+  const pinned = {
+    name: "Prepare Git owner",
+    uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+  };
+  const workflows = [
+    {
+      file: ".github/workflows/linux-app-release.yml",
+      job: "validate_release",
+      checkout: "Checkout selected tag",
+      validation: "Ensure tag commit is reachable from main",
+    },
+    {
+      file: ".github/workflows/macos-release.yml",
+      job: "validate_macos_release_request",
+      checkout: "Checkout selected tag",
+      validation: "Validate release tag and package metadata",
+    },
+    {
+      file: ".github/workflows/npm-placeholder-bootstrap.yml",
+      job: "plan",
+      checkout: "Checkout selected source",
+      validation: "Validate trusted workflow and target",
+    },
+  ] as const;
+  for (const entry of workflows) {
+    const workflow = parse(readFileSync(entry.file, "utf8"));
+    const steps = workflow.jobs[entry.job].steps as WorkflowStep[];
+    const checkout = steps.findIndex(({ name }) => name === entry.checkout);
+    expect(steps[checkout - 1]).toEqual(pinned);
+    const validation = steps.find(({ name }) => name === entry.validation);
+    const body = expectDefined(validation?.run, `${entry.file} admission body`);
+    expect(body).not.toMatch(/timeout --|(?:^|\s)git (?:fetch|rev-parse|merge-base)\b/mu);
+    expect(body).not.toMatch(/backoff\(|for attempt in range/u);
+  }
+
+  const linux = parse(readFileSync(workflows[0].file, "utf8"));
+  const linuxBody = expectDefined(
+    (linux.jobs.validate_release.steps as WorkflowStep[]).find(
+      ({ name }) => name === workflows[0].validation,
+    )?.run,
+    "Linux release admission body",
+  );
+  expect(linuxBody).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+  expect(linuxBody.match(/timeout=120/gu)).toHaveLength(1);
+  expect(linuxBody).toMatch(/"fetch",\s+"--quiet",\s+"origin",\s+"main",/u);
+  expect(linuxBody).toContain(
+    'run_git(workspace, "merge-base", "--is-ancestor", tag_sha, "origin/main")',
+  );
+
+  const macos = parse(readFileSync(workflows[1].file, "utf8"));
+  const macosBody = expectDefined(
+    (macos.jobs.validate_macos_release_request.steps as WorkflowStep[]).find(
+      ({ name }) => name === workflows[1].validation,
+    )?.run,
+    "macOS release admission body",
+  );
+  expect(macosBody.match(/--git 0/gu)).toHaveLength(1);
+  expect(macosBody.match(/--checkout-git 120/gu)).toHaveLength(1);
+  expect(macosBody).toContain(
+    '"+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"',
+  );
+  expect(macosBody.indexOf("--checkout-git 120")).toBeLessThan(
+    macosBody.indexOf("pnpm release:openclaw:npm:check"),
+  );
+
+  const placeholder = parse(readFileSync(workflows[2].file, "utf8"));
+  const placeholderBody = expectDefined(
+    (placeholder.jobs.plan.steps as WorkflowStep[]).find(
+      ({ name }) => name === workflows[2].validation,
+    )?.run,
+    "placeholder admission body",
+  );
+  expect(placeholderBody).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+  expect(placeholderBody.match(/timeout=120/gu)).toHaveLength(1);
+  expect(placeholderBody.match(/run_git\(workspace, "merge-base"/gu)).toHaveLength(2);
+  expect(placeholderBody).toContain('output.write(f"sha={source_ref}\\n")');
+});
+
 it("pins every Performance Git owner before checkout and preserves Git deadlines", () => {
   const source = readFileSync(".github/workflows/openclaw-performance.yml", "utf8");
   const workflow = parse(source);

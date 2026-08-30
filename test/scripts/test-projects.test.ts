@@ -695,6 +695,39 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it.each([
+    [
+      ".github/workflows/linux-app-release.yml",
+      ["test/scripts/release-workflow-git-lifecycle.test.ts"],
+    ],
+    [
+      ".github/workflows/macos-release.yml",
+      [
+        "test/scripts/release-workflow-git-lifecycle.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+      ],
+    ],
+    [
+      ".github/workflows/npm-placeholder-bootstrap.yml",
+      [
+        "test/scripts/release-workflow-git-lifecycle.test.ts",
+        "test/scripts/npm-placeholder-publication.test.ts",
+      ],
+    ],
+  ])("routes simple release admission lifecycle and semantic proof for %s", (source, semantic) => {
+    const plan = resolveChangedTestTargetPlan([source]);
+    expect(plan).toEqual({
+      mode: "targets",
+      targets: expect.arrayContaining([
+        "test/scripts/ci-git-owner.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-platform-checkout.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+        ...semantic,
+      ]),
+    });
+  });
+
   it("keeps CI workflow edits on workflow guard tests", () => {
     expectChangedTargets(
       [".github/workflows/ci.yml"],
@@ -4443,6 +4476,7 @@ it.each([
   "test/scripts/openclaw-performance-workflow.test.ts",
   "test/scripts/openclaw-performance-workflow.test-support.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+  "test/scripts/release-workflow-git-lifecycle.test.ts",
   ".github/actions/publish-generated-pr/action.yml",
   ".github/actions/publish-generated-pr/policy.py",
   ".github/workflows/maturity-scorecard.yml",
@@ -4453,7 +4487,7 @@ it.each([
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
   "test/scripts/fixtures/ci-platform-checkout.mjs",
-])("routes generated publisher ownership through all shared tooling lanes: %s", (changedPath) => {
+])("routes shared Git ownership through all native tooling lanes: %s", (changedPath) => {
   const plan = resolveChangedTestTargetPlan([changedPath]);
   expect(plan.mode).toBe("targets");
   expect(plan.targets).toEqual(
@@ -4490,6 +4524,25 @@ it.each([
   );
   expect(
     buildVitestRunPlans(["test/scripts/openclaw-performance-git-lifecycle.test.ts"]).map(
+      ({ config }) => config,
+    ),
+  ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+});
+
+it("routes release admission lifecycle ownership through serial native proof", () => {
+  expect(
+    resolveChangedTestTargetPlan(["test/scripts/release-workflow-git-lifecycle.test.ts"]).targets,
+  ).toEqual(
+    expect.arrayContaining([
+      "test/scripts/ci-git-owner.test.ts",
+      "test/scripts/ci-linux-git.test.ts",
+      "test/scripts/ci-platform-checkout.test.ts",
+      "test/scripts/release-workflow-git-lifecycle.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ]),
+  );
+  expect(
+    buildVitestRunPlans(["test/scripts/release-workflow-git-lifecycle.test.ts"]).map(
       ({ config }) => config,
     ),
   ).toEqual(["test/vitest/vitest.tooling.config.ts"]);

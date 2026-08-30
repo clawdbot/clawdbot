@@ -453,6 +453,7 @@ async function command() {
   } else if (
     options.publisher ||
     options.performance ||
+    options.releaseAdmission ||
     commandResult ||
     ["fetch", "ls-remote", "clone"].includes(operation) ||
     (operation === "worktree" && args[0] === "add") ||
@@ -464,7 +465,7 @@ async function command() {
     // independent results but share unique tree identities with those transports.
     const counterName =
       commandResult ||
-      (options.performance && operation !== "fetch") ||
+      ((options.performance || options.releaseAdmission) && operation !== "fetch") ||
       ["rebase", "push", "rev-parse"].includes(operation)
         ? `${operation}-attempt.json`
         : "attempt.json";
@@ -543,11 +544,13 @@ async function command() {
       }
       const shell = owned.find((entry) => entry.role === "shell");
       const owner =
-        (options.docsAgent || options.performance) && process.ppid !== shell?.pid
+        (options.docsAgent || options.performance || options.releaseAdmission) &&
+        process.ppid !== shell?.pid
           ? { pid: process.ppid }
           : shell;
       const parent =
-        (options.docsAgent || options.performance) && owner?.pid !== shell?.pid
+        (options.docsAgent || options.performance || options.releaseAdmission) &&
+        owner?.pid !== shell?.pid
           ? spawnSync("/bin/ps", ["-o", "ppid=", "-p", String(owner?.pid)], { encoding: "utf8" })
           : undefined;
       // Gate policies retain a shell for the cadence block. Validate that direct
@@ -586,11 +589,11 @@ async function command() {
               ? options.rebaseResults
               : operation === "push"
                 ? options.pushResults
-                : operation === "rev-parse"
+                : operation === "rev-parse" && options.revParseResult !== undefined
                   ? [options.revParseResult]
-                  : !options.performance || operation === "fetch"
-                    ? options.fetchResults
-                    : undefined;
+                  : (options.performance || options.releaseAdmission) && operation !== "fetch"
+                    ? undefined
+                    : options.fetchResults;
       const result =
         commandResult?.code ?? remoteResult?.code ?? operationResults?.[resultAttempt - 1] ?? 0;
       if (commandResult?.output !== undefined) {
@@ -839,8 +842,12 @@ async function supervise() {
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);
   }
-  if (options.performance) {
-    fs.writeFileSync(path.join(bin, "timeout"), '#!/bin/bash\nshift\nexec "$@"\n', { mode: 0o755 });
+  if (options.performance || options.releaseAdmission) {
+    fs.writeFileSync(
+      path.join(bin, "timeout"),
+      '#!/bin/bash\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
+      { mode: 0o755 },
+    );
   }
   if (options.publisher) {
     fs.copyFileSync(path.join(root, "publisher-bin/sleep"), path.join(bin, "sleep"));
