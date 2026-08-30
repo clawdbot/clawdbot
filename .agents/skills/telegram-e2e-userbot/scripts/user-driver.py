@@ -118,6 +118,16 @@ TDLIB_PREBUILT = {
 }
 
 
+def extract_prebuilt_archive(tar, destination):
+    root = Path(destination).resolve()
+    for member in tar.getmembers():
+        target = (root / member.name).resolve()
+        outside_root = target != root and root not in target.parents
+        if outside_root or not (member.isfile() or member.isdir()):
+            raise DriverError("TDLib package archive has an unsafe member")
+    tar.extractall(destination)
+
+
 def ensure_prebuilt_tdjson():
     entry = TDLIB_PREBUILT.get((platform.system().lower(), platform.machine().lower()))
     if not entry:
@@ -153,7 +163,7 @@ def ensure_prebuilt_tdjson():
                 )
             with tempfile.TemporaryDirectory(dir=cache_dir, prefix=".extract-") as temp:
                 with tarfile.open(archive) as tar:
-                    tar.extractall(temp)
+                    extract_prebuilt_archive(tar, temp)
                 Path(temp, "package").replace(cache_dir / "package")
         finally:
             archive.unlink(missing_ok=True)

@@ -13,6 +13,21 @@ SPEC.loader.exec_module(driver)
 
 
 class PhotoContentTest(unittest.TestCase):
+    def test_rejects_unsafe_prebuilt_archive_members(self):
+        class FakeTar:
+            extracted = False
+
+            def getmembers(self):
+                return [driver.tarfile.TarInfo("../escape")]
+
+            def extractall(self, _destination):
+                self.extracted = True
+
+        archive = FakeTar()
+        with self.assertRaisesRegex(driver.DriverError, "unsafe member"):
+            driver.extract_prebuilt_archive(archive, tempfile.mkdtemp())
+        self.assertFalse(archive.extracted)
+
     def test_uses_current_tdlib_photo_shape(self):
         instance = driver.UserDriver.__new__(driver.UserDriver)
         instance.config = {}
