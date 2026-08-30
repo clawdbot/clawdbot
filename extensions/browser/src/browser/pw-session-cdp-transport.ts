@@ -11,8 +11,8 @@ type CdpSocketLookup = typeof dnsLookupCb;
 // Keep transport-owned replies below that range so Playwright never consumes them.
 const FIRST_INTERNAL_COMMAND_ID = -10_000;
 
-// Playwright exempts only the browser target before requiring browserContextId.
-// Release every other contextless target here or its assertion exits the Gateway.
+// Playwright's browser-root handler requires browserContextId for non-browser targets.
+// Release only those root targets; nested sessions belong to Playwright's frame handler.
 function contextlessTargetSession(message: Record<string, unknown>): string | undefined {
   if (readStringField(message, "method") !== "Target.attachedToTarget") {
     return undefined;
@@ -20,6 +20,7 @@ function contextlessTargetSession(message: Record<string, unknown>): string | un
   const params = asOptionalRecord(message.params);
   const targetInfo = asOptionalRecord(params?.targetInfo);
   if (
+    readStringField(message, "sessionId") ||
     readStringField(targetInfo, "type") === "browser" ||
     readStringField(targetInfo, "browserContextId")
   ) {

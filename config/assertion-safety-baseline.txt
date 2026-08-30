@@ -3442,7 +3442,7 @@ src/plugins/bundle-mcp.ts	2
 src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	2
-src/plugins/capability-provider-runtime.ts	16
+src/plugins/capability-provider-runtime.ts	15
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
@@ -4053,7 +4053,7 @@ ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
-ui/src/pages/chat/components/chat-message-markdown.ts	3
+ui/src/pages/chat/components/chat-message-markdown.ts	2
 ui/src/pages/chat/components/chat-message-media.ts	13
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
@@ -4068,7 +4068,7 @@ ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
-ui/src/pages/chat/components/chat-thread-interactions.ts	7
+ui/src/pages/chat/components/chat-thread-interactions.ts	6
 ui/src/pages/chat/components/chat-tool-cards.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/session-diff-menus.ts	1

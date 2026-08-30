@@ -886,6 +886,10 @@ describe("resolvePluginCapabilityProviders", () => {
       id: "xai",
       provider: { defaultModel: "shadowed-model" },
     });
+    addCapabilityProvider(loaded, "imageGenerationProviders", {
+      id: "unconfigured-image",
+      provider: { isConfigured: () => false },
+    });
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
@@ -898,6 +902,11 @@ describe("resolvePluginCapabilityProviders", () => {
           origin: "bundled",
           contracts: { imageGenerationProviders: ["xai"] },
         },
+        {
+          id: "unconfigured-image",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["unconfigured-image"] },
+        },
       ] as never,
       diagnostics: [],
     });
@@ -905,16 +914,34 @@ describe("resolvePluginCapabilityProviders", () => {
       params === undefined ? active : loaded,
     );
 
+    const cfg: OpenClawConfig = { plugins: { allow: ["fal", "xai", "unconfigured-image"] } };
     const providers = resolvePluginCapabilityProviders({
       key: "imageGenerationProviders",
-      cfg: { plugins: { allow: ["fal", "xai"] } } as OpenClawConfig,
+      cfg,
     });
 
-    expectResolvedCapabilityProviderIds(providers, ["xai", "fal"]);
+    expectResolvedCapabilityProviderIds(providers, ["xai", "fal", "unconfigured-image"]);
     expect(providers[0]).toBe(active.imageGenerationProviders[0]?.provider);
     expect(providers[1]).toBe(loaded.imageGenerationProviders[0]?.provider);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expectActiveRegistryLookup(["fal", "xai"]);
+    expectActiveRegistryLookup(["fal", "unconfigured-image", "xai"]);
+
+    const requestedProviders = resolvePluginCapabilityProviders({
+      key: "imageGenerationProviders",
+      cfg,
+      additionalProviderIds: [" FAL ", "fal"],
+    });
+    expectResolvedCapabilityProviderIds(requestedProviders, ["xai", "fal", "unconfigured-image"]);
+    expect(requestedProviders[0]).toBe(active.imageGenerationProviders[0]?.provider);
+    expect(requestedProviders[1]).toBe(loaded.imageGenerationProviders[0]?.provider);
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({
+        key: "imageGenerationProviders",
+        cfg,
+        additionalProviderIds: [],
+      }),
+      ["xai", "fal", "unconfigured-image"],
+    );
   });
 
   it.each([

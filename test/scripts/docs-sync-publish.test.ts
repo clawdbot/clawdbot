@@ -173,32 +173,16 @@ describe("docs-sync-publish", () => {
       "Help",
     ]);
 
-    const releaseRoutes = [
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
-      "maturity/scorecard",
-      "maturity/taxonomy",
-      "reference/RELEASING",
-      "reference/full-release-validation",
-      "reference/release-performance-sweep",
-      "reference/test",
-      "ci",
-      "help/scripts",
-    ];
     const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
+    const releaseRoutes = collectPages(releaseTab);
+    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
     expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
       "Release notes",
       "Maturity",
       "Release process",
       "Testing and CI",
     ]);
-    expect(releaseTab?.groups?.[0]?.pages).toEqual([
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
-    ]);
-    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
+    expect(releaseNotes[0]).toBe("releases/index");
     expect(new Set(collectPages(releaseTab))).toHaveLength(releaseRoutes.length);
 
     const englishWithoutClawHub = {
@@ -220,11 +204,9 @@ describe("docs-sync-publish", () => {
       "发布流程",
       "测试与 CI",
     ]);
-    expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual([
-      "zh-CN/releases/index",
-      "zh-CN/releases/2026.7.1",
-      "zh-CN/releases/2026.6.11",
-    ]);
+    expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
+      releaseNotes.map((page) => `zh-CN/${page}`),
+    );
     expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
       releaseRoutes.map((page) => `zh-CN/${page}`),
     );

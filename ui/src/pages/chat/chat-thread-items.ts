@@ -408,9 +408,12 @@ export function hasRenderableNormalizedMessage(
   }
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
-  const media = role === "user" && readTranscriptMediaEntries(message).length;
   return Boolean(
-    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+    role === "tool" ||
+    normalized.content.length ||
+    normalized.replyTarget ||
+    label ||
+    (role === "user" && readTranscriptMediaEntries(message).length),
   );
 }
 
