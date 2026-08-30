@@ -177,6 +177,10 @@ export function createAgentAdmissionController(params: {
   };
 
   const interrupt = () => {
+    // Draining an already-stopped admission must preserve its original cancellation reason.
+    if (admittedRunAbort?.controller.signal.aborted) {
+      return;
+    }
     if (admittedRunAbort?.entry) {
       admittedRunAbort.entry.abortStopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     }

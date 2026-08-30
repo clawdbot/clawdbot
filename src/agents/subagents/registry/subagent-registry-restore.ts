@@ -17,7 +17,7 @@ import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-autho
 import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
   reconcileOrphanedRestoredRuns,
@@ -290,6 +290,7 @@ export function createSubagentRegistryRestorer(config: {
             );
           },
         });
+        bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry);
         continue;
       }
       // An aborted persisted session belongs to orphan recovery. Waiting on its

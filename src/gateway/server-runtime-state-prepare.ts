@@ -216,7 +216,7 @@ export async function prepareGatewayKernelState(params: {
                 return;
               }
               const { captureAbortedPartial, persistAbortedPartials } =
-                await import("./server-methods/chat-abort-runtime.js");
+                await import("./server-methods/chat-transcript-persistence.runtime.js");
               await persistAbortedPartials({
                 context: { logGateway: log },
                 snapshots: [

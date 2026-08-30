@@ -73,6 +73,7 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
     createdAt: entry.createdAt,
     execution: {
+      status: entry.execution.status,
       ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
       ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
       ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),

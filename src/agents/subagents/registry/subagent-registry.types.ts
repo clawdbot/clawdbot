@@ -330,5 +330,5 @@ export type SubagentRunReadRecord = Pick<
   | "cleanupCompletedAt"
   | "delivery"
 > & {
-  execution: Pick<SubagentExecutionState, "startedAt" | "endedAt" | "outcome">;
+  execution: Pick<SubagentExecutionState, "status" | "startedAt" | "endedAt" | "outcome">;
 };

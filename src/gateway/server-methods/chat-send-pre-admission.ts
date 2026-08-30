@@ -55,6 +55,7 @@ type ChatSendPreAdmissionParams = {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  assertCurrent?: () => void;
 };
 
 /** Recheck synchronously at reservation: recovery lookups can yield to a competing request. */
@@ -226,11 +227,12 @@ export async function runChatSendPreAdmission(
       abortOrigin: "stop-command",
       stopReason: "stop",
       requester: resolveChatAbortRequester(client),
+      assertCurrent: params.assertCurrent,
       cascadeDescendants: true,
     });
     const error = res.unauthorized
       ? errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized")
-      : descendantAbortError(res.descendants, "Session");
+      : (res.error ?? descendantAbortError(res.descendants, "Session"));
     if (error) {
       respond(false, undefined, error);
       return false;

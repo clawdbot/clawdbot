@@ -145,6 +145,7 @@ export async function killSubagentRun(params: {
   entry: SubagentRunRecord;
   session: ReturnType<typeof resolveSubagentKillSession>;
   suppressTaskDelivery?: boolean;
+  beforeSessionKill?: () => boolean;
   isCurrent?: (entry: SubagentRunRecord) => boolean;
   withdrawQueuedReservation: () => void;
   refreshDescendants: () => void;
@@ -152,6 +153,7 @@ export async function killSubagentRun(params: {
   killed: boolean;
   sessionId?: string;
   superseded?: boolean;
+  declined?: true;
   targetState?: SubagentKillTargetState;
   error?: string;
 }> {
@@ -181,7 +183,7 @@ export async function killSubagentRun(params: {
   const sessionId = resolved.entry?.sessionId;
   const sessionLifecycleRevision = resolved.entry?.lifecycleRevision;
   const runtime = await subagentKillRuntimeLoader.load();
-  let admittedWorkReleased = true;
+  let admission: "ready" | "declined" | "busy" = "ready";
   return await runExclusiveSessionLifecycleMutation({
     scope: resolved.storePath,
     identities: [childSessionKey, sessionId],
@@ -191,14 +193,27 @@ export async function killSubagentRun(params: {
       }
       // Admissions can release scheduler capacity synchronously when interrupted.
       params.refreshDescendants();
-      admittedWorkReleased = await interruptSessionWorkAdmissions({
+      // The session fence is active before resolving/signaling other owners.
+      // A refused full-session Stop must not interrupt their admissions or this collector.
+      if (params.beforeSessionKill?.() === false) {
+        admission = "declined";
+        return;
+      }
+      if (!isCurrent()) {
+        return;
+      }
+      const released = await interruptSessionWorkAdmissions({
         scope: resolved.storePath,
         identities: [childSessionKey, sessionId],
         timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
       });
+      admission = released ? "ready" : "busy";
     },
     run: async () => {
-      if (!admittedWorkReleased) {
+      if (admission === "declined") {
+        return { killed: false, sessionId, declined: true as const };
+      }
+      if (admission === "busy") {
         return {
           killed: false,
           sessionId,

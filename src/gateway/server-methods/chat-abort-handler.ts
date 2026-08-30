@@ -29,8 +29,6 @@ import {
   abortChatRunsForSessionKeyWithPartials,
   cancelWorkerInferenceForSession,
   createChatAbortOps,
-  persistAbortedPartials,
-  captureAbortedPartial,
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
@@ -38,6 +36,7 @@ import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
+import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -53,7 +52,7 @@ type ChatAbortTarget = Pick<
 >;
 
 export async function handleChatAbortRequestWithLifecycle(
-  { params, respond, context, client }: GatewayRequestHandlerOptions,
+  { params, respond, context, client, sessionMutationAuthorization }: GatewayRequestHandlerOptions,
   lifecycle: ChatAbortLifecycle = {},
 ): Promise<void> {
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
@@ -160,6 +159,7 @@ export async function handleChatAbortRequestWithLifecycle(
       abortOrigin: "rpc",
       stopReason: "rpc",
       requester,
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
       preserveSideRuns,
       excludeRunIds: lifecycle.excludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
@@ -169,7 +169,7 @@ export async function handleChatAbortRequestWithLifecycle(
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
     }
-    const error = descendantAbortError(res.descendants, "Session");
+    const error = res.error ?? descendantAbortError(res.descendants, "Session");
     if (error) {
       respond(false, undefined, error);
       return;

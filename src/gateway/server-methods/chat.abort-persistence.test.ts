@@ -18,7 +18,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { captureAbortedPartial, persistAbortedPartials } from "./chat-abort-runtime.js";
+import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
 import {
   createActiveRun,
   createChatAbortContext,

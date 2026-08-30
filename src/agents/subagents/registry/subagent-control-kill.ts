@@ -55,6 +55,7 @@ type KillTree = KillBinding & {
 type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
+  assertCurrent?: () => void;
   controller?: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
 };
 
@@ -100,11 +101,15 @@ async function withSubagentKillScope<T>(
       ) {
         continue;
       }
-      const ownerCurrent = (candidate: SubagentRunRecord) =>
-        isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-        isParentCurrent?.() !== false &&
-        (!controller ||
-          !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }));
+      const ownerCurrent = (candidate: SubagentRunRecord) => {
+        params.assertCurrent?.();
+        return (
+          isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+          isParentCurrent?.() !== false &&
+          (!controller ||
+            !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }))
+        );
+      };
       if (!ownerCurrent(entry) || !isCurrentSubagentRun(entry, params.cfg)) {
         continue;
       }
@@ -250,6 +255,7 @@ async function killLatestSubagentRun(params: {
   tree: KillTree;
   scope: KillScope;
   suppressTaskDelivery?: boolean;
+  beforeSessionKill?: () => boolean;
   expectedRunId?: string;
   expectedGeneration?: number;
   expectedOwnerKey?: string;
@@ -405,7 +411,7 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
     if (stopped.result.error) {
       params.tree.errors.add(stopped.result.error);
     }
-    if (!stopped.result.superseded) {
+    if (!stopped.result.superseded && !stopped.result.declined) {
       cascade = await killSubagentDescendants(params);
     }
   } catch (error) {
@@ -438,7 +444,13 @@ export async function killAllControlledSubagentRuns(params: {
       scope.refresh();
     }
     const acceptedTrees = accepted ? trees : [];
-    const stopped = await killSubagentRunTree({ ...params, trees: acceptedTrees, scope });
+    // The bulk signal was consumed above; never forward caller hooks into child kills.
+    const stopped = await killSubagentRunTree({
+      cfg: params.cfg,
+      suppressTaskDelivery: params.suppressTaskDelivery,
+      trees: acceptedTrees,
+      scope,
+    });
     return { ...stopped, ...collectKillErrors(acceptedTrees) };
   });
   if (result.errors.length > 0) {
@@ -547,6 +559,7 @@ export async function killControlledSubagentRun(params: {
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(
   params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
+  control?: { assertCurrent: () => void; beforeSessionKill?: () => boolean },
 ): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
     if (params.onResult?.(result) !== undefined) {
@@ -575,7 +588,7 @@ export async function killSubagentRunAdmin(
 
   let rootStopSuperseded = false;
   return withSubagentKillScope<SubagentAdminKillResult>(
-    { cfg: params.cfg, runs: [entry] },
+    { cfg: params.cfg, runs: [entry], assertCurrent: control?.assertCurrent },
     async (scope, [tree]) => {
       if (!tree) {
         return { found: false as const, killed: false as const };
@@ -584,6 +597,7 @@ export async function killSubagentRunAdmin(
         cfg: params.cfg,
         tree,
         scope,
+        beforeSessionKill: control?.beforeSessionKill,
         expectedRunId: params.expectedRunId?.trim() || undefined,
         expectedGeneration: params.expectedGeneration,
         expectedOwnerKey: params.expectedOwnerKey?.trim() || undefined,
@@ -630,9 +644,9 @@ export async function killSubagentRunAdmin(
       if (!result.found || !tree) {
         return publish(result);
       }
-      // Completion can commit on the same owner during the awaited handoff.
-      // Read its outcome with the final authority check, immediately before task writes.
-      const ownsOutcome = !rootStopSuperseded && tree.ownsRun();
+      // Completion can commit during the awaited handoff. Fence both the retained
+      // run and its session incarnation before any synchronous result publication.
+      const ownsOutcome = !rootStopSuperseded && tree.ownsRun() && tree.canTraverse();
       if (!ownsOutcome) {
         tree.errors.add("Subagent ownership changed during cancellation; retry.");
       }

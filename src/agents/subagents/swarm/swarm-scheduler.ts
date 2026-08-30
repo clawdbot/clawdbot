@@ -8,6 +8,7 @@ type SwarmLaunch = {
 
 type QueuedSwarmRun = {
   runId: string;
+  owner?: object;
   launch?: SwarmLaunch;
   holds: number;
   retryReady: boolean;
@@ -130,6 +131,19 @@ export function reserveSwarmRun(params: {
   lane.queue.push(item);
   runLocations.set(params.runId, { lane, state: "queued", item });
   return true;
+}
+
+/** Bind a committed registration without transferring a retained reservation to a replacement. */
+export function bindSwarmRunReservation(runId: string, owner: object): void {
+  const item = runLocations.get(runId)?.item;
+  if (item && item.owner === undefined) {
+    item.owner = owner;
+  }
+}
+
+/** Includes held/preactivation work and the launch awaiting Gateway acceptance. */
+export function ownsSwarmRunReservation(runId: string, owner: object): boolean {
+  return runLocations.get(runId)?.item?.owner === owner;
 }
 
 /** Attach launch work to an existing FIFO reservation. */

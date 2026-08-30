@@ -15,7 +15,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import * as transcriptPersistence from "./chat-transcript-persistence.js";
+import * as transcriptInject from "./chat-transcript-inject.js";
 import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.js";
 import {
   createActiveRun,
@@ -25,7 +25,12 @@ import {
 
 vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
+  loadSessionEntry: (sessionKey: string) => ({
+    cfg: {},
+    agentId: "main",
+    canonicalKey: sessionKey,
+    entry: { sessionId: "main-session" },
+  }),
 }));
 
 describe("descendant cascade ownership", () => {
@@ -192,7 +197,7 @@ describe("descendant cascade ownership", () => {
           })
         : undefined;
     const append = vi
-      .spyOn(transcriptPersistence, "appendAssistantTranscriptMessage")
+      .spyOn(transcriptInject, "appendInjectedAssistantMessageToTranscript")
       .mockImplementationOnce(async () => {
         if (kind === "late descendant") {
           releaseSwarmRun("capacity");

@@ -428,6 +428,7 @@ export async function admitChatSend(params: {
             });
           }
         } else if (!admittedRunAbort.controller.signal.aborted) {
+          // A later lifecycle drain must not overwrite the first abort reason.
           if (admittedRunAbort.entry) {
             admittedRunAbort.entry.abortStopReason = stopReason;
           }
