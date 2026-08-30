@@ -954,27 +954,34 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
-  it.each(["run", "request"])("omits redundant %s error details", (source) => {
-    const container = renderChatView(
-      source === "run"
-        ? { runError: { summary: "Gateway unavailable" } }
-        : { error: "Gateway unavailable" },
-    );
-    const alert = requireElement(container, ".chat-error", "chat run error");
-
-    expect(alert.querySelector("details")).toBeNull();
-    expect(alert.textContent).toContain("Gateway unavailable");
-    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
-  });
-
-  it("ignores whitespace-only differences when deciding whether details add information", () => {
-    const container = renderChatView({
-      runError: { summary: "Gateway unavailable\n  Gateway   unavailable  " },
-    });
-
-    expect(container.querySelector(".chat-error details")).toBeNull();
-    expect(container.querySelector(".chat-error strong")?.textContent).toBe("Gateway unavailable");
-  });
+  it.each(["run", "request"])(
+    "does not offer redundant details for a short %s error",
+    async (source) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const message = "Failed to open the plugin state database.";
+      for (const diagnostic of [
+        message,
+        ` \n ${message.replaceAll(" ", "  \t")} \n `,
+        `${message}\n${message}`,
+        `${message}\n  ${message.replaceAll(" ", "  \t")} \n `,
+      ]) {
+        const container = renderChatView(
+          source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+        );
+        const alert = requireElement(container, ".chat-error", "chat error");
+        expect(alert.getAttribute("role")).toBe("alert");
+        expect(alert.querySelector("strong")?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+          message,
+        );
+        expect(alert.querySelector("details")).toBeNull();
+        expect(alert.textContent).not.toContain("Error details");
+        alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+        await Promise.resolve();
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+      }
+    },
+  );
 
   it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
@@ -1066,33 +1073,40 @@ describe("chat run error", () => {
     },
   );
 
-  it.each(["run", "request"])(
-    "exposes the complete %s error as selectable text and a copy action",
-    (source) => {
-      const diagnostic =
-        "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line";
-      const container = renderChatView(
-        source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
-      );
+  it.each([
+    ["run", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
+    ["request", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
+    ["run", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
+    ["request", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
+  ])("exposes the complete %s error as selectable text and a copy action", (source, diagnostic) => {
+    const container = renderChatView(
+      source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+    );
 
-      const alert = requireElement(container, ".chat-error", "chat run error");
-      expect(alert.getAttribute("role")).toBe("alert");
-      const details = requireElement(alert, "details", "error disclosure");
-      expect(details.hasAttribute("open")).toBe(false);
-      expect(requireElement(details, "summary strong", "error summary").textContent).toBe(
-        "Error: gateway disconnected",
-      );
-      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(diagnostic);
-      expect(alert.querySelector("img")).toBeNull();
-      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
-      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
-        source === "request",
-      );
-      expect(
-        alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
-      ).not.toBeNull();
-    },
-  );
+    const alert = requireElement(container, ".chat-error", "chat run error");
+    expect(alert.getAttribute("role")).toBe("alert");
+    const details = requireElement(alert, "details", "error disclosure");
+    expect(details.hasAttribute("open")).toBe(false);
+    const preview = requireElement(details, "strong", "error preview").textContent ?? "";
+    expect(preview).not.toContain("Final diagnostic line");
+    expect(preview.length).toBeLessThanOrEqual(120);
+    if (diagnostic.includes("\n")) {
+      expect(preview).toBe("Error: gateway disconnected");
+    } else {
+      expect(preview).toMatch(/^Request failed: .+…$/u);
+    }
+    const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
+    expect(fullDiagnostic.textContent).toBe(diagnostic);
+    expect(fullDiagnostic.getAttribute("tabindex")).toBe("0");
+    expect(alert.querySelector("img")).toBeNull();
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
+      source === "request",
+    );
+    expect(
+      alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+    ).not.toBeNull();
+  });
 
   it("keeps dismiss on the error state owned by its callback", () => {
     const onDismissError = vi.fn();
@@ -1101,6 +1115,7 @@ describe("chat run error", () => {
     container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
 
     expect(onDismissError).toHaveBeenCalledOnce();
+    expect(container.querySelector(".chat-error details")).toBeNull();
     expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
   });
 

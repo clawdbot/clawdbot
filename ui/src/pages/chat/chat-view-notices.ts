@@ -5,6 +5,7 @@ import { renderCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { clampText } from "../../lib/format.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
@@ -66,16 +67,14 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
 }
 
 function renderErrorNotice(error: string, action: TemplateResult | typeof nothing = nothing) {
-  const lines = error.split(/\r?\n/u);
-  const summaryIndex = lines.findIndex((line) => line.trim());
-  const summary = lines[summaryIndex]?.trim() ?? "";
-  const normalizedDetails = lines
-    .slice(summaryIndex + 1)
-    .join(" ")
+  const lines = error
     .trim()
-    .replace(/\s+/gu, " ");
-  const hasDetails =
-    normalizedDetails !== "" && normalizedDetails !== summary.replace(/\s+/gu, " ");
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\s+/gu, " ").trim());
+  const [firstLine = ""] = lines;
+  const summary = clampText(firstLine);
+  const hasDetails = lines.some((line) => line !== "" && line !== summary);
+  // Plain summaries wrap fully; only expandable previews may clip at narrow widths.
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"

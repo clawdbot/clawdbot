@@ -374,7 +374,7 @@ suite.define(() => {
       await stage(page, "Mock Gateway: retain on blocked storage");
       await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
       await paneFor(page)
-        .locator(".chat-error__summary strong")
+        .getByRole("alert")
         .filter({ hasText: "Browser attachment storage is unavailable" })
         .waitFor();
       expect(await composerFor(page).inputValue()).toBe("Mock Gateway: retain on blocked storage");
