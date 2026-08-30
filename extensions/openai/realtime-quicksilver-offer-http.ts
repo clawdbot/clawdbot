@@ -8,7 +8,7 @@ import {
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 
-export type ResponseDeliveryWaiter = {
+type ResponseDeliveryWaiter = {
   result: Promise<boolean>;
   cancel: () => void;
 };

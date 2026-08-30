@@ -23,7 +23,6 @@ import {
   readOfferBearerToken,
   rejectOversizedOffer,
   respondRealtimeOffer,
-  type ResponseDeliveryWaiter,
 } from "./realtime-quicksilver-offer-http.js";
 import {
   releaseOpenAIQuicksilverSession,
