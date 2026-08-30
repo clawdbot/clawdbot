@@ -12,24 +12,73 @@ function selectCostTier(
   if (!tiers || tiers.length === 0) {
     return undefined;
   }
-  const tier = tiers.find((candidate) => {
+  const sorted = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
+  if (inputTokens <= 0) {
+    return sorted[0];
+  }
+  const tier = sorted.find((candidate) => {
     const [start, end] = candidate.range;
     return inputTokens >= start && (end === undefined || inputTokens < end);
   });
-  return tier ?? tiers.at(-1);
+  if (tier) {
+    return tier;
+  }
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const candidate = sorted[index];
+    if (candidate && inputTokens >= candidate.range[0]) {
+      return candidate;
+    }
+  }
+  return sorted[0];
+}
+
+function calculateSampleCost(
+  model: Model,
+  sample: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cacheWrite1h?: number;
+  },
+): Usage["cost"] {
+  const tier = selectCostTier(model.cost.tieredPricing, sample.input);
+  const rates = tier ?? model.cost;
+  const cacheWrite1h = Math.min(sample.cacheWrite, Math.max(0, sample.cacheWrite1h ?? 0));
+  const cacheWrite5m = sample.cacheWrite - cacheWrite1h;
+  return {
+    input: (rates.input / 1_000_000) * sample.input,
+    output: (rates.output / 1_000_000) * sample.output,
+    cacheRead: (rates.cacheRead / 1_000_000) * sample.cacheRead,
+    cacheWrite: (rates.cacheWrite * cacheWrite5m + rates.input * 2 * cacheWrite1h) / 1_000_000,
+    total: 0,
+  };
 }
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
-  const tier = selectCostTier(model.cost.tieredPricing, usage.input);
-  const rates = tier ?? model.cost;
-  const cacheWrite1h = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));
-  const cacheWrite5m = usage.cacheWrite - cacheWrite1h;
-  usage.cost.input = (rates.input / 1000000) * usage.input;
-  usage.cost.output = (rates.output / 1000000) * usage.output;
-  usage.cost.cacheRead = (rates.cacheRead / 1000000) * usage.cacheRead;
-  usage.cost.cacheWrite =
-    (rates.cacheWrite * cacheWrite5m + rates.input * 2 * cacheWrite1h) / 1000000;
+  const samples = usage.costByIteration;
+  if (samples && samples.length > 0) {
+    const total = samples.reduce(
+      (acc, sample) => {
+        const cost = calculateSampleCost(model, sample);
+        acc.input += cost.input;
+        acc.output += cost.output;
+        acc.cacheRead += cost.cacheRead;
+        acc.cacheWrite += cost.cacheWrite;
+        return acc;
+      },
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    );
+    total.total = total.input + total.output + total.cacheRead + total.cacheWrite;
+    Object.assign(usage.cost, total);
+    // Per-iteration samples are an internal billing aid; do not let them
+    // escape through usage objects that may be forwarded or persisted.
+    usage.costByIteration = undefined;
+    return usage.cost;
+  }
+  const cost = calculateSampleCost(model, usage);
+  Object.assign(usage.cost, cost);
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
   return usage.cost;

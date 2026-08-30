@@ -1,5 +1,5 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import type { Usage } from "../types.js";
+import type { Usage, UsageCostSample } from "../types.js";
 
 type AnthropicUsagePayload = {
   input_tokens?: unknown;
@@ -37,6 +37,7 @@ type AnthropicBilledUsage = {
   cacheRead: number;
   cacheWrite: number;
   cacheWrite1h: number;
+  iterations: UsageCostSample[];
 };
 
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
@@ -125,6 +126,7 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     cacheRead: 0,
     cacheWrite: 0,
     cacheWrite1h: 0,
+    iterations: [],
   };
   for (const iteration of iterations) {
     if (!iteration || typeof iteration !== "object" || Array.isArray(iteration)) {
@@ -148,7 +150,9 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     billed.output += output;
     billed.cacheRead += cacheRead;
     billed.cacheWrite += cacheWrite;
-    billed.cacheWrite1h += readAnthropicCacheWriteUsage(record).cacheWrite1h ?? 0;
+    const cacheWrite1h = readAnthropicCacheWriteUsage(record).cacheWrite1h ?? 0;
+    billed.cacheWrite1h += cacheWrite1h;
+    billed.iterations.push({ input, output, cacheRead, cacheWrite, cacheWrite1h });
   }
   return sawCompaction ? billed : undefined;
 }
@@ -218,6 +222,11 @@ export function applyAnthropicMessageDeltaUsage(
     cacheWrite: cacheWriteTokens,
     cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
   };
+  if (billedIterations) {
+    target.costByIteration = billedIterations.iterations;
+  } else {
+    target.costByIteration = undefined;
+  }
   if (resolved.input !== undefined) {
     target.input = resolved.input;
   }

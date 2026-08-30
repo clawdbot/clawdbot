@@ -298,6 +298,8 @@ export interface Usage {
     | { state: "available"; promptTokens: number; totalTokens: number }
     | { state: "unavailable" };
   totalTokens: number;
+  /** Runtime-only billed samples used when a provider reports independent iterations. */
+  costByIteration?: UsageCostSample[];
   cost: {
     input: number;
     output: number;
@@ -308,6 +310,15 @@ export interface Usage {
     totalOrigin?: "provider-billed";
   };
 }
+
+/** Runtime-only usage sample for independently billed provider iterations. */
+export type UsageCostSample = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cacheWrite1h?: number;
+};
 
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
