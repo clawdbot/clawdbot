@@ -32,6 +32,7 @@ import { createWebSocketTransport } from "./transport-websocket.js";
 import {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
+  hasCodexAppServerNaturalExit,
   type CodexAppServerTransport,
 } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -297,7 +298,22 @@ export class CodexAppServerClient {
       });
       return client;
     } catch (error) {
-      throw client?.getCloseError() ?? error;
+      assertCurrent?.();
+      if (client?.transportExited && hasCodexAppServerNaturalExit(client.child)) {
+        throw buildCodexAppServerExitError(
+          client.child.exitCode,
+          client.child.signalCode,
+          client.stderrTail,
+        );
+      }
+      // Cleanup must not turn a live-child registration refusal into
+      // a retryable exit. Keep the refusal and its bounded, redacted diagnostics.
+      const stderr = client?.getStderrDiagnostic();
+      throw stderr
+        ? new Error(`${coerceErrorMessage(error)}; stderr=${JSON.stringify(stderr)}`, {
+            cause: error,
+          })
+        : error;
     }
   }
 

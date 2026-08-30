@@ -19,8 +19,9 @@ const MAX_PROCESS_QUIESCE_PASSES = 16;
 
 export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
-): Promise<(() => void) | undefined> {
-  return (await containDescendants(child))?.resume;
+): Promise<(() => void) | "exited" | undefined> {
+  const contained = await containDescendants(child);
+  return contained === "exited" ? contained : contained?.resume;
 }
 
 /** A durable spawn fact, never a command-line match, selects the orphan root. */
@@ -28,11 +29,12 @@ export async function terminateCodexAppServerOrphan(
   expected: CodexAppServerProcessIdentity,
 ): Promise<boolean> {
   const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
-  const contained = await containDescendants(
+  const result = await containDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
     expected,
     deadline,
   );
+  const contained = result === "exited" ? undefined : result;
   let gone = false;
   try {
     if (contained) {
@@ -72,9 +74,12 @@ async function containDescendants(
   child: ContainableTransport,
   expected?: CodexAppServerProcessIdentity,
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
-): Promise<{ root: PosixProcess; resume: () => void } | undefined> {
+): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
-  if (process.platform === "win32" || !rootPid || !child.kill || hasExited(child)) {
+  if (hasExited(child)) {
+    return "exited";
+  }
+  if (process.platform === "win32" || !rootPid || !child.kill) {
     return undefined;
   }
   const snapshot = await readCodexAppServerProcessSnapshot(deadline);
@@ -82,6 +87,11 @@ async function containDescendants(
     return undefined;
   }
   const root = snapshot.find((row) => row.pid === rootPid);
+  // A retained direct child cannot have its PID reused before Node reaps it.
+  // Preserve an OS-observed exit even when Node's exit callback is still queued.
+  if (!expected && (!root || root.state.startsWith("Z"))) {
+    return "exited";
+  }
   if (
     !root ||
     !(expected ? isSameLiveProcess(root, expected) : root.ppid === process.pid) ||
