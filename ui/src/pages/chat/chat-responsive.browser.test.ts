@@ -2908,6 +2908,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         for (const width of [320, 560]) {
           await page.setViewportSize({ width, height: 852 });
           const failedCard = cards.filter({ hasText: "settings.toml" });
+          // The viewport ACK does not settle the retained pane's responsive geometry.
+          await failedCard.scrollIntoViewIfNeeded();
+          await waitForLayoutSettled(
+            page,
+            ".chat-main__conversation, .chat-assistant-attachment-card, .chat-assistant-attachment-card__status-reason",
+          );
           const mobileStatusLayout = await failedCard.evaluate((card) => {
             const badge = card.querySelector<HTMLElement>(
               ".chat-assistant-attachment-card__status-badge",
