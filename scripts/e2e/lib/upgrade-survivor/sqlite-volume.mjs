@@ -551,8 +551,8 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
       `unreferenced volume transcript was not archived: ${orphan}`,
     );
   }
-  for (const index of [0, 1, 2]) {
-    const fixture = getVolumeSessionFixture(index);
+  for (const fixture of fixtures.slice(0, 3)) {
+    const { index } = fixture;
     const archived = archivedTranscripts.get(fixture.agentId);
     const entry = archived?.transcriptsByName.get(`${fixture.sessionId}.jsonl`);
     assert(archived && entry, `archived volume transcript sample missing: ${index}`);
