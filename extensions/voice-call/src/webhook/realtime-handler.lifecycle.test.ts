@@ -154,6 +154,53 @@ async function connectCarrierStream(handler: RealtimeCallHandler) {
 }
 
 describe("RealtimeCallHandler lifecycle", () => {
+  it.each(["completed", "error"] as const)(
+    "ends the carrier call when the provider closes with %s",
+    async (reason) => {
+      let onProviderClose: ((reason: "completed" | "error") => void) | undefined;
+      const closeBridge = vi.fn(() => onProviderClose?.("completed"));
+      const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>((request) => {
+        onProviderClose = request.onClose;
+        return createBridge(closeBridge);
+      });
+      const { call, handler, hangupCall, processEvent } =
+        createCarrierLifecycleHarness(createBridgeForCall);
+      const { server, ws } = await connectCarrierStream(handler);
+
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-provider-close", callSid: call.providerCallId },
+          }),
+        );
+        await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledOnce());
+
+        const closed = waitForClose(ws);
+        onProviderClose?.(reason);
+
+        await vi.waitFor(() =>
+          expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+            reason,
+          }),
+        );
+        expect((await closed).code).toBe(reason === "completed" ? 1000 : 1011);
+        expect(closeBridge).toHaveBeenCalledOnce();
+        expect(
+          processEvent.mock.calls.filter(([event]) => event.type === "call.ended"),
+        ).toHaveLength(1);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED) {
+          ws.terminate();
+        }
+        await handler.close();
+        await server.close();
+      }
+    },
+  );
+
   it("keeps a failed startup nonterminal until manager-owned carrier termination succeeds", async () => {
     const termination = createDeferred<{ success: boolean; error?: string }>();
     const endCall = vi.fn(() => termination.promise);

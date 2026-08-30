@@ -14,6 +14,7 @@ import {
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
   type RealtimeVoiceForcedConsultHandle,
@@ -312,7 +313,7 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
+type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivity" | "error";
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
@@ -843,6 +844,7 @@ export class RealtimeCallHandler {
         : undefined;
     // Providers may close synchronously before createBridge returns; no consult can exist yet.
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
+    let sessionClosed = false;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -852,6 +854,7 @@ export class RealtimeCallHandler {
       cfg: this.coreConfig,
       agentId,
       providerConfig,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
       instructions,
       tools: this.config.tools,
@@ -1079,12 +1082,13 @@ export class RealtimeCallHandler {
           payload: { reason },
           final: true,
         });
-        if (reason !== "error") {
+        // Carrier teardown already owns its outcome; a provider-ended call still needs hangup.
+        if (reason === "completed" && (!ownsCallState || sessionClosed)) {
           return;
         }
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, "Bridge disconnected");
+          ws.close(reason === "error" ? 1011 : 1000, "Bridge disconnected");
         }
         // A provisional replacement may fail before its bridge owner is assigned.
         // The active predecessor still owns call termination until creation succeeds.
@@ -1094,7 +1098,7 @@ export class RealtimeCallHandler {
         ) {
           return;
         }
-        void emitCallEnd("error");
+        void emitCallEnd(reason);
       },
     };
     let session: ActiveRealtimeVoiceBridge;
@@ -1142,7 +1146,6 @@ export class RealtimeCallHandler {
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);
-    let sessionClosed = false;
     session.close = () => {
       if (sessionClosed) {
         return;

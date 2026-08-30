@@ -515,6 +515,11 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(createBridge).toHaveBeenCalled();
         });
+        expect(createBridge.mock.calls[0]?.[0].audioFormat).toEqual({
+          encoding: "g711_ulaw",
+          sampleRateHz: 8000,
+          channels: 1,
+        });
         callbacks?.onReady?.();
         const event = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
           | NormalizedEvent
@@ -608,6 +613,11 @@ describe("RealtimeCallHandler path routing", () => {
         );
         expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
         expect(createBridge.mock.calls[0]?.[0].agentId).toBe("support");
+        expect(createBridge.mock.calls[0]?.[0].audioFormat).toEqual({
+          encoding: "g711_ulaw",
+          sampleRateHz: 8000,
+          channels: 1,
+        });
         callbacks?.onReady?.();
         expect(triggerGreeting).toHaveBeenCalledTimes(1);
         expect(triggerGreeting.mock.calls[0]?.[0]).toContain("hello");
@@ -824,6 +834,7 @@ describe("RealtimeCallHandler path routing", () => {
         }
       | undefined;
     const processEvent = vi.fn();
+    const endCall = vi.fn(async () => ({ success: true }));
     const close = vi.fn(() => {
       callbacks?.onTranscript?.("user", "last words", true);
       callbacks?.onClose?.("completed");
@@ -868,6 +879,7 @@ describe("RealtimeCallHandler path routing", () => {
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
+        endCall,
         getCallByProviderCallId,
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
@@ -895,6 +907,7 @@ describe("RealtimeCallHandler path routing", () => {
         const events = processEvent.mock.calls.map(([event]) => event as NormalizedEvent);
         expect(close).toHaveBeenCalledTimes(1);
         expect(disconnect).toHaveBeenCalledExactlyOnceWith("CA-complete", "MZ-complete");
+        expect(endCall).not.toHaveBeenCalled();
         const speechIndex = events.findIndex((event) => event.type === "call.speech");
         expect(speechIndex).toBeGreaterThanOrEqual(0);
         expect(events.some((event) => event.type === "call.ended")).toBe(false);
@@ -922,6 +935,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(
           processEvent.mock.calls.filter(([event]) => event.type === "call.ended"),
         ).toHaveLength(1);
+        expect(endCall).not.toHaveBeenCalled();
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
