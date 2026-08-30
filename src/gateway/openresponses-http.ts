@@ -522,9 +522,9 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const abortController = new AbortController();
-  let onClientDisconnect: (() => void) | undefined;
+  let onClientDisconnect: () => void = () => undefined;
   const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
-    onClientDisconnect?.();
+    onClientDisconnect();
   });
   const prompt = buildAgentPrompt(payload.input);
 
