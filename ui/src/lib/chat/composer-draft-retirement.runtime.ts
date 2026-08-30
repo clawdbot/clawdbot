@@ -57,7 +57,7 @@ export async function retireDeletedComposerDrafts(
       const durable = await retireDurableComposerDrafts(
         { gatewayOwner: stored.gatewayOwner, recoveryScope: client.recoveryScope },
         stored.retirements.map((retirement) => ({
-          scopeKey: storedChatOutboxScopeKey(retirement.scope),
+          scopeKey: `chat:v3:${storedChatOutboxScopeKey(retirement.scope)}`,
           minimumRevision: retirement.minimumRevision,
           retireBeforeRevision: retirement.retireBeforeRevision,
         })),

@@ -9,8 +9,11 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   expectRequestCountStable,
   installMockGateway,
+  requireRecord,
+  readOutboxPayloadAttachments,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -28,7 +31,7 @@ const composerFor = (page: Page) =>
 async function readQueue(page: Page): Promise<ChatQueueItem[]> {
   return page.evaluate(() =>
     Object.keys(sessionStorage)
-      .filter((key) => key.startsWith("openclaw.control.chatComposer.v3:"))
+      .filter((key) => key.startsWith("openclaw.control.chatComposer.v4:"))
       .flatMap((key) => {
         const store = JSON.parse(sessionStorage.getItem(key)!) as {
           sessions: Record<string, { queue?: ChatQueueItem[] }>;
@@ -65,39 +68,9 @@ async function payloadCount(page: Page): Promise<number> {
 }
 
 async function readPayloadBytes(page: Page, key: string): Promise<string[] | null> {
-  return page.evaluate(async (payloadKey) => {
-    type StoredPayload = { attachments: Array<{ blob: Blob }> };
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openclaw-control-ui");
-      request.onsuccess = () => resolve(request.result);
-      request.addEventListener("error", () =>
-        reject(request.error ?? new Error("IDB open failed")),
-      );
-    });
-    try {
-      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
-        const request = database
-          .transaction("outboxPayloads")
-          .objectStore("outboxPayloads")
-          .get(payloadKey);
-        request.onsuccess = () => resolve(request.result as StoredPayload | undefined);
-        request.addEventListener("error", () =>
-          reject(request.error ?? new Error("IDB read failed")),
-        );
-      });
-      if (!payload) {
-        return null;
-      }
-      return Promise.all(
-        payload.attachments.map(async ({ blob }) => {
-          const bytes = new Uint8Array(await blob.arrayBuffer());
-          return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
-        }),
-      );
-    } finally {
-      database.close();
-    }
-  }, key);
+  return (
+    (await readOutboxPayloadAttachments(page, key))?.map((attachment) => attachment.base64) ?? null
+  );
 }
 
 async function stage(page: Page, message: string) {
@@ -107,6 +80,163 @@ async function stage(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it.each(["agent:main:topic", "global"])(
+    "preserves landed v3 %s Blobs through migration, reload, explicit retry and retirement",
+    async (legacySessionKey) => {
+      await suite.withPage(
+        { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const destination = legacySessionKey === "global" ? "agent:main:main" : legacySessionKey;
+          const gateway = await installMockGateway(page, {
+            sessionKey: destination,
+            sessions: [
+              {
+                key: destination,
+                kind: "direct",
+                updatedAt: 1,
+                hasActiveRun: false,
+                activeRunIds: [],
+              },
+            ],
+            historyMessages: history,
+            deferredMethods: ["chat.send"],
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
+          await waitForControlUiGatewayReady(page);
+          await paneFor(page)
+            .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
+            .waitFor();
+          await gateway.setOnline(false);
+          await waitForControlUiGatewayReconnecting(page);
+          await stage(page, "Mock Gateway: retained v3 Blob submission");
+          await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+          await expect.poll(async () => (await readQueue(page)).length).toBe(1);
+          const original = (await readQueue(page))[0]!;
+          const reference = original.attachmentPayload;
+          assert(
+            reference,
+            "Admission must own the complete Blob before seeding the legacy envelope",
+          );
+          await page.route("**/outbox-legacy-seed", (route) =>
+            route.fulfill({ contentType: "text/html", body: "Synthetic v3 metadata seed" }),
+          );
+          // Leave the app before replacing its metadata; no old writer races the legacy producer.
+          await page.goto(`${suite.server.baseUrl}outbox-legacy-seed`);
+          const legacyKey = await page.evaluate(
+            ({ item, sessionKey }) => {
+              const currentKey = Object.keys(sessionStorage).find((key) =>
+                key.startsWith("openclaw.control.chatComposer.v4:"),
+              );
+              if (!currentKey) {
+                throw new Error("Missing admitted metadata");
+              }
+              const current = JSON.parse(sessionStorage.getItem(currentKey)!) as {
+                gatewayOwner: string;
+              };
+              const key = `openclaw.control.chatComposer.v3:${encodeURIComponent(current.gatewayOwner)}`;
+              sessionStorage.setItem(
+                key,
+                JSON.stringify({
+                  version: 3,
+                  gatewayOwner: current.gatewayOwner,
+                  sessions: {
+                    [`${sessionKey}\u0000agent:main`]: {
+                      updatedAt: 10,
+                      draftRevision: 42,
+                      queue: [
+                        {
+                          ...item,
+                          sessionKey,
+                          agentId: "main",
+                          sendAttempts: 1,
+                          sendState: "unconfirmed",
+                        },
+                      ],
+                    },
+                  },
+                }),
+              );
+              sessionStorage.removeItem(currentKey);
+              return key;
+            },
+            { item: original, sessionKey: legacySessionKey },
+          );
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
+          await gateway.setOnline(true);
+          await waitForControlUiGatewayReady(page);
+          await expect
+            .poll(() => page.evaluate((key) => sessionStorage.getItem(key), legacyKey))
+            .toBeNull();
+          expect(await readPayloadBytes(page, reference.key)).toEqual([
+            file.buffer.toString("base64"),
+          ]);
+          if (legacySessionKey === "global") {
+            expect(await readQueue(page)).toEqual([]);
+            const notice = paneFor(page).locator(".chat-outbox-recovery");
+            await notice.locator("summary").click();
+            await notice
+              .getByText("Mock Gateway: retained v3 Blob submission", { exact: true })
+              .waitFor();
+            await expectRequestCountStable(gateway, "chat.send", 0);
+            await notice.getByRole("button", { name: "Restore here for review" }).click();
+            const dialog = page.locator("openclaw-modal-dialog");
+            await dialog.getByText(`${destination} (main)`, { exact: true }).waitFor();
+            await dialog.getByRole("button", { name: "Restore here for review" }).click();
+          }
+          await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+          await page.reload();
+          await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+          expect((await readQueue(page))[0]).toMatchObject({
+            id: original.id,
+            sessionKey: destination,
+            agentId: "main",
+            sendRunId: original.sendRunId,
+            sendAttempts: 1,
+            attachmentPayload: reference,
+          });
+          expect(await readPayloadBytes(page, reference.key)).toEqual([
+            file.buffer.toString("base64"),
+          ]);
+          await expectRequestCountStable(gateway, "chat.send", 0);
+          await mkdir(proofDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(
+              proofDir,
+              `v3-${legacySessionKey === "global" ? "recovered" : "named"}-paused.png`,
+            ),
+            fullPage: true,
+            animations: "disabled",
+          });
+          await paneFor(page)
+            .locator(".chat-group.user")
+            .getByRole("button", { name: /Retry/i })
+            .click();
+          const sent = await gateway.waitForRequest("chat.send");
+          expect(sent.params).toMatchObject({
+            sessionKey: destination,
+            idempotencyKey: original.sendRunId,
+            attachments: [
+              {
+                type: "file",
+                mimeType: file.mimeType,
+                fileName: file.name,
+                content: file.buffer.toString("base64"),
+              },
+            ],
+          });
+          expect(requireRecord(sent.params).agentId).toBeUndefined();
+          expect(await readPayloadBytes(page, reference.key)).toEqual([
+            file.buffer.toString("base64"),
+          ]);
+          await gateway.resolveDeferred("chat.send", { runId: original.sendRunId, status: "ok" });
+          await expect.poll(async () => (await readQueue(page)).length).toBe(0);
+          await expect.poll(() => payloadCount(page)).toBe(0);
+          await expectRequestCountStable(gateway, "chat.send", 1);
+        },
+      );
+    },
+  );
+
   it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", async () => {
     await suite.withPage(
       {
@@ -519,7 +649,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}outbox-upgrade`);
       await page.evaluate(async (content) => {
         const gatewayOwner = `ws://${location.host}`;
-        const scopeKey = "global\u0000agent:main";
+        const scopeKey = "agent:main:main\u0000agent:main";
         sessionStorage.setItem(
           `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`,
           JSON.stringify({

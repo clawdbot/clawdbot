@@ -90,9 +90,9 @@ suite.define(() => {
           const scope = {
             gatewayOwner: state.settings.gatewayUrl,
             recoveryScope: client.recoveryScope,
-            scopeKey: composer.storedChatOutboxScopeKey(
+            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(
               composer.resolveStoredChatOutboxScope(state, state.sessionKey),
-            ),
+            )}`,
           };
           const persistence = new composer.ChatComposerPersistence(() => state);
           persistence.start();
@@ -134,6 +134,157 @@ suite.define(() => {
       expect(result).toMatchObject({
         status: "found",
         draft: { text: "authenticated offline draft" },
+      });
+    });
+  });
+
+  it("migrates identifiable attachment drafts and atomically retains failed or conflicting recovery", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}settings`);
+      const handle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const result = await page.evaluate(async (store) => {
+        const owner = { gatewayOwner: "migration-gateway", recoveryScope: "migration-account" };
+        const qualified = { ...owner, scopeKey: "agent:work:main\u0000agent:work" };
+        const ambiguous = { ...owner, scopeKey: "global\u0000agent:work" };
+        const attachment = {
+          blob: new Blob(["preserve these bytes"], { type: "text/plain" }),
+          mimeType: "text/plain",
+          fileName: "saved.txt",
+        };
+        for (const scope of [qualified, ambiguous]) {
+          await store.writeDurableComposerDraft(
+            scope,
+            { revision: 42, text: "saved attachment draft", attachments: [attachment] },
+            { expectedRevision: 0, writeId: "legacy" },
+          );
+        }
+        const migrated = await store.prepareDurableComposerRecovery(owner);
+        if (migrated.status !== "ready" || migrated.entries.length !== 1) {
+          throw new Error("Expected one ambiguous draft");
+        }
+        const entry = migrated.entries[0]!;
+        const canonical = { ...owner, scopeKey: "chat:v3:agent:work:main\u0000agent:work" };
+        const identified = await store.readDurableComposerDraft(canonical);
+        const destination = { ...owner, scopeKey: "chat:v3:agent:work:review\u0000agent:work" };
+        const originalPut = Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "put")
+          ?.value as IDBObjectStore["put"];
+        IDBObjectStore.prototype.put = function (value, key) {
+          if (value.scopeKey === ambiguous.scopeKey) {
+            throw new DOMException("quota", "QuotaExceededError");
+          }
+          return key === undefined
+            ? originalPut.call(this, value)
+            : originalPut.call(this, value, key);
+        };
+        const failed = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          0,
+          undefined,
+          () => true,
+          0,
+        );
+        IDBObjectStore.prototype.put = originalPut;
+        const afterFailure = await store.readDurableComposerDraft(ambiguous);
+        const failedDestination = await store.readDurableComposerDraft(destination);
+        await store.writeDurableComposerDraft(
+          destination,
+          { revision: 50, text: "newer destination", attachments: [] },
+          { expectedRevision: 0, writeId: "newer" },
+        );
+        const conflict = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          0,
+          undefined,
+          () => true,
+          0,
+        );
+        const newer = await store.readDurableComposerDraft(destination);
+        const fence = await store.retireDurableComposerDraft(destination, 50);
+        if (fence.status !== "persisted" || fence.revision === undefined) {
+          throw new Error("Missing destination fence");
+        }
+        const staleOwner = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          fence.revision!,
+          fence.writeId,
+          () => false,
+          0,
+        );
+        const restored = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          fence.revision!,
+          fence.writeId,
+          () => true,
+          fence.revision!,
+        );
+        const recovered = await store.readDurableComposerDraft(destination);
+        const sourceAfter = await store.readDurableComposerDraft(ambiguous);
+        // A downgraded reader can start a new draft behind the source tombstone.
+        const oldFence = await store.readDurableComposerDraft(qualified);
+        if (oldFence.status !== "not-found" || oldFence.revision === undefined) {
+          throw new Error("Missing legacy fence");
+        }
+        await store.writeDurableComposerDraft(
+          qualified,
+          {
+            revision: oldFence.revision + 1,
+            text: "older UI new draft",
+            attachments: [attachment],
+          },
+          {
+            expectedRevision: oldFence.revision,
+            expectedWriteId: oldFence.writeId,
+            writeId: "downgraded",
+          },
+        );
+        const reopened = await store.prepareDurableComposerRecovery(owner);
+        return {
+          identified:
+            identified.status === "found"
+              ? {
+                  text: identified.draft.text,
+                  revision: identified.draft.revision,
+                  writeId: identified.draft.writeId,
+                  bytes: await identified.draft.attachments[0]!.blob.text(),
+                }
+              : null,
+          failed: failed.status,
+          afterFailure: afterFailure.status,
+          failedDestination: failedDestination.status,
+          conflict: conflict.status,
+          newer: newer.status === "found" ? newer.draft.text : null,
+          staleOwner: staleOwner.status,
+          restored: restored.status,
+          sourceAfter: sourceAfter.status,
+          recovered:
+            recovered.status === "found" ? await recovered.draft.attachments[0]!.blob.text() : null,
+          reopened: reopened.status === "ready" ? reopened.entries.map((row) => row.text) : null,
+        };
+      }, handle);
+      expect(result).toEqual({
+        identified: {
+          text: "saved attachment draft",
+          revision: 42,
+          writeId: "legacy",
+          bytes: "preserve these bytes",
+        },
+        failed: "storage-failed",
+        afterFailure: "found",
+        failedDestination: "not-found",
+        conflict: "conflict",
+        newer: "newer destination",
+        staleOwner: "conflict",
+        restored: "persisted",
+        sourceAfter: "not-found",
+        recovered: "preserve these bytes",
+        reopened: ["older UI new draft"],
       });
     });
   });
@@ -317,7 +468,7 @@ suite.define(() => {
           const scope = {
             gatewayOwner: state.settings.gatewayUrl,
             recoveryScope: state.client.recoveryScope,
-            scopeKey: composer.storedChatOutboxScopeKey(storedScope),
+            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(storedScope)}`,
           };
           const persistence = new composer.ChatComposerPersistence(() => state);
           persistence.start();

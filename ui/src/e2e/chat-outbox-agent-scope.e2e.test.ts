@@ -31,7 +31,7 @@ suite.define(() => {
       ],
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "global",
     };
     const historyResponse = (active: boolean) => ({
       messages: [],
@@ -57,6 +57,8 @@ suite.define(() => {
         },
       ]);
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "agents.list": agentsList,
         "chat.history": {

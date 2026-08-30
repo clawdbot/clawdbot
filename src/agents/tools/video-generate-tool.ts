@@ -59,17 +59,19 @@ import {
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  resolveMediaToolSandboxConfig,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
+  type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import {
   hasAuthForProvider,
   coerceToolModelConfig,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, ToolFsPolicy } from "./tool-runtime.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -427,10 +429,7 @@ function formatIgnoredVideoGenerationOverride(override: VideoGenerationIgnoredOv
   return `${sanitizeGeneratedMediaDisplayText(override.key)}=${sanitizeGeneratedMediaDisplayText(String(override.value))}`;
 }
 
-type VideoGenerateSandboxConfig = {
-  root: string;
-  bridge: SandboxFsBridge;
-};
+type VideoGenerateSandboxConfig = MediaToolSandbox;
 
 const defaultScheduleVideoGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
   toolName: "video_generate",
@@ -442,7 +441,7 @@ async function loadReferenceAssets(params: {
   expectedKind: "image" | "video" | "audio";
   maxBytes: number;
   workspaceDir?: string;
-  sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<
@@ -817,13 +816,10 @@ export function createVideoGenerateTool(options?: {
     return null;
   }
 
-  const sandboxConfig = options?.sandbox
-    ? {
-        root: options.sandbox.root,
-        bridge: options.sandbox.bridge,
-        workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-      }
-    : null;
+  const sandboxConfig = resolveMediaToolSandboxConfig(
+    options?.sandbox,
+    options?.fsPolicy?.workspaceOnly,
+  );
   const scheduleBackgroundWork =
     options?.scheduleBackgroundWork ?? defaultScheduleVideoGenerateBackgroundWork;
   const includeAudioReferences = shouldExposeVideoReferenceAudioParams({

@@ -81,7 +81,7 @@ suite.define(() => {
               path: "",
               sessions: [
                 {
-                  key: "main",
+                  key: "agent:main:main",
                   kind: "direct",
                   model: "gpt-5.6-sol",
                   modelProvider: "openai",
@@ -132,7 +132,7 @@ suite.define(() => {
         await composer.press("Enter");
         const patchRequest = await gateway.waitForRequest("sessions.patch");
         expect(patchRequest.params).toMatchObject({
-          key: "main",
+          key: "agent:main:main",
           thinkingLevel: "ultra",
         });
 

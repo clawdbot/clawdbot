@@ -57,6 +57,7 @@ import {
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
+import { resolveUnsafeUpdateRecoveryGuidance } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -124,11 +125,20 @@ export async function finishUpdate(params: {
     });
     if (params.result.recovery?.serviceRestartSafe === false) {
       if (!params.opts.json) {
+        const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
         defaultRuntime.log(
           theme.warn(
-            `Managed gateway remains stopped because update recovery could not prove a runnable installation (${params.result.recovery.reason}).`,
+            managedGatewayStopped
+              ? `Managed gateway remains stopped because update recovery could not prove a runnable installation (${params.result.recovery.reason}).`
+              : `Update recovery could not prove a runnable installation (${params.result.recovery.reason}).`,
           ),
         );
+        defaultRuntime.log(
+          theme.muted(resolveUnsafeUpdateRecoveryGuidance(params.result.recovery.reason)),
+        );
+        if (managedGatewayStopped) {
+          defaultRuntime.log(theme.muted("Keep the gateway stopped until the update succeeds."));
+        }
       }
     } else {
       await maybeRestartServiceAfterFailedMutableUpdate({

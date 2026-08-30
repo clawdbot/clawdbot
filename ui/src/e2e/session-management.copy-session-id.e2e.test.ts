@@ -3,6 +3,7 @@ import {
   activateSelfRemovingControl,
   captureUiProof,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   sessionRow,
   sessionsListResponse,
@@ -42,7 +43,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeSessionKey));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
       await expect.poll(() => row.count()).toBe(1);
       await row.hover();

@@ -68,7 +68,16 @@ describe("task detail panel", () => {
       sessionKey: "main",
       client: createGatewayBrowserClientFixture({ request }),
       connected: true,
-      hello: null,
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
     };
     const container = document.createElement("div");
     document.body.append(container);

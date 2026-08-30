@@ -73,7 +73,18 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      // A real active turn holds the restored queue while we inspect its order.
+      sessions: [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          hasActiveRun: true,
+          activeRunIds: ["queue-order-holder"],
+          status: "running",
+        },
+      ],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -129,7 +140,7 @@ suite.define(() => {
       const storedQueueOrder = () =>
         page.evaluate(() =>
           Object.entries(sessionStorage)
-            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v3:"))
+            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
             .flatMap(([, value]) => {
               try {
                 const parsed = JSON.parse(value) as {

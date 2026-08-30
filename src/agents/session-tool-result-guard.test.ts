@@ -6,6 +6,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
@@ -191,6 +192,34 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toMatch(
       /\[\.\.\. \d+ more characters truncated; rerun with narrower args if needed\]$/,
     );
+  });
+
+  it("keeps the exec retention-loss disclosure through the session result cap", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, { maxToolResultChars: 4_000 });
+    const result = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "x".repeat(80_000),
+        timedOut: false,
+      },
+      aggregateOutputDropped: true,
+    });
+    const content = result.content[0];
+    if (!content || content.type !== "text") {
+      throw new Error("expected text result");
+    }
+
+    appendToolResultText(sm, content.text);
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text).toMatch(
+      /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
+    );
+    expect(text).toMatch(/\[\.\.\. \d+ more characters truncated/);
   });
 
   it("honors tiny configured tool-result caps truthfully", () => {

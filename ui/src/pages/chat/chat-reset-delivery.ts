@@ -26,7 +26,7 @@ export function createResetSlashCommandSender(
   deliverChatQueueItem: DeliverChatQueueItem,
 ): ChatOutboxDrainDependencies["sendResetSlashCommand"] {
   return async (host: ChatHost, message: string, options: ChatCommandResetOptions) => {
-    const item = createPendingSendMessage(
+    const pending = createPendingSendMessage(
       host,
       message,
       undefined,
@@ -34,10 +34,14 @@ export function createResetSlashCommandSender(
       undefined,
       reconnectSafeQueuedSendState(host),
     );
+    const item = pending?.item;
     if (item) {
       publishPendingSendMessage(host, item);
     }
-    if (!item || !admitQueuedMessageForSession(host, host.sessionKey, item)) {
+    if (
+      !item ||
+      !admitQueuedMessageForSession(host, host.sessionKey, item, undefined, pending?.admission)
+    ) {
       if (item) {
         cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
       }

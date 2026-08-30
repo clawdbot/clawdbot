@@ -10,7 +10,11 @@ import {
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
-import { createManagedOutgoingMediaBlocks } from "../../../../src/gateway/managed-image-attachments.js";
+import {
+  attachManagedOutgoingMediaToMessage,
+  cleanupManagedOutgoingMediaRecords,
+  createManagedOutgoingMediaBlocks,
+} from "../../../../src/gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../../../src/gateway/managed-image-record-store.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
@@ -386,9 +390,11 @@ describe("Gateway agent and artifact APIs", () => {
       })),
       localRoots: [mainWorkspace],
       stateDir,
-      messageId,
     });
     expect(managedBlocks).toHaveLength(2);
+    // Startup maintenance may run after preparation but before transcript commit.
+    await cleanupManagedOutgoingMediaRecords({ stateDir });
+    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     await appendTranscriptMessage(scope, {
       eventId: messageId,
       message: {
@@ -402,6 +408,9 @@ describe("Gateway agent and artifact APIs", () => {
         },
       } as never,
     });
+    expect(
+      attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
+    ).toBe(true);
 
     await disconnectGatewayClient(client);
     client = await connectGatewayClient({

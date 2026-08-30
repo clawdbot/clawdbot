@@ -125,13 +125,14 @@ if (mode === "admission-rearm") {
 } else if (mode === "tree") {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
-} else if (mode === "background-start") {
+} else if (mode === "background-start" || mode.startsWith("background-start:")) {
+  const port = mode === "background-start" ? 0 : Number(mode.slice("background-start:".length));
   grandchild = spawn(process.execPath, ["-e", [
     "const server = require('node:http').createServer((req, res) => res.end('preview-ready'));",
-    "server.listen(0, '127.0.0.1', () => process.stdout.write(JSON.stringify({",
+    "server.listen(Number(process.argv[1]), '127.0.0.1', () => process.stdout.write(JSON.stringify({",
     "pid: process.pid, url: 'http://127.0.0.1:' + server.address().port,",
     "}) + '\\n'));",
-  ].join("\n")], { stdio: ["ignore", "pipe", "inherit"] });
+  ].join("\n"), String(port)], { stdio: ["ignore", "pipe", "inherit"] });
   background = await new Promise((resolve, reject) => {
     grandchild.once("error", reject);
     const output = createInterface({ input: grandchild.stdout });

@@ -75,7 +75,7 @@ async function observeMockSends(page: Page) {
         if (frame.method === "chat.send") {
           const params = frame.params;
           const queue = Object.keys(sessionStorage)
-            .filter((key) => key.startsWith("openclaw.control.chatComposer.v3:"))
+            .filter((key) => key.startsWith("openclaw.control.chatComposer.v4:"))
             .flatMap((key) => {
               const stored = JSON.parse(sessionStorage.getItem(key)!) as StoredComposerState;
               return Object.values(stored.sessions).flatMap((session) => session.queue ?? []);
@@ -316,7 +316,7 @@ suite.define(() => {
               {
                 message,
                 queueMode: "steer",
-                sessionKey: "main",
+                sessionKey: "agent:main:main",
                 runId: expect.any(String),
                 durableBeforeSend: true,
                 storedSendState: "waiting-reconnect",
@@ -350,7 +350,7 @@ suite.define(() => {
                 page.evaluate(
                   (deliveredRunId) =>
                     Object.keys(sessionStorage)
-                      .filter((key) => key.startsWith("openclaw.control.chatComposer.v3:"))
+                      .filter((key) => key.startsWith("openclaw.control.chatComposer.v4:"))
                       .flatMap((key) =>
                         Object.values(
                           (JSON.parse(sessionStorage.getItem(key)!) as StoredComposerState)

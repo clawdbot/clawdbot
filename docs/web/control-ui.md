@@ -665,8 +665,8 @@ offline, except that **Stop** can queue an exact local run ID for replay. A sess
 is not replayed because newer work may start in that session before the connection returns.
 
 Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
-metadata and payload references in session storage. Attachment bytes stay with the queued input
-when session aliases resolve or change; the queue metadata owns its destination. All attachments
+metadata and payload references in session storage. Attachment bytes stay with the queued input;
+the captured queue metadata owns its destination, even when configured main-session defaults change. All attachments
 must be stored before the message is admitted, and all must be readable before sending. Failed admission leaves the draft
 unsent. Missing or unreadable queued payloads leave a visible row with recovery guidance; the
 browser never sends just the remaining attachments. Binary outbox storage requires browser
@@ -698,6 +698,32 @@ the session's active or last run ID for delivery proof. A matching run confirms 
 before its transcript row appears. Without proof, an attempted message stays in the conversation
 with an amber **Delivery unconfirmed** footer and **Retry**. Check the conversation and retry only
 if the message did not arrive. Unconfirmed local commands keep their retry/discard queue controls.
+
+Queued messages and drafts keep the conversation and agent selected when they were created.
+Switching agents, opening a split pane, or reloading does not move them to another destination.
+A literal `global` conversation keeps its captured agent; an agent's main conversation stays
+separate unless the Gateway is configured with global session scope.
+
+Older browser state may have combined several destinations into one bucket. The Control UI uses
+metadata version 4 (`openclaw.control.chatComposer.v4:`), migrating version 1, 2, and 3 records
+directly when their destination is still identifiable. It verifies the new metadata before
+removing an older source, retaining complete sources when storage or recovery capacity blocks
+migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Ambiguous records appear under
+**Saved messages need a destination** and remain unsent. Open the intended non-Incognito conversation with
+an empty composer and queue, expand the notice, and choose **Restore here for review**. Confirm
+the displayed conversation key and agent. Recovered queued messages stay paused: check for
+previous delivery before using **Retry**. Recovered attachment drafts return to the composer
+without sending. Reconnect, a replacement session, or enabling Incognito while confirmation is
+open cancels the transfer; confirm again in the intended conversation. Older attachment drafts
+whose destination is known stay cleared when that destination has a newer clear. Ambiguous saved
+data remains available for review. Queued Blob references and original submission IDs survive
+both automatic migration and explicit destination recovery. Credential-bound messages are shown
+only under their original Gateway credential scope, including when an older bucket contains
+messages from several scopes. Moving a message into or out of recovery does not delete its bytes;
+cleanup follows verified delivery or discard and accounts for retained recovery messages too.
+If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
+available rather than overwriting newer input. Do not clear browser site data
+while you still have saved messages or attachment drafts to recover.
 
 First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a

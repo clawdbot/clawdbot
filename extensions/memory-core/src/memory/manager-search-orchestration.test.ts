@@ -565,23 +565,6 @@ describe("memory index", () => {
     await pendingSync;
   });
 
-  it("reports session-only refreshes from the manager sync owner", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
-    );
-    await manager.sync({ reason: "test" });
-
-    Reflect.set(manager, "dirty", false);
-    Reflect.set(manager, "sessionsDirty", true);
-    Reflect.set(manager, "syncing", new Promise<void>(() => {}));
-    try {
-      expect(manager.status().pendingSyncSources).toEqual(["sessions"]);
-    } finally {
-      Reflect.set(manager, "syncing", null);
-      Reflect.set(manager, "sessionsDirty", false);
-    }
-  });
-
   it("keeps the published index searchable while dirty maintenance builds", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(
@@ -624,10 +607,7 @@ describe("memory index", () => {
     try {
       const firstSearch = manager.search("zebra", { maxResults: 5, minScore: 0 });
       await maintenanceReady.promise;
-      expect(manager.status()).toMatchObject({
-        dirty: true,
-        pendingSyncSources: ["memory"],
-      });
+      expect(manager.status()).toMatchObject({ dirty: true });
 
       const publishedResults = await manager.search("zebra", { maxResults: 5, minScore: 0 });
       expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
@@ -764,6 +744,7 @@ describe("memory index", () => {
 
       expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search", force: true });
       expect(maintenance.close).toHaveBeenCalledTimes(1);
+      expect(manager.status().lastSyncError).toContain("maintenance failed");
       expect(Reflect.get(manager, "dirty")).toBe(true);
       expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
       expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
@@ -771,6 +752,76 @@ describe("memory index", () => {
       expect(Reflect.get(manager, "sessionsReconcileDirty")).toBe(true);
       expect(Reflect.get(manager, "sessionsDirtyFiles")).toEqual(new Set(["session.jsonl"]));
     } finally {
+      getSpy.mockRestore();
+    }
+  });
+
+  it("keeps sync failures process-local and clears them after a successful sync", async () => {
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      onSearch: true,
+      hybrid: { enabled: true },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "baseline" });
+    const fields = manager as unknown as {
+      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+    };
+    const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
+    const syncSpy = vi
+      .spyOn(fields, "syncMemoryFiles")
+      .mockRejectedValueOnce(new Error("sync failed"));
+    Reflect.set(manager, "dirty", true);
+
+    await expect(manager.sync({ reason: "failure" })).rejects.toThrow("sync failed");
+    expect(manager.status().lastSyncError).toBe("sync failed");
+    const statusManager = await getFreshManager(cfg, "status");
+    expect(statusManager.status().lastSyncError).toBeUndefined();
+
+    syncSpy.mockImplementation(syncMemoryFiles);
+    await manager.sync({ reason: "recovery" });
+    expect(manager.status().lastSyncError).toBeUndefined();
+  });
+
+  it("does not let a no-op sync hide a later detached failure", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+    );
+    await manager.sync({ reason: "baseline" });
+    const maintenanceStarted = createDeferred<void>();
+    const releaseMaintenance = createDeferred<void>();
+    const maintenance = {
+      sync: vi.fn(async () => {
+        maintenanceStarted.resolve();
+        await releaseMaintenance.promise;
+        throw new Error("older maintenance failed");
+      }),
+      close: vi.fn(async () => {}),
+    };
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockResolvedValue(maintenance as never);
+    Reflect.set(manager, "dirty", true);
+    const detachedSync = (
+      manager as unknown as {
+        syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+      }
+    ).syncPublishedIndexInBackground({ reason: "search" });
+
+    try {
+      await maintenanceStarted.promise;
+      expect(manager.status().dirty).toBe(false);
+      await manager.sync({ reason: "interval" });
+      releaseMaintenance.resolve();
+      await expect(detachedSync).rejects.toThrow("older maintenance failed");
+
+      expect(manager.status().dirty).toBe(true);
+      expect(manager.status().lastSyncError).toContain("older maintenance failed");
+
+      await manager.sync({ reason: "retry" });
+      expect(manager.status().lastSyncError).toBeUndefined();
+    } finally {
+      releaseMaintenance.resolve();
+      await detachedSync.catch(() => undefined);
       getSpy.mockRestore();
     }
   });
@@ -821,6 +872,7 @@ describe("memory index", () => {
       ).resolves.toBeUndefined();
 
       expect(manager.status().dirty).toBe(true);
+      expect(manager.status().lastSyncError).toContain("Local embedding worker exited");
       expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
     } finally {
       providerFixture.providerNullResult = null;

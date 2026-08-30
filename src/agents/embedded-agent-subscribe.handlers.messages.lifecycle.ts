@@ -21,14 +21,13 @@ import {
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   buildAssistantStreamData,
+  emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
   isOpenAiCompletionsAssistantMessage,
-  isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
-  scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -36,7 +35,6 @@ import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
   createThinkingTagStreamState,
-  extractAssistantCommentaryText,
   extractAssistantThinking,
   extractAssistantVisibleText,
   extractEmbeddedAssistantText,
@@ -162,15 +160,6 @@ export function handleMessageEnd(
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
-    const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);
-    const commentaryMessage = isResponsesCommentary
-      ? scopeAssistantMessageToStreamBlock(
-          assistantMessage as AssistantMessage,
-          ctx.state.lastAssistantStreamContentIndex,
-          ctx.state.lastAssistantStreamItemId,
-        )
-      : assistantMessage;
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(commentaryMessage));
     appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_message_end",
@@ -179,20 +168,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    const commentaryAlreadyStreamed =
-      isResponsesCommentary &&
-      Boolean(ctx.state.deltaBuffer) &&
-      ctx.state.deltaBuffer === commentaryText;
-    if (commentaryText && !commentaryAlreadyStreamed) {
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({
-          text: commentaryText,
-          replace: true,
-          phase: "commentary",
-          itemId: isResponsesCommentary ? ctx.state.lastAssistantStreamItemId : undefined,
-        }),
-      );
-    }
+    emitAssistantCommentaryStreamData(ctx, assistantMessage);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()

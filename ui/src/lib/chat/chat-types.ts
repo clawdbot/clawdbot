@@ -29,6 +29,15 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
@@ -47,6 +56,7 @@ export type ChatGoalDraft = { sessionId?: string } & (
 export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;
   attachments: ChatAttachment[];

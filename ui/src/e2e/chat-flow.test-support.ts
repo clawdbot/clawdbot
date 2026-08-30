@@ -245,3 +245,52 @@ export async function sidebarSessionOrder(page: Page): Promise<string[]> {
         .filter((key) => key.startsWith("agent:main:session-")),
     );
 }
+
+/** Read native queued Blobs without going through a credential-filtered UI projection. */
+export async function readOutboxPayloadAttachments(page: Page, key: string) {
+  return page.evaluate(async (payloadKey) => {
+    type StoredPayload = {
+      attachments: Array<{ blob: Blob; fileName?: string; mimeType: string }>;
+    };
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("openclaw-control-ui");
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("IDB open failed")),
+        { once: true },
+      );
+    });
+    try {
+      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
+        const request = database
+          .transaction("outboxPayloads")
+          .objectStore("outboxPayloads")
+          .get(payloadKey);
+        request.addEventListener(
+          "success",
+          () => resolve(request.result as StoredPayload | undefined),
+          { once: true },
+        );
+        request.addEventListener(
+          "error",
+          () => reject(request.error ?? new Error("IDB read failed")),
+          { once: true },
+        );
+      });
+      return payload
+        ? Promise.all(
+            payload.attachments.map(async ({ blob, fileName, mimeType }) => {
+              let binary = "";
+              for (const byte of new Uint8Array(await blob.arrayBuffer())) {
+                binary += String.fromCharCode(byte);
+              }
+              return { fileName, mimeType, base64: btoa(binary) };
+            }),
+          )
+        : null;
+    } finally {
+      database.close();
+    }
+  }, key);
+}

@@ -145,14 +145,17 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
   await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
-  const boundary = prepareEmbeddedAttemptSessionBoundary({
-    activeSession,
-    attempt,
-    ...preparedSessionManager.userMessageBoundary,
-    isRawModelRun: input.isRawModelRun,
-    sessionManager,
-    setActiveSessionSystemPrompt,
-  });
+  const boundary = await input.sessionManager.withOwnedTranscriptWrite(() =>
+    prepareEmbeddedAttemptSessionBoundary({
+      abortSignal: input.agentSession.runAbortSignal,
+      activeSession,
+      attempt,
+      ...preparedSessionManager.userMessageBoundary,
+      isRawModelRun: input.isRawModelRun,
+      sessionManager,
+      setActiveSessionSystemPrompt,
+    }),
+  );
   state.prePromptMessageCount = activeSession.messages.length;
 
   // Session-owned projections survive attempt teardown so already-sent tool results

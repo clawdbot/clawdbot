@@ -163,7 +163,7 @@ suite.define(() => {
       await gateway.setHistoryMessages(persistedHistory);
       await gateway.resolveDeferred("chat.history", {
         messages: persistedInterimHistory,
-        sessionId: "control-ui-e2e-session",
+        sessionId: `session:${sessionKey}`,
         thinkingLevel: null,
       });
       await gateway.waitForRequest("chat.history", { after: historyCount + 1 });

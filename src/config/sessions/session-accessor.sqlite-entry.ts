@@ -26,7 +26,6 @@ import type {
   SessionTranscriptInstanceListOptions,
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
-  SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import {
   readSessionEntryCache,
@@ -81,17 +80,17 @@ import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
-import {
-  SessionTranscriptWriterClaimReboundError,
-  withOwnedSessionTranscriptWriterFence,
-} from "./transcript-write-context.js";
 import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
+
+export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
   skipMaintenance?: boolean;
+  /** Synchronous owner bookkeeping after COMMIT, before observers can cancel the caller. */
+  onCommitted?: (entry: SessionEntry) => void;
 };
 
 type ResolvedSqliteSessionEntry = {
@@ -448,48 +447,6 @@ export function replaceSessionEntrySync(scope: SessionAccessScope, entry: Sessio
   emitCommittedSessionIdentityDiff(previous, current);
 }
 
-/** Creates a missing session identity without replacing a concurrently owned row. */
-export function ensureSessionEntrySync(
-  scope: SessionAccessScope &
-    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
-  entry: SessionEntry,
-): boolean {
-  // Every sync initializer inherits and enforces the admitted writer claim.
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteScope(fencedScope);
-  assertCanonicalSessionWriteScope(resolved);
-  let owned = false;
-  let previous = new Map<string, SessionEntry>();
-  let current = new Map<string, SessionEntry>();
-  runOpenClawAgentWriteTransaction((database) => {
-    const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
-    previous = readSessionIdentitySnapshot(database, identityKeys);
-    const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-    if (existing) {
-      // This branch is a read-only ownership probe. The immediately following
-      // transcript mutation rechecks the lifecycle and writer claim in its own
-      // transaction, where a rebound can be reported precisely.
-      owned = existing.sessionId === entry.sessionId;
-      current = previous;
-      return;
-    }
-    if (fencedScope.expectedWriterRunId !== undefined) {
-      current = previous;
-      return;
-    }
-    writeSessionEntry(database, resolved.sessionKey, entry);
-    current = readSessionIdentitySnapshot(database, identityKeys);
-    owned = current.get(resolved.sessionKey)?.sessionId === entry.sessionId;
-  }, toDatabaseOptions(resolved));
-  if (current.size !== previous.size || owned) {
-    emitCommittedSessionIdentityDiff(previous, current);
-  }
-  if (fencedScope.expectedWriterRunId !== undefined && !owned) {
-    throw new SessionTranscriptWriterClaimReboundError();
-  }
-  return owned;
-}
-
 /** Patches one entry in the additive SQLite session store. */
 export async function patchSessionEntryCore(
   scope: SessionAccessScope,
@@ -619,7 +576,13 @@ async function patchSqliteSessionEntrySnapshot(
       currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    try {
+      if (next && result) {
+        options.onCommitted?.(cloneSessionEntry(result));
+      }
+    } finally {
+      emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    }
     return { maintenancePlans, result };
   });
   // Worker materialization runs after the initial write releases the lane;

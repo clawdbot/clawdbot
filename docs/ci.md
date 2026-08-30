@@ -540,6 +540,34 @@ The mock-provider lane also runs OpenClaw-native source probes after the Kova pa
 
 Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints a short-lived ClawSweeper GitHub App token scoped only to `openclaw/clawgrit-reports` contents and passes it only to the Git push step. It commits `report.json`, `report.md`, `index.md`, source-probe artifacts, and bundle metadata/checksums under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
 
+All explicit Performance workflow Git commands use the pinned Git lifecycle owner,
+prepared in `RUNNER_TEMP` before each job's selected checkout. Target resolution,
+Kova revision/install Git, source revision and baseline Git, and local publisher
+operations remain unbounded. Only the initial reports fetch, each push, and each
+reconciliation fetch have a 120-second deadline. The owner drains the entire Git
+process tree before reads, checkout reuse, artifact consumers, outputs, or retry;
+exclusive reports fetches reclaim only invocation-created locks after extinction.
+
+Report preparation and all fetches are anonymous. The App token is created only
+after a new report is prepared, removed from the environment immediately, and
+passed as a masked Basic header to push commands alone; it never enters the remote
+URL or repository config. A verified existing report succeeds before token creation.
+Only a successful empty `ls-tree` lookup means a baseline or report is absent;
+repository/read failures are terminal. Malformed baseline pointer JSON remains
+advisory, as does an ordinary baseline fetch failure after verified cleanup.
+
+Publication allows exactly five pushes. Every failed push, including the fifth,
+gets a 2/4/6/8/10-second backoff followed by one anonymous reconciliation fetch.
+A fetched remote report proves success even after the fifth ambiguous push; direct
+push success needs no fetch. Otherwise, attempts 1–4 replay the report commit on
+detached `FETCH_HEAD` with `cherry-pick -X theirs`, preserving concurrent unique
+reports while the current writer wins the latest pointer. There is no fifth-attempt
+replay. Ordinary fetch failures warn and retry on attempts 1–4. Only typed Git
+failure or timeout after verified cleanup permits recovery; owner setup, census,
+cleanup failure, and cancellation stop before fallback, retry, replay, or success.
+Full Release Validation continues to disable the publisher entirely and retains
+performance evidence only as workflow artifacts.
+
 ## Full Release Validation
 
 `Full Release Validation` is the manual release umbrella. Every run binds an

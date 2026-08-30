@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -15,14 +15,38 @@ import {
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
 import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { guardModelFixtureWorkspace } from "./embedded-agent-runner/model.fixture.test-support.js";
+import {
   createModelGenerationFixture,
-  GENERATION_WORKSPACE_DIR,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./embedded-agent-runner/model.generation-scope.test-support.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+
+let state: OpenClawTestState;
+let workspaceGuard: ReturnType<typeof guardModelFixtureWorkspace>;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "btw-model" });
+});
+beforeEach(() => {
+  workspaceGuard = guardModelFixtureWorkspace(state.root);
+});
+afterEach(() => {
+  try {
+    workspaceGuard.verify();
+  } finally {
+    workspaceGuard.spy.mockRestore();
+  }
+});
+afterAll(async () => {
+  defaultPluginMetadataSnapshot = undefined;
+  await state.cleanup();
+});
 
 const streamSimpleMock = vi.fn();
 const readFileMock = vi.fn();
@@ -728,11 +752,16 @@ describe("runBtwSideQuestion", () => {
     resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
-    defaultPluginMetadataSnapshot ??= resolvePluginMetadataSnapshot({
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      allowCurrent: false,
-    });
+    if (!defaultPluginMetadataSnapshot) {
+      defaultPluginMetadataSnapshot = resolvePluginMetadataSnapshot({
+        config: {},
+        workspaceDir: state.workspaceDir,
+        allowCurrent: false,
+      });
+      expect(workspaceGuard.spy).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: state.workspaceDir }),
+      );
+    }
     preparedRuntimeSnapshotState.snapshot = {
       metadataSnapshot: defaultPluginMetadataSnapshot,
     };
@@ -916,6 +945,8 @@ describe("runBtwSideQuestion", () => {
   it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
     const cfg = { agents: { entries: { main: { default: true } } } } as never;
     const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config: cfg,
       label: "btw-a",
       provider: "local-proxy",
@@ -923,6 +954,8 @@ describe("runBtwSideQuestion", () => {
       modelId: "side-model",
     });
     const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config: cfg,
       label: "btw-b",
       provider: "local-proxy",
@@ -931,7 +964,7 @@ describe("runBtwSideQuestion", () => {
     });
     preparedRuntimeSnapshotState.snapshot = generationA.preparedModelRuntime;
     preparedRuntimeSnapshotState.useSnapshotPluginRegistry = true;
-    resolveAgentWorkspaceDirMock.mockReturnValue(GENERATION_WORKSPACE_DIR);
+    resolveAgentWorkspaceDirMock.mockReturnValue(state.workspaceDir);
     publishCurrentModelGeneration(generationB);
     const runtimeAuthA = vi.fn(async () => ({ apiKey: "runtime-auth-a" }));
     const runtimeAuthB = vi.fn(async () => ({ apiKey: "runtime-auth-b" }));
@@ -953,7 +986,7 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockImplementation(() => {
       const snapshot = getCurrentPluginMetadataSnapshot({
         config: cfg,
-        workspaceDir: GENERATION_WORKSPACE_DIR,
+        workspaceDir: state.workspaceDir,
       });
       const label = snapshot === generationA.metadataSnapshot ? "A" : "B";
       return {

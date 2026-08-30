@@ -4,9 +4,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
+  createOverflowRunParams,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
-  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
@@ -50,6 +50,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     const sessionKey = "agent:main:projection-retry";
     const storePath = state.statePath("alternate", "sessions.json");
     const sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
+    await sessionAccessor.replaceSessionEntry(sessionTarget, { sessionId, updatedAt: 1 });
     await sessionAccessor.persistSessionTranscriptTurn(sessionTarget, {
       messages: [
         {
@@ -68,8 +69,8 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     let ownedProjectionSettled = false;
     const waitForProjection = vi
       .spyOn(reconcile, "waitForSessionTranscriptProjection")
-      .mockImplementation(async (scope) => {
-        await originalWaitForProjection(scope);
+      .mockImplementation(async (scope, abortSignal) => {
+        await originalWaitForProjection(scope, abortSignal);
         expect(
           agentDatabase
             .openOpenClawAgentDatabase(databaseOptions)
@@ -137,7 +138,10 @@ describe("runEmbeddedAgent transcript projection retry", () => {
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(waitForProjection).toHaveBeenCalledOnce();
-      expect(waitForProjection).toHaveBeenCalledWith(sessionTarget, controller.signal);
+      expect(waitForProjection).toHaveBeenCalledWith(
+        { ...sessionTarget, expectedWriterRunId: "run-owned-projection-retry" },
+        controller.signal,
+      );
       agentDatabase.closeOpenClawAgentDatabaseByPath(
         agentDatabase.resolveOpenClawAgentSqlitePath(databaseOptions),
       );

@@ -2,6 +2,7 @@ import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   outboxPayloadTab,
+  observeOutboxRecoveryOwner,
   readOutboxPayload,
   removeOutboxPayloads,
   writeOutboxPayload,
@@ -13,14 +14,10 @@ import {
   readBlobAsDataUrl,
 } from "./durable-composer-persistence.ts";
 
-type Host = ChatComposerScope & {
-  client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
-  selectedChatSessionIncognito?: boolean;
-};
+type Host = ChatComposerScope;
 type PayloadResult =
   | { status: "ready"; item: ChatQueueItem }
   | { status: "failed"; reason: OutboxPayloadFailure };
-const knownOwners = new WeakMap<object, string>();
 
 export function outboxPayloadError(reason: OutboxPayloadFailure): string {
   return t(
@@ -41,27 +38,15 @@ export function failOutboxPayload(item: ChatQueueItem, reason: OutboxPayloadFail
   };
 }
 
-export function observeOutboxRecoveryOwner(host: Host): string | undefined {
-  const client = host.client;
-  if (!client) {
-    return undefined;
-  }
-  if (client.recoveryScopeReady && client.recoveryScope) {
-    knownOwners.set(client, client.recoveryScope);
-  }
-  const remembered = knownOwners.get(client);
-  return remembered === client.recoveryScope ? remembered : undefined;
-}
-
 export function captureOutboxPayloadOwner(host: Host): () => boolean {
   const client = host.client;
   const gateway = host.settings?.gatewayUrl;
-  const recoveryScope = client?.recoveryScope;
+  const recoveryScope = observeOutboxRecoveryOwner(host);
   const incognito = host.selectedChatSessionIncognito;
   return () =>
     host.client === client &&
     host.settings?.gatewayUrl === gateway &&
-    host.client?.recoveryScope === recoveryScope &&
+    observeOutboxRecoveryOwner(host) === recoveryScope &&
     host.selectedChatSessionIncognito === incognito;
 }
 

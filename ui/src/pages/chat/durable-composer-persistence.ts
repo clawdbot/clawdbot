@@ -1,8 +1,9 @@
-import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
   DurableComposerDraftAttachment,
-  DurableComposerDraftScope,
-} from "../../lib/chat/composer-draft-store.runtime.ts";
+} from "../../lib/chat/chat-types.ts";
+import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import {
   generateAttachmentId,
   getChatAttachmentBlob,
@@ -323,7 +324,15 @@ export class DurableChatComposerPersistence {
     apply: (draft: RestoredDraft) => void,
     onCurrentWins: (storedRevision: number) => void,
   ) {
-    const { readDurableComposerDraft } = await loadDurableComposerStore();
+    const { readDurableComposerDraft, prepareDurableComposerRecovery } =
+      await loadDurableComposerStore();
+    if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
+      const recovery = await prepareDurableComposerRecovery(baseline.scope);
+      if (recovery.status === "storage-failed") {
+        reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+        return;
+      }
+    }
     const result = await readDurableComposerDraft(baseline.scope);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(baseline.scope, this.onStorageError);

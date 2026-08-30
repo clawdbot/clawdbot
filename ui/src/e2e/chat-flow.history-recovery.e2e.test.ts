@@ -3,7 +3,6 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
-import type { DurableComposerDraftAttachment } from "../lib/chat/composer-draft-store.runtime.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -12,6 +11,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  readOutboxPayloadAttachments,
   requireString,
   scrollChatThreadToTop,
   visibleChatBubbleTexts,
@@ -54,8 +54,8 @@ suite.define(() => {
       ],
     };
     const sessionListResponse = chatSessionListResponse([
-      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 3 },
-      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 2 },
+      { key: sessionA, sessionId: "session-a", kind: "direct", label: "Session A", updatedAt: 3 },
+      { key: sessionB, sessionId: "session-b", kind: "direct", label: "Session B", updatedAt: 2 },
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
@@ -204,6 +204,7 @@ suite.define(() => {
         "sessions.list": chatSessionListResponse([
           {
             key: sessionA,
+            sessionId: "current-session",
             kind: "direct",
             label: "Session A",
             reasoningLevel: "high",
@@ -211,6 +212,7 @@ suite.define(() => {
           },
           {
             key: sessionB,
+            sessionId: "trace-session",
             kind: "direct",
             label: "Session B",
             reasoningLevel: "high",
@@ -222,7 +224,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
 
       const sessionLink = (sessionKey: string) =>
@@ -340,13 +342,28 @@ suite.define(() => {
             },
           ],
         },
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            sessionId: "control-ui-e2e-history-session-a",
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: "agent:main:session-b",
+            sessionId: "control-ui-e2e-history-session-b",
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: "agent:main:session-a",
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
@@ -528,14 +545,16 @@ suite.define(() => {
           ],
         },
         "sessions.list": chatSessionListResponse([
-          ...shortSessions.map(({ key, label, updatedAt }) => ({
+          ...shortSessions.map(({ key, label, updatedAt, sessionId }) => ({
             key,
+            sessionId,
             kind: "direct",
             label,
             updatedAt,
           })),
           {
             key: "agent:main:session-b",
+            sessionId: "retained-history-session",
             kind: "direct",
             label: "Session B",
             updatedAt: 3,
@@ -546,7 +565,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
 
       const sessionB = page.locator(
@@ -686,7 +705,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -740,7 +759,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -836,10 +855,12 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:global",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -885,70 +906,38 @@ suite.define(() => {
       await queue.getByText(prompt).waitFor({ timeout: 10_000 });
       const requestsBeforeReconnect = await gateway.getRequests("chat.send");
       expect(requestsBeforeReconnect).toHaveLength(0);
-      const readStoredProof = () =>
-        page.evaluate(
-          async ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
-            const item = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v3:"))
+      const readStoredProof = async () => {
+        const item = await page.evaluate(
+          (expectedPrompt) =>
+            Object.entries(sessionStorage)
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
               .flatMap(([, value]) => {
                 const parsed = JSON.parse(value) as {
                   sessions: Record<string, { queue?: ChatQueueItem[] }>;
                 };
                 return Object.values(parsed.sessions).flatMap((session) => session.queue ?? []);
               })
-              .find((entry) => entry.text === expectedPrompt);
-            const attachment = item?.attachments?.find(
-              (entry) => entry.fileName === expectedAttachmentName,
-            );
-            const reference = item?.attachmentPayload;
-            let attachmentMatches = false;
-            if (reference && attachment) {
-              const database = await new Promise<IDBDatabase>((resolve, reject) => {
-                const request = indexedDB.open("openclaw-control-ui");
-                request.onsuccess = () => resolve(request.result);
-                request.addEventListener("error", () =>
-                  reject(request.error ?? new Error("IndexedDB request failed")),
-                );
-              });
-              try {
-                const record = await new Promise<
-                  { attachments: DurableComposerDraftAttachment[] } | undefined
-                >((resolve, reject) => {
-                  const request = database
-                    .transaction("outboxPayloads")
-                    .objectStore("outboxPayloads")
-                    .get(reference.key);
-                  request.onsuccess = () => resolve(request.result);
-                  request.addEventListener("error", () =>
-                    reject(request.error ?? new Error("IndexedDB request failed")),
-                  );
-                });
-                const storedAttachment = record?.attachments.find(
-                  (entry) => entry.fileName === expectedAttachmentName,
-                );
-                if (storedAttachment) {
-                  const bytes = new Uint8Array(await storedAttachment.blob.arrayBuffer());
-                  const dataUrl = `data:${storedAttachment.mimeType};base64,${btoa(String.fromCharCode(...bytes))}`;
-                  attachmentMatches =
-                    attachment.dataUrl === undefined && dataUrl === expectedAttachmentDataUrl;
-                }
-              } finally {
-                database.close();
-              }
-            }
-            return {
-              attachment: attachmentMatches,
-              prompt: item !== undefined,
-              runId: item?.sendRunId ?? null,
-              waitingReconnect: item?.sendState === "waiting-reconnect",
-            };
-          },
-          {
-            expectedAttachmentDataUrl: attachmentDataUrl,
-            expectedAttachmentName: attachmentName,
-            expectedPrompt: prompt,
-          },
+              .find((entry) => entry.text === expectedPrompt),
+          prompt,
         );
+        const attachment = item?.attachments?.find((entry) => entry.fileName === attachmentName);
+        const payload = item?.attachmentPayload
+          ? await readOutboxPayloadAttachments(page, item.attachmentPayload.key)
+          : null;
+        const storedAttachment = payload?.find((entry) => entry.fileName === attachmentName);
+        return {
+          attachment: Boolean(
+            attachment &&
+            storedAttachment &&
+            attachment.dataUrl === undefined &&
+            `data:${storedAttachment.mimeType};base64,${storedAttachment.base64}` ===
+              attachmentDataUrl,
+          ),
+          prompt: item !== undefined,
+          runId: item?.sendRunId ?? null,
+          waitingReconnect: item?.sendState === "waiting-reconnect",
+        };
+      };
       await expect.poll(readStoredProof).toEqual({
         attachment: true,
         prompt: true,

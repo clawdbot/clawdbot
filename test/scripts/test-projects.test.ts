@@ -4439,6 +4439,10 @@ describe("scripts/test-projects channel contract lane patterns", () => {
 });
 
 it.each([
+  ".github/workflows/openclaw-performance.yml",
+  "test/scripts/openclaw-performance-workflow.test.ts",
+  "test/scripts/openclaw-performance-workflow.test-support.ts",
+  "test/scripts/openclaw-performance-git-lifecycle.test.ts",
   ".github/actions/publish-generated-pr/action.yml",
   ".github/actions/publish-generated-pr/policy.py",
   ".github/workflows/maturity-scorecard.yml",
@@ -4462,5 +4466,31 @@ it.each([
   );
   expect(
     buildVitestRunPlans(["test/scripts/ci-git-owner.test.ts"]).map(({ config }) => config),
+  ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+});
+
+// Workflow policy and shared fixture changes must select both semantic and process proof.
+it.each([
+  ".github/workflows/openclaw-performance.yml",
+  "test/scripts/openclaw-performance-workflow.test.ts",
+  "test/scripts/openclaw-performance-workflow.test-support.ts",
+  "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+  "test/scripts/ci-git-owner.test-support.ts",
+  "test/scripts/fixtures/ci-platform-checkout.mjs",
+])("routes Performance lifecycle ownership: %s", (changedPath) => {
+  expect(resolveChangedTestTargetPlan([changedPath]).targets).toEqual(
+    expect.arrayContaining([
+      "test/scripts/ci-git-owner.test.ts",
+      "test/scripts/ci-linux-git.test.ts",
+      "test/scripts/ci-platform-checkout.test.ts",
+      "test/scripts/openclaw-performance-workflow.test.ts",
+      "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ]),
+  );
+  expect(
+    buildVitestRunPlans(["test/scripts/openclaw-performance-git-lifecycle.test.ts"]).map(
+      ({ config }) => config,
+    ),
   ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
 });

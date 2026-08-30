@@ -105,6 +105,7 @@ type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (stdinIsTTYDescriptor) {
     Object.defineProperty(process.stdin, "isTTY", stdinIsTTYDescriptor);
   } else {
@@ -936,12 +937,15 @@ function failedResult(recovery: UpdateRunResult["recovery"]): UpdateRunResult {
   };
 }
 
-async function finishFailedUpdate(result: UpdateRunResult): Promise<void> {
+async function finishFailedUpdate(
+  result: UpdateRunResult,
+  options: { json?: boolean; stopped?: boolean } = {},
+): Promise<void> {
   await finishUpdate({
     result,
-    opts: {},
+    opts: { json: options.json },
     showProgress: false,
-    preManagedServiceStop: { stopped: true, serviceEnv: {} },
+    preManagedServiceStop: { stopped: options.stopped ?? true, serviceEnv: {} },
     controlPlaneUpdateSentinelMeta: undefined,
   } as unknown as FinishUpdateParams);
 }
@@ -1006,5 +1010,67 @@ describe("failed Git update recovery restart", () => {
 
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("repair the checkout or installation"),
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("rerun `openclaw update`"));
+  });
+
+  it("explains how to recover from a dirty rollback checkout", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await finishFailedUpdate(
+      failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
+    );
+
+    const output = log.mock.calls.flat().map(String).join("\n");
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(output).toContain("From the update root shown above");
+    expect(output).toContain("git status --short");
+    expect(output).toContain("resolve the reported changes");
+    expect(output).toContain("rerun `openclaw update`");
+    expect(output).toContain("Keep the gateway stopped until the update succeeds");
+  });
+
+  it("preserves the active profile in unsafe recovery guidance", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await finishFailedUpdate(
+      failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
+    );
+
+    const output = log.mock.calls.flat().map(String).join("\n");
+    expect(output).toContain("rerun `openclaw --profile work update`");
+    expect(output).not.toContain("rerun `openclaw update`");
+  });
+
+  it("does not claim an unsafe recovery stopped a service that was already down", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await finishFailedUpdate(
+      failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
+      { stopped: false },
+    );
+
+    const output = log.mock.calls.flat().map(String).join("\n");
+    expect(output).toContain("Update recovery could not prove a runnable installation");
+    expect(output).toContain("resolve the reported changes");
+    expect(output).not.toContain("remains stopped");
+    expect(output).not.toContain("Keep the gateway stopped");
+  });
+
+  it("keeps structured JSON recovery free of prose guidance", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    const result = failedResult({
+      serviceRestartSafe: false,
+      reason: "rollback-checkout-dirty",
+    });
+
+    await finishFailedUpdate(result, { json: true });
+
+    expect(mocks.printResult).toHaveBeenCalledWith(result, expect.objectContaining({ json: true }));
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
   });
 });

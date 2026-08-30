@@ -5,15 +5,15 @@ import { expect, it } from "vitest";
 import {
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
 } from "../lib/chat/outbox-store.ts";
+import type { UiSessionDefaultsHost } from "../lib/sessions/session-key.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForCommittedState } from "./settle.test-support.ts";
+import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -71,61 +71,22 @@ async function waitForCommittedAttachmentDraft(
   sessionKey: string,
   text: string,
 ): Promise<void> {
-  const gatewayUrl = await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connection: { gatewayUrl: string } } } };
-    };
-    return app.runtime?.context.gateway.connection.gatewayUrl ?? null;
-  });
-  if (!gatewayUrl) {
-    throw new Error("OpenClaw application Gateway URL is unavailable");
-  }
-  const storedScope = resolveStoredChatOutboxScope({ settings: { gatewayUrl } }, sessionKey);
-  await waitForCommittedState(
+  const defaults = await page
+    .locator('openclaw-chat-pane[aria-hidden="false"]')
+    .evaluate((element) => {
+      const { state } = element as HTMLElement & { state: UiSessionDefaultsHost };
+      return {
+        assistantAgentId: state.assistantAgentId,
+        agentsList: state.agentsList,
+        hello: state.hello,
+      };
+    });
+  const storedScope = resolveStoredChatOutboxScope(defaults, sessionKey);
+  await waitForCommittedComposerDraft(
     page,
-    async (expected) => {
-      const { gatewayOwner, recoveryScope, scopeKey, draftText, attachmentCount } = expected;
-      if (
-        typeof gatewayOwner !== "string" ||
-        typeof recoveryScope !== "string" ||
-        typeof scopeKey !== "string" ||
-        typeof draftText !== "string" ||
-        typeof attachmentCount !== "number"
-      ) {
-        return false;
-      }
-      try {
-        const storeUrl = performance
-          .getEntriesByType("resource")
-          .map((entry) => entry.name)
-          .find((name) => /\/composer-draft-store\.runtime-[^/]+\.js$/u.test(name));
-        if (!storeUrl) {
-          return false;
-        }
-        const draftStore = (await import(
-          /* @vite-ignore */ storeUrl
-        )) as typeof import("../lib/chat/composer-draft-store.runtime.ts");
-        const result = await draftStore.readDurableComposerDraft({
-          gatewayOwner,
-          recoveryScope,
-          scopeKey,
-        });
-        return (
-          result.status === "found" &&
-          result.draft.text === draftText &&
-          result.draft.attachments.length === attachmentCount
-        );
-      } catch {
-        return false;
-      }
-    },
-    {
-      gatewayOwner: storageTargetForGateway(gatewayUrl).gatewayOwner,
-      recoveryScope: "e2e-recovery-scope",
-      scopeKey: storedChatOutboxScopeKey(storedScope),
-      draftText: text,
-      attachmentCount: 1,
-    },
+    `chat:v3:${storedChatOutboxScopeKey(storedScope)}`,
+    text,
+    1,
   );
 }
 
@@ -179,7 +140,7 @@ suite.define(() => {
           expect(initial.params).toMatchObject({
             idempotencyKey: expect.any(String),
             message: initialText,
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           });
           const initialRunId = (initial.params as { idempotencyKey: string }).idempotencyKey;
           expect(initialRunId).not.toBe("");
@@ -231,8 +192,13 @@ suite.define(() => {
             message: terminalMessage,
             messageId: "held-enter-terminal",
             messageSeq: 3,
-            session: { activeRunIds: [], hasActiveRun: false, key: "main", status: "done" },
-            sessionKey: "main",
+            session: {
+              activeRunIds: [],
+              hasActiveRun: false,
+              key: "agent:main:main",
+              status: "done",
+            },
+            sessionKey: "agent:main:main",
           });
           await gateway.waitForRequest("chat.history", { after: historyBefore });
           await expect
@@ -290,12 +256,12 @@ suite.define(() => {
             await gateway.deferNext("chat.send");
             await gateway.resolveDeferred("chat.history", {
               messages: historyMessages,
-              sessionId: "control-ui-e2e-session",
+              sessionId: "session:agent:main:main",
               sessionInfo: {
                 activeLeafEntryId: "held-enter-terminal",
                 activeRunIds: [],
                 hasActiveRun: false,
-                key: "main",
+                key: "agent:main:main",
                 status: "done",
               },
               thinkingLevel: null,
@@ -305,7 +271,7 @@ suite.define(() => {
               expectedLeafEntryId: "held-enter-terminal",
               idempotencyKey: expect.any(String),
               message: followUpText,
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               ...(attachment
                 ? {
                     attachments: [
@@ -419,7 +385,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page);
-        const sessionKey = "global";
+        const sessionKey = "agent:main:main";
         const text = "offline attachment draft";
         const contents = "offline attachment contents";
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -458,6 +424,7 @@ suite.define(() => {
             },
           ],
           message: text,
+          sessionKey,
         });
       },
     );

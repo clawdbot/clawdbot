@@ -243,7 +243,7 @@ export async function handleSendChat(
   }
   const requestedEditId = opts?.resumeQueuedMessageEditId;
   const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
-  if (requestedEditId != null && !inlineEdit) {
+  if (requestedEditId != null && inlineEdit?.id !== requestedEditId) {
     return undefined;
   }
   const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
@@ -568,7 +568,7 @@ export async function handleSendChat(
     // store write, so a rejected write leaves the original queued and editable.
     const resumedEdit =
       requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
-    let queued = createPendingSendMessage(
+    const submission = createPendingSendMessage(
       host,
       effectiveMessage,
       deliveredAttachments.length ? deliveredAttachments : undefined,
@@ -581,9 +581,10 @@ export async function handleSendChat(
       intent,
       expectedLeafEntryId,
     );
-    if (!queued) {
+    if (!submission) {
       return;
     }
+    let queued = submission.item;
     if (queued.attachments?.length) {
       const payload = await prepareOutboxPayload(host, queued);
       const currentEdit = activeQueuedMessageEdit(host);
@@ -642,6 +643,7 @@ export async function handleSendChat(
             expected: resumedEdit.source,
           }
         : undefined,
+      submission.admission,
     );
     if (resumedEdit) {
       retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments, resumedEdit);

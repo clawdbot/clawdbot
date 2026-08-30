@@ -27,6 +27,10 @@ const CONTEXT_TTL_MS = 30 * 60 * 1000;
 const SESSION_LANE = "queued-run-context-session";
 const GLOBAL_LANE = "queued-run-context-global";
 
+function rejectUnexpectedCompactionSuccessor(): never {
+  throw new Error("Unexpected compaction successor during queue liveness test");
+}
+
 function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
   const runId = overrides.runId ?? "healthy-queued-run";
@@ -159,6 +163,7 @@ describe("queued embedded run context liveness", () => {
       markPlacementEntered = resolve;
     });
     const uninstallPlacement = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => await runLocal(),
       executeTurn: async (_claim, _params, runLocal) => {
         markPlacementEntered?.();
@@ -222,6 +227,7 @@ describe("queued embedded run context liveness", () => {
     const remoteFinished = createDeferred();
     const localTurn = vi.fn(async () => ({}) as EmbeddedAgentRunResult);
     const uninstallPlacement = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => await runLocal(),
       executeTurn: async (_claim, _params, _runLocal, onAdmitted) => {
         placementEntered.resolve();
@@ -374,6 +380,7 @@ describe("queued embedded run context liveness", () => {
       const uninstallPlacement =
         execution === "remote"
           ? installSessionPlacementAdmissionProvider({
+              assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
               executeLocalTurn: async (_claim, runLocal) => await runLocal(),
               executeTurn: async (_claim, _params, _runLocal, onAdmitted) => {
                 onAdmitted?.();
@@ -429,6 +436,7 @@ describe("queued embedded run context liveness", () => {
       const resumePlacement = createDeferred();
       const localTurn = vi.fn(async () => ({}) as EmbeddedAgentRunResult);
       const uninstallPlacement = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
         executeLocalTurn: async (_claim, runLocal) => await runLocal(),
         executeTurn: async (_claim, _params, runLocal, onAdmitted) => {
           placementEntered.resolve();

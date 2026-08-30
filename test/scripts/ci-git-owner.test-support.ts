@@ -21,6 +21,10 @@ import {
   prepareGeneratedPublisherFixture,
   type GeneratedPublisherOptions,
 } from "./generated-publisher.test-support.js";
+import {
+  preparePerformanceFixture,
+  type PerformanceFixtureOptions,
+} from "./openclaw-performance-workflow.test-support.js";
 
 type Step = {
   name?: string;
@@ -99,8 +103,15 @@ export async function runCiGitStep(options: {
     | "git-owner"
     | "mantis-validate-trusted-ref"
     | "publish-generated-pr";
+  performance?: PerformanceFixtureOptions;
   publisher?: GeneratedPublisherOptions & { baseChangePath?: "a" | "b" | null };
   gitFault?: { match: string; occurrence?: number; code: FetchResult | "cancel"; output?: string };
+  gitFaults?: {
+    match: string;
+    occurrence?: number;
+    code: FetchResult | "cancel";
+    output?: string;
+  }[];
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
@@ -125,6 +136,7 @@ export async function runCiGitStep(options: {
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
   cancelDuringCleanup?: boolean;
+  cleanupCancelMatch?: string;
   startupDelay?: { tree: number };
   revisions?: Record<string, string>;
   mergeBase?: { ancestor: boolean; revision: string };
@@ -181,11 +193,14 @@ export async function runCiGitStep(options: {
     throw new Error("Missing executable action step");
   }
   let env: Record<string, string>;
+  let performanceFixture: ReturnType<typeof preparePerformanceFixture> | undefined;
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
   return withCiCheckoutFixture(
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
+      if (options.performance)
+        performanceFixture = preparePerformanceFixture(root, options.performance);
       env = stepEnvironment(step, {
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
@@ -203,6 +218,7 @@ export async function runCiGitStep(options: {
         FETCH_REF: "fixture-base",
         BASE_ACTION_PATH: path.join(actions, "ensure-base-commit"),
         OWNER_ACTION_PATH: path.join(actions, "git-owner"),
+        ...performanceFixture?.env,
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
@@ -268,11 +284,12 @@ export async function runCiGitStep(options: {
           readFileSync(`.github/actions/${action}/${name}`, "utf8"),
           clock,
         );
-        if (action === "git-owner" && (publisher || maturity)) {
+        if (action === "git-owner" && (publisher || maturity || options.performance)) {
           source = source.replace(
             "def main():",
             `def fixture_file_boundary(event, args):
     names = {os.environ["GITHUB_OUTPUT"]: "output", os.environ["GITHUB_STEP_SUMMARY"]: "summary",
+             os.environ["GITHUB_ENV"]: "environment",
              os.path.join(os.environ["RUNNER_TEMP"], "generated-pr-push.log"): "push-log"}
     if event == "open" and args[0] in names:
         subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
@@ -282,6 +299,14 @@ sys.addaudithook(fixture_file_boundary)
 
 
 def main():`,
+          );
+        }
+        if (action === "git-owner" && options.performance) {
+          source = source.replace(
+            "def backoff(seconds):",
+            `def backoff(seconds):
+    subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                    "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
           );
         }
         writeFileSync(path.join(actions, action, name), source);
@@ -330,7 +355,9 @@ def main():`,
           publisher: publisherFixture
             ? { git: env.FAKE_REAL_GIT, gh: path.join(publisherFixture.fakeBin, "gh") }
             : undefined,
+          performance: performanceFixture?.proxy,
           gitFault: options.gitFault,
+          gitFaults: options.gitFaults,
           revisions,
           mergeBase: options.mergeBase,
           workingDirectory: publisher ? undefined : step["working-directory"],
@@ -350,6 +377,7 @@ def main():`,
           mergeSnapshots: options.mergeSnapshots,
           consumers: Boolean(options.prepare || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
+          cleanupCancelMatch: options.cleanupCancelMatch,
           baseAvailableAfter: options.baseAvailableAfter,
           invalidRef: options.invalidRef,
           lsRemoteResults: options.lsRemoteResults,
@@ -391,6 +419,38 @@ ${run}`;
         writeFileSync(path.join(root, "prepare.sh"), renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
+      }
+      if (options.performance) {
+        const mapfileShim =
+          options.performance.mode === "prepare"
+            ? `if ! type mapfile >/dev/null 2>&1; then
+  mapfile() {
+    local delimiter=$'\\n'
+    if [[ "\${1:-}" == "-d" ]]; then delimiter="$2"; shift 2; fi
+    local destination="$1" item quoted index=0
+    eval "$destination=()"
+    while IFS= read -r -d "$delimiter" item; do
+      printf -v quoted '%q' "$item"
+      eval "$destination[$index]=$quoted"
+      index=$((index + 1))
+    done
+  }
+fi
+`
+            : "";
+        // Observe immediately after each owner invocation; Python policies separately
+        // expose output/summary writes through the audit hook, and exit is always censused.
+        run = `${mapfileShim}performance_owner_pending=false
+performance_owner_boundary() {
+  local command="$1"
+  if [[ "$performance_owner_pending" == "true" ]]; then
+    ${JSON.stringify(process.execPath)} ${JSON.stringify(ciCheckoutFixture)} observe "$TMPDIR" linux:configured shell-command
+    performance_owner_pending=false
+  fi
+  if [[ "$command" == *CI_GIT_OWNER* ]]; then performance_owner_pending=true; fi
+}
+trap 'performance_owner_boundary "$BASH_COMMAND"' DEBUG
+${run}`;
       }
       writeFileSync(path.join(root, "checkout.sh"), run);
     },
@@ -459,6 +519,7 @@ ${run}`;
         authHeaderPresent,
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),
+        performance: performanceFixture?.inspect(),
         pushLog: readOutput("runner-temp/generated-pr-push.log"),
         workspace,
         githubOutput: readOutput("github-output"),
@@ -467,7 +528,7 @@ ${run}`;
         githubPath: readOutput("github-path"),
         trustedConfig: readOutput("temp/pre-commit-base.yaml"),
         trustedZizmor: readOutput("temp/zizmor-base.yml"),
-        runnerTemp: path.join(root, "temp"),
+        runnerTemp: performanceFixture?.env.RUNNER_TEMP ?? path.join(root, "temp"),
         fetches: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "fetch"),
         clones: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "clone"),
         worktrees: report.commands.filter(

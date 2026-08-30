@@ -496,7 +496,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const { mode, appliedSummaries } = await runSessionsCleanup({
+      const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         opts: {
           agent: params.agent,
@@ -511,8 +511,17 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         mode,
         dryRun: false,
         summaries: appliedSummaries,
+        failure,
       });
-      respond(true, result, undefined);
+      if (failure) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, failure.message, { details: result }),
+        );
+      } else {
+        respond(true, result, undefined);
+      }
       for (const summary of appliedSummaries) {
         emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
         if (summary.wouldMutate) {
@@ -520,6 +529,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             `sessions.cleanup applied ${summary.storePath}: ${summary.beforeCount} -> ${summary.afterCount}`,
           );
         }
+      }
+      if (failure?.lifecycleCommitted) {
+        emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
       }
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));

@@ -305,6 +305,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        if (targetedSessionSync.failure) {
+          this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
+        }
         return;
       }
     }
@@ -377,6 +380,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        this.syncOutcomes.recordActiveFailure(err);
         log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
         return;
       }

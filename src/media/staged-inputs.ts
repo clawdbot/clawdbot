@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { root as fsRoot, sanitizeUntrustedFileName, type Root } from "../infra/fs-safe.js";
+import type { MediaFact } from "./media-facts.js";
 
 const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
 export const STAGED_INPUT_GIT_PATHSPEC = `:(glob)${STAGED_INPUT_DIRECTORY_PREFIX}*/**`;
@@ -87,6 +89,44 @@ export function stagedInputDirectory(identity: string): string {
 export function stagedInputFileName(name: string): string {
   // A generic prefix keeps uploaded Git control filenames ordinary input files.
   return sanitizeUntrustedFileName(`input-${name}`, "input-attachment");
+}
+
+/** Maps producer-stamped upload handles to exact private paths for the current turn. */
+export function resolveStagedInputMediaPaths(
+  media: readonly MediaFact[] | undefined,
+): ReadonlyMap<string, string> {
+  const paths = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const fact of media ?? []) {
+    if (fact.staged !== true || !fact.path) {
+      continue;
+    }
+    const directory = stagedInputPathDirectory(fact.path);
+    const prefix = directory ? `${directory}/input-` : undefined;
+    if (!prefix || !fact.path.startsWith(prefix)) {
+      continue;
+    }
+    const fileName = fact.path.slice(prefix.length);
+    if (!/^file_[^/\\]+$/u.test(fileName)) {
+      continue;
+    }
+    const extension = path.posix.extname(fileName);
+    const aliases = extension ? [fileName, fileName.slice(0, -extension.length)] : [fileName];
+    for (const alias of aliases) {
+      if (ambiguous.has(alias)) {
+        continue;
+      }
+      const existing = paths.get(alias);
+      if (existing && existing !== fact.path) {
+        // A duplicate alias has no authoritative target; input order must not select one.
+        paths.delete(alias);
+        ambiguous.add(alias);
+      } else {
+        paths.set(alias, fact.path);
+      }
+    }
+  }
+  return paths;
 }
 
 export async function ensureStagedInputDirectory(

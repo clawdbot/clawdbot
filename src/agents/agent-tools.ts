@@ -201,6 +201,7 @@ type OpenClawCodingToolsOptions = {
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
   sandbox?: SandboxContext | null;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   sessionKey?: string;
   /**
    * The durable store session key for the live run when it differs from the
@@ -849,6 +850,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
+            stagedMediaPaths: options?.stagedMediaPaths,
             sandboxWorkspaceMediaReadAllowed,
             fsPolicy,
             workspaceDir: workspaceRoot,

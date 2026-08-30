@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -119,13 +120,16 @@ function createPreparedRuntimeLease(input: {
   agentId?: string;
   workspaceDir?: string;
 }) {
-  const prepared = createModelGenerationFixture({ config: input.config, label: "cli" });
+  const prepared = createModelGenerationFixture({
+    config: input.config,
+    label: "cli",
+    agentDir: input.agentDir,
+    workspaceDir: expectDefined(input.workspaceDir, "compaction fixture workspace"),
+  });
   return {
     snapshot: {
       ...prepared.preparedModelRuntime,
       ...(input.agentId ? { agentId: input.agentId } : {}),
-      agentDir: input.agentDir,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     },
     pluginGeneration: {
       configuredCatalogEntries: [],
@@ -382,7 +386,7 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   it("records context-engine compaction successor session targets", async () => {
     const successorSessionId = "session-cli-rotated";
-    const recordCliCompactionInStore = vi.fn(async () => undefined);
+    const recordCliCompactionInStore = vi.fn(recordCliCompactionInStoreImpl);
     const scenario = await prepareCompactionScenario({
       suffix: "cli-rotates",
       tmpDir,
@@ -421,7 +425,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
         compactionKind: "context-engine",
-        newSessionId: successorSessionId,
+        expectedSession: expect.objectContaining({ sessionId: successorSessionId }),
         tokensAfter: 100,
       }),
     );
@@ -459,11 +463,13 @@ describe("runCliTurnCompactionLifecycle", () => {
       }),
     );
     expect(scenario.recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({ newSessionId: successorId }),
+      expect.objectContaining({
+        expectedSession: expect.objectContaining({ sessionId: successorId }),
+      }),
     );
   });
 
-  it("adopts a deprecated session-key successor after the engine rotates its stored id", async () => {
+  it("rejects an engine that changes the host row before successor acceptance", async () => {
     const successorId = "session-cli-key-successor";
     const scenario = await prepareContextSuccessorScenario({
       suffix: "session-key",
@@ -486,18 +492,9 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
 
-    await scenario.run();
-
-    expect(scenario.maintenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: scenario.sessionKey,
-        sessionId: successorId,
-        sessionTarget: expect.objectContaining({
-          sessionId: successorId,
-          sessionKey: scenario.sessionKey,
-        }),
-      }),
-    );
+    await expect(scenario.run()).rejects.toThrow();
+    expect(scenario.maintenance).not.toHaveBeenCalled();
+    expect(scenario.recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting CLI successor ids", async () => {
@@ -879,7 +876,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(scenario.compactCalls).toHaveLength(0);
   });
 
-  it("passes owning context engines into native harness CLI compaction", async () => {
+  it("does not interpret a native harness result id as a host successor", async () => {
     const compactCalls: CompactParams[] = [];
     const contextEngine = {
       ...buildContextEngine({ compactCalls }),
@@ -936,7 +933,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect.objectContaining({
         sessionKey,
         tokensAfter: 42,
-        newSessionId: "session-codex-owned-engine-rotated",
+        expectedSession: expect.objectContaining({ sessionId: "session-codex-owned-engine" }),
       }),
     );
   });

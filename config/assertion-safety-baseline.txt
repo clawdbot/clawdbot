@@ -1590,7 +1590,6 @@ packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/session-transcript-corpus.ts	1
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
 packages/memory-host-sdk/src/host/sqlite.ts	1
-packages/memory-host-sdk/src/host/types.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	6
 packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2
@@ -1709,7 +1708,7 @@ src/agents/cli-credentials.ts	10
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
 src/agents/cli-runner.ts	1
-src/agents/cli-runner/bundle-mcp-codex.ts	5
+src/agents/cli-runner/bundle-mcp-codex.ts	4
 src/agents/cli-runner/bundle-mcp-gemini.ts	4
 src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	6
@@ -1731,7 +1730,6 @@ src/agents/codex-mcp-config.ts	1
 src/agents/command/attempt-execution.helpers.ts	7
 src/agents/command/attempt-execution.ts	3
 src/agents/command/delivery.ts	2
-src/agents/command/session-store.ts	2
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
@@ -1762,7 +1760,7 @@ src/agents/embedded-agent-runner/cache-ttl.ts	2
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	7
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	1
 src/agents/embedded-agent-runner/compact.hooks.harness.ts	8
-src/agents/embedded-agent-runner/compact.queued.ts	5
+src/agents/embedded-agent-runner/compact.queued.ts	3
 src/agents/embedded-agent-runner/compaction-diagnostics.ts	5
 src/agents/embedded-agent-runner/compaction-hooks.ts	1
 src/agents/embedded-agent-runner/compaction-session-agent.ts	7
@@ -1772,7 +1770,7 @@ src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/empty-assistant-turn.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
 src/agents/embedded-agent-runner/extra-params.ts	12
-src/agents/embedded-agent-runner/google-prompt-cache.ts	6
+src/agents/embedded-agent-runner/google-prompt-cache.ts	5
 src/agents/embedded-agent-runner/history.ts	2
 src/agents/embedded-agent-runner/message-visibility.ts	13
 src/agents/embedded-agent-runner/model-context-tokens.ts	1
@@ -1859,13 +1857,13 @@ src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
 src/agents/embedded-agent-runner/tool-result-truncation.ts	23
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
-src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	6
+src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	5
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
-src/agents/embedded-agent-subscribe.handlers.ts	11
+src/agents/embedded-agent-subscribe.handlers.ts	10
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-subscribe.ts	5
 src/agents/embedded-agent-tool-media.ts	10
@@ -1978,7 +1976,6 @@ src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	24
 src/agents/session-transcript-repair.ts	15
 src/agents/sessions/agent-session-base.ts	3
-src/agents/sessions/agent-session-compaction.ts	1
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-inspection.ts	2
 src/agents/sessions/agent-session-models.ts	2
@@ -2443,7 +2440,7 @@ src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/update-cli/update-command-post-update.ts	2
 src/cli/users-cli.ts	1
-src/commands/agent-exec.ts	6
+src/commands/agent-exec.ts	1
 src/commands/agent-via-gateway.ts	7
 src/commands/agents.commands.bind.ts	5
 src/commands/agents.commands.identity.ts	1
@@ -2670,7 +2667,7 @@ src/config/schema.hints.ts	15
 src/config/schema.tags.ts	1
 src/config/schema.ts	3
 src/config/sessions/archive-compression.ts	1
-src/config/sessions/cleanup-service.ts	4
+src/config/sessions/cleanup-service.ts	3
 src/config/sessions/conversation-delivery-store.ts	2
 src/config/sessions/group.ts	1
 src/config/sessions/legacy-main-session-migration-operations.ts	1

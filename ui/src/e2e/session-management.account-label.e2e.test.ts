@@ -76,7 +76,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, cardsKey));
       const row = page.locator(`[data-session-key="${cardsKey}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       // The row itself carries the account discriminator, so a rename field that

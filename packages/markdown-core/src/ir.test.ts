@@ -11,6 +11,25 @@ function expectWellFormedUtf16(text: string): void {
   expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
 }
 
+describe("Markdown parser calls", () => {
+  it("keeps document references and changed options local to each parse", () => {
+    const options = { linkify: false };
+    expect(
+      markdownToIR("[ref]: https://example.org/doc\n\n[ref]", options).links.map(
+        (link) => link.href,
+      ),
+    ).toEqual(["https://example.org/doc"]);
+    expect(markdownToIR("[ref] example.org", options).links).toEqual([]);
+
+    options.linkify = true;
+    expect(markdownToIR("[ref] example.org", options).links.map((link) => link.href)).toEqual([
+      "http://example.org",
+    ]);
+    options.linkify = false;
+    expect(markdownToIR("[ref] example.org", options).links).toEqual([]);
+  });
+});
+
 describe("sliceMarkdownIR surrogate pair boundaries", () => {
   it("expands start boundary backward when it lands on a low surrogate", () => {
     // "a😀b" — UTF-16: [a] [\uD83D] [\uDE00] [b], indices 0-3

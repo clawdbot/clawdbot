@@ -51,7 +51,7 @@ import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-eve
 
 type TranscriptAppendOptions = {
   allowStoredAlias?: boolean;
-  dedupeByMessageIdempotency?: boolean;
+  idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
@@ -97,15 +97,10 @@ function appendTranscriptEvent(
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
     return false;
   }
-  if (
-    identity?.messageIdempotencyKey &&
-    options.dedupeByMessageIdempotency &&
-    readTranscriptIdentityByMessageIdempotencyKey(
-      database,
-      scope.sessionId,
-      identity.messageIdempotencyKey,
-    )
-  ) {
+  const idempotencyKeyOwner = identity?.messageIdempotencyKey
+    ? readIdempotencyKeyOwner(database, scope.sessionId, identity.messageIdempotencyKey)
+    : undefined;
+  if (idempotencyKeyOwner && options.idempotencyKeyMode === "dedupe") {
     return false;
   }
   const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
@@ -133,16 +128,20 @@ function appendTranscriptEvent(
     options.onProjectionReconcileNeeded?.();
   }
   if (identity) {
-    // Caller-checked appends may retain a duplicate key in the payload, but the
-    // identity index can point at only one row.
+    // Replayed copies take ownership so later retries resolve on the active branch.
+    // scan-assistant preserves a colliding user's ownership instead.
+    if (idempotencyKeyOwner && options.idempotencyKeyMode === "relocate-owner") {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("transcript_event_identities")
+          .set({ message_idempotency_key: null })
+          .where("session_id", "=", scope.sessionId)
+          .where("event_id", "=", idempotencyKeyOwner.eventId),
+      );
+    }
     const indexedMessageIdempotencyKey =
-      identity.messageIdempotencyKey &&
-      !options.dedupeByMessageIdempotency &&
-      readTranscriptIdentityByMessageIdempotencyKey(
-        database,
-        scope.sessionId,
-        identity.messageIdempotencyKey,
-      )
+      idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner"
         ? undefined
         : identity.messageIdempotencyKey;
     executeSqliteQuerySync(
@@ -580,7 +579,7 @@ export function readTranscriptIdentityByEventId(
   return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
-function readTranscriptIdentityByMessageIdempotencyKey(
+function readIdempotencyKeyOwner(
   database: OpenClawAgentDatabase,
   sessionId: string,
   idempotencyKey: string,
@@ -604,11 +603,7 @@ function readTranscriptMessageByIdempotencyKey(
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
 ): { messageId: string; message: unknown } | undefined {
-  const identity = readTranscriptIdentityByMessageIdempotencyKey(
-    database,
-    scope.sessionId,
-    idempotencyKey,
-  );
+  const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
 }
 

@@ -1,19 +1,17 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getSafeSessionStorage } from "../../local-storage.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-  resolveUiDefaultAgentId,
-  resolveUiKnownSelectedGlobalAgentId,
+  hasUiSessionDefaults,
+  resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
-import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 import { removeOutboxPayloads } from "./outbox-payload-store.runtime.ts";
 import {
-  MAX_RETAINED_QUEUE_ITEMS,
   MAX_STORED_SESSIONS,
   normalizeStoredSession,
   type StoredComposerSession,
@@ -21,38 +19,30 @@ import {
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
-const INLINE_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
-const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
-export const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
+const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
+const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
+const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
+const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 const storedChatOutboxChangeListeners = new Set<() => void>();
 let storageChangeListenerInstalled = false;
 
 export type ChatComposerScope = {
   client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
+  connected?: boolean;
+  selectedChatSessionIncognito?: boolean;
   settings?: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
-};
-
-type StoredComposerMainAlias = {
-  key: string;
-  agentId: string;
 };
 
 type ComposerStorageTarget = {
   key: string;
   legacyKey: string;
-  inlineKey: string;
+  previousKey: string;
+  blobKey: string;
   gatewayOwner: string;
   legacyOwnerIsUnambiguous: boolean;
-};
-
-export type ComposerStorageScope = {
-  conversationKey: string;
-  agentScope: string;
-  routingAgentId?: string;
-  isGlobal: boolean;
 };
 
 export type StoredChatOutboxScope = {
@@ -61,17 +51,25 @@ export type StoredChatOutboxScope = {
 };
 
 export type StoredComposerState = {
-  version: 3;
-  /** Upgrade source, removed only after its replacement commits. Never persisted. */
-  upgradeSourceKey?: string;
+  version: 4;
   gatewayOwner: string;
   sessions: Record<string, StoredComposerSession>;
-  mainAlias?: StoredComposerMainAlias;
+  recovery: Record<string, StoredComposerRecovery>;
+  legacyReceipts?: Partial<Record<"1" | "2" | "3", string>>;
+  recoveryBlocked?: true;
 };
 
-const storedMainAliasByStorage = new WeakMap<
-  Storage,
-  Map<string, StoredComposerMainAlias | null>
+export type StoredComposerRecovery = {
+  sourceVersion: 1 | 2 | 3 | 4;
+  sourceScopeKey: string;
+  session: StoredComposerSession;
+};
+
+// Keep the original recovery bound; excess whole legacy sources remain untouched.
+const MAX_RECOVERY_ROWS = 80;
+const pendingLegacyTransfers = new WeakMap<
+  StoredComposerState,
+  Array<{ key: string; raw: string }>
 >();
 // Projection reads share one normalized snapshot until a canonical write or
 // browser storage event invalidates it; mutation paths still reread for CAS.
@@ -107,24 +105,18 @@ export function notifyStoredChatOutboxChanges(): void {
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
   if (event.key === null && event.storageArea) {
-    storedMainAliasByStorage.get(event.storageArea)?.clear();
     projectedStoreByStorage.get(event.storageArea)?.clear();
     notifyStoredChatOutboxChanges();
     return;
   }
   if (
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
-    event.key?.startsWith(INLINE_STORAGE_KEY_PREFIX) ||
-    event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX)
+    event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX) ||
+    event.key?.startsWith(PREVIOUS_STORAGE_KEY_PREFIX) ||
+    event.key?.startsWith(BLOB_STORAGE_KEY_PREFIX)
   ) {
     if (event.storageArea) {
-      const previousPrefix = event.key.startsWith(LEGACY_STORAGE_KEY_PREFIX)
-        ? LEGACY_STORAGE_KEY_PREFIX
-        : INLINE_STORAGE_KEY_PREFIX;
-      const projectedKey = event.key.startsWith(STORAGE_KEY_PREFIX)
-        ? event.key
-        : `${STORAGE_KEY_PREFIX}${event.key.slice(previousPrefix.length)}`;
-      projectedStoreByStorage.get(event.storageArea)?.delete(projectedKey);
+      projectedStoreByStorage.get(event.storageArea)?.clear();
     }
     notifyStoredChatOutboxChanges();
   }
@@ -137,8 +129,9 @@ export function storageTargetForGateway(
   const encodedOwner = encodeURIComponent(gatewayOwner);
   return {
     key: `${STORAGE_KEY_PREFIX}${encodedOwner}`,
-    inlineKey: `${INLINE_STORAGE_KEY_PREFIX}${encodedOwner}`,
     legacyKey: `${LEGACY_STORAGE_KEY_PREFIX}${encodedOwner.slice(0, 240)}`,
+    previousKey: `${PREVIOUS_STORAGE_KEY_PREFIX}${encodedOwner}`,
+    blobKey: `${BLOB_STORAGE_KEY_PREFIX}${encodedOwner}`,
     gatewayOwner,
     // Shipped v1 keys omitted the owner and truncated its encoded value. A
     // truncated row cannot prove which same-prefix gateway owns its outbox.
@@ -146,304 +139,76 @@ export function storageTargetForGateway(
   };
 }
 
-export function hasKnownSessionDefaults(state: ChatComposerScope): boolean {
-  if (state.agentsList != null) {
-    return true;
+export function parseStoredChatOutboxScope(key: string): StoredChatOutboxScope | null {
+  const separator = "\u0000agent:";
+  const index = key.lastIndexOf(separator);
+  if (index < 1) {
+    return null;
   }
-  const snapshot = state.hello?.snapshot;
-  return Boolean(
-    snapshot &&
-    typeof snapshot === "object" &&
-    "sessionDefaults" in snapshot &&
-    snapshot.sessionDefaults &&
-    typeof snapshot.sessionDefaults === "object",
-  );
-}
-
-function rememberStoredMainAlias(
-  storage: Storage,
-  storageKey: string,
-  mainAlias: StoredComposerMainAlias | undefined,
-) {
-  let byStorageKey = storedMainAliasByStorage.get(storage);
-  if (!byStorageKey) {
-    byStorageKey = new Map();
-    storedMainAliasByStorage.set(storage, byStorageKey);
+  const sessionKey = key.slice(0, index);
+  const agentScope = key.slice(index + separator.length);
+  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (parsedAgentId && normalizeAgentId(agentScope) !== normalizeAgentId(parsedAgentId)) {
+    return null;
   }
-  byStorageKey.set(storageKey, mainAlias ?? null);
+  const agentId =
+    parsedAgentId ??
+    (sessionKey === "global" && agentScope !== UNRESOLVED_GLOBAL_AGENT_SCOPE
+      ? agentScope
+      : undefined);
+  return { sessionKey, ...(agentId ? { agentId: normalizeAgentId(agentId) } : {}) };
 }
 
-function rememberedStoredMainAlias(
-  storage: Storage,
-  storageKey: string,
-): StoredComposerMainAlias | undefined {
-  return storedMainAliasByStorage.get(storage)?.get(storageKey) ?? undefined;
-}
-
-export function resolveComposerStorageScope(
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-  storedMainAlias?: StoredComposerMainAlias,
-): ComposerStorageScope {
-  const parsed = parseAgentSessionKey(sessionKey);
-  const normalizedSessionKey = sessionKey.trim().toLowerCase();
-  const knownSessionDefaults = hasKnownSessionDefaults(state);
-  const configuredMainKey = resolveUiConfiguredMainKey(state);
-  const bareGlobalAlias =
-    normalizedSessionKey === DEFAULT_MAIN_KEY || normalizedSessionKey === configuredMainKey;
-  const storedAliasCandidate = parsed?.rest ?? normalizedSessionKey;
-  const storedMainAliasMatches =
-    !knownSessionDefaults && storedMainAlias?.key === storedAliasCandidate;
-  const storedBareMainAliasAgentId =
-    !knownSessionDefaults &&
-    !parsed &&
-    storedMainAlias &&
-    (normalizedSessionKey === DEFAULT_MAIN_KEY || storedMainAliasMatches)
-      ? storedMainAlias.agentId
-      : undefined;
-  const unresolvedBareMain =
-    !knownSessionDefaults && !parsed && normalizedSessionKey === DEFAULT_MAIN_KEY;
-  const parsedGlobalAlias =
-    parsed &&
-    (parsed.rest === "global" ||
-      parsed.rest === DEFAULT_MAIN_KEY ||
-      parsed.rest === configuredMainKey);
-  const isGlobal =
-    normalizedSessionKey === "global" ||
-    bareGlobalAlias ||
-    Boolean(parsedGlobalAlias) ||
-    storedMainAliasMatches;
-  const explicitAgentId = parsed?.agentId ?? agentIdOverride?.trim();
-  const knownAgentId = resolveUiKnownSelectedGlobalAgentId(state);
-  const bareGlobalAgentId =
-    knownSessionDefaults && !parsed && bareGlobalAlias ? resolveUiDefaultAgentId(state) : undefined;
-  const routingAgentId = isGlobal
-    ? explicitAgentId
-      ? normalizeAgentId(explicitAgentId)
-      : bareGlobalAgentId
-        ? bareGlobalAgentId
-        : storedBareMainAliasAgentId
-          ? storedBareMainAliasAgentId
-          : unresolvedBareMain
-            ? undefined
-            : knownAgentId
-              ? knownAgentId
-              : storedMainAliasMatches
-                ? storedMainAlias.agentId
-                : undefined
-    : parsed?.agentId
-      ? normalizeAgentId(parsed.agentId)
-      : undefined;
-  const agentScope =
-    routingAgentId ?? (isGlobal ? UNRESOLVED_GLOBAL_AGENT_SCOPE : DEFAULT_AGENT_ID);
-  // Before Gateway defaults load, bare `main` means the unknown default agent
-  // while raw `global` means the unknown selected agent. Keep their durable
-  // rows distinct until those two owners can be resolved.
-  const preserveBareMainRoute = unresolvedBareMain && !routingAgentId;
-  return {
-    conversationKey: preserveBareMainRoute ? DEFAULT_MAIN_KEY : isGlobal ? "global" : sessionKey,
-    agentScope,
-    ...(routingAgentId ? { routingAgentId } : {}),
-    isGlobal,
-  };
-}
-
-function storageSessionKeyForAgentScope(sessionKey: string, agentScope: string): string {
-  return `${sessionKey}\u0000agent:${agentScope}`;
-}
-
-function updateStoredMainAlias(store: StoredComposerState, state: ChatComposerScope): boolean {
-  if (!hasKnownSessionDefaults(state)) {
-    return false;
-  }
-  const key = resolveUiConfiguredMainKey(state);
-  const next =
-    key === DEFAULT_MAIN_KEY ? undefined : { key, agentId: resolveUiDefaultAgentId(state) };
-  if (store.mainAlias?.key === next?.key && store.mainAlias?.agentId === next?.agentId) {
-    return false;
-  }
-  if (next) {
-    store.mainAlias = next;
-  } else {
-    delete store.mainAlias;
-  }
-  return true;
-}
-
-function mergeStoredComposerSessions(
-  current: StoredComposerSession | null,
-  incoming: StoredComposerSession,
-): StoredComposerSession {
-  if (!current) {
-    return incoming;
-  }
-  // Storage insertion order breaks timestamp ties, while draft revisions remain
-  // independent so a newer queue update cannot erase an older live draft.
-  const newest = current.updatedAt > incoming.updatedAt ? current : incoming;
-  const older = newest === current ? incoming : current;
-  const draftOwner =
-    (current.draftRevision ?? -1) > (incoming.draftRevision ?? -1) ? current : incoming;
-  const queue = Array.from(
-    new Map(
-      [...(older.queue ?? []), ...(newest.queue ?? [])].map((item) => [item.id, item]),
-    ).values(),
-  )
-    .toSorted(compareChatQueueOrder)
-    .slice(0, MAX_RETAINED_QUEUE_ITEMS);
-  return {
-    ...(draftOwner.draft ? { draft: draftOwner.draft } : {}),
-    ...(draftOwner.goalMode ? { goalMode: draftOwner.goalMode } : {}),
-    ...(draftOwner.draftRevision !== undefined ? { draftRevision: draftOwner.draftRevision } : {}),
-    ...(queue.length ? { queue } : {}),
-    updatedAt: Math.max(current.updatedAt, incoming.updatedAt),
-  };
-}
-
-export function resolveStoredComposerSession(
+// Only admissions made before defaults arrived can move after reconnect. Stored
+// canonical identities never get reinterpreted by a later config or selection.
+export function resolvePendingComposerSessions(
   store: StoredComposerState,
   state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-) {
-  const resolved = resolveComposerSessionAliases(store, state, sessionKey, agentIdOverride);
-  const scope = resolveComposerStorageScope(state, sessionKey, agentIdOverride, store.mainAlias);
-  const session = resolved.session;
-  // Legacy rows can already have the canonical bucket key while their items
-  // lack embedded routes. Normalize at migration, before edit/remove CAS reads.
-  if (
-    session?.queue?.some(
-      (item) => item.sessionKey !== scope.conversationKey || item.agentId !== scope.routingAgentId,
-    )
-  ) {
-    session.queue = session.queue.map((item) => applyStoredChatOutboxScope(item, scope));
-    store.sessions[resolved.storeSessionKey] = session;
-    resolved.migrated = true;
-  }
-  return resolved;
-}
-
-function resolveComposerSessionAliases(
-  store: StoredComposerState,
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-): { session: StoredComposerSession | null; storeSessionKey: string; migrated: boolean } {
-  let migrated = updateStoredMainAlias(store, state);
-  const scope = resolveComposerStorageScope(state, sessionKey, agentIdOverride, store.mainAlias);
-  const storeSessionKey = storageSessionKeyForAgentScope(scope.conversationKey, scope.agentScope);
-  const defaultGlobalAgentId = hasKnownSessionDefaults(state)
-    ? resolveUiDefaultAgentId(state)
-    : store.mainAlias?.agentId;
-  if (defaultGlobalAgentId) {
-    const defaultGlobalKey = storageSessionKeyForAgentScope("global", defaultGlobalAgentId);
-    let defaultGlobalSession = normalizeStoredSession(store.sessions[defaultGlobalKey]);
-    const bareMainAliases = new Set([
-      DEFAULT_MAIN_KEY,
-      resolveUiConfiguredMainKey(state),
-      ...(store.mainAlias ? [store.mainAlias.key] : []),
-    ]);
-    for (const legacySessionKey of Object.keys(store.sessions)) {
-      if (legacySessionKey === defaultGlobalKey) {
-        continue;
-      }
-      const separatorIndex = legacySessionKey.lastIndexOf("\u0000agent:");
-      if (
-        separatorIndex < 0 ||
-        !bareMainAliases.has(legacySessionKey.slice(0, separatorIndex).trim().toLowerCase())
-      ) {
-        continue;
-      }
-      const legacySession = normalizeStoredSession(store.sessions[legacySessionKey]);
-      if (!legacySession) {
-        continue;
-      }
-      // Shipped bare-main rows kept the selected agent, but the route always
-      // belongs to the default agent; preserve every queued item while moving it.
-      const queue = legacySession.queue?.map((item) => ({
-        ...item,
-        agentId: defaultGlobalAgentId,
-        sessionKey: "global",
-      }));
-      defaultGlobalSession = mergeStoredComposerSessions(defaultGlobalSession, {
-        ...legacySession,
-        ...(queue ? { queue } : {}),
-      });
-      store.sessions[defaultGlobalKey] = defaultGlobalSession;
-      delete store.sessions[legacySessionKey];
-      migrated = true;
-    }
-  }
-  let session = normalizeStoredSession(store.sessions[storeSessionKey]);
-  const agentSuffix = `\u0000agent:${scope.agentScope}`;
-  const unqualifiedOpaqueRoute = !scope.isGlobal && !parseAgentSessionKey(sessionKey);
-  for (const legacySessionKey of Object.keys(store.sessions)) {
-    if (legacySessionKey === storeSessionKey) {
+): boolean {
+  let migrated = false;
+  for (const [key, pending] of Object.entries(store.sessions)) {
+    if (!pending.awaitingDefaults || !hasUiSessionDefaults(state)) {
       continue;
     }
-    const separatorIndex = legacySessionKey.lastIndexOf("\u0000agent:");
-    if (separatorIndex < 0) {
+    const source = parseStoredChatOutboxScope(key);
+    if (!source) {
       continue;
     }
-    const legacyRawSessionKey = legacySessionKey.slice(0, separatorIndex);
-    const sameOpaqueRoute = unqualifiedOpaqueRoute && legacyRawSessionKey === scope.conversationKey;
-    if (!sameOpaqueRoute && !legacySessionKey.endsWith(agentSuffix)) {
-      continue;
-    }
-    if (!sameOpaqueRoute) {
-      const legacyScope = resolveComposerStorageScope(
-        state,
-        legacyRawSessionKey,
-        scope.agentScope === UNRESOLVED_GLOBAL_AGENT_SCOPE ? undefined : scope.agentScope,
-        store.mainAlias,
-      );
-      if (legacyScope.conversationKey !== scope.conversationKey) {
-        continue;
+    const resolved = resolveStoredChatOutboxScope(state, source.sessionKey, source.agentId);
+    const nextKey = storedChatOutboxScopeKey(resolved);
+    const { awaitingDefaults: _, ...session } = pending;
+    const destination = store.sessions[nextKey];
+    if (nextKey !== key && destination) {
+      const existingIds = new Set(destination.queue?.map((item) => item.id));
+      const conflict = session.queue?.some((item) => existingIds.has(item.id));
+      const sourceNewer = (session.draftRevision ?? 0) > (destination.draftRevision ?? 0);
+      if (conflict || (session.draft && !sourceNewer)) {
+        holdComposerRecovery(store, `pending:${key}`, 4, key, session);
+      } else {
+        const draftOwner = sourceNewer ? session : destination;
+        store.sessions[nextKey] = {
+          ...draftOwner,
+          queue: [
+            ...(destination.queue ?? []),
+            ...(session.queue ?? []).map((item) => applyStoredChatOutboxScope(item, resolved)),
+          ],
+          updatedAt: Math.max(session.updatedAt, destination.updatedAt),
+        };
       }
+    } else {
+      store.sessions[nextKey] = {
+        ...session,
+        ...(session.queue
+          ? { queue: session.queue.map((item) => applyStoredChatOutboxScope(item, resolved)) }
+          : {}),
+      };
     }
-    const legacySession = normalizeStoredSession(store.sessions[legacySessionKey]);
-    if (!legacySession) {
-      continue;
+    if (nextKey !== key) {
+      delete store.sessions[key];
     }
-    // Normalize embedded routes with their owner row so later durable mutations
-    // can find aliases and selected-agent opaque routes after reconnect.
-    const queue = legacySession.queue?.map(({ agentId: _agentId, ...item }) => ({
-      ...item,
-      sessionKey: scope.conversationKey,
-      ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
-    }));
-    session = mergeStoredComposerSessions(session, {
-      ...legacySession,
-      ...(queue ? { queue } : {}),
-    });
-    store.sessions[storeSessionKey] = session;
-    delete store.sessions[legacySessionKey];
     migrated = true;
   }
-  if (!scope.isGlobal || scope.agentScope !== resolveUiKnownSelectedGlobalAgentId(state)) {
-    return { session, storeSessionKey, migrated };
-  }
-  const unresolvedKey = storageSessionKeyForAgentScope(
-    scope.conversationKey,
-    UNRESOLVED_GLOBAL_AGENT_SCOPE,
-  );
-  const unresolved =
-    storeSessionKey === unresolvedKey
-      ? null
-      : normalizeStoredSession(store.sessions[unresolvedKey]);
-  if (!unresolved) {
-    return { session, storeSessionKey, migrated };
-  }
-  const queue = unresolved.queue?.map((item) =>
-    item.agentId ? item : { ...item, agentId: scope.agentScope },
-  );
-  const merged = mergeStoredComposerSessions(session, {
-    ...unresolved,
-    ...(queue ? { queue } : {}),
-  });
-  store.sessions[storeSessionKey] = merged;
-  delete store.sessions[unresolvedKey];
-  return { session: merged, storeSessionKey, migrated: true };
+  return migrated;
 }
 
 export function resolveStoredChatOutboxScope(
@@ -451,83 +216,98 @@ export function resolveStoredChatOutboxScope(
   sessionKey: string,
   agentIdOverride?: string,
 ): StoredChatOutboxScope {
-  const storage = getSafeSessionStorage();
-  const target = storageTargetForGateway(state.settings?.gatewayUrl);
-  const storedMainAlias = storage ? rememberedStoredMainAlias(storage, target.key) : undefined;
-  const scope = resolveComposerStorageScope(state, sessionKey, agentIdOverride, storedMainAlias);
+  return resolveUiConversationIdentity(state, sessionKey, agentIdOverride);
+}
+
+export function captureChatOutboxAdmission(
+  state: ChatComposerScope,
+  sessionKey: string,
+  agentId?: string,
+) {
   return {
-    sessionKey: scope.conversationKey,
-    ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
+    scope: resolveStoredChatOutboxScope(state, sessionKey, agentId),
+    awaitingDefaults: !hasUiSessionDefaults(state),
   };
+}
+
+// Captured scopes never consult current defaults. Fill only an omitted agent;
+// explicit conflicting facts must remain visible to stored-scope validation.
+function storedChatOutboxAgentId(scope: StoredChatOutboxScope): string | undefined {
+  return scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
 }
 
 export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
   const normalizedSessionKey = scope.sessionKey.trim().toLowerCase();
   const agentScope =
-    scope.agentId ??
+    storedChatOutboxAgentId(scope) ??
     (normalizedSessionKey === "global" || normalizedSessionKey === DEFAULT_MAIN_KEY
       ? UNRESOLVED_GLOBAL_AGENT_SCOPE
       : DEFAULT_AGENT_ID);
-  return storageSessionKeyForAgentScope(scope.sessionKey, agentScope);
+  return `${scope.sessionKey}\u0000agent:${agentScope}`;
 }
 
-function parseStoredOutboxStore(
-  storage: Storage,
-  target: ComposerStorageTarget,
-  raw: string,
-  version: 1 | 2 | 3,
-): StoredComposerState | null {
-  let parsed: Omit<Partial<StoredComposerState>, "version"> & { version?: number };
-  try {
-    parsed = JSON.parse(raw) as typeof parsed;
-  } catch {
-    return null;
+function holdComposerRecovery(
+  store: StoredComposerState,
+  id: string,
+  sourceVersion: StoredComposerRecovery["sourceVersion"],
+  sourceScopeKey: string,
+  session: StoredComposerSession,
+): void {
+  const { queue, ...draft } = session;
+  const groups = new Map<string | undefined, ChatQueueItem[]>();
+  if (draft.draft || draft.goalMode || (!queue?.length && draft.draftRevision !== undefined)) {
+    groups.set(undefined, []);
   }
-  if (
-    !parsed ||
-    parsed.version !== version ||
-    !parsed.sessions ||
-    typeof parsed.sessions !== "object"
-  ) {
-    return null;
+  for (const item of queue ?? []) {
+    const owner = item.attachmentPayload?.recoveryScope;
+    groups.set(owner, [...(groups.get(owner) ?? []), item]);
   }
-  if (version !== 1 && parsed.gatewayOwner !== target.gatewayOwner) {
-    // Never replace another Gateway's occupied bucket while deriving badges or
-    // restoring a composer; its queued messages belong to a different owner.
-    throw new Error("Chat outbox gateway owner mismatch");
-  }
-  try {
-    const sessions: Record<string, StoredComposerSession> = {};
-    for (const [sessionKey, value] of Object.entries(parsed.sessions)) {
-      const session = normalizeStoredSession(value);
-      if (session) {
-        sessions[sessionKey] = session;
-        observeDraftRevision(session.draftRevision);
-        rememberDraftRevision(storage, target.key, sessionKey, session.draftRevision);
-      }
-    }
-    const rawMainAlias = parsed.mainAlias;
-    const mainAlias =
-      rawMainAlias &&
-      typeof rawMainAlias === "object" &&
-      typeof rawMainAlias.key === "string" &&
-      rawMainAlias.key.trim() &&
-      typeof rawMainAlias.agentId === "string" &&
-      rawMainAlias.agentId.trim()
-        ? {
-            key: rawMainAlias.key.trim().toLowerCase(),
-            agentId: normalizeAgentId(rawMainAlias.agentId),
-          }
-        : undefined;
-    rememberStoredMainAlias(storage, target.key, mainAlias);
-    return {
-      version: 3,
-      gatewayOwner: target.gatewayOwner,
-      sessions,
-      ...(mainAlias ? { mainAlias } : {}),
+  for (const [owner, rows] of groups) {
+    store.recovery[`${id}:${JSON.stringify(owner ?? null)}`] = {
+      sourceVersion,
+      sourceScopeKey,
+      session: {
+        ...(owner === undefined
+          ? draft
+          : { updatedAt: session.updatedAt, draftRevision: session.draftRevision }),
+        ...(rows.length ? { queue: rows } : {}),
+      },
     };
-  } catch {
-    return null;
+  }
+}
+
+function migrateComposerRow(
+  store: StoredComposerState,
+  version: 1 | 2 | 3,
+  sourceScopeKey: string,
+  session: StoredComposerSession,
+  scope: StoredChatOutboxScope | null,
+  receipt: string,
+): void {
+  const key = scope ? storedChatOutboxScopeKey(scope) : sourceScopeKey;
+  const conflictingItems = session.queue?.some(
+    (item) =>
+      (item.sessionKey && item.sessionKey !== scope?.sessionKey) ||
+      (item.agentId && item.agentId !== scope?.agentId),
+  );
+  if (
+    scope &&
+    !conflictingItems &&
+    !store.sessions[key] &&
+    Object.keys(store.sessions).length < MAX_STORED_SESSIONS
+  ) {
+    store.sessions[key] = {
+      ...session,
+      ...(session.queue ? { queue: session.queue.map((item) => ({ ...item, ...scope })) } : {}),
+    };
+  } else {
+    holdComposerRecovery(
+      store,
+      `${version}:${receipt}:${sourceScopeKey}`,
+      version,
+      sourceScopeKey,
+      session,
+    );
   }
 }
 
@@ -536,33 +316,155 @@ export function readStoredOutboxStore(
   target: ComposerStorageTarget,
 ): StoredComposerState {
   const raw = storage.getItem(target.key);
+  const store: StoredComposerState = raw
+    ? JSON.parse(raw)
+    : {
+        version: 4,
+        gatewayOwner: target.gatewayOwner,
+        sessions: {},
+        recovery: {},
+      };
   if (raw) {
-    const store = parseStoredOutboxStore(storage, target, raw, 3);
-    if (store) {
-      return store;
+    if (
+      store.version !== 4 ||
+      store.gatewayOwner !== target.gatewayOwner ||
+      !store.sessions ||
+      !store.recovery
+    ) {
+      throw new Error("Chat outbox owner or version mismatch");
     }
-  } else {
-    // New reference rows use a separate bucket; old binaries cannot rewrite them.
-    // Upgrade is copy-before-remove so quota failure preserves every inline input.
-    const inlineRaw = storage.getItem(target.inlineKey);
-    const legacyRaw = target.legacyOwnerIsUnambiguous ? storage.getItem(target.legacyKey) : null;
-    const sourceKey = inlineRaw ? target.inlineKey : target.legacyKey;
-    const source = inlineRaw ?? legacyRaw;
-    const store = source
-      ? parseStoredOutboxStore(storage, target, source, inlineRaw ? 2 : 1)
-      : null;
-    if (store) {
-      store.upgradeSourceKey = sourceKey;
-      try {
-        writeStoredOutboxStore(storage, target, store);
-      } catch {
-        // Keep readable shipped rows when browser quota blocks migration.
+    for (const [key, value] of Object.entries(store.sessions)) {
+      const session = normalizeStoredSession(value);
+      if (!session) {
+        throw new Error("Invalid chat outbox record");
       }
-      return store;
+      store.sessions[key] = session;
+      observeDraftRevision(session.draftRevision);
+      rememberDraftRevision(storage, target.key, key, session.draftRevision);
     }
   }
-  rememberStoredMainAlias(storage, target.key, undefined);
-  return { version: 3, gatewayOwner: target.gatewayOwner, sessions: {} };
+  const sources: Array<{ key: string; raw: string }> = [];
+  for (const [key, version] of [
+    [target.blobKey, 3],
+    [target.previousKey, 2],
+    ...(target.legacyOwnerIsUnambiguous ? [[target.legacyKey, 1] as const] : []),
+  ] as const) {
+    const legacyRaw = storage.getItem(key);
+    if (!legacyRaw) {
+      continue;
+    }
+    const receipt = bytesToHex(sha256(new TextEncoder().encode(legacyRaw)));
+    if (store.legacyReceipts?.[version] === receipt) {
+      sources.push({ key, raw: legacyRaw });
+      continue;
+    }
+    const legacy = JSON.parse(legacyRaw) as {
+      version: number;
+      gatewayOwner?: string;
+      mainAlias?: { key?: string };
+      sessions: Record<string, unknown>;
+    };
+    if (
+      legacy.version !== version ||
+      (version !== 1 && legacy.gatewayOwner !== target.gatewayOwner) ||
+      !legacy.sessions
+    ) {
+      throw new Error("Chat outbox legacy owner or version mismatch");
+    }
+    const previousSessions = { ...store.sessions };
+    const previousRecovery = { ...store.recovery };
+    for (const [sourceScopeKey, value] of Object.entries(legacy.sessions)) {
+      const session = normalizeStoredSession(value);
+      const removed =
+        isRecord(value) && Array.isArray(value.removedQueueItemIds)
+          ? value.removedQueueItemIds
+          : [];
+      const sourceQueue =
+        isRecord(value) && Array.isArray(value.queue)
+          ? value.queue.filter((item) => !isRecord(item) || !removed.includes(item.id))
+          : [];
+      if (!session || sourceQueue.length !== (session.queue?.length ?? 0)) {
+        // Do not acknowledge a partial migration or discard unreadable source bytes.
+        throw new Error("Invalid legacy chat outbox record");
+      }
+      const scope = parseStoredChatOutboxScope(sourceScopeKey);
+      const identifiable =
+        scope &&
+        (parseAgentSessionKey(scope.sessionKey) ||
+          (version === 1 && scope.sessionKey === "global" && scope.agentId) ||
+          (scope.sessionKey !== "global" &&
+            scope.sessionKey !== "main" &&
+            scope.sessionKey !== legacy.mainAlias?.key));
+      // Some pre-consolidation items still carry an independent qualified target.
+      // Move those items by their own identity; the bucket's draft remains ambiguous.
+      if (!raw && version !== 1 && scope?.sessionKey === "global") {
+        const identified = new Map<string, ChatQueueItem[]>();
+        session.queue = session.queue?.filter((item) => {
+          const parsed = parseAgentSessionKey(item.sessionKey);
+          if (!parsed || (item.agentId && item.agentId !== parsed.agentId)) {
+            return true;
+          }
+          const identifiedKey = storedChatOutboxScopeKey({
+            sessionKey: item.sessionKey!,
+            agentId: parsed.agentId,
+          });
+          if (
+            !identified.has(identifiedKey) &&
+            Object.keys(store.sessions).length + identified.size >= MAX_STORED_SESSIONS
+          ) {
+            return true;
+          }
+          identified.set(identifiedKey, [...(identified.get(identifiedKey) ?? []), item]);
+          return false;
+        });
+        for (const [identifiedKey, queue] of identified) {
+          migrateComposerRow(
+            store,
+            version,
+            `${sourceScopeKey}:${identifiedKey}`,
+            { queue, updatedAt: session.updatedAt },
+            parseStoredChatOutboxScope(identifiedKey),
+            receipt,
+          );
+        }
+      }
+      if (
+        session.draft ||
+        session.goalMode ||
+        session.draftRevision !== undefined ||
+        session.queue?.length
+      ) {
+        // A later legacy writer may have already sent an earlier copy. Never
+        // auto-replay a downgraded writer's snapshot over current browser state.
+        migrateComposerRow(
+          store,
+          version,
+          sourceScopeKey,
+          session,
+          !raw && identifiable ? scope : null,
+          receipt,
+        );
+      }
+    }
+    if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
+      // Keep existing recovery usable while the next whole source waits for space.
+      store.sessions = previousSessions;
+      store.recovery = previousRecovery;
+      store.recoveryBlocked = true;
+      continue;
+    }
+    store.legacyReceipts = { ...store.legacyReceipts, [version]: receipt };
+    sources.push({ key, raw: legacyRaw });
+  }
+  if (sources.length) {
+    pendingLegacyTransfers.set(store, sources);
+    try {
+      writeStoredOutboxStore(storage, target, store);
+    } catch {
+      // The complete source remains readable; no queued entry is lost to quota.
+    }
+  }
+  return store;
 }
 
 export function readProjectedOutboxStore(
@@ -588,6 +490,9 @@ export function writeStoredOutboxStore(
 ): void {
   const previous = storage.getItem(target.key);
   projectedStoreByStorage.get(storage)?.delete(target.key);
+  if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
+    throw new Error("Chat outbox recovery limit reached; legacy source retained");
+  }
   const entries = Object.entries(store.sessions);
   const outboxes = entries.filter(([, session]) => session.queue?.length);
   if (outboxes.length > MAX_STORED_SESSIONS) {
@@ -596,6 +501,8 @@ export function writeStoredOutboxStore(
   const drafts = entries.filter(([, session]) => !session.queue?.length);
   const unresolvedGlobalKey = `global\u0000agent:${UNRESOLVED_GLOBAL_AGENT_SCOPE}`;
   const byNewest = (a: (typeof entries)[number], b: (typeof entries)[number]) =>
+    Number(b[1].awaitingDefaults === true && !parseAgentSessionKey(b[0])) -
+      Number(a[1].awaitingDefaults === true && !parseAgentSessionKey(a[0])) ||
     b[1].updatedAt - a[1].updatedAt ||
     (b[1].draftRevision ?? 0) - (a[1].draftRevision ?? 0) ||
     a[0].localeCompare(b[0]);
@@ -624,67 +531,133 @@ export function writeStoredOutboxStore(
     ].slice(0, MAX_STORED_SESSIONS),
     ...protectedDrafts,
   ];
-  if (retained.length === 0 && !store.mainAlias) {
+  if (
+    retained.length === 0 &&
+    Object.keys(store.recovery).length === 0 &&
+    !pendingLegacyTransfers.has(store) &&
+    !store.legacyReceipts
+  ) {
     storage.removeItem(target.key);
-    if (store.upgradeSourceKey) {
-      storage.removeItem(store.upgradeSourceKey);
+    if (storage.getItem(target.key) !== null) {
+      throw new Error("Chat outbox removal verification failed");
     }
-    rememberStoredMainAlias(storage, target.key, undefined);
-    retireRemovedOutboxPayloads(previous, []);
+    retireRemovedOutboxPayloads(storage, target, previous, null);
     return;
   }
-  storage.setItem(
-    target.key,
-    JSON.stringify({
-      version: 3,
-      gatewayOwner: target.gatewayOwner,
-      sessions: Object.fromEntries(retained),
-      ...(store.mainAlias ? { mainAlias: store.mainAlias } : {}),
-    }),
-  );
-  if (store.upgradeSourceKey) {
-    storage.removeItem(store.upgradeSourceKey);
+  if (pendingLegacyTransfers.has(store) && retained.length < entries.length) {
+    throw new Error("Chat outbox migration exceeds retention; source retained");
   }
-  rememberStoredMainAlias(storage, target.key, store.mainAlias);
-  retireRemovedOutboxPayloads(
-    previous,
-    retained.flatMap(([, session]) => session.queue ?? []),
-  );
+  const payload = JSON.stringify({
+    version: 4,
+    gatewayOwner: target.gatewayOwner,
+    sessions: Object.fromEntries(retained),
+    recovery: store.recovery,
+    ...(store.legacyReceipts ? { legacyReceipts: store.legacyReceipts } : {}),
+  });
+  // Verification precedes deleting any legacy source, including quota/no-op writes.
+  storage.setItem(target.key, payload);
+  if (storage.getItem(target.key) !== payload) {
+    throw new Error("Chat outbox write verification failed");
+  }
+  for (const source of pendingLegacyTransfers.get(store) ?? []) {
+    if (storage.getItem(source.key) === source.raw) {
+      try {
+        storage.removeItem(source.key);
+      } catch {
+        // The verified receipt fences this exact source even if deletion fails.
+      }
+    }
+  }
+  pendingLegacyTransfers.delete(store);
+  retireRemovedOutboxPayloads(storage, target, previous, payload);
 }
 
-function retireRemovedOutboxPayloads(previous: string | null, retained: ChatQueueItem[]): void {
+// Cleanup follows a verified metadata commit, never a credential-filtered view.
+function retireRemovedOutboxPayloads(
+  storage: Storage,
+  target: ComposerStorageTarget,
+  previous: string | null,
+  current: string | null,
+): void {
   if (!previous) {
     return;
   }
   try {
-    const parsed: unknown = JSON.parse(previous);
-    if (!isRecord(parsed) || parsed.version !== 3 || !isRecord(parsed.sessions)) {
+    // An unclassified, deferred, or undeletable source can still own these bytes.
+    // Keep bounded orphans rather than introduce a second garbage-collection store.
+    if (
+      [target.legacyKey, target.previousKey, target.blobKey].some(
+        (key) => storage.getItem(key) !== null,
+      )
+    ) {
       return;
     }
-    const remaining = new Set(retained.map((item) => item.attachmentPayload?.key));
-    const removed = Object.values(parsed.sessions)
-      .flatMap((value) => normalizeStoredSession(value)?.queue ?? [])
-      .flatMap((item) =>
-        item.attachmentPayload && !remaining.has(item.attachmentPayload.key)
-          ? [item.attachmentPayload]
-          : [],
-      );
+    const references = (raw: string | null) => {
+      if (raw === null) {
+        return [];
+      }
+      const value: unknown = JSON.parse(raw);
+      if (
+        !isRecord(value) ||
+        value.version !== 4 ||
+        value.gatewayOwner !== target.gatewayOwner ||
+        !isRecord(value.sessions) ||
+        !isRecord(value.recovery)
+      ) {
+        throw new Error("Unreadable outbox retention source");
+      }
+      const rows = [
+        ...Object.values(value.sessions),
+        ...Object.values(value.recovery).map((entry) => {
+          if (!isRecord(entry)) {
+            throw new Error("Unreadable recovery source");
+          }
+          return entry.session;
+        }),
+      ];
+      return rows.flatMap((row) => {
+        if (!isRecord(row) || (row.queue !== undefined && !Array.isArray(row.queue))) {
+          throw new Error("Unreadable outbox row");
+        }
+        return (row.queue ?? []).flatMap((item: unknown) => {
+          if (!isRecord(item)) {
+            throw new Error("Unreadable outbox item");
+          }
+          const ref = item.attachmentPayload;
+          if (ref === undefined) {
+            return [];
+          }
+          if (
+            !isRecord(ref) ||
+            typeof ref.key !== "string" ||
+            typeof ref.recoveryScope !== "string" ||
+            typeof ref.tabId !== "string"
+          ) {
+            throw new Error("Unreadable outbox payload reference");
+          }
+          return [{ key: ref.key, recoveryScope: ref.recoveryScope, tabId: ref.tabId }];
+        });
+      });
+    };
+    const remaining = new Set(references(current).map((ref) => ref.key));
+    const removed = references(previous).filter((ref) => !remaining.has(ref.key));
     if (removed.length) {
       void removeOutboxPayloads(removed);
     }
   } catch {
-    // An unreadable previous bucket cannot authorize payload deletion.
+    // Missing/unreadable storage cannot authorize deletion; the Blob budget bounds retention.
   }
 }
 
 export function applyStoredChatOutboxScope(
   item: ChatQueueItem,
-  scope: ComposerStorageScope,
+  scope: StoredChatOutboxScope,
 ): ChatQueueItem {
   const { agentId: _agentId, ...withoutAgentId } = item;
+  const agentId = storedChatOutboxAgentId(scope);
   return {
     ...withoutAgentId,
-    sessionKey: scope.conversationKey,
-    ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
+    sessionKey: scope.sessionKey,
+    ...(agentId ? { agentId } : {}),
   };
 }

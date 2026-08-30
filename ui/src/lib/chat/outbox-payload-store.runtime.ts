@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import type { ChatQueueItem } from "./chat-types.ts";
-import type { DurableComposerDraftAttachment } from "./composer-draft-store.runtime.ts";
+import type { ChatQueueItem, DurableComposerDraftAttachment } from "./chat-types.ts";
 import {
   openControlUiDatabase,
   requestResult,
@@ -205,4 +204,30 @@ export function outboxPayloadTab(): Promise<string> {
     tabPromise = null;
     throw error;
   }));
+}
+
+// A connected client must finish recovery resolution; an offline client may
+// retain the exact owner it previously authenticated, but never infer a new one.
+const knownOwners = new WeakMap<object, string>();
+type RecoveryHost = {
+  client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
+  connected?: boolean;
+};
+export function observeOutboxRecoveryOwner(host: RecoveryHost): string | undefined {
+  const client = host.client;
+  if (!client || (host.connected && !client.recoveryScopeReady)) {
+    return undefined;
+  }
+  if (client.recoveryScopeReady && client.recoveryScope) {
+    knownOwners.set(client, client.recoveryScope);
+  }
+  const remembered = knownOwners.get(client);
+  return remembered === client.recoveryScope ? remembered : undefined;
+}
+
+export function outboxPayloadMatchesOwner(host: RecoveryHost, item: ChatQueueItem): boolean {
+  return (
+    !item.attachmentPayload ||
+    item.attachmentPayload.recoveryScope === observeOutboxRecoveryOwner(host)
+  );
 }

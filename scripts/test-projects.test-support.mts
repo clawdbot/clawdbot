@@ -2343,7 +2343,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
-  [/^\.github\/workflows\/openclaw-performance\.yml$/u, ["openclaw-performance-workflow"]],
+  [
+    /^\.github\/workflows\/openclaw-performance\.yml$/u,
+    ["openclaw-performance-workflow", "openclaw-performance-git-lifecycle"],
+  ],
   [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
   [/^\.github\/workflows\/tui-pty\.yml$/u, [packageAcceptance]],
   [
@@ -2393,7 +2396,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
   [
-    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
     ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
   ],
   [/^\.github\/actions\/publish-generated-pr\//u, [workflowGuards]],
@@ -3001,7 +3004,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   if (
-    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|fixtures\/ci-platform-checkout\.mjs)$/u.test(
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|fixtures\/ci-platform-checkout\.mjs)$/u.test(
       changedPath,
     )
   ) {
@@ -3009,6 +3012,8 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
       "ci-git-owner",
       "ci-linux-git",
       "ci-platform-checkout",
+      "openclaw-performance-workflow",
+      "openclaw-performance-git-lifecycle",
       workflowGuards,
     );
   }

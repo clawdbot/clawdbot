@@ -46,7 +46,11 @@ describe("memory targeted session sync", () => {
       targetArchiveFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(result).toEqual({
+      handled: true,
+      sessionsDirty: true,
+      failure: { error: expect.objectContaining({ message: "embedding backend failed" }) },
+    });
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });

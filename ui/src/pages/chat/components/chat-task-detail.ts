@@ -5,7 +5,7 @@ import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import {
-  canonicalUiSessionKeyForPersistence,
+  uiConversationMatches,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
   uiSessionRowMatchesSelectedChat,
@@ -62,15 +62,16 @@ export function renderTaskDetailPanel(params: {
       ? currentTask.childSessionKey
       : (currentTask.childSessionKey ?? currentTask.sessionKey),
   );
-  const canonicalTranscriptKey = canonicalUiSessionKeyForPersistence(
-    params.host,
-    transcriptSessionKey,
-  );
-  const canonicalPaneKey = canonicalUiSessionKeyForPersistence(params.host, params.host.sessionKey);
   // A task pointing at this pane's canonical session uses the inspector. Mirroring
   // the current conversation into its own detail sidebar would duplicate the chat.
   const content =
-    transcriptSessionKey && canonicalTranscriptKey !== canonicalPaneKey
+    transcriptSessionKey &&
+    !uiConversationMatches(
+      params.host,
+      params.host.sessionKey,
+      transcriptSessionKey,
+      currentTask.agentId,
+    )
       ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
       : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`

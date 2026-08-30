@@ -81,8 +81,7 @@ async function settleDeliverySettings(
 ): Promise<ChatQueueItem | QueuedChatSendResult> {
   const route = options?.routingSessionKey ?? queueSessionKey;
   const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
-  const routeVisible = (agentId = item.agentId) =>
-    host.sessionKey === route && visibleSessionMatches(host, route, agentId);
+  const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   let current = readQueuedMessageById(host, item.id);
   let pendingSettings =
     options?.pendingSettings ?? getPendingChatPickerPatch(host, route, item.agentId);
@@ -625,9 +624,7 @@ export async function deliverChatQueueItem(
         admittedItem = admitted;
       }
     }
-    const routeVisible =
-      host.sessionKey === routingSessionKey &&
-      visibleSessionMatches(host, routingSessionKey, admittedItem.agentId);
+    const routeVisible = visibleSessionMatches(host, routingSessionKey, admittedItem.agentId);
     if (
       drainResult === undefined &&
       routeVisible &&
@@ -662,7 +659,7 @@ export async function deliverChatQueueItem(
     }
     result = drainResult ?? "pending";
   }
-  if (result === "sent" && host.sessionKey === sessionKey) {
+  if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
     setLastActiveSessionKey(host, sessionKey);
     resetChatInputHistoryNavigation(host);
     if (options.restoreDraft && options.previousDraft?.trim()) {
@@ -674,12 +671,15 @@ export async function deliverChatQueueItem(
   }
   if (
     deliveryConnectionIsCurrent() &&
-    host.sessionKey === routingSessionKey &&
     visibleSessionMatches(host, routingSessionKey, deliveryAgentId)
   ) {
     scheduleChatScroll(host, true);
   }
-  if (result === "sent" && host.sessionKey === sessionKey && !host.chatRunId) {
+  if (
+    result === "sent" &&
+    visibleSessionMatches(host, sessionKey, deliveryAgentId) &&
+    !host.chatRunId
+  ) {
     void flushStoredChatOutbox(host, chatOutboxDrainDependencies);
   }
   return result;

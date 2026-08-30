@@ -1,7 +1,8 @@
 // Control UI chat module owns editing a queued message in its queue row.
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
@@ -13,6 +14,7 @@ import {
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
+import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
@@ -21,21 +23,38 @@ import {
  * the replacement inherits.
  */
 export type QueuedMessageEdit = {
-  agentId?: string;
+  readonly agentId?: string;
+  readonly gatewayOwner: string;
+  readonly recoveryScope?: string;
   attachments: readonly ChatAttachment[];
   draftText: string;
   id: string;
   orderKey: number;
   revision: number;
   replyToId?: string;
-  sessionKey: string;
+  readonly sessionKey: string;
   source: ChatQueueItem;
   sourceWasDurable: boolean;
 };
 
 type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
+  client?: Pick<GatewayBrowserClient, "recoveryScope" | "recoveryScopeReady"> | null;
+  connected?: boolean;
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
+
+function currentQueuedMessageEditOwner(host: QueuedMessageEditHost) {
+  // Recovery resolves after hello. While offline, the client retains its last
+  // authenticated scope; a replacement client must establish its own scope.
+  if (host.connected && host.client && !host.client.recoveryScopeReady) {
+    return null;
+  }
+  return {
+    ...resolveStoredChatOutboxScope(host, host.sessionKey),
+    gatewayOwner: storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner,
+    recoveryScope: host.client?.recoveryScope?.trim() || undefined,
+  };
+}
 
 function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueueItem): boolean {
   return (
@@ -45,7 +64,8 @@ function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueue
     item.sendState === edit.source.sendState &&
     item.agentId === edit.source.agentId &&
     item.sessionKey === edit.source.sessionKey &&
-    item.orderKey === edit.source.orderKey
+    item.orderKey === edit.source.orderKey &&
+    item.attachmentPayload?.key === edit.source.attachmentPayload?.key
   );
 }
 
@@ -63,27 +83,21 @@ export const QUEUED_MESSAGE_RETRY_CONFLICT_ERROR =
 export const QUEUED_MESSAGE_STEER_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before steering it.";
 
-/**
- * The edit belongs to the scope it started in — session and agent, the pair every
- * outbox is keyed by. Reading it through here is what makes that true everywhere:
- * a pane showing another session, or the same raw global session after the
- * selected agent changed underneath it, sees no edit. So no lifecycle hook has to
- * remember to clear one, and no send can retire a row in the outbox it left.
- */
+/** Captured destinations and recovery owners never follow live alias/default changes. */
 export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMessageEdit | null {
   const edit = host.chatQueuedEdit;
-  if (!edit || !visibleSessionMatches(host, edit.sessionKey, edit.agentId)) {
+  const owner = currentQueuedMessageEditOwner(host);
+  if (
+    !edit ||
+    !owner ||
+    edit.gatewayOwner !== owner.gatewayOwner ||
+    edit.recoveryScope !== owner.recoveryScope ||
+    storedChatOutboxScopeKey(edit) !== storedChatOutboxScopeKey(owner)
+  ) {
     return null;
   }
-  // Route changes intentionally release the edit hold so another pane can
-  // drain or update the row. Do not revive a token whose source changed while
-  // away: its replacement CAS would reject the stale captured version and
-  // there would be no safe submit/cancel action to offer on return.
-  const source = readQueuedMessageById(host, edit.id);
-  if (!source || !queuedMessageEditSourceMatches(edit, source)) {
-    host.chatQueuedEdit = null;
-    return null;
-  }
+  // Custody outlives a source-version conflict. Admission checks the captured
+  // version; reading/rendering the correction must never discard unsaved text.
   return edit;
 }
 
@@ -94,7 +108,17 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
  * deliver the text an operator is visibly rewriting.
  */
 export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: string): boolean {
-  return anyChatOutboxPaneMatches(host, (pane) => activeQueuedMessageEdit(pane)?.id === id);
+  // Credentials fence edit actions, but a pane still on the captured conversation
+  // holds its source against a peer drain until the correction is released.
+  const gatewayOwner = storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner;
+  return anyChatOutboxPaneMatches(
+    host,
+    (pane) =>
+      pane.chatQueuedEdit?.id === id &&
+      pane.chatQueuedEdit.gatewayOwner === gatewayOwner &&
+      storedChatOutboxScopeKey(pane.chatQueuedEdit) ===
+        storedChatOutboxScopeKey(resolveStoredChatOutboxScope(pane, pane.sessionKey)),
+  );
 }
 
 /** Removal is a conflicting shared-outbox action while any pane owns the row draft. */
@@ -116,10 +140,12 @@ export function beginQueuedMessageEdit(
   host: QueuedMessageEditHost,
   id: string,
 ): QueuedMessageEditResult {
+  const owner = currentQueuedMessageEditOwner(host);
   const item = readQueuedMessageById(host, id);
   // Local slash commands take a different enqueue path that cannot carry a
   // resumed position, so they keep the discard-and-retype flow for now.
   if (
+    !owner ||
     !item ||
     !isMovableChatQueueItem(item) ||
     Boolean(item.attachmentStorageError) ||
@@ -134,16 +160,14 @@ export function beginQueuedMessageEdit(
   // drain refuses it while this edit owns it (see chat-outbox-drain). The draft
   // belongs to this token rather than the global composer, so editing a queued
   // row never overwrites text the operator is composing for a different send.
-  const agentId = scopedAgentIdForSession(host, host.sessionKey);
   host.chatQueuedEdit = {
-    ...(agentId ? { agentId } : {}),
+    ...owner,
     attachments: item.attachments ?? [],
     draftText: item.text,
     id,
     orderKey: chatQueueOrderKey(item),
     revision: 0,
     ...(item.replyToId ? { replyToId: item.replyToId } : {}),
-    sessionKey: host.sessionKey,
     source: { ...item },
     sourceWasDurable: isDurableQueuedMessage(host, id),
   };
@@ -193,8 +217,19 @@ export function retireEditedQueuedMessageSource(
   if (editOverride && host.chatQueuedEdit !== edit) {
     return;
   }
-  if (!edit || (!admittedDurably && isDurableQueuedMessage(host, edit.id))) {
+  if (!edit) {
     return;
+  }
+  if (!admittedDurably) {
+    const source = readQueuedMessageById(host, edit.id);
+    if (
+      edit.sourceWasDurable ||
+      isDurableQueuedMessage(host, edit.id) ||
+      !source ||
+      !queuedMessageEditSourceMatches(edit, source)
+    ) {
+      return;
+    }
   }
   host.chatQueuedEdit = null;
   removeVisibleOrScopedQueuedMessageWithoutReleasing(host, edit.id, edit.sessionKey);

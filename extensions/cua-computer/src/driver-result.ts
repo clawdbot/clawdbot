@@ -354,6 +354,27 @@ export function projectProcesses(value: unknown): Record<string, unknown> {
   };
 }
 
+function observationImage(
+  result: CuaToolResult,
+  width: unknown,
+  height: unknown,
+): Pick<NonNullable<ComputerActResult["observation"]>, "base64" | "format" | "width" | "height"> {
+  const image = result.images.find(
+    (entry) => entry.mimeType === "image/png" || entry.mimeType === "image/jpeg",
+  );
+  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
+  if (image && !base64) {
+    throw new Error(
+      "COMPUTER_DRIVER_ERROR: CUA Driver returned malformed observation image base64",
+    );
+  }
+  return {
+    ...(base64 ? { base64, format: image?.mimeType === "image/jpeg" ? "jpeg" : "png" } : {}),
+    ...(typeof width === "number" && width >= 1 ? { width: Math.trunc(width) } : {}),
+    ...(typeof height === "number" && height >= 1 ? { height: Math.trunc(height) } : {}),
+  };
+}
+
 export function windowObservation(
   result: CuaToolResult,
   state: CuaFrameState,
@@ -392,19 +413,6 @@ export function windowObservation(
       },
     ];
   });
-  const image = result.images.find((entry) => entry.mimeType === "image/png");
-  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
-  if (image && !base64) {
-    throw new Error("COMPUTER_DRIVER_ERROR: CUA Driver returned malformed window PNG base64");
-  }
-  const width =
-    typeof structured.screenshot_width === "number" && structured.screenshot_width > 0
-      ? Math.trunc(structured.screenshot_width)
-      : undefined;
-  const height =
-    typeof structured.screenshot_height === "number" && structured.screenshot_height > 0
-      ? Math.trunc(structured.screenshot_height)
-      : undefined;
   const details: Record<string, unknown> = {
     ...(typeof structured.total_element_count === "number"
       ? { totalElementCount: structured.total_element_count }
@@ -424,9 +432,12 @@ export function windowObservation(
     ...action,
     observation: {
       kind: "window",
-      ...(base64 ? { base64, format: "png" as const } : {}),
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
+      // CUA zoom returns JPEG with width/height; window snapshots use screenshot_* fields.
+      ...observationImage(
+        result,
+        structured[options.fromZoom ? "width" : "screenshot_width"],
+        structured[options.fromZoom ? "height" : "screenshot_height"],
+      ),
       observationId: observation.id,
       ...(elements.length ? { elements } : {}),
     },
@@ -539,19 +550,6 @@ export function browserObservation(
     ];
   });
   const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
-  const image = result.images.find((entry) => entry.mimeType === "image/png");
-  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
-  if (image && !base64) {
-    throw new Error("COMPUTER_DRIVER_ERROR: CUA Driver returned malformed browser PNG base64");
-  }
-  const width =
-    typeof structured.screenshot_width === "number" && structured.screenshot_width > 0
-      ? Math.trunc(structured.screenshot_width)
-      : undefined;
-  const height =
-    typeof structured.screenshot_height === "number" && structured.screenshot_height > 0
-      ? Math.trunc(structured.screenshot_height)
-      : undefined;
   const page =
     structured.page && typeof structured.page === "object" && !Array.isArray(structured.page)
       ? (structured.page as Record<string, unknown>)
@@ -560,9 +558,7 @@ export function browserObservation(
     ok: true,
     observation: {
       kind: "browser",
-      ...(base64 ? { base64, format: "png" as const } : {}),
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
+      ...observationImage(result, structured.screenshot_width, structured.screenshot_height),
       observationId: observation.id,
     },
     details: {

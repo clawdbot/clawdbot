@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   chatThreadDistanceFromBottom,
@@ -12,6 +13,7 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -767,11 +769,53 @@ suite.define(() => {
 
       const prompt = "use a tool then reconnect";
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await gateway.deferNext("chat.send");
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      const sessionKey = requireString(params.sessionKey, "accepted session key");
+      // The Gateway registers the run before its started ACK; losing the socket
+      // during a tool call must not turn this fixture into a lost-delivery test.
+      const acceptedSession = {
+        key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: acceptedSession,
+        messages: [],
+      });
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      // Publish acceptance after the ACK settles, then wait for its durable
+      // retirement before disconnecting this already accepted tool run.
+      await waitForCommittedState(
+        page,
+        ({ runId: expectedRunId }) => {
+          const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+            "openclaw-chat-pane",
+          )?.state;
+          return state !== undefined && state.chatRunId === expectedRunId && !state.chatSending;
+        },
+        { runId },
+      );
+      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+      await waitForCommittedState(
+        page,
+        ({ runId: expectedRunId }) => {
+          const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+            "openclaw-chat-pane",
+          )?.state;
+          return (
+            state !== undefined && state.chatRunId === expectedRunId && state.chatQueue.length === 0
+          );
+        },
+        { runId },
+      );
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
 
       await gateway.emitGatewayEvent("agent", {
@@ -783,7 +827,7 @@ suite.define(() => {
         },
         runId,
         seq: 1,
-        sessionKey: "main",
+        sessionKey,
         stream: "tool",
         ts: Date.now(),
       });
@@ -801,6 +845,9 @@ suite.define(() => {
         },
       ]);
 
+      // This scenario loses the connection during an already accepted tool run.
+      expect(await page.locator(".chat-send-status").count()).toBe(0);
+
       await gateway.closeLatest(1006, "lost during tool call");
 
       await page
@@ -808,6 +855,7 @@ suite.define(() => {
         .getByText("Recovered from refreshed history.")
         .waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

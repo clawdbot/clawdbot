@@ -847,7 +847,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
 
 export async function removeManagedOutgoingMediaBlocks(params: {
   blocks: readonly Record<string, unknown>[];
-  messageId: string;
+  messageId: string | null;
   stateDir?: string;
 }): Promise<void> {
   const stateDir = params.stateDir ?? resolveStateDir();
@@ -1075,20 +1075,6 @@ function collectManagedOutgoingAttachmentRefs(
     }
   }
   return [...refs.values()];
-}
-
-async function removePreparedManagedOutgoingMedia(
-  blocks: readonly ManagedMediaBlock[],
-  stateDir: string,
-): Promise<void> {
-  await Promise.all(
-    collectManagedOutgoingAttachmentRefs(blocks).map(async ({ attachmentId }) => {
-      const record = readManagedImageRecord(attachmentId, stateDir);
-      if (record) {
-        await deleteManagedImageRecordArtifacts(record, stateDir);
-      }
-    }),
-  );
 }
 
 async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<string> | null> {
@@ -1765,7 +1751,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
         params.onPrepareError?.(sanitizedError);
         continue;
       }
-      await removePreparedManagedOutgoingMedia(blocks, stateDir);
+      await removeManagedOutgoingMediaBlocks({
+        blocks,
+        messageId: params.messageId ?? null,
+        stateDir,
+      });
       throw sanitizedError;
     }
   }

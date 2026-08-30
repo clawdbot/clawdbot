@@ -513,7 +513,6 @@ export async function applyMediaUnderstanding(params: {
     }
 
     if (outputs.length > 0) {
-      ctx.Body = formatMediaUnderstandingBody({ body: ctx.Body, outputs });
       const audioOutputs = outputs.filter((output) => output.kind === "audio.transcription");
       if (audioOutputs.length > 0) {
         const transcript = formatAudioTranscripts(audioOutputs);
@@ -567,14 +566,14 @@ export async function applyMediaUnderstanding(params: {
       deliveredImageIndexes: params.deliveredImageIndexes,
     });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
-    if (contextBlocks.length > 0) {
-      ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);
-    }
     if (outputs.length > 0 || contextBlocks.length > 0) {
-      finalizeInboundContext(ctx, {
-        forceBodyForAgent: true,
-        forceBodyForCommands: true,
-      });
+      const enrich = (body?: string) =>
+        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
+      // Channels may carry preflight transcripts only in prepared agent text.
+      // Enrich that base before changing the separate transport envelope.
+      ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
+      ctx.Body = enrich(ctx.Body);
+      finalizeInboundContext(ctx, { forceBodyForCommands: true });
     }
 
     return {

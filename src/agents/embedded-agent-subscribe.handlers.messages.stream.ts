@@ -21,6 +21,7 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { extractAssistantCommentaryText } from "./embedded-agent-utils.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
@@ -179,6 +180,29 @@ export function scopeAssistantMessageToStreamBlock(
   // index becomes a logical reply boundary, downstream snapshots must be
   // cumulative only within that block or earlier text is replayed.
   return { ...message, content: [block] };
+}
+
+export function emitAssistantCommentaryStreamData(
+  ctx: EmbeddedAgentSubscribeContext,
+  message: AssistantMessage,
+) {
+  const isResponsesCommentary = isResponsesApiAssistantMessage(message);
+  const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
+  // Non-text updates carry prior Responses items too; publish only the active item.
+  const commentaryMessage = isResponsesCommentary
+    ? scopeAssistantMessageToStreamBlock(message, index, itemId)
+    : message;
+  const text = extractAssistantCommentaryText(commentaryMessage);
+  if (text && (!isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
+    ctx.emitAssistantStreamData(
+      buildAssistantStreamData({
+        text,
+        replace: true,
+        phase: "commentary",
+        itemId: isResponsesCommentary ? itemId : undefined,
+      }),
+    );
+  }
 }
 
 export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {

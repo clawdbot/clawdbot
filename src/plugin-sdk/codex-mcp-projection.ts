@@ -31,6 +31,7 @@ export function resolveCodexScheduledToolProjectionFactory(
 export {
   buildCodexUserMcpServersThreadConfigPatch,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
+  buildCodexUserMcpServersThreadConfigPatchForRun,
   resolveCodexMcpToolOverridesForAgent,
 } from "../agents/cli-runner/bundle-mcp-codex.js";
 export {
