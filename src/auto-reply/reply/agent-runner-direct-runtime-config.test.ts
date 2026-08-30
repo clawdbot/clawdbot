@@ -318,7 +318,7 @@ describe("runReplyAgent runtime config", () => {
     expect(createReplyMediaContextMock).toHaveBeenCalledWith({
       cfg: freshCfg,
       sessionKey: undefined,
-      workspaceDir: "/tmp",
+      workspaceDir: followupRun.run.workspaceDir,
       messageProvider: "telegram",
       accountId: undefined,
       groupId: undefined,
