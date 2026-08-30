@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway restart memory: release retired plugin registries and their captured cache generations during shutdown and replacement, preventing heap growth across repeated in-process restarts. (#132914)
 - **Browser extension relay:** route Runtime binding callbacks only to registered clients and preserve shared bindings during client cleanup, preventing raw callback payloads from reaching unrelated Playwright sessions.
 - **Control UI media playback:** restore inline audio and video rendition loading so readiness checks reach the Gateway instead of silently falling back to download cards. (#132832)
 - **Grok web search startup:** avoid loading the full agent runtime before the first search, while preserving agent-scoped credentials and OAuth fallback behavior.
