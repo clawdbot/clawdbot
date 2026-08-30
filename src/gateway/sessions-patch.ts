@@ -164,6 +164,11 @@ export async function projectSessionsPatchEntry(params: {
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch, creation } = params;
+  if ("execSecurity" in patch || "execAsk" in patch) {
+    return invalid(
+      "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+    );
+  }
   const authorizedHarnessCreation =
     params.existingEntry === undefined &&
     isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);

@@ -252,10 +252,10 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
-  it.each(["execSecurity", "execAsk"])("rejects retired session policy field %s", (field) => {
+  it.each(["execSecurity", "execAsk"])("accepts retired v4 session policy field %s", (field) => {
     for (const value of ["deny", "always", null]) {
-      expectRejected(validateSessionsPatchParams, [sessionPatch({ [field]: value })]);
-      expectRejected(validateSessionsPatchManyParams, [
+      expectAccepted(validateSessionsPatchParams, [sessionPatch({ [field]: value })]);
+      expectAccepted(validateSessionsPatchManyParams, [
         { targets: [{ key: "agent:main:main" }], patch: { [field]: value } },
       ]);
     }

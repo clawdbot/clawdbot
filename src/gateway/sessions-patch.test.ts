@@ -1720,6 +1720,36 @@ describe("gateway sessions patch", () => {
     expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
+  test.each([
+    { execSecurity: "deny" },
+    { execSecurity: null },
+    { execAsk: "always" },
+    { execAsk: null },
+  ])("rejects retired session policy patch %j without writing", async (retiredPatch) => {
+    for (const store of [{}, mainStoreEntry({ label: "Original", permissionMode: "read-only" })]) {
+      const before = structuredClone(store);
+      const result = await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          label: "Changed",
+          permissionMode: "guarded",
+          ...retiredPatch,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+        },
+      });
+      expect(store).toEqual(before);
+    }
+  });
+
   test("stores and clears a session permission mode without a recorded root", async () => {
     const store = mainStoreEntry({});
     const stored = expectPatchOk(

@@ -5,6 +5,9 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals-core.js";
+import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -25,6 +28,122 @@ afterEach(async () => {
 });
 
 describe("doctor legacy session exec policy", () => {
+  it.each<{
+    name: string;
+    cfg: OpenClawConfig;
+    legacy: { execSecurity?: string; execAsk?: string };
+    host?: SessionEntry["execHost"];
+    sandbox?: SessionEntry["sandbox"];
+    oldPolicy: { security: ExecSecurity; ask: ExecAsk };
+    expected: SessionEntry["permissionMode"];
+  }>([
+    {
+      name: "partial ask under global deny",
+      cfg: { tools: { exec: { mode: "deny" } } },
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "deny", ask: "off" },
+      expected: "read-only",
+    },
+    {
+      name: "partial ask under agent deny overriding global full",
+      cfg: {
+        tools: { exec: { mode: "full" } },
+        agents: { list: [{ id: "worker", tools: { exec: { mode: "deny" } } }] },
+      },
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "deny", ask: "off" },
+      expected: "read-only",
+    },
+    {
+      name: "partial ask under allowlist config",
+      cfg: { tools: { exec: { mode: "allowlist" } } },
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "allowlist", ask: "off" },
+      expected: "guarded",
+    },
+    {
+      name: "partial ask under full config",
+      cfg: { tools: { exec: { mode: "full" } } },
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "full", ask: "off" },
+      expected: undefined,
+    },
+    {
+      name: "partial security inherits global ask always",
+      cfg: { tools: { exec: { security: "full", ask: "always" } } },
+      legacy: { execSecurity: "allowlist" },
+      oldPolicy: { security: "allowlist", ask: "always" },
+      expected: "read-only",
+    },
+    {
+      name: "partial security inherits agent ask always",
+      cfg: {
+        tools: { exec: { mode: "full" } },
+        agents: { list: [{ id: "worker", tools: { exec: { ask: "always" } } }] },
+      },
+      legacy: { execSecurity: "full" },
+      oldPolicy: { security: "full", ask: "always" },
+      expected: "read-only",
+    },
+    {
+      name: "partial ask in a required sandbox",
+      cfg: {},
+      sandbox: "required",
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "deny", ask: "off" },
+      expected: "read-only",
+    },
+    {
+      name: "partial ask with unknown auto sandbox availability",
+      cfg: {},
+      host: "auto",
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "deny", ask: "off" },
+      expected: "read-only",
+    },
+    {
+      name: "partial ask with explicit gateway and no config policy",
+      cfg: {},
+      legacy: { execAsk: "off" },
+      oldPolicy: { security: "full", ask: "off" },
+      expected: undefined,
+    },
+  ])("does not broaden $name", async ({ cfg, legacy, host, sandbox, oldPolicy, expected }) => {
+    state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-base-" });
+    const scope = { agentId: "worker", env: state.env, sessionKey: "agent:worker:exec-policy" };
+    await replaceSessionEntry(scope, {
+      sessionId: "legacy-policy",
+      updatedAt: Date.now(),
+      execHost: host ?? "gateway",
+      ...(sandbox ? { sandbox } : {}),
+      ...legacy,
+    });
+    await noteSessionTranscriptHealth({
+      cfg: { ...cfg, plugins: { enabled: false } },
+      env: state.env,
+      sessionDirs: [],
+      sessionSqlite: true,
+      shouldRepair: true,
+    });
+    closeOpenClawAgentDatabasesForTest();
+    const migrated = listSessionEntriesCore(scope)[0]?.entry;
+    expect(migrated?.permissionMode).toBe(expected);
+    expect(migrated).not.toHaveProperty("execSecurity");
+    expect(migrated).not.toHaveProperty("execAsk");
+    // Resolve the stored policy without a sandbox or approval floor masking a
+    // broadened migration. These fixtures state the old effective pair explicitly.
+    const resolved = resolveExecDefaults({
+      cfg,
+      agentId: scope.agentId,
+      execApprovals: { version: 1 },
+      sessionEntry: { execHost: "gateway", permissionMode: migrated?.permissionMode },
+    });
+    expect(minSecurity(resolved.security, oldPolicy.security)).toBe(resolved.security);
+    if (resolved.security !== "deny") {
+      expect(maxAsk(resolved.ask, oldPolicy.ask)).toBe(resolved.ask);
+    }
+  });
+
   it("migrates persisted restrictions without granting full access and reports each session once", async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-policy-" });
     const env = state.env;
@@ -67,8 +186,8 @@ describe("doctor legacy session exec policy", () => {
       },
       { name: "partial-full", legacy: { execSecurity: "full" }, expected: undefined },
       { name: "partial-deny", legacy: { execSecurity: "deny" }, expected: "read-only" },
-      { name: "partial-ask", legacy: { execAsk: "on-miss" }, expected: "guarded" },
-      { name: "partial-off", legacy: { execAsk: "off" }, expected: "guarded" },
+      { name: "partial-ask", legacy: { execAsk: "on-miss" }, expected: "read-only" },
+      { name: "partial-off", legacy: { execAsk: "off" }, expected: "read-only" },
       {
         name: "existing",
         legacy: { execSecurity: "deny" },
