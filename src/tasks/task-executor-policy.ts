@@ -120,8 +120,13 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
     return false;
   }
   if (task.runtime === "subagent" && task.status !== "cancelled") {
-    // Subagent lifecycle owns provider-result publication.
-    return false;
+    // Subagent lifecycle owns provider-result publication; task delivery only
+    // surfaces a required completion after that lifecycle marks delivery blocked.
+    return (
+      task.status === "succeeded" &&
+      task.deliveryStatus === "failed" &&
+      task.terminalOutcome === "blocked"
+    );
   }
   if (
     task.runtime === "subagent" &&

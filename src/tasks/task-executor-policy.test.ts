@@ -154,7 +154,38 @@ describe("task-executor-policy", () => {
         createTask({
           runtime: "subagent",
           status: "succeeded",
+          terminalOutcome: "blocked",
+          deliveryStatus: "failed",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "succeeded",
+          terminalOutcome: "blocked",
+          deliveryStatus: "failed",
+          notifyPolicy: "silent",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "succeeded",
           deliveryStatus: "pending",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "succeeded",
+          terminalOutcome: "blocked",
+          deliveryStatus: "delivered",
         }),
       ),
     ).toBe(false);

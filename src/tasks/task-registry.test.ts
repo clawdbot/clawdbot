@@ -68,6 +68,7 @@ import {
   recordTaskProgressByRunId,
   reloadTaskRegistryFromStore,
   resolveTaskForLookupToken,
+  setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -2578,6 +2579,84 @@ describe("task-registry", () => {
       ]);
       await flushHeartbeatWakeRequests();
       expectHeartbeatWake("background-task-blocked", "agent:main:main");
+    });
+  });
+
+  it("surfaces blocked follow-up for failed subagent completion delivery", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:blocked-delivery",
+        runId: "run-subagent-blocked",
+        task: "Deliver blocked completion",
+        deliveryStatus: "pending",
+      });
+
+      setTaskRunDeliveryStatusByRunId({
+        runId: task.runId!,
+        runtime: "subagent",
+        sessionKey: task.childSessionKey,
+        deliveryStatus: "failed",
+        error: "announce deferred or direct delivery failed",
+      });
+      finalizeSubagentTask(task, {
+        status: "succeeded",
+        endedAt: 250,
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+      });
+
+      await waitForAssertion(() => {
+        expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "session_queued" });
+        const events = peekSystemEvents("agent:main:main");
+        expect(events).toHaveLength(2);
+        expect(events[0]).toBe(
+          "Background task blocked: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+        );
+        expect(events[1]).toBe(
+          "Task needs follow-up: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+        );
+      });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+      expect(
+        peekSystemEvents("agent:main:main").filter((event) =>
+          event.startsWith("Task needs follow-up:"),
+        ),
+      ).toHaveLength(1);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("suppresses blocked follow-up for subagent completion when notify policy is silent", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:blocked-delivery-silent",
+        runId: "run-subagent-blocked-silent",
+        task: "Deliver blocked completion silently",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+
+      setTaskRunDeliveryStatusByRunId({
+        runId: task.runId!,
+        runtime: "subagent",
+        sessionKey: task.childSessionKey,
+        deliveryStatus: "failed",
+        error: "announce deferred or direct delivery failed",
+      });
+      finalizeSubagentTask(task, {
+        status: "succeeded",
+        endedAt: 250,
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+      });
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "failed" });
+      expect(peekSystemEvents("agent:main:main")).toHaveLength(0);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
 
