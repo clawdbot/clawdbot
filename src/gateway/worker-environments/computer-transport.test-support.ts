@@ -179,6 +179,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     return { ok: true, payload: { ok: true } };
   });
   context.nodeRegistry.invoke = publicInvoke;
+  context.nodeRegistry.invokeLifecycle = publicInvoke;
   vi.spyOn(context.nodeRegistry, "get").mockImplementation((id) =>
     id === state.node.nodeId ? state.node : undefined,
   );

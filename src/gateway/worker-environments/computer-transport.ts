@@ -236,16 +236,27 @@ export function createWorkerComputerTransportOwner(options: {
             ...params,
             isDispatchAuthorized: isCurrent,
           })
-        : await invokeNodeWithReadinessRetry(context.nodeRegistry, {
-            nodeId: node.nodeId,
-            expectedConnId: node.connId,
-            expectedPairingGeneration: node.pairingGeneration,
-            command,
-            params: commandParams,
-            sessionKey: placement.sessionKey,
-            ...params,
-            isDispatchAuthorized: isCurrent,
-          });
+        : await invokeNodeWithReadinessRetry(
+            input.operation === "close"
+              ? {
+                  invoke: (request) =>
+                    context.nodeRegistry.invokeLifecycle({
+                      ...request,
+                      isDispatchAuthorized: isCurrent,
+                    }),
+                }
+              : context.nodeRegistry,
+            {
+              nodeId: node.nodeId,
+              expectedConnId: node.connId,
+              expectedPairingGeneration: node.pairingGeneration,
+              command,
+              params: commandParams,
+              sessionKey: placement.sessionKey,
+              ...params,
+              isDispatchAuthorized: isCurrent,
+            },
+          );
     };
 
     return {
