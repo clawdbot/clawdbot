@@ -28,6 +28,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
@@ -133,10 +134,43 @@ function createSubscriptionMock(): SubscriptionMock {
     getLastAssistantTextMessageIndex: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
-    toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
+    toolMetas: [] as SubscriptionMock["toolMetas"],
     runToolLifecycle: async <T>(toolParams: {
+      args: unknown;
+      replaySafe?: boolean;
       execute: (onImplementationStart: () => void) => Promise<T>;
-    }) => await toolParams.execute(() => undefined),
+      onTerminal?: (terminal: {
+        result: unknown;
+        isError: boolean;
+        executedArguments: unknown;
+        effectReceipt: {
+          state: "read_completed" | "failed_no_effect" | "mutation_committed" | "uncertain";
+        };
+      }) => void | Promise<void>;
+    }) => {
+      try {
+        const result = await toolParams.execute(() => undefined);
+        await toolParams.onTerminal?.({
+          result,
+          isError: false,
+          executedArguments: structuredClone(toolParams.args),
+          effectReceipt: {
+            state: toolParams.replaySafe ? "read_completed" : "mutation_committed",
+          },
+        });
+        return result;
+      } catch (error) {
+        await toolParams.onTerminal?.({
+          result: buildToolLifecycleErrorResult(error),
+          isError: true,
+          executedArguments: structuredClone(toolParams.args),
+          effectReceipt: {
+            state: toolParams.replaySafe ? "failed_no_effect" : "uncertain",
+          },
+        });
+        throw error;
+      }
+    },
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},

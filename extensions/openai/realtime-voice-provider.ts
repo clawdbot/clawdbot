@@ -10,10 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  createOpenAIRealtimeClientSecret,
-  resolveOpenAIProviderConfigRecord,
-} from "./realtime-provider-shared.js";
+import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
@@ -22,7 +19,11 @@ import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
-import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import {
+  isOpenAIGptLiveModel,
+  isSupportedOpenAIGptLiveModel,
+  OPENAI_GPT_LIVE_DEFAULT_VOICE,
+} from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
   OPENAI_REALTIME_CAPABILITIES,
@@ -82,6 +83,7 @@ type OpenAIInternalRealtimeBrowserSessionCreateRequest =
 type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
   handlesAgentConsult?: boolean;
   supportsGatewayControl?: boolean;
+  voicesByModel?: Record<string, readonly string[]>;
 };
 
 type OpenAIInternalRealtimeVoiceProviderApi = {
@@ -128,7 +130,10 @@ function buildOpenAIRealtimeBrowserSessionConfig(
   session: Record<string, unknown> & { model: string };
   voice: OpenAIRealtimeVoice;
 } {
-  const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
+  const voice =
+    normalizeOpenAIRealtimeVoice(req.voice) ??
+    normalizeOpenAIRealtimeVoice(config.voice) ??
+    "alloy";
   const tools = normalizeOpenAIRealtimeTools(req.tools);
   const session: Record<string, unknown> & { model: string } = {
     type: "realtime",
@@ -172,7 +177,6 @@ async function createOpenAIRealtimeBrowserSession(
   quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
   logger: Pick<PluginLogger, "warn">,
 ): Promise<RealtimeVoiceBrowserSession> {
-  const rawConfig = resolveOpenAIProviderConfigRecord(req.providerConfig);
   const config = normalizeProviderConfig(req.providerConfig);
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
@@ -183,12 +187,11 @@ async function createOpenAIRealtimeBrowserSession(
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
     }
-    const configuredVoice = normalizeOptionalString(rawConfig?.speakerVoice ?? rawConfig?.voice);
     const quicksilverRequest = {
       ...req,
       model,
       instructions: buildOpenAIQuicksilverInstructions(req.instructions),
-      ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
+      voice: req.voice ?? config.voice,
     };
     const auth = await resolveOpenAIQuicksilverBridgeAuth({
       configuredApiKey: config.apiKey,
@@ -206,7 +209,10 @@ async function createOpenAIRealtimeBrowserSession(
       cfg: req.cfg,
       agentId: req.agentId,
     });
-    const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
+    const voice =
+      normalizeOpenAIRealtimeVoice(req.voice) ??
+      normalizeOpenAIRealtimeVoice(config.voice) ??
+      "alloy";
     const sessionConfig = buildOpenAIRealtimeGaSessionPolicy({
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions: req.instructions,
@@ -333,8 +339,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     id: "openai",
     label: "OpenAI Realtime Voice",
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
-    // GA and GPT-Live accept the same ten voices; quicksilver validates at call
-    // creation because voice is immutable once the session starts.
+    // GA is the provider default; model-specific GPT-Live voices are in the capabilities.
     models: OPENAI_REALTIME_MODELS,
     voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
@@ -369,7 +374,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           return new OpenAIQuicksilverGatewayBridge({
             ...req,
             model,
-            voice: config.voice ?? "marin",
+            voice: config.voice ?? OPENAI_GPT_LIVE_DEFAULT_VOICE,
             instructions: buildOpenAIQuicksilverInstructions(req.instructions),
             logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
             resolveAuth: () =>
@@ -402,7 +407,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         ...req,
         apiKey: config.apiKey,
         model: config.model,
-        voice: config.voice,
+        voice: normalizeOpenAIRealtimeVoice(config.voice),
         temperature: config.temperature,
         vadThreshold: config.vadThreshold,
         silenceDurationMs: config.silenceDurationMs,

@@ -6014,18 +6014,98 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
-  it("bounds docs publish-repository Git transports", () => {
+  it("owns docs mirror Git lifecycle without changing transport or stale-source policy", () => {
     const source = readFileSync(".github/workflows/docs-sync-publish.yml", "utf8");
-    const transports = source
-      .split("\n")
-      .filter((line) => line.includes("git clone") || line.includes("git fetch origin main:"));
-
+    const workflow = parse(source);
+    const steps = workflow.jobs["sync-publish-repo"].steps as WorkflowStep[];
+    expect(steps.map(({ name }) => name)).toEqual([
+      "Skip publish sync without token",
+      "Checkout source repo",
+      "Checkout ClawHub docs source",
+      "Prepare Git owner",
+      "Setup Node",
+      "Clone publish repo",
+      "Sync docs into publish repo",
+      "Install docs MDX checker dependency",
+      "Check publish docs MDX",
+      "Commit publish repo sync",
+    ]);
+    expect(steps[3]).toEqual({
+      name: "Prepare Git owner",
+      if: "env.OPENCLAW_DOCS_SYNC_TOKEN != ''",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    });
+    expect(steps[1]).toMatchObject({ with: { "fetch-depth": 0 } });
+    expect(steps[2]).toMatchObject({
+      with: {
+        repository: "openclaw/clawhub",
+        ref: "main",
+        path: "clawhub-source",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+      },
+    });
+    expect(steps.slice(1).every((step) => step.if === "env.OPENCLAW_DOCS_SYNC_TOKEN != ''")).toBe(
+      true,
+    );
+    expect(source).not.toContain("setup-python");
+    expect(workflow.concurrency).toEqual({
+      group:
+        "docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}",
+      "cancel-in-progress": false,
+    });
+    const clone = expectDefined(steps[5]?.run, "clone policy");
+    const sync = expectDefined(steps[6]?.run, "sync body");
+    const publish = expectDefined(steps[9]?.run, "publication policy");
+    expect(steps[9]?.["working-directory"]).toBe("publish");
+    for (const policy of [clone, publish]) {
+      expect(
+        policy.startsWith(
+          "set -euo pipefail\nexec python3 -I -S \"$CI_GIT_OWNER\" --policy - <<'PYTHON'\n",
+        ),
+      ).toBe(true);
+      expect(policy.match(/for attempt in range\(1, 6\):/gu)).toHaveLength(1);
+      expect(policy.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
+      expect(policy).toContain("except (GitFailure, FetchTimeout):");
+      expect(policy).not.toMatch(
+        /except (?:Exception|BaseException)|except:|error\.code|\$\?|\|\| true/u,
+      );
+    }
+    expect(clone).toContain('publish = os.path.join(workspace, "publish")');
+    expect(clone).toContain('subprocess.run(["rm", "-rf", publish], check=True)');
+    expect(clone).toContain(
+      "https://x-access-token:{os.environ['OPENCLAW_DOCS_SYNC_TOKEN']}@github.com/openclaw/docs.git",
+    );
+    const calls = [...`${clone}\n${publish}`.matchAll(/run_git\(([\s\S]*?)\)(?=\n|$)/gu)].map(
+      (match) => match[1]!,
+    );
+    const transports = calls.filter((call) => /^\w+, "(?:clone|fetch)"/u.test(call));
     expect(transports).toHaveLength(3);
-    expect(
-      transports.every((line) =>
-        line.trimStart().startsWith("if timeout --signal=TERM --kill-after=10s 120s git"),
+    expect(transports.every((call) => call.includes("timeout=120"))).toBe(true);
+    expect(transports.slice(1)).toEqual(
+      Array(2).fill(
+        'publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True',
       ),
+    );
+    expect(calls.filter((call) => call.includes("timeout="))).toEqual(transports);
+    expect(calls.filter((call) => /^publish, "(?:rebase|push)"/u.test(call))).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => /^publish, "(?:config|add|commit|rebase|push)"/u.test(call))
+        .every((call) => call.includes("reclaim_locks=True")),
     ).toBe(true);
+    expect(publish).toContain("if not current_source_sha or current_source_sha == source_sha:");
+    expect(publish).toContain(
+      'run_git(workspace, "merge-base", "--is-ancestor", source_sha, current_source_sha)',
+    );
+    expect(publish).toContain("except (GitFailure, json.JSONDecodeError):");
+    expect(sync.startsWith("set -euo pipefail\n")).toBe(true);
+    expect(sync).toContain(
+      'clawhub_sha="$(cd "$GITHUB_WORKSPACE/clawhub-source" && python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 rev-parse HEAD)"\nnode scripts/docs-sync-publish.mjs',
+    );
+    expect([clone, sync, publish].join("\n")).not.toMatch(
+      /\btimeout --|\bgit (?:clone|fetch|show|merge-base|diff|config|add|commit|rebase|push|rev-parse)\b|--depth|--no-tags/u,
+    );
   });
 
   it.each([[".github/workflows/plugin-clawhub-release.yml", 3]])(

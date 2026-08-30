@@ -1023,6 +1023,22 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("routes docs mirror edits through docs, workflow, and native Git owner proof", () => {
+    expectChangedTargets(
+      [".github/workflows/docs-sync-publish.yml"],
+      [
+        "test/scripts/docs-sync-publish.test.ts",
+        "test/scripts/ci-git-owner.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-platform-checkout.test.ts",
+        "src/scripts/ci-changed-scope.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    );
+    const plans = buildVitestRunPlans(["test/scripts/ci-linux-git.test.ts"]);
+    expect(plans.map(({ config }) => config)).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+  });
+
   it("keeps Mantis proof workflow edits on workflow evidence regression tests", () => {
     const packageAcceptanceTargets = [
       "test/scripts/package-acceptance-workflow.test.ts",

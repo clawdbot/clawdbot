@@ -33,12 +33,11 @@ import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
   hangupOpenAIRealtimeCall,
-  resolveOpenAIQuicksilverVoice,
   type OpenAIQuicksilverAuth,
   type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
-import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import { isOpenAIGptLiveModel, resolveOpenAIQuicksilverVoice } from "./realtime-quicksilver.js";
 import { assertOpenAIRealtimeAudioOnlyOffer } from "./realtime-sdp-offer.js";
 export const OPENAI_QUICKSILVER_OFFER_PATH = "/plugins/openai/realtime/calls";
 export const OPENAI_QUICKSILVER_CAPABILITIES = {
@@ -70,7 +69,6 @@ type OpenAIQuicksilverSessionRequest = RealtimeVoiceBrowserSessionCreateRequest 
 
 type PreparedOpenAIQuicksilverSessionRequest = OpenAIQuicksilverSessionRequest & {
   model: string;
-  voice: string;
 };
 
 type PendingOffer = {
@@ -331,7 +329,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       ) {
         throw new Error("Too many concurrent OpenAI realtime sessions for this client");
       }
-      const voice = resolveOpenAIQuicksilverVoice(request.voice);
+      const voice = isGptLive ? resolveOpenAIQuicksilverVoice(request.voice) : request.voice;
       const token = randomBytes(32).toString("base64url");
       const expiresAt = Date.now() + OPENAI_QUICKSILVER_PENDING_TTL_MS;
       reserveOpenAIQuicksilverSession(token, { expiresAtMs: expiresAt });

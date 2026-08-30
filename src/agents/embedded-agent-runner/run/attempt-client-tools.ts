@@ -25,6 +25,7 @@ import {
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
+import { applyCodeModeRecoveryPreparedToolSurface } from "./code-mode-reconciliation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
@@ -144,6 +145,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
+  if (params.attempt.codeModeRecovery?.kind === "resume") {
+    clientToolDefs = applyCodeModeRecoveryPreparedToolSurface({
+      tools: clientToolDefs,
+      state: params.attempt.codeModeRecovery,
+    });
+  }
   // Terminal observations are name-only, so ownership is valid only when one
   // concrete OpenClaw or client tool owns the normalized name.
   const sideEffectToolOwners = collectSideEffectToolOwners(

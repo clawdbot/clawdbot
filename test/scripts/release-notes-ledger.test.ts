@@ -53,6 +53,47 @@ function contributionLedger({
 }
 
 describe("renderContributionRecordEntry", () => {
+  it.each([
+    ["refactor(plugins)!: remove a bundled workflow plugin", "refactor", true],
+    ["refactor!: remove the legacy setup command", "refactor", true],
+    ["REFACTOR(cli)!: rename the setup command", "refactor", true],
+    ["build!: require a supported runtime", "build", true],
+    ["refactor(plugins): simplify loader internals", "refactor", false],
+    ["test: cover breaking plugin changes!", "test", false],
+    ["fix: preserve message delivery", "fix", true],
+  ])("classifies declared breaking changes for release prose: %s", (title, type, eligible) => {
+    const nodes = new Map([
+      [
+        123,
+        {
+          __typename: "PullRequest",
+          author: { __typename: "User", login: "alice" },
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title,
+        },
+      ],
+    ]);
+    const result = contributionLedger({ nodes, sourcePullRequests: [123] });
+    expect(result.pullRequests).toMatchObject([
+      { number: 123, type, editorialEligible: eligible, thanks: ["alice"] },
+    ]);
+    const source = [
+      "## 2026.8.1",
+      "### Highlights",
+      ...[1, 2, 3, 4, 5].map((value) => `- Highlight ${value}.`),
+      "### Changes",
+      "- Explain the user impact. (#123) Thanks @alice.",
+      "### Fixes",
+      result.ledger,
+    ].join("\n");
+    expect(ledgerChecks({ source }, result.pullRequests, nodes, [])).toEqual(
+      eligible
+        ? []
+        : [`editorial release prose references non-editorial ${type} PR #123 (${type})`],
+    );
+  });
+
   it("keeps external and linked issue references without repeating PR title references", () => {
     expect(
       renderContributionRecordEntry({

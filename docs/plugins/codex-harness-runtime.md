@@ -134,14 +134,15 @@ approvals.
 For a stored or idle session on the Gateway computer, **Continue as branch**
 creates a normal, model-locked Chat and mirrors bounded user and assistant
 history through the source's last terminal persisted turn. The first normal
-Chat turn installs the real approval handlers and uses a temporary native fork
+Chat turn installs the real approval handlers and uses an ephemeral native fork
 to pin the snapshot without a model or provider override. Codex App Server uses
 its current native configuration and returns the selected pair; it emits its
 normal warning if that model differs from the source's last recorded model.
-On the same supervision connection, OpenClaw starts the canonical
+OpenClaw confirms the fork's subscription is released before starting the canonical
 `appServer`-source Codex harness thread under its cwd and runtime policy with
-exactly the returned model and provider for that initial start, injects the
-bounded visible history, and archives the temporary fork. The source is never
+exactly the returned model and provider for that initial start. It then injects the
+bounded visible history and commits the binding on the same supervision connection.
+The probe is never persisted or archived. The source is never
 resumed. The canonical thread has the full OpenClaw harness tool surface;
 reasoning, tool calls, and tool results from the source are not cloned into it.
 The private connection scope survives pending and committed binding states, so

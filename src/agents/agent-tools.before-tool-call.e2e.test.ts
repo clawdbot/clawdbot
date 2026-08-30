@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
@@ -49,12 +50,21 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function currentNodeEvalCommand(source: string): string {
+  const shellQuote = (value: string) =>
+    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+  const command = `${shellQuote(process.execPath)} -e ${shellQuote(source)}`;
+  return process.platform === "win32" ? `& ${command}` : command;
+}
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -493,6 +503,68 @@ describe("before_tool_call loop detection behavior", () => {
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+  });
+
+  it("blocks real exec failures whose process ids drift across a session alias merge", async () => {
+    const workspace = tempDirs.make("openclaw-exec-loop-merge-");
+    const sessionId = "exec-loop-merge-session";
+    const sessionKey = "agent:main:exec-loop-merge";
+    const sessionIdAlias = "agent:main:exec-loop-merge-id";
+    const runId = "exec-loop-merge-run";
+    const script = "process.stderr.write(`retry pid ${process.pid}\\n`); process.exit(1)";
+    const command = currentNodeEvalCommand(script);
+    const execDefaults = {
+      host: "gateway" as const,
+      security: "full" as const,
+      ask: "off" as const,
+      cwd: workspace,
+      allowBackground: false,
+    };
+    const sessionIdTool = wrapToolWithBeforeToolCallHook(createExecTool(execDefaults), {
+      agentId: "main",
+      sessionId,
+      sessionKey: sessionIdAlias,
+      runId,
+      loopDetection: { enabled: true },
+    });
+    const sessionKeyTool = wrapToolWithBeforeToolCallHook(createExecTool(execDefaults), {
+      agentId: "main",
+      sessionKey,
+      runId,
+      loopDetection: { enabled: true },
+    });
+    const outputs = new Set<string>();
+
+    for (const [alias, tool] of [
+      ["id", sessionIdTool],
+      ["key", sessionKeyTool],
+    ] as const) {
+      for (let index = 0; index < CRITICAL_THRESHOLD / 2; index += 1) {
+        const result = await tool.execute(`exec-loop-${alias}-${index}`, { command });
+        const details = requireRecord(result.details, "exec result details");
+        expect(details).toMatchObject({ status: "completed", exitCode: 1 });
+        const aggregated = details.aggregated;
+        expect(aggregated).toBeTypeOf("string");
+        if (typeof aggregated !== "string") {
+          throw new Error("exec result details.aggregated was not a string");
+        }
+        outputs.add(aggregated);
+      }
+    }
+    expect(outputs.size).toBeGreaterThan(1);
+
+    const merged = getDiagnosticSessionState({ sessionId, sessionKey });
+    expect(merged.toolCallHistory).toHaveLength(CRITICAL_THRESHOLD);
+
+    const mergedTool = wrapToolWithBeforeToolCallHook(createExecTool(execDefaults), {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      runId,
+      loopDetection: { enabled: true },
+    });
+    const blocked = await mergedTool.execute("exec-loop-blocked", { command });
+    expectToolLoopBlockedResult(blocked, "identical outcomes");
   });
 
   it("blocks changing-argument terminal exec failures and escalates vetoes", async () => {

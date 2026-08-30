@@ -590,6 +590,7 @@ describe("talk.catalog handler", () => {
       defaultModel: "gpt-realtime-2.1",
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      capabilities: { voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] } },
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
@@ -626,6 +627,7 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime.providers[0]).toMatchObject({
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
     });
     // Catalog readiness must mirror talk.client.create: top-level
     // talk.realtime.model overrides the provider-level model and the resolved

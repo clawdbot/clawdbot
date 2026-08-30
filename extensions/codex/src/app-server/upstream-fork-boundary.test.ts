@@ -36,6 +36,7 @@ async function resolveFromTurns(params: {
   userMessageOrdinal: number;
   localPrefixTexts: readonly (string | undefined)[];
   localIdentities?: readonly (string | undefined)[];
+  historyMode?: "legacy" | "paginated";
 }) {
   const identities =
     params.localIdentities ??
@@ -62,13 +63,19 @@ async function resolveFromTurns(params: {
         )
       : { role: "user", content: text ?? "", timestamp: index },
   }));
-  return await resolveEntries(params.turns, entries, `entry-${params.userMessageOrdinal}`);
+  return await resolveEntries(
+    params.turns,
+    entries,
+    `entry-${params.userMessageOrdinal}`,
+    params.historyMode,
+  );
 }
 
 async function resolveEntries(
   turns: readonly CodexTurn[],
   entries: SessionTranscriptMessageEntry[],
   entryId: string,
+  historyMode: "legacy" | "paginated" = "legacy",
 ) {
   transcriptMocks.readVisibleEntries.mockResolvedValue(entries);
   const result = await resolveCodexUpstreamForkBoundary({
@@ -79,7 +86,7 @@ async function resolveEntries(
     entryId,
     threadId: "thread-1",
     control: {
-      readThread: vi.fn(async () => ({ id: "thread-1" })),
+      readThread: vi.fn(async () => ({ id: "thread-1", historyMode })),
       listTurnPage: vi.fn(async () => ({ data: [...turns] })),
     } as unknown as Parameters<typeof resolveCodexUpstreamForkBoundary>[0]["control"],
   });
@@ -87,22 +94,26 @@ async function resolveEntries(
 }
 
 describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
-  it("maps the recorded user identity to the upstream turn", async () => {
-    const result = await resolveFromTurns({
-      turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("two")])],
-      userMessageOrdinal: 1,
-      localPrefixTexts: ["one", "two"],
-    });
+  it.each(["legacy", "paginated"] as const)(
+    "maps the recorded user identity to the upstream turn with %s history",
+    async (historyMode) => {
+      const result = await resolveFromTurns({
+        turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("two")])],
+        userMessageOrdinal: 1,
+        localPrefixTexts: ["one", "two"],
+        historyMode,
+      });
 
-    expect(result).toEqual({
-      ok: true,
-      boundary: {
-        beforeTurnId: "turn-2",
-        targetTurnId: "turn-2",
-        retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
-      },
-    });
-  });
+      expect(result).toEqual({
+        ok: true,
+        boundary: {
+          beforeTurnId: "turn-2",
+          targetTurnId: "turn-2",
+          retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+        },
+      });
+    },
+  );
 
   it("cuts before the first turn with an empty retained baseline", async () => {
     const result = await resolveFromTurns({
@@ -280,25 +291,5 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
 
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
-  });
-});
-
-describe("resolveCodexUpstreamForkBoundary", () => {
-  it("rejects paginated-history threads before reading turns", async () => {
-    const readThread = vi.fn(async () => ({ id: "thread-1", historyMode: "paginated" }));
-    const result = await resolveCodexUpstreamForkBoundary({
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:upstream",
-      storePath: "/tmp/does-not-matter",
-      entryId: "entry-1",
-      threadId: "thread-1",
-      control: { readThread } as unknown as Parameters<
-        typeof resolveCodexUpstreamForkBoundary
-      >[0]["control"],
-    });
-
-    expect(result).toMatchObject({ ok: false, code: "upstream-unavailable" });
-    expect(readThread).toHaveBeenCalledWith("thread-1", false);
   });
 });

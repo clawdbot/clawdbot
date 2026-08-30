@@ -72,11 +72,8 @@ function resolveChatSlashCommandArgOptions(
   if (props.modelSwitching) {
     return [];
   }
-  const session = props.sessions?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
   return resolveThinkingCommandArgOptionsForSession(
-    session,
+    props.selectedSession,
     props.sessions?.defaults,
     props.modelCatalog,
   );
@@ -103,9 +100,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     sendingForCurrentSession || showAbortableUi || Boolean(submittedProgress)
       ? { phase: "in-progress" as const }
       : props.runStatus;
-  const activeSession = props.sessions?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
   const draftKey = composerDraftKey(props);
   if (state.composerDraftScopeKey !== null && state.composerDraftScopeKey !== draftKey) {
     state.dictation?.dispose();
@@ -143,7 +137,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
   const contextNotice = renderContextNotice(
-    activeSession,
+    props.selectedSession,
     props.sessions?.defaults?.contextTokens ?? null,
     {
       messages: props.messages,
@@ -622,7 +616,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state,
     canCompose,
     showAbortableUi,
-    activeSession,
+    activeSession: props.selectedSession,
     visibleDraft,
     contextNotice,
     composerControls,

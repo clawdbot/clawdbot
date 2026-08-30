@@ -691,6 +691,7 @@ async function runCronScenarioAction({
   gatewayEnv,
   cronDeliveryTarget,
   message,
+  bestEffort,
   isStopped,
 }) {
   let jobId;
@@ -717,6 +718,7 @@ async function runCronScenarioAction({
         "telegram",
         "--to",
         cronDeliveryTarget,
+        ...(bestEffort ? ["--best-effort-deliver"] : []),
         "--json",
         "--keep-after-run",
       ],
@@ -1324,6 +1326,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
               gatewayEnv: controlEnv,
               cronDeliveryTarget: selectedChatTarget.cronDeliveryTarget,
               message: action.message,
+              bestEffort: action.bestEffort,
               isStopped: () => controlsStopped,
             }).then(
               (result) => {

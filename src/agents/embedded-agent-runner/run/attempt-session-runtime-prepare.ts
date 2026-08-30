@@ -48,6 +48,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   effectiveWorkspace: string;
   initialSystemPrompt: string;
   isRawModelRun: boolean;
+  nestedToolActivities: AgentSessionInput["nestedToolActivities"];
   sessionManager: Pick<
     SessionManagerInput,
     | "replayAllowedToolNames"
@@ -137,6 +138,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
+    nestedToolActivities: input.nestedToolActivities,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {

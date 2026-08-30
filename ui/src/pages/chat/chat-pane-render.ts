@@ -436,6 +436,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             }
           : undefined,
       sessions: state.sessionsResult,
+      selectedSession,
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined

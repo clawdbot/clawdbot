@@ -131,6 +131,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "authoredContextTokenCap"
+  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "pluginHarnessToolPolicySafeDeniedTools"

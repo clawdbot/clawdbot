@@ -189,6 +189,8 @@ describe("session connection hydration", () => {
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(0);
     expect(sessions.state.result).toBeNull();
     const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
+    snapshot = { ...snapshot, selfUser: { id: "collaborator", name: "Collaborator" } };
+    gatewayListener?.(snapshot);
 
     bootstrap.resolve({ subscribed: true, list: roster });
     await waitForFast(() =>
@@ -260,77 +262,100 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("rehydrates owner sessions when identity arrives on the same connection", async () => {
-    let resolveList: (result: SessionsListResult) => void = () => undefined;
-    const pendingList = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
-    let listCalls = 0;
-    const result: SessionsListResult = {
-      ts: 1,
-      path: "(multiple)",
-      count: 0,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [],
-    };
-    const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
+  it.each(["main", "work"])(
+    "rehydrates the current %s roster when identity arrives on the same connection",
+    async (agentId) => {
+      let resolveList: (result: SessionsListResult) => void = () => undefined;
+      const pendingList = new Promise<SessionsListResult>((resolve) => {
+        resolveList = resolve;
+      });
+      let listCalls = 0;
+      const result: SessionsListResult = {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+      const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.list") {
+          listCalls += 1;
+          return listCalls === 1 ? await pendingList : result;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      let snapshot = {
+        client: null as GatewayBrowserClient | null,
+        phase: "reconnecting" as "connected" | "reconnecting",
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main" as string | null,
+        hello: null as GatewayHelloOk | null,
+        canvasPluginSurfaceUrl: null as string | null,
+        selfUser: null as { id: string; name?: string } | null,
+      };
+      let gatewayListener: ((next: typeof snapshot) => void) | undefined;
+      const sessions = createSessionCapability({
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe(listener) {
+          gatewayListener = listener;
+          return () => undefined;
+        },
+        subscribeEvents: () => () => undefined,
+      });
+
+      snapshot = { ...snapshot, client, phase: "connected" };
+      gatewayListener?.(snapshot);
+      await waitForFast(() => expect(listCalls).toBe(1));
+
+      snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
+      gatewayListener?.(snapshot);
+      await Promise.resolve();
+      expect(listCalls).toBe(1);
+
+      if (agentId === "work") {
+        resolveList(result);
+        await waitForFast(() => expect(sessions.state.result).toBe(result));
+        // The global route remains unchanged while the picker selects another roster.
+        snapshot = { ...snapshot, sessionKey: "global" };
+        await sessions.refresh({ agentId, search: "selected", force: true });
+        expect(sessions.state.agentId).toBe(agentId);
       }
-      if (method === "sessions.list") {
-        listCalls += 1;
-        return listCalls === 1 ? await pendingList : result;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    let snapshot = {
-      client: null as GatewayBrowserClient | null,
-      phase: "reconnecting" as "connected" | "reconnecting",
-      sessionKey: "agent:main:main",
-      assistantAgentId: "main" as string | null,
-      hello: null as GatewayHelloOk | null,
-      canvasPluginSurfaceUrl: null as string | null,
-      selfUser: null as { id: string; name?: string } | null,
-    };
-    let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener) {
-        gatewayListener = listener;
-        return () => undefined;
-      },
-      subscribeEvents: () => () => undefined,
-    });
+      snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
+      gatewayListener?.(snapshot);
+      resolveList(result);
+      await waitForFast(() => expect(listCalls).toBe(agentId === "work" ? 3 : 2));
 
-    snapshot = { ...snapshot, client, phase: "connected" };
-    gatewayListener?.(snapshot);
-    await waitForFast(() => expect(listCalls).toBe(1));
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "sessions.list")
+          .map(([, params]) => params),
+      ).toEqual([
+        expect.not.objectContaining({ ownerFirst: expect.anything() }),
+        ...(agentId === "work" ? [expect.objectContaining({ agentId, search: "selected" })] : []),
+        expect.objectContaining({
+          agentId,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          ...(agentId === "work" ? { search: "selected" } : { ownerFirst: true }),
+        }),
+      ]);
+      await waitForFast(() => expect(sessions.state.agentId).toBe(agentId));
+      expect(sessions.state.result?.sessions).toEqual([]);
 
-    snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
-    gatewayListener?.(snapshot);
-    await Promise.resolve();
-    expect(listCalls).toBe(1);
-
-    snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
-    gatewayListener?.(snapshot);
-    resolveList(result);
-    await waitForFast(() => expect(listCalls).toBe(2));
-
-    expect(
-      request.mock.calls
-        .filter(([method]) => method === "sessions.list")
-        .map(([, params]) => params),
-    ).toEqual([
-      expect.not.objectContaining({ ownerFirst: expect.anything() }),
-      expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
-    ]);
-    expect(sessions.state.result?.sessions).toEqual([]);
-    expect(sessions.state.agentId).toBe("main");
-    sessions.dispose();
-  });
+      // A new connection still derives scope from the current gateway route.
+      snapshot = { ...snapshot, phase: "reconnecting" };
+      gatewayListener?.(snapshot);
+      snapshot = { ...snapshot, phase: "connected", sessionKey: "agent:main:main" };
+      gatewayListener?.(snapshot);
+      await waitForFast(() => expect(sessions.state.agentId).toBe("main"));
+      sessions.dispose();
+    },
+  );
 
   it("hydrates again after the current client reconnects", async () => {
     let listCalls = 0;
