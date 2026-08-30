@@ -22,6 +22,11 @@ import {
   type RichText,
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
+import {
+  collectTelegramDetailsStructuralIslands,
+  rebuildTelegramHtmlContainer,
+  type TelegramDetailsStructuralSegment,
+} from "./rich-blocks-details.js";
 import { findTelegramHtmlIslands } from "./rich-blocks-html-map.js";
 import { parseInlineHtmlIslands } from "./rich-blocks-html.js";
 import {
@@ -50,17 +55,8 @@ const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;
 
 type InlineStyleKind = "bold" | "italic" | "strikethrough" | "code" | "spoiler";
 
-type StructuralRange = { start: number; end: number };
-type DetailsRichBlock = Extract<InputRichBlock, { type: "details" }>;
-
 type StructuralSegment =
-  | {
-      kind: "details";
-      start: number;
-      end: number;
-      bodyRanges: readonly StructuralRange[];
-      block: DetailsRichBlock;
-    }
+  | TelegramDetailsStructuralSegment
   | { kind: "heading"; start: number; end: number; size: 1 | 2 | 3 | 4 | 5 | 6 }
   | { kind: "code_block"; start: number; end: number; language?: string }
   | { kind: "blockquote"; start: number; end: number }
@@ -404,11 +400,11 @@ function collectStructuralSegments(
 ): StructuralSegment[] {
   const segments: StructuralSegment[] = [];
   const htmlIslands = findAuthoredHtmlIslands(ir, 0, ir.text.length);
-  const detailsIslands = htmlIslands.filter(
-    (island): island is typeof island & { detailsBodyRanges: StructuralRange[] } =>
-      island.blocks.length === 1 &&
-      island.blocks[0]?.type === "details" &&
-      island.detailsBodyRanges !== undefined,
+  const detailsIslands = collectTelegramDetailsStructuralIslands(
+    ir,
+    0,
+    ir.text.length,
+    htmlIslands,
   );
   const isInsideHtmlIsland = (start: number, end: number) =>
     htmlIslands.some((island) => start >= island.start && end <= island.end);
@@ -417,19 +413,7 @@ function collectStructuralSegments(
   const isUnownedHtmlChild = (start: number, end: number) =>
     isInsideHtmlIsland(start, end) && !isInsideDetailsIsland(start, end);
 
-  for (const island of detailsIslands) {
-    const block = island.blocks[0];
-    if (block?.type !== "details") {
-      continue;
-    }
-    segments.push({
-      kind: "details",
-      start: island.start,
-      end: island.end,
-      bodyRanges: island.detailsBodyRanges,
-      block,
-    });
-  }
+  segments.push(...detailsIslands);
   for (const span of ir.styles) {
     if (span.end <= span.start) {
       continue;
@@ -477,19 +461,58 @@ function collectStructuralSegments(
   // Containers sort before their children (start asc, end desc) so emitSegments
   // can consume contained segments recursively instead of double-emitting them.
   const containerRank = (segment: StructuralSegment) =>
-    segment.kind === "details"
-      ? -1
-      : segment.kind === "blockquote"
-        ? 0
-        : segment.kind === "list"
-          ? 1
-          : 2;
-  return segments.toSorted(
-    (left, right) =>
-      left.start - right.start ||
-      right.end - left.end ||
-      containerRank(left) - containerRank(right),
+    segment.kind === "blockquote"
+      ? 0
+      : segment.kind === "list"
+        ? 1
+        : segment.kind === "details"
+          ? 2
+          : 3;
+  const isZeroWidthTable = (segment: StructuralSegment) =>
+    segment.kind === "table" && segment.start === segment.end;
+  return segments.toSorted((left, right) => {
+    if (left.start !== right.start) {
+      return left.start - right.start;
+    }
+    const leftIsZeroWidthTable = isZeroWidthTable(left);
+    const rightIsZeroWidthTable = isZeroWidthTable(right);
+    if (leftIsZeroWidthTable !== rightIsZeroWidthTable) {
+      const other = leftIsZeroWidthTable ? right : left;
+      // Tables disappear from ir.text, so a table immediately before a
+      // details opener shares its offset; blockquote/list spans at that
+      // offset still own the table and must remain the outer container.
+      const otherOwnsPlaceholder = other.kind === "blockquote" || other.kind === "list";
+      if (otherOwnsPlaceholder) {
+        return leftIsZeroWidthTable ? 1 : -1;
+      }
+      return leftIsZeroWidthTable ? -1 : 1;
+    }
+    return right.end - left.end || containerRank(left) - containerRank(right);
+  });
+}
+
+type DetailsStructuralSegment = Extract<StructuralSegment, { kind: "details" }>;
+type DetailsRichBlock = DetailsStructuralSegment["block"];
+
+function emitDetailsSegment(
+  ir: MarkdownIR,
+  segment: DetailsStructuralSegment,
+  children: readonly StructuralSegment[],
+  degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+): Extract<InputRichBlock, { type: "details" }> {
+  const nested = segment.bodyRanges.flatMap((range) =>
+    emitSegments(
+      ir,
+      children.filter((child) => child.start >= range.start && child.end <= range.end),
+      range.start,
+      range.end,
+      degradationReasons,
+    ),
   );
+  return {
+    ...segment.block,
+    blocks: nested.length > 0 ? nested : [{ type: "paragraph", text: "" }],
+  };
 }
 
 function emitSegments(
@@ -519,19 +542,20 @@ function emitSegments(
     const children = segments.slice(index + 1, next);
     switch (segment.kind) {
       case "details": {
-        const nested = segment.bodyRanges.flatMap((range) =>
-          emitSegments(
-            ir,
-            children.filter((child) => child.start >= range.start && child.end <= range.end),
-            range.start,
-            range.end,
-            degradationReasons,
-          ),
-        );
-        blocks.push({
-          ...segment.block,
-          blocks: nested.length > 0 ? nested : [{ type: "paragraph", text: "" }],
-        });
+        blocks.push(emitDetailsSegment(ir, segment, children, degradationReasons));
+        break;
+      }
+      case "html-container": {
+        const detailsByBlock = new Map<InputRichBlock, DetailsRichBlock>();
+        for (const child of children) {
+          if (child.kind === "details") {
+            detailsByBlock.set(
+              child.block,
+              emitDetailsSegment(ir, child, children, degradationReasons),
+            );
+          }
+        }
+        blocks.push(rebuildTelegramHtmlContainer(segment.block, detailsByBlock));
         break;
       }
       case "heading": {

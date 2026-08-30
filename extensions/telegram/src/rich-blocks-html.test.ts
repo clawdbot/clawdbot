@@ -63,6 +63,131 @@ describe("block HTML islands", () => {
     expect(JSON.stringify(block)).not.toContain("<details>");
   });
 
+  it("preserves nested <details> containers around Markdown blocks", () => {
+    const block = single(
+      [
+        "<details><summary>Outer</summary>",
+        "",
+        "# Outer heading",
+        "",
+        "<details><summary>Inner</summary>",
+        "",
+        "# Inner heading",
+        "",
+        "```bash",
+        "openclaw doctor",
+        "```",
+        "",
+        "> inner quote",
+        "",
+        "| item | done |",
+        "| --- | --- |",
+        "| lint | yes |",
+        "",
+        "</details>",
+        "",
+        "> outer quote",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["heading", "details", "blockquote"]);
+    const inner = block.blocks[1];
+    expect(inner?.type).toBe("details");
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.summary).toBe("Inner");
+    expect(inner.blocks.map((child) => child.type)).toEqual([
+      "heading",
+      "pre",
+      "blockquote",
+      "table",
+    ]);
+    expect(JSON.stringify(block)).not.toContain("<details>");
+  });
+
+  it("keeps same-offset tables before nested <details>", () => {
+    const block = single(
+      [
+        "<details><summary>Outer</summary>",
+        "",
+        "| item | done |",
+        "| --- | --- |",
+        "| table | before |",
+        "",
+        "<details><summary>Inner</summary>",
+        "",
+        "# Inner heading",
+        "",
+        "</details>",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["table", "details"]);
+    const inner = block.blocks[1];
+    expect(inner?.type).toBe("details");
+  });
+
+  it("keeps blockquote wrappers around nested <details>", () => {
+    const block = single(
+      [
+        "<details><summary>Outer</summary>",
+        "",
+        "> <details><summary>Inner</summary>",
+        ">",
+        "> # Inner heading",
+        ">",
+        "> </details>",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["blockquote"]);
+    const quote = block.blocks[0];
+    expect(quote?.type).toBe("blockquote");
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks.map((child) => child.type)).toEqual(["details"]);
+  });
+
+  it("preserves raw blockquote wrappers around nested <details>", () => {
+    const block = single(
+      "<details><summary>Outer</summary><blockquote><details><summary>Inner</summary>\n\n# Inner heading\n\n</details><cite>Author</cite></blockquote></details>",
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["blockquote"]);
+    const quote = block.blocks[0];
+    expect(quote).toMatchObject({ type: "blockquote", credit: "Author" });
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks.map((child) => child.type)).toEqual(["details"]);
+    const inner = quote.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',
