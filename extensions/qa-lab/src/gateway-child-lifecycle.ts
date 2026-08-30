@@ -271,6 +271,9 @@ export class QaGatewayChildLifecycle {
         cleanupQaGatewayTempRoots({
           tempRoot,
           stagedBundledPluginsRoot: this.stagedBundledPluginsRoot,
+          // The isolation owner created private directories under another UID.
+          // Finalize them only after shutdown and sanitized log preservation.
+          cleanupTempRoot: this.controller?.cleanupTempRoot,
         }),
       );
     }
