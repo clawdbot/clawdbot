@@ -77,7 +77,6 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
-/** Adds current actor display data without persisting rename-prone metadata. */
 /** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
 function channelAvatarRevision(reference: string): string {
   return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
