@@ -26,136 +26,136 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.7.1-2..59d3e7252503d6ecd58de69206de149a020594be history: 126 in-range PRs + 0 retained seed-only PRs = 126 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.7.1-2..81f2b9e9cc520d53fdb35044fefe9d4eb2a7107a history: 126 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
-- **PR #102438** Related #102430. Thanks @obviyus.
-- **PR #102125** Thanks @mushuiyu886.
-- **PR #102451** Thanks @QiuYuang.
-- **PR #102276** Related #102252. Thanks @harjothkhara and @yetval.
-- **PR #101739** Thanks @Alix-007.
-- **PR #102089** Thanks @Alix-007.
-- **PR #102403** Thanks @yetval.
-- **PR #102398** Thanks @yetval.
-- **PR #38290** Related #46520. Thanks @brunowowk and @mosidevv.
-- **PR #102013** Thanks @masatohoshino.
-- **PR #102825** Related #102393. Thanks @wangyan2026 and @yetval.
-- **PR #102426** Thanks @pgondhi987.
-- **PR #101000** Thanks @hugenshen and @cursoragent.
-- **PR #104625**
-- **PR #104540** Thanks @zhangguiping-xydt.
-- **PR #104734** Related #104713. Thanks @ObliviateRickLin and @davefano.
-- **PR #104811** Thanks @ShiroKSH.
-- **PR #102881** Related #102834. Thanks @wangyan2026 and @yetval.
-- **PR #101469** Thanks @cxbAsDev.
-- **PR #103562** Related #102381. Thanks @cxbAsDev and @zuofengboss.
-- **PR #113700**
-- **PR #113703**
-- **PR #113697**
-- **PR #114134** Thanks @pgondhi987.
-- **PR #102331**
-- **PR #101630** Thanks @hugenshen and @cursoragent.
-- **PR #101736** Thanks @chengzhichao-xydt and @Alix-007.
-- **PR #101617** Thanks @zhangguiping-xydt.
-- **PR #102246** Thanks @mushuiyu886.
-- **PR #102332** Thanks @QiuYuang.
-- **PR #101815** Thanks @VectorPeak.
-- **PR #102090** Thanks @wm0018.
-- **PR #101976** Thanks @MoerAI.
-- **PR #102378** Thanks @zw-xysk.
-- **PR #102085** Thanks @wm0018.
-- **PR #102105** Thanks @wangmiao0668000666.
-- **PR #102157** Thanks @wangmiao0668000666.
-- **PR #102395** Thanks @wangmiao0668000666.
-- **PR #102266** Thanks @zw-xysk.
-- **PR #101781** Thanks @hugenshen and @cursoragent.
-- **PR #101934** Thanks @wm0018.
-- **PR #102407** Thanks @miorbnli.
-- **PR #102466** Thanks @chengzhichao-xydt.
-- **PR #102464** Thanks @lsr911.
-- **PR #102467** Thanks @lsr911.
-- **PR #102470** Thanks @zw-xysk.
-- **PR #102483** Thanks @wings1029.
-- **PR #102478** Thanks @qingminglong.
-- **PR #101649** Thanks @Alix-007.
-- **PR #101506** Thanks @mikasa0818.
-- **PR #102484** Thanks @wings1029.
-- **PR #102477** Thanks @xydt-tanshanshan.
-- **PR #102496** Thanks @chengzhichao-xydt.
-- **PR #102500** Thanks @lsr911.
-- **PR #102515** Thanks @lsr911.
-- **PR #102525** Thanks @lsr911.
-- **PR #102527** Thanks @lsr911.
-- **PR #102536** Related #102528.
-- **PR #102149** Thanks @wangmiao0668000666.
-- **PR #102524** Thanks @lsr911.
-- **PR #102389** Related #101837. Thanks @Supsumintong and @qingminglong.
-- **PR #101832** Related #101785. Thanks @MonkeyLeeT and @aniruddhaadak80.
-- **PR #104049**
-- **PR #97828** Related #80862. Thanks @ly-wang19 and @kyle20026.
-- **PR #102859** Thanks @Alix-007 and @Leon-SK668.
-- **PR #102862** Thanks @Alix-007 and @Leon-SK668.
-- **PR #103547** Thanks @xialonglee.
-- **PR #103555** Thanks @xialonglee.
-- **PR #104229**
-- **PR #104306** Related #104214. Thanks @vincentkoc.
-- **PR #102965** Thanks @chengzhichao-xydt.
-- **PR #103752** Thanks @Leon-SK668.
-- **PR #103728** Thanks @Leon-SK668 and @vincentkoc.
-- **PR #104426** Related #104425.
-- **PR #103731** Thanks @Leon-SK668 and @vincentkoc.
-- **PR #104263** Thanks @qingminglong.
-- **PR #104156** Thanks @qingminglong.
-- **PR #104173** Thanks @qingminglong.
-- **PR #104110** Thanks @zhangguiping-xydt and @vincentkoc.
-- **PR #104404** Thanks @mushuiyu886 and @vincentkoc.
-- **PR #104440** Thanks @qingminglong.
-- **PR #104260** Thanks @hugenshen.
-- **PR #104151** Thanks @hugenshen.
-- **PR #104148** Thanks @hugenshen.
-- **PR #104414** Thanks @qingminglong.
-- **PR #104556** Thanks @qingminglong.
-- **PR #102974** Thanks @hugenshen.
-- **PR #104610**
-- **PR #104301** Thanks @whiteyzy.
-- **PR #103445** Thanks @zw-xysk and @cursoragent.
-- **PR #104677** Thanks @Leon-SK668.
-- **PR #104423** Thanks @mushuiyu886.
-- **PR #104560** Thanks @wings1029.
-- **PR #104454** Thanks @chenyangjun-xy.
-- **PR #104715** Thanks @Leon-SK668.
-- **PR #104470** Related #104469. Thanks @VectorPeak.
-- **PR #104498** Thanks @VectorPeak.
-- **PR #113259** Thanks @lzw112.
-- **PR #112855** Related #112854. Thanks @fr-meyer.
-- **PR #113609**
-- **PR #113683**
-- **PR #113685**
-- **PR #113106** Thanks @zenglingbiao.
-- **PR #113109** Thanks @zenglingbiao.
-- **PR #113790**
-- **PR #113897**
-- **PR #114051**
-- **PR #114061**
-- **PR #114280** Thanks @yangxiansheng.
-- **PR #114325** Thanks @RomneyDa.
-- **PR #93516** Related #102885. Thanks @Papilionidae.
-- **PR #114450** Related #105078. Thanks @VectorPeak.
-- **PR #114512**
-- **PR #112352** Thanks @kesava500.
-- **PR #114540** Thanks @hugenshen.
-- **PR #114500** Related #103735. Thanks @Maless88.
-- **PR #97024** Thanks @0xghost42.
-- **PR #114076** Related #105701. Thanks @qingminglong and @aniruddhaadak80.
-- **PR #128799** Related #128743. Thanks @LiuwqGit and @Patrick-Erichsen and @schaba21.
-- **PR #131546** Related #131544.
-- **PR #131195** Related #129349. Thanks @edenfunf and @obviyus.
-- **PR #131783**
-- **PR #132014** Related #132000. Thanks @edenfunf and @obviyus.
-- **PR #102636** Related #102628. Thanks @Gary-Jia-new and @altaywtf and @Joakim-Emanuelson.
-- **PR #132545**
-- **PR #102160** Related #85826, #96168. Thanks @obviyus and @kiagentkronos-cell and @alvelda.
+- **PR #102438** fix: auth bookkeeping no longer reverts rotated OpenAI OAuth credentials. Related #102430. Thanks @obviyus.
+- **PR #102125** fix(gateway): finish plugin HTTP responses after post-header failures. Thanks @mushuiyu886.
+- **PR #102451** fix(memory-host): reject queued worker requests on shutdown. Thanks @QiuYuang.
+- **PR #102276** fix(agent-core): stop canceled parallel tools from starting. Related #102252. Thanks @harjothkhara and @yetval.
+- **PR #101739** fix(secrets): reject inherited exec response ids. Thanks @Alix-007.
+- **PR #102089** fix(twilio): redact webhook turnToken diagnostics. Thanks @Alix-007.
+- **PR #102403** fix(backup): write backup archive with owner-only 0o600 permissions. Thanks @yetval.
+- **PR #102398** fix(plugins): terminate git clone args so git: specs cannot inject options. Thanks @yetval.
+- **PR #38290** Gateway: allow extension origins in browser allowlist. Related #46520. Thanks @brunowowk and @mosidevv.
+- **PR #102013** fix(gateway): bound sessions.usage all-agent session discovery concurrency. Thanks @masatohoshino.
+- **PR #102825** fix(gateway): parse image data URLs linearly. Related #102393. Thanks @wangyan2026 and @yetval.
+- **PR #102426** fix: redact diagnostic config fields with schema hints [AI]. Thanks @pgondhi987.
+- **PR #101000** fix(plugins): bound hosted catalog feed reads on non-streaming responses. Thanks @hugenshen and @cursoragent.
+- **PR #104625** fix(gateway): demote startup close transport races.
+- **PR #104540** fix(sessions): prevent corrupted Unicode in persisted tool details. Thanks @zhangguiping-xydt.
+- **PR #104734** fix(models): redact synthetic auth credentials from models status --json. Related #104713. Thanks @ObliviateRickLin and @davefano.
+- **PR #104811** fix(gateway): keep channels stopped during shutdown and reload. Thanks @ShiroKSH.
+- **PR #102881** fix(gateway): reject disallowed browser Origin before accepting auth.mode=none on HTTP (#102834). Thanks @wangyan2026 and @yetval.
+- **PR #101469** fix(hooks): bound HOOK.md reads during hook install validation. Thanks @cxbAsDev.
+- **PR #103562** fix(discord): retry reply session init conflicts to prevent silent message loss. Related #102381. Thanks @cxbAsDev and @zuofengboss.
+- **PR #113700** fix: recover outbound messages after the correct retry delay.
+- **PR #113703** fix: preserve distinct imported CLI session messages.
+- **PR #113697** fix: repair tool-call transcripts when plugins block results.
+- **PR #114134** fix: require approval for escaped newline shell words [AI]. Thanks @pgondhi987.
+- **PR #102331** fix(google-meet): keep Meet sessions on the agent that joined them. Thanks @steipete-oai.
+- **PR #101630** fix(mattermost): truncate inbound preview on code-point boundary. Thanks @hugenshen and @cursoragent.
+- **PR #101736** fix(agents): keep steering metadata truncation UTF-16 safe. Thanks @chengzhichao-xydt and @Alix-007.
+- **PR #101617** fix(discord): prevent stale gateway error listeners after restart. Thanks @zhangguiping-xydt.
+- **PR #102246** fix(discord): keep gateway close reasons UTF-16 safe. Thanks @mushuiyu886.
+- **PR #102332** fix(agents): keep truncation surrogate-safe. Thanks @QiuYuang.
+- **PR #101815** fix(discord): split encoded video URLs from captions. Thanks @VectorPeak.
+- **PR #102090** fix(gateway): keep session title and preview text truncation UTF-16 safe. Thanks @wm0018.
+- **PR #101976** fix(acp): keep background-task summaries UTF-16 safe at truncation boundaries. Thanks @MoerAI.
+- **PR #102378** fix(acp): keep session update text truncation surrogate-safe. Thanks @zw-xysk.
+- **PR #102085** fix(agents): keep chunkString and buildResumeMessage truncation UTF-16 safe. Thanks @wm0018.
+- **PR #102105** fix(google-meet): handle stdout/stderr stream errors in node host. Thanks @wangmiao0668000666.
+- **PR #102157** fix(google-meet): bound Calendar v3 events.list request deadline. Thanks @wangmiao0668000666.
+- **PR #102395** fix(matrix): keep HTTP error and tool-progress truncations UTF-16 safe. Thanks @wangmiao0668000666.
+- **PR #102266** fix(security): keep channel-metadata and install-policy truncation surrogate-safe. Thanks @zw-xysk.
+- **PR #101781** fix(telegram): keep DM topic auto-rename user message UTF-16 safe. Thanks @hugenshen and @cursoragent.
+- **PR #101934** fix: keep task title truncation UTF-16 safe in restart/diagnostic output. Thanks @wm0018.
+- **PR #102407** fix(channels): keep inbound log previews UTF-16 safe. Thanks @miorbnli.
+- **PR #102466** fix(agents): keep tool-result context guard truncation UTF-16 safe. Thanks @chengzhichao-xydt.
+- **PR #102464** fix(tool-policy-audit): use truncateUtf16Safe for audit field truncation. Thanks @lsr911.
+- **PR #102467** fix(native-hook-relay): use truncateUtf16Safe for hook display text truncation. Thanks @lsr911.
+- **PR #102470** fix(gateway): keep chat history display text truncation surrogate-safe. Thanks @zw-xysk.
+- **PR #102483** fix(auto-reply,infra): keep startup context and heartbeat event text UTF-16 safe. Thanks @wings1029.
+- **PR #102478** fix(memory): snippets split emoji when truncated. Thanks @qingminglong.
+- **PR #101649** fix(zalouser): clear probe timeout after auth resolves. Thanks @Alix-007.
+- **PR #101506** fix(browser): bound Chrome launch stderr diagnostics. Thanks @mikasa0818.
+- **PR #102484** fix(gateway): keep live chat assistant buffer tail truncation UTF-16 safe. Thanks @wings1029.
+- **PR #102477** fix(talk): use truncateUtf16Safe for LLM-prompt-facing text truncation. Thanks @xydt-tanshanshan.
+- **PR #102496** fix(agents): keep provider error detail truncation UTF-16 safe. Thanks @chengzhichao-xydt.
+- **PR #102500** fix(mcp-runtime): use truncateUtf16Safe for MCP metadata text truncation. Thanks @lsr911.
+- **PR #102515** fix(compaction): use truncateUtf16Safe for post-compaction context text. Thanks @lsr911.
+- **PR #102525** fix(discord): use truncateUtf16Safe for deploy error body truncation. Thanks @lsr911.
+- **PR #102527** fix(oc-path): use truncateUtf16Safe for error message path truncation. Thanks @lsr911.
+- **PR #102536** fix(nodes): restore Mac app allowlist execution. Related #102528.
+- **PR #102149** fix(google-meet): bound Meet v2 + Drive files.export request deadlines. Thanks @wangmiao0668000666.
+- **PR #102524** fix(memory-core): use truncateUtf16Safe for diary context truncation. Thanks @lsr911.
+- **PR #102389** fix(web-fetch): report exact-limit response bodies as complete, not truncated [AI-assisted]. Related #101837. Thanks @Supsumintong and @qingminglong.
+- **PR #101832** fix: keep Gemini thinking disabled after clamp. Related #101785. Thanks @MonkeyLeeT and @aniruddhaadak80.
+- **PR #104049** fix: installer removes temporary files after failed commands.
+- **PR #97828** fix(telegram): clear reasoning preview before forceNewMessage rotation (#80862). Thanks @ly-wang19 and @kyle20026.
+- **PR #102859** fix(nextcloud-talk): add timeout to room info lookup. Thanks @Alix-007 and @Leon-SK668.
+- **PR #102862** fix(minimax): add timeouts to OAuth HTTP requests. Thanks @Alix-007 and @Leon-SK668.
+- **PR #103547** fix(voice-call): redact phone numbers in event logs via subsystem logger. Thanks @xialonglee.
+- **PR #103555** fix(voice-call): consolidate webhook logs on the injected plugin logger and assert transcript privacy boundary. Thanks @xialonglee.
+- **PR #104229** fix: live updater builds complete runtime assets.
+- **PR #104306** fix: start local embedding services on demand. Related #104214. Thanks @vincentkoc.
+- **PR #102965** fix(inworld): add timeout to voices list request. Thanks @chengzhichao-xydt.
+- **PR #103752** fix(google-meet): validate chrome node policy params. Thanks @Leon-SK668.
+- **PR #103728** fix(memory): skip blank search provider bootstrap. Thanks @Leon-SK668 and @vincentkoc.
+- **PR #104426** fix(commitments): isolate extraction batches by agent. Related #104425.
+- **PR #103731** fix(plugins): honor empty document extractor scope. Thanks @Leon-SK668 and @vincentkoc.
+- **PR #104263** fix(gateway): cap history when numeric limit is huge. Thanks @qingminglong.
+- **PR #104156** fix(agents): truncate multibyte middleware details at byte limit. Thanks @qingminglong.
+- **PR #104173** fix(onboard): wait for gateway warnings before installing service. Thanks @qingminglong.
+- **PR #104110** fix(agents): cancel pending bundle LSP requests when the agent stops. Thanks @zhangguiping-xydt and @vincentkoc.
+- **PR #104404** fix(agents): preserve UTF-16 boundaries in context pruning. Thanks @mushuiyu886 and @vincentkoc.
+- **PR #104440** fix(browser): reject hex click coordinates in act route. Thanks @qingminglong.
+- **PR #104260** fix(voice-call): use sliceUtf16Safe for bounded child output tail cap. Thanks @hugenshen.
+- **PR #104151** fix(file-transfer): keep bounded stderr tail UTF-16 safe. Thanks @hugenshen.
+- **PR #104148** fix(agents): keep scp stderr tail UTF-16 safe. Thanks @hugenshen.
+- **PR #104414** fix(nodes): reject malformed media payloads when base64 is invalid. Thanks @qingminglong.
+- **PR #104556** fix(file-transfer): reject oversized inline file writes before node dispatch. Thanks @qingminglong.
+- **PR #102974** fix(google): stream Gemini batch JSONL output instead of res.text(). Thanks @hugenshen.
+- **PR #104610** fix(gateway): demote expected startup socket aborts.
+- **PR #104301** fix(utils): use UTF-16 safe truncation for long URL timeout logs. Thanks @whiteyzy.
+- **PR #103445** fix(slack): preserve unrelated action rows after interactions. Thanks @zw-xysk and @cursoragent.
+- **PR #104677** fix(browser): run mutation guard before JSON parsing. Thanks @Leon-SK668.
+- **PR #104423** fix(agents): preserve UTF-16 boundaries in bootstrap context. Thanks @mushuiyu886.
+- **PR #104560** fix(write): report actual UTF-8 byte count in success message. Thanks @wings1029.
+- **PR #104454** fix(attempt-execution): use truncateUtf16Safe for summary text truncation. Thanks @chenyangjun-xy.
+- **PR #104715** fix(browser): apply profile proxy policy to tab list redaction. Thanks @Leon-SK668.
+- **PR #104470** fix(ai): reject non-finite tool schema numbers. Related #104469. Thanks @VectorPeak.
+- **PR #104498** fix(feishu): avoid logging raw duplicate card-action tokens. Thanks @VectorPeak.
+- **PR #113259** fix(gateway): reject incomplete usage date ranges. Thanks @lzw112.
+- **PR #112855** fix: doctor preserves locks owned by exact gateway process title. Related #112854. Thanks @fr-meyer.
+- **PR #113609** fix(gateway): return 404 for disabled OpenAI API routes.
+- **PR #113683** fix: route skill verification through the managed proxy.
+- **PR #113685** fix: preserve child process signal exit codes.
+- **PR #113106** fix(xiaomi): reject malformed base64 audio in TTS responses. Thanks @zenglingbiao.
+- **PR #113109** fix(volcengine): reject malformed base64 audio in TTS responses. Thanks @zenglingbiao.
+- **PR #113790** fix: recognize Bash completion installed in login profiles.
+- **PR #113897** fix(models): keep empty model lists machine-readable.
+- **PR #114051** fix(agents): prevent session stalls under concurrent load.
+- **PR #114061** fix(gateway): prevent missing assets on nested dashboard routes.
+- **PR #114280** fix(gateway): keep failed account stops from stranding siblings. Thanks @yangxiansheng.
+- **PR #114325** fix: report unavailable system Node versions accurately. Thanks @RomneyDa.
+- **PR #93516** fix(matrix): reverse-proxy path support for Matrix homeserver URLs. Related #102885. Thanks @Papilionidae.
+- **PR #114450** fix(zalo): deliver text when optional media is blank. Related #105078. Thanks @VectorPeak.
+- **PR #114512** fix(cron): avoid false agent timeouts while execution lanes are busy. Thanks @hugin-bot.
+- **PR #112352** fix(model): report the model change before the thinking remap it triggers. Thanks @kesava500.
+- **PR #114540** fix(cron): prevent local model preflight socket leaks. Thanks @hugenshen.
+- **PR #114500** fix(auto-reply): normalize newline-delimited silent tokens. Related #103735. Thanks @Maless88.
+- **PR #97024** fix(session-delivery): propagate non-ENOENT retry persistence failures. Thanks @0xghost42.
+- **PR #114076** fix: debug proxy respects response backpressure (issue #105701). Thanks @qingminglong and @aniruddhaadak80.
+- **PR #128799** fix(ai): preserve root properties when flattening root-level anyOf tool schemas. Related #128743. Thanks @LiuwqGit and @Patrick-Erichsen and @schaba21.
+- **PR #131546** fix(copilot): own BYOK response stream lifecycles. Related #131544.
+- **PR #131195** fix(line): /card splits an action, list item, or receipt entry at a comma inside its data. Related #129349. Thanks @edenfunf and @obviyus.
+- **PR #131783** fix(agents): keep dangling symlinks visible in ls listings.
+- **PR #132014** fix(line): give the agent the selection a postback carries. Related #132000. Thanks @edenfunf and @obviyus.
+- **PR #102636** fix(handoff): skip orchestrator framing for solo agents without subagents. Related #102628. Thanks @Gary-Jia-new and @altaywtf and @Joakim-Emanuelson.
+- **PR #132545** fix(plugins): keep compiled plugin aliases on the built runtime.
+- **PR #102160** fix(agents): run-lifecycle reliability — bounded release, evidence-based liveness, watchdog semantics. Related #85826, #96168. Thanks @obviyus and @kiagentkronos-cell and @alvelda.
 
 ## 2026.7.1-2
 
