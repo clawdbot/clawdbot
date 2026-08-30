@@ -180,15 +180,17 @@ Mount the gateway state **as a directory**, never as a single file. The repo
 # - "./openclaw.json:/home/node/.openclaw/openclaw.json"
 ```
 
-Docker pins a file bind to one inode. OpenClaw writes `openclaw.json` with a
-sibling temp file plus rename, which publishes a new inode. After that replace,
-a file-bound container can keep reading the old file while the host path points
-at the new one, so config edits look like a no-op.
+A Docker file bind attaches the mount-time inode, not the path name. OpenClaw
+writes `openclaw.json` with `@openclaw/fs-safe` `replaceFileAtomic`: a sibling
+temp file plus rename. The config writer also sets
+`copyFallbackOnPermissionError: true`, which falls back to copy-replace only
+on `EPERM`/`EEXIST`. Either path publishes a new inode. The file-bound
+container can keep reading the old inode while the host path points at the
+new one, so config edits look like a no-op.
 
-Do not treat a specific errno or `openclaw doctor` as the signal. The config
-writer enables a permission-error copy fallback, so a failed rename does not
-always mean config cannot be saved. Doctor "config drift" is for
-supervisor/service files, not a bind-mounted `openclaw.json`.
+Do not treat a specific Docker errno or `openclaw doctor` as the signal. A
+failed rename can still save via that copy fallback. Doctor "config drift"
+is for supervisor/service files, not a bind-mounted `openclaw.json`.
 
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
