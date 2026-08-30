@@ -18,9 +18,13 @@ afterEach(resetPluginRuntimeStateForTest);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("VoiceCallWebhookServer transcription provider discovery", () => {
-  it.each([undefined, "configured-stt"])(
-    "initializes streaming from configured candidates with explicit selection %s",
-    async (configuredProviderId) => {
+  it.each(
+    ["configured-stt", "configured-stt-alias"].flatMap((configKey) =>
+      [undefined, configKey].map((configuredProviderId) => ({ configKey, configuredProviderId })),
+    ),
+  )(
+    "initializes streaming from $configKey config with explicit selection $configuredProviderId",
+    async ({ configuredProviderId, configKey }) => {
       const root = tempDirs.make("voice-call-provider-discovery-");
       const workspace = path.join(root, "workspace");
       fs.mkdirSync(workspace, { recursive: true });
@@ -31,7 +35,7 @@ describe("VoiceCallWebhookServer transcription provider discovery", () => {
           path.join(pluginDir, "index.cjs"),
           `module.exports = { id: "${id}", register(api) {
             api.registerRealtimeTranscriptionProvider({
-              id: "${id}", label: "${id}",
+              id: "${id}", aliases: ["${id}-alias"], label: "${id}",
               isConfigured: ({ providerConfig }) => providerConfig.ready === true,
               createSession: () => { throw new Error("startup must not start transcription"); },
             });
@@ -86,7 +90,7 @@ describe("VoiceCallWebhookServer transcription provider discovery", () => {
           config.streaming.provider = configuredProviderId;
           config.streaming.providers = {
             "active-stt": { ready: false },
-            "configured-stt": { ready: true },
+            [configKey]: { ready: true },
           };
           const server = new VoiceCallWebhookServer(
             config,

@@ -113,19 +113,38 @@ describe("plugin-sdk provider-selection-runtime", () => {
     expect(resolveProviderConfig).not.toHaveBeenCalled();
   });
 
-  it("merges canonical and selected provider config", () => {
-    expect(
-      resolveProviderRawConfig({
-        providerId: "canonical",
-        configuredProviderId: "alias",
-        providerConfigs: {
-          canonical: { apiKey: "default", model: "base" },
-          alias: { model: "alias-model" },
-        },
-      }),
-    ).toEqual({
-      apiKey: "default",
-      model: "alias-model",
-    });
-  });
+  it.each([
+    {
+      configuredProviderId: undefined,
+      expected: { apiKey: "default", model: "base", voice: "first", language: "en" },
+    },
+    {
+      configuredProviderId: "alias",
+      expected: { apiKey: "default", model: "alias-model", voice: "first" },
+    },
+    {
+      configuredProviderId: "canonical",
+      expected: { apiKey: "default", model: "base" },
+    },
+    {
+      configuredProviderId: "other-alias",
+      expected: { apiKey: "default", model: "other-model", voice: "second", language: "en" },
+    },
+  ])(
+    "merges provider config with explicit selection $configuredProviderId",
+    ({ configuredProviderId, expected }) => {
+      expect(
+        resolveProviderRawConfig({
+          providerId: "canonical",
+          providerAliases: ["alias", "other-alias"],
+          configuredProviderId,
+          providerConfigs: {
+            canonical: { apiKey: "default", model: "base" },
+            "other-alias": { model: "other-model", voice: "second", language: "en" },
+            alias: { model: "alias-model", voice: "first" },
+          },
+        }),
+      ).toEqual(expected);
+    },
+  );
 });

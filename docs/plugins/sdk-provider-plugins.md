@@ -893,6 +893,10 @@ catalog, API-key auth, and dynamic model resolution.
         Consumers can pass candidate provider IDs as the optional second argument
         to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
         ordinary catalog discovery; per-call candidates do not change that catalog.
+        Automatic realtime voice and Voice Call transcription selection uses declared alias config as
+        defaults, with earlier aliases preferred and canonical values taking precedence.
+        An explicitly selected alias still overrides canonical config without inheriting
+        settings from other aliases.
 
         ```typescript
         api.registerRealtimeVoiceProvider({

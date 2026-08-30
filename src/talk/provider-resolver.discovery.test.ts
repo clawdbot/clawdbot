@@ -1,17 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  EMPTY_PLUGIN_SCHEMA,
   loadOpenClawPlugins,
-  makePluginLoaderTempDir,
-  mkdirSafe,
   resetPluginLoaderTestStateForTest,
-  writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { withEnv } from "../test-utils/env.js";
+import { createVoiceProviderFixture } from "./provider-discovery.test-fixtures.js";
 import { listRealtimeVoiceProviders } from "./provider-registry.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "./provider-resolver.js";
 
@@ -19,70 +14,24 @@ function withVoiceProviders(
   run: (cfg: OpenClawConfig) => void,
   policy: OpenClawConfig["plugins"] = {},
 ) {
-  const root = fs.realpathSync(makePluginLoaderTempDir());
-  const workspace = path.join(root, "workspace");
-  mkdirSafe(workspace);
-  for (const [id, order] of [
-    ["active-voice", 20],
-    ["configured-voice", 10],
-  ] as const) {
-    const plugin = writePlugin({
-      id,
-      dir: path.join(root, "extensions", id),
-      filename: "index.cjs",
-      body: `module.exports = { id: "${id}", register(api) {
-        api.registerRealtimeVoiceProvider({
-          id: "${id}", aliases: ["${id}-alias"], label: "${id}", autoSelectOrder: ${order},
-          resolveConfig: ({ rawConfig }) => ({ ...rawConfig, resolved: true }),
-          isConfigured: ({ providerConfig }) => providerConfig.ready === true ||
-            process.env.VOICE_DISCOVERY_TEST_CONFIGURED_PROVIDER === "${id}",
-          createBridge: () => { throw new Error("provider discovery must not start media"); },
-        });
-      } };`,
-    });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-        contracts: { realtimeVoiceProviders: [id] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(plugin.dir, "package.json"),
-      JSON.stringify({ openclaw: { extensions: ["./index.cjs"] } }),
-    );
-  }
-  const cfg: OpenClawConfig = {
-    agents: { defaults: { workspace } },
-    plugins: {
-      allow: ["active-voice", "configured-voice"],
-      ...policy,
-      entries: {
-        "active-voice": { enabled: true },
-        "configured-voice": { enabled: true },
-        ...policy?.entries,
-      },
-    },
-  };
-  return withEnv(
-    {
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
-    () => run(cfg),
-  );
+  const { cfg, env } = createVoiceProviderFixture(policy);
+  return withEnv(env, () => run(cfg));
 }
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("realtime voice provider discovery", () => {
-  it.each([false, true])(
-    "discovers configured candidates when the active provider is configured=%s",
-    (activeReady) => {
+  it.each(
+    [false, true].flatMap((activeReady) =>
+      ["configured-voice", "configured-voice-alias"].map((configKey) => ({
+        activeReady,
+        configKey,
+      })),
+    ),
+  )(
+    "discovers $configKey config when the active provider is configured=$activeReady",
+    ({ activeReady, configKey }) => {
       withVoiceProviders((cfg) => {
         const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
         expect(registry.realtimeVoiceProviders.map((entry) => entry.provider.id)).toEqual([
@@ -93,7 +42,7 @@ describe("realtime voice provider discovery", () => {
           cfg,
           providerConfigs: {
             "active-voice": { ready: activeReady },
-            "configured-voice": { ready: true },
+            [configKey]: { ready: true },
           },
         });
 
@@ -107,14 +56,21 @@ describe("realtime voice provider discovery", () => {
     },
   );
 
-  it.each([undefined, "configured-voice"])(
-    "selects a configured provider from a cold registry with explicit selection %s",
-    (configuredProviderId) => {
+  it.each(
+    ["configured-voice", "configured-voice-alias"].flatMap((configKey) =>
+      [undefined, " ", configKey].map((configuredProviderId) => ({
+        configKey,
+        configuredProviderId,
+      })),
+    ),
+  )(
+    "selects cold $configKey config with explicit selection $configuredProviderId",
+    ({ configuredProviderId, configKey }) => {
       withVoiceProviders((cfg) => {
         const result = resolveConfiguredRealtimeVoiceProvider({
           cfg,
           configuredProviderId,
-          providerConfigs: { "configured-voice": { ready: true } },
+          providerConfigs: { [configKey]: { ready: true } },
         });
         expect(result.provider.id).toBe("configured-voice");
       });
