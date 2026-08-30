@@ -2426,6 +2426,10 @@ describe("buildCachedChatItems", () => {
       });
     const result = (id: string, text = "ready", runId: string | undefined = "run-a") =>
       toolResultMessage(id, "exec", [{ type: "text", text }], 20, { runId });
+    const canonical = ({ runId, ...message }: Record<string, unknown>, seq: number) => ({
+      ...message,
+      __openclaw: { id: `tool-entry-${seq}`, seq, runId },
+    });
     const snapshot = (id: string, completed = true) =>
       assistantMessage(
         [
@@ -2474,15 +2478,21 @@ describe("buildCachedChatItems", () => {
       },
     );
 
-    it.each([false, true])(
-      "keeps one invocation before an optimistic steer (completed=%s)",
-      (completed) => {
+    it.each(
+      [false, true].flatMap((completed) =>
+        ["live", "canonical"].map((owner) => ({ completed, owner })),
+      ),
+    )(
+      "keeps one invocation before an optimistic steer ($owner ownership, completed=$completed)",
+      ({ completed, owner }) => {
+        const persisted = [call("exec-1"), ...(completed ? [result("exec-1")] : [])].map(
+          (message, index) => (owner === "canonical" ? canonical(message, index + 2) : message),
+        );
         const history = [
           userMessage("Original request", 1, {
             __openclaw: { id: "user-entry", seq: 1 },
           }),
-          call("exec-1"),
-          ...(completed ? [result("exec-1")] : []),
+          ...persisted,
           userMessage("Follow up after the command", 15, {
             __openclaw: { idempotencyKey: "steer-send:user" },
           }),
@@ -2512,6 +2522,21 @@ describe("buildCachedChatItems", () => {
         expect(history).toEqual(before);
       },
     );
+
+    it("keeps canonical sibling invocation owners when live runs reuse a call id", () => {
+      const cards = cardsFor(
+        [
+          canonical(call("shared"), 1),
+          canonical(result("shared", "first result"), 2),
+          canonical(call("shared", "exec", "run-b"), 3),
+          canonical(result("shared", "second result", "run-b"), 4),
+        ],
+        [snapshot("shared", false), { ...snapshot("shared", false), runId: "run-b" }],
+      );
+      expect(cards).toHaveLength(2);
+      expect(cards.map((card) => card.outputText)).toEqual(["first result", "second result"]);
+      expect(cards.every((card) => card.completed)).toBe(true);
+    });
 
     it.each(["different run", "unknown history run", "unknown live run", "reset", "reused"])(
       "does not relocate a live invocation across a boundary with %s ownership",
