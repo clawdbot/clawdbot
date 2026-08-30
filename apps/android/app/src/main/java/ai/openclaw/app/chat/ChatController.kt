@@ -4198,6 +4198,7 @@ class ChatController internal constructor(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.let { _thinkingLevel.value = it }
+          enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
           true
         }
       }
@@ -4206,7 +4207,6 @@ class ChatController internal constructor(
       refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
     }
     completeReconnectRecoveryIfOwned(sessionKey, generation)
-    persistTranscript(requestCacheScope, requestAgentId, sessionKey, history.messages)
     confirmDurableSendsFromHistory(requestCacheScope, history, requestAgentId)
     publishOutbox()
     return HistoryRefreshResult.Applied(historyBranchState)
@@ -4350,7 +4350,7 @@ class ChatController internal constructor(
 
   // Write-through uses the scope captured before the live request. Re-resolving here could put
   // an old response under a newly selected gateway. Failures are ignored: the cache is disposable.
-  private suspend fun persistTranscript(
+  private fun enqueueTranscriptCacheWrite(
     requestCacheScope: ChatCacheScope?,
     agentId: String,
     sessionKey: String,
@@ -4358,9 +4358,13 @@ class ChatController internal constructor(
   ) {
     val cache = transcriptCache ?: return
     val capturedScope = requestCacheScope ?: return
-    cacheMutationMutex.withLock {
-      if (capturedScope != currentCacheScope()) return@withLock
-      runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages) }
+    // Enter the cache queue before releasing the publication lock: neither another IO thread
+    // nor a reconnect health wait may let a newer snapshot persist ahead of this one.
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+      cacheMutationMutex.withLock {
+        if (capturedScope != currentCacheScope()) return@withLock
+        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages) }
+      }
     }
   }
 
