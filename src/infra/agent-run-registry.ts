@@ -424,27 +424,6 @@ export function getAgentRunContextOwnerStatus(
   return owners.clearRequested ? "clear-requested" : "active";
 }
 
-function sameOperationalRunInstance(
-  left: Readonly<{ instanceId: string; runId: string }>,
-  right: Readonly<{ instanceId: string; runId: string }>,
-): boolean {
-  return left.instanceId === right.instanceId && left.runId === right.runId;
-}
-
-function ownsCurrentAgentRunClaim(
-  runId: string,
-  claimId: string,
-  lifecycleGeneration: string,
-): boolean {
-  const state = getAgentRunRegistryState();
-  const owners = state.owners.get(runId);
-  return (
-    lifecycleGeneration === state.lifecycleGeneration &&
-    owners?.lifecycleGeneration === lifecycleGeneration &&
-    owners.claimIds.has(claimId)
-  );
-}
-
 /** Claims approval authority for the exact admitted operational execution. */
 export function claimAgentRunDelegatedAuthority(
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
@@ -456,15 +435,15 @@ export function claimAgentRunDelegatedAuthority(
   }
   const state = getAgentRunRegistryState();
   const lifecycleGeneration = state.lifecycleGeneration;
-  const current = state.contexts.get(runId);
-  const existing = current?.delegatedAuthority;
-  if (
-    existing &&
-    sameOperationalRunInstance(existing.operationalRunInstance, { instanceId, runId }) &&
-    ownsCurrentAgentRunClaim(runId, existing.claimId, lifecycleGeneration)
-  ) {
-    return existing;
+  const currentInstance =
+    operationalRunInstance.instanceId === instanceId && operationalRunInstance.runId === runId
+      ? operationalRunInstance
+      : Object.freeze({ instanceId, runId });
+  const active = getActiveAgentRunDelegatedAuthority(currentInstance);
+  if (active) {
+    return active;
   }
+  const existing = state.contexts.get(runId)?.delegatedAuthority;
   if (existing) {
     // Same-id replacement retires only the prior operational authority. Other
     // legitimate run-context owners continue until their own lifecycle exits.
@@ -485,10 +464,7 @@ export function claimAgentRunDelegatedAuthority(
     throw new Error("agent run delegated authority could not claim the operational execution");
   }
   const authority = Object.freeze({
-    operationalRunInstance:
-      operationalRunInstance.instanceId === instanceId && operationalRunInstance.runId === runId
-        ? operationalRunInstance
-        : Object.freeze({ instanceId, runId }),
+    operationalRunInstance: currentInstance,
     lifecycleGeneration,
     claimId,
   });
@@ -508,12 +484,14 @@ export function getActiveAgentRunDelegatedAuthority(
   const context = getAgentRunRegistryState().contexts.get(operationalRunInstance.runId);
   const authority = context?.delegatedAuthority;
   return authority &&
-    sameOperationalRunInstance(authority.operationalRunInstance, operationalRunInstance) &&
-    ownsCurrentAgentRunClaim(
+    authority.operationalRunInstance.instanceId === operationalRunInstance.instanceId &&
+    authority.operationalRunInstance.runId === operationalRunInstance.runId &&
+    // A clear request is projection state; the exact live claim still owns authority.
+    getAgentRunContextOwnerStatus(
       operationalRunInstance.runId,
       authority.claimId,
       authority.lifecycleGeneration,
-    )
+    ) !== undefined
     ? authority
     : undefined;
 }
@@ -572,11 +550,7 @@ export function listAgentRunsForSession(params: {
       runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
     }
   }
-  return runs.toSorted((a, b) =>
-    a.runId === b.runId
-      ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
-      : a.runId.localeCompare(b.runId),
-  );
+  return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
 }
 
 type ProjectedAgentRunState = "queued" | "running" | "capacity-wait";
