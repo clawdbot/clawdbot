@@ -200,7 +200,10 @@ export async function monitorLineProvider(
           : undefined;
 
       try {
-        const textLimit = resolveLineTextChunkLimit({ cfg: config, accountId: ctx.accountId });
+        // The reply boundary must come from the same config the turn runs under: a
+        // reload between monitor start and this event otherwise splits the reply on
+        // the old limit while the turn already answers under the new one.
+        const textLimit = resolveLineTextChunkLimit({ cfg: turnConfig, accountId: ctx.accountId });
         const core = getLineRuntime();
         const turnResult = await core.channel.inbound.run({
           channel: "line",

@@ -401,7 +401,7 @@ describe("monitorLineProvider lifecycle", () => {
     await monitor.stop();
   });
 
-  it("chunks an inbound reply at the account's configured limit", async () => {
+  it("chunks an inbound reply at the limit live for that event", async () => {
     // The limit is configured per account but applied per reply: it only holds
     // if the delivery answering an inbound event carries it.
     const { setLineRuntime } = await import("./runtime.js");
@@ -435,9 +435,18 @@ describe("monitorLineProvider lifecycle", () => {
     }
 
     try {
-      await onMessage(createInboundTextContext({ accountId: "work" }), { cfg: {} });
+      // Admission hands every event its live config, so a reload between monitor
+      // start and this event is the reachable case. Passing the start config back
+      // would let a stale read pass: only a differing live value can tell them apart.
+      await onMessage(createInboundTextContext({ accountId: "work" }), {
+        cfg: {
+          channels: {
+            line: { textChunkLimit: 4000, accounts: { work: { textChunkLimit: 1200 } } },
+          },
+        },
+      });
 
-      expect(deliverMock.mock.calls[0]?.[0]?.textLimit).toBe(900);
+      expect(deliverMock.mock.calls[0]?.[0]?.textLimit).toBe(1200);
     } finally {
       // A leaked registration makes later shared-path signature tests ambiguous.
       await monitor.stop();
