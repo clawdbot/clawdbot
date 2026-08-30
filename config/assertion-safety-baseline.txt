@@ -3901,7 +3901,7 @@ ui/src/app/theme.ts	4
 ui/src/app/update-schedule-dto.ts	2
 ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
-ui/src/app/web-push.runtime.ts	3
+ui/src/app/web-push.runtime.ts	2
 ui/src/components/agent-select.ts	3
 ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-nav-menus.ts	6

@@ -435,6 +435,8 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     return execution;
   } catch (error) {
     if (failures.length > 1) {
+      // AggregateError retains the primary failure as cause and every cleanup failure in errors.
+      // oxlint-disable-next-line preserve-caught-error -- the rule does not inspect AggregateError options.
       throw new AggregateError(failures, "Matrix QA CLI bootstrap-failure lifecycle failed", {
         cause: error,
       });
