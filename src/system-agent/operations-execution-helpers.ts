@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   SYSTEM_AGENT_CONFIG_WRITE_DENYLIST,
@@ -123,7 +124,7 @@ export async function resolveChannelSetupState(deps: SystemAgentCommandDeps | un
     (await import("../config/channel-configured-shared.js")).isStaticallyChannelConfigured;
   const { shouldShowChannelInSetup } = await import("../commands/channel-setup/discovery.js");
   const snapshot = await readConfigFileSnapshotLazy();
-  const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const cfg = snapshot.valid ? resolveAppliedSnapshotConfig(snapshot) : {};
   const installedPlugins = listPlugins();
   const resolved = resolveEntries({ cfg, installedPlugins });
   return {
@@ -395,7 +396,7 @@ async function verifyCurrentSetupInference(
       "OpenClaw setup requires a valid configured inference route. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
-  const beforeConfig = before.runtimeConfig ?? before.config;
+  const beforeConfig = resolveAppliedSnapshotConfig(before);
   const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
@@ -418,7 +419,10 @@ async function verifyCurrentSetupInference(
       "The default-agent inference route changed during setup verification, so setup was not applied. Review the current config and retry.",
     );
   }
-  const afterConfig = after.runtimeConfig ?? after.config;
+  // Same selection as beforeConfig: a fresh disk read still carries unresolved
+  // file SecretRefs, so comparing it raw against the pre-probe applied config
+  // would report an untouched provider key as route drift and block setup.
+  const afterConfig = resolveAppliedSnapshotConfig(after);
   const afterRoute = await projectDefaultInferenceRoute(afterConfig);
   if (
     !sameDefaultInferenceRoute(beforeRoute, afterRoute) ||
@@ -694,7 +698,11 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
   if (!snapshot.exists || !snapshot.valid) {
     return true;
   }
-  const config = snapshot.runtimeConfig ?? snapshot.config;
+  // Same applied-snapshot selection as the setup probe: this guard decides
+  // whether a plugin-uninstall or config write may proceed, so a fresh disk
+  // read with an unresolved file SecretRef must not misclassify the active
+  // default-route plugin.
+  const config = resolveAppliedSnapshotConfig(snapshot);
   const route = (await projectDefaultInferenceRoute(config ?? {})).route;
   if (!route) {
     return false;
