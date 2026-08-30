@@ -35,6 +35,7 @@ async function expectPublicSnapshot(
   ) =>
     | { cleanup: () => boolean; location: string }
     | Promise<{ cleanup: () => boolean; location: string }>,
+  preserveSourceArtifacts = false,
 ): Promise<void> {
   const sqlite = requireNodeSqlite();
   const databasePath = createTempDatabasePath();
@@ -48,6 +49,7 @@ async function expectPublicSnapshot(
       INSERT INTO probe VALUES ('from-wal');
     `);
     expect(fs.existsSync(`${databasePath}-wal`)).toBe(true);
+    const sourceBefore = readFamily(databasePath);
 
     const prepared = await prepare(databasePath);
     cleanup = prepared.cleanup;
@@ -59,6 +61,9 @@ async function expectPublicSnapshot(
     }
     expect(prepared.cleanup()).toBe(true);
     cleanup = undefined;
+    if (preserveSourceArtifacts) {
+      expect(readFamily(databasePath)).toEqual(sourceBefore);
+    }
   } finally {
     cleanup?.();
     writer.close();
@@ -138,16 +143,27 @@ print(json.dumps(locks))
 }
 
 describe("prepareSqliteReadOnlyLocation", () => {
-  it("prepares a readable WAL snapshot through the async public entry point", async () => {
-    await expectPublicSnapshot(prepareSqliteReadOnlyLocation);
-  });
-
-  it("prepares a readable WAL snapshot through the sync public entry point", async () => {
-    await expectPublicSnapshot(prepareSqliteReadOnlyLocationSync);
-  });
+  it.each([
+    { mode: "async backup", prepare: prepareSqliteReadOnlyLocation, preservesArtifacts: false },
+    {
+      mode: "async copy",
+      prepare: (pathname: string) => prepareSqliteReadOnlyLocation(pathname, "copy"),
+      preservesArtifacts: true,
+    },
+    { mode: "sync copy", prepare: prepareSqliteReadOnlyLocationSync, preservesArtifacts: true },
+  ])(
+    "prepares a readable WAL snapshot through the $mode public entry point",
+    async ({ prepare, preservesArtifacts }) => {
+      await expectPublicSnapshot(prepare, preservesArtifacts);
+    },
+  );
 
   it.each([
     { mode: "async", prepare: prepareSqliteReadOnlyLocation },
+    {
+      mode: "async copy",
+      prepare: (pathname: string) => prepareSqliteReadOnlyLocation(pathname, "copy"),
+    },
     { mode: "sync", prepare: prepareSqliteReadOnlyLocationSync },
   ])("stages the $mode isolated worker snapshot in the private user cache", async ({ prepare }) => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cache-");
@@ -237,6 +253,12 @@ describe("prepareSqliteReadOnlyLocation", () => {
       },
       {
         mode: "async copy",
+        prepare: (pathname: string) => prepareSqliteReadOnlyLocationInProcess(pathname, "copy"),
+        empty: false,
+        sync: false,
+      },
+      {
+        mode: "async empty copy",
         prepare: prepareSqliteReadOnlyLocationInProcess,
         empty: true,
         sync: false,

@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
+  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "../infra/sqlite-readonly-location.js";
@@ -62,7 +63,7 @@ export async function assertOpenClawStateDatabaseCompatible(
   if (pathname === undefined) {
     return;
   }
-  const prepared = prepareSqliteReadOnlyLocationSync(pathname);
+  const prepared = await prepareSqliteReadOnlyLocation(pathname, "copy");
   try {
     // Admission checks the committed version only. Doctor still owns repair of
     // quarantined state; opening the runtime store here would prevent that repair.

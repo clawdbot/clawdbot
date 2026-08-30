@@ -7,7 +7,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   snapshotStateFixtureFiles,
   writeStateSchemaFixture,
-} from "../test-utils/state-schema-fixture.js";
+} from "../test-utils/state-schema-fixture.test-support.js";
 import { withSetupMigrationTargetLock } from "./setup.migration-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

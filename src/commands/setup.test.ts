@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   snapshotStateFixtureFiles,
   writeStateSchemaFixture,
-} from "../test-utils/state-schema-fixture.js";
+} from "../test-utils/state-schema-fixture.test-support.js";
 import { setupCommand } from "./setup.js";
 
 function createSetupDeps(home: string) {

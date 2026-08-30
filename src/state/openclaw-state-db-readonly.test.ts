@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   snapshotStateFixtureFiles,
   writeStateSchemaFixture,
-} from "../test-utils/state-schema-fixture.js";
+} from "../test-utils/state-schema-fixture.test-support.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   readOpenClawDatabaseQuarantine,

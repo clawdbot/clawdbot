@@ -8,13 +8,12 @@ function formatWorkerError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The sync strategy raw-copies without attaching SQLite to the source, so sync
-// callers stay byte-neutral on the live family; the async strategy holds a read
-// transaction on the source and may update its WAL index.
+// Copy strategies never attach SQLite to the source or change its WAL index.
+// Async copies also keep private-directory PowerShell work off the sync path.
 async function runWorker(): Promise<void> {
   const mode = process.argv[3];
   const pathname = process.argv[4];
-  if ((mode !== "sync" && mode !== "async") || !pathname) {
+  if ((mode !== "sync" && mode !== "async" && mode !== "async-copy") || !pathname) {
     process.exitCode = 1;
     process.stdout.write(
       JSON.stringify({
@@ -28,7 +27,10 @@ async function runWorker(): Promise<void> {
     const prepared =
       mode === "sync"
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+        : await prepareSqliteReadOnlyLocationInProcess(
+            pathname,
+            mode === "async-copy" ? "copy" : "backup",
+          );
     process.stdout.write(JSON.stringify({ ok: true, location: prepared.location }));
   } catch (error) {
     process.exitCode = 1;

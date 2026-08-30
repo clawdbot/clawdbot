@@ -8,7 +8,7 @@ import { ConfigMutationConflictError } from "../config/mutate.js";
 import {
   snapshotStateFixtureFiles,
   writeStateSchemaFixture,
-} from "../test-utils/state-schema-fixture.js";
+} from "../test-utils/state-schema-fixture.test-support.js";
 import {
   createEnabledWebSearchConfig,
   createWizardTestRuntime as createRuntime,

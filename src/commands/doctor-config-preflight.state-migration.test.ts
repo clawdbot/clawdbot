@@ -13,7 +13,7 @@ import { ExitError } from "../runtime.js";
 import {
   snapshotStateFixtureFiles,
   writeStateSchemaFixture,
-} from "../test-utils/state-schema-fixture.js";
+} from "../test-utils/state-schema-fixture.test-support.js";
 import {
   getMaybeRepairPluginOpenClawHostLinksMock,
   makeStartupConvergenceResult,
