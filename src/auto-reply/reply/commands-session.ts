@@ -3,7 +3,6 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveNonNegativeIntegerOption,
-  resolveOptionalIntegerOption,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -139,62 +138,16 @@ type UpdatedLifecycleBinding = {
   maxAgeMs?: number;
 };
 
-function isSessionBindingRecord(
-  binding: UpdatedLifecycleBinding | SessionBindingRecord,
-): binding is SessionBindingRecord {
-  return "bindingId" in binding;
-}
-
-function resolveUpdatedLifecycleDurationMs(
-  binding: UpdatedLifecycleBinding | SessionBindingRecord,
-  key: "idleTimeoutMs" | "maxAgeMs",
-): number | undefined {
-  const raw = isSessionBindingRecord(binding) ? binding.metadata?.[key] : binding[key];
-  return resolveOptionalIntegerOption(raw, { min: 0 });
-}
-
-function toUpdatedLifecycleBinding(
-  binding: UpdatedLifecycleBinding | SessionBindingRecord,
-): UpdatedLifecycleBinding {
-  const lastActivityAt = isSessionBindingRecord(binding)
-    ? resolveSessionBindingLastActivityAt(binding)
-    : Math.max(Math.floor(binding.lastActivityAt), binding.boundAt);
-  return {
-    boundAt: binding.boundAt,
-    lastActivityAt,
-    idleTimeoutMs: resolveUpdatedLifecycleDurationMs(binding, "idleTimeoutMs"),
-    maxAgeMs: resolveUpdatedLifecycleDurationMs(binding, "maxAgeMs"),
-  };
-}
-
 function resolveUpdatedBindingExpiry(params: {
   action: typeof SESSION_ACTION_IDLE | typeof SESSION_ACTION_MAX_AGE;
   bindings: UpdatedLifecycleBinding[];
 }): number | undefined {
   const expiries = params.bindings
     .map((binding) => {
-      if (params.action === SESSION_ACTION_IDLE) {
-        const idleTimeoutMs =
-          typeof binding.idleTimeoutMs === "number" && Number.isFinite(binding.idleTimeoutMs)
-            ? Math.max(0, Math.floor(binding.idleTimeoutMs))
-            : 0;
-        if (idleTimeoutMs <= 0) {
-          return undefined;
-        }
-        return resolveSessionBindingExpiryAt(
-          Math.max(binding.lastActivityAt, binding.boundAt),
-          idleTimeoutMs,
-        );
-      }
-
-      const maxAgeMs =
-        typeof binding.maxAgeMs === "number" && Number.isFinite(binding.maxAgeMs)
-          ? Math.max(0, Math.floor(binding.maxAgeMs))
-          : 0;
-      if (maxAgeMs <= 0) {
-        return undefined;
-      }
-      return resolveSessionBindingExpiryAt(binding.boundAt, maxAgeMs);
+      const isIdle = params.action === SESSION_ACTION_IDLE;
+      const durationMs = (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0;
+      const baseMs = isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt;
+      return resolveSessionBindingExpiryAt(baseMs, durationMs);
     })
     .filter((expiresAt): expiresAt is number => typeof expiresAt === "number");
 
@@ -567,7 +520,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const nextExpiry = resolveUpdatedBindingExpiry({
     action,
-    bindings: updatedBindings.map((binding) => toUpdatedLifecycleBinding(binding)),
+    bindings: updatedBindings,
   });
   const expiryLabel =
     typeof nextExpiry === "number" && Number.isFinite(nextExpiry)

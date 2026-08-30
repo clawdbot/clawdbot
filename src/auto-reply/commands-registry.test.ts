@@ -602,18 +602,7 @@ describe("commands registry", () => {
   });
 
   it("respects text command gating", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          plugin: createChannelTestPluginBase({
-            id: "discord",
-            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
     const cfg = { commands: { text: false } };
     expect(
       shouldHandleTextCommands({
@@ -636,6 +625,14 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    for (const [surface, expected] of [
+      ["discord", true],
+      [" SLACK ", false],
+    ] as const) {
+      expect(shouldHandleTextCommands({ cfg, surface, commandSource: "text" })).toBe(expected);
+    }
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {

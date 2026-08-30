@@ -24,7 +24,6 @@ function createUpdates(params: {
       sessionUpdate: params.sessionUpdate ?? vi.fn(async () => {}),
     },
     eventLedger: params.ledger,
-    getAvailableCommands: async () => [],
     log: () => {},
   });
 }
