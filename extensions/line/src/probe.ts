@@ -2,6 +2,7 @@
 import { messagingApi } from "@line/bot-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readLineMessageQuota } from "./message-quota.js";
 import type { LineProbeResult } from "./types.js";
 
 export async function probeLineBot(
@@ -20,6 +21,10 @@ export async function probeLineBot(
     timeoutMs,
     async () => {
       const profile = await client.getBotInfo();
+      // LINE meters monthly messages per account and stops accepting pushes once
+      // the allowance runs out, so the probe reports it next to the identity an
+      // operator already checks here. An unreadable quota leaves the probe green.
+      const quota = await readLineMessageQuota(client);
       return {
         ok: true,
         bot: {
@@ -28,6 +33,7 @@ export async function probeLineBot(
           basicId: profile.basicId,
           pictureUrl: profile.pictureUrl,
         },
+        ...(quota ? { quota } : {}),
       };
     },
     (error) => ({ ok: false, error: formatErrorMessage(error) }),

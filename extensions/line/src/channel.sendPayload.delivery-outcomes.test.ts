@@ -36,6 +36,55 @@ describe("line outbound delivery outcomes", () => {
     });
   });
 
+  it.each([
+    {
+      label: "settles and names the allowance when it is used up",
+      quota: { kind: "limited", limit: 200, used: 200 } as const,
+      retryable: false,
+      reason: "200/200 monthly messages used",
+    },
+    {
+      label: "stays retryable while the allowance still has room",
+      quota: { kind: "limited", limit: 200, used: 12 } as const,
+      retryable: true,
+      reason: "429 - Too Many Requests",
+    },
+    {
+      label: "stays retryable when the allowance cannot be read",
+      quota: undefined,
+      retryable: true,
+      reason: "429 - Too Many Requests",
+    },
+  ])("$label", async ({ quota, retryable, reason }) => {
+    const { runtime, mocks } = createRuntime();
+    // LINE answers a spent monthly allowance and an ordinary rate limit with the
+    // same 429, so only the quota separates "try again shortly" from "nothing
+    // will send until next month".
+    const rejection = new HTTPFetchError("429 - Too Many Requests", {
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: new Headers(),
+      body: JSON.stringify({ message: "You have reached your monthly limit." }),
+    });
+    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+    mocks.readAccountMessageQuota.mockResolvedValue(quota);
+    setLineRuntime(runtime);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "hello",
+        payload: { text: "hello" },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      }),
+    ).rejects.toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      retryable,
+      message: expect.stringContaining(reason),
+    });
+  });
+
   it("preserves partial delivery evidence with a nested LINE rejection", async () => {
     const { runtime, mocks } = createRuntime();
     const rejection = new HTTPFetchError("400 - provider rejection", {

@@ -19,6 +19,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { describeLineQuotaRefusal } from "./message-quota.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import {
@@ -29,8 +30,13 @@ import {
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import { resolveLineNonDispatchRetryable } from "./send-retry.js";
-import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
+import { resolveLineRefusalRetryable } from "./send-retry.js";
+import type {
+  LineChannelData,
+  LineMessageQuota,
+  LineSendResult,
+  ResolvedLineAccount,
+} from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
 
@@ -63,6 +69,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const buildTemplate =
       lineRuntime?.buildTemplateMessageFromPayload ??
       outboundRuntime.buildTemplateMessageFromPayload;
+    const readAccountQuota =
+      lineRuntime?.readAccountMessageQuota ?? outboundRuntime.readLineAccountMessageQuota;
     const sendOptions = { verbose: false, cfg, accountId: accountId ?? undefined };
 
     let lastResult: LineSendResult | null = null;
@@ -73,17 +81,28 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       try {
         result = await resultPromise;
       } catch (error) {
+        // Read once: the verdict and the reported reason must describe the same
+        // allowance, and a refusal path should not ask LINE twice.
+        let quota: LineMessageQuota | undefined;
+        let quotaRead = false;
+        const readQuota = async () => {
+          if (!quotaRead) {
+            quotaRead = true;
+            quota = await readAccountQuota({ cfg, accountId });
+          }
+          return quota;
+        };
         const retryable = isChannelPartialDeliveryError(error)
           ? undefined
-          : resolveLineNonDispatchRetryable(error);
+          : await resolveLineRefusalRetryable({ error, readQuota });
+        const rejection =
+          describeLineQuotaRefusal(quota) ??
+          (error instanceof Error ? error.message : "LINE rejected the message");
         // Nothing has been accepted yet for this payload, so a LINE client error
         // proves the whole delivery was rejected rather than left ambiguous.
         // Once a send has landed the failure is partial and keeps its own shape.
         throw lastResult === null && retryable !== undefined
-          ? new PlatformMessageNotDispatchedError(
-              error instanceof Error ? error.message : "LINE rejected the message",
-              { cause: error, retryable },
-            )
+          ? new PlatformMessageNotDispatchedError(rejection, { cause: error, retryable })
           : error;
       }
       lastResult = result;
