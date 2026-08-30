@@ -417,7 +417,7 @@ it.each(
           expect(findTaskByRunId("child")?.status).toBe("queued");
           expect(dispatchChild).not.toHaveBeenCalled();
         } finally {
-          registration.cleanup({ force: true });
+          registration.cleanup();
         }
       }
       const displaced = scenario.startsWith("replacement");

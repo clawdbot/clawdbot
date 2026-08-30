@@ -111,10 +111,10 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
           expect(await loadTranscriptEvents({ ...scope, ...binding })).toContainEqual(
             expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
           );
-          admission.cleanupAdmittedRun({ force: true });
+          admission.cleanupAdmittedRun();
           expect(context.chatQueuedTurns.has(runId)).toBe(true);
         } else if (closure === "removed" || closure === "replaced") {
-          admission.activeRunAbort.cleanup({ force: true });
+          admission.activeRunAbort.cleanup();
           if (closure === "replaced") {
             successor = registerChatAbortController({
               chatAbortControllers: context.chatAbortControllers,
@@ -160,11 +160,11 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
       } finally {
         options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         reply?.complete();
-        successor?.cleanup({ force: true });
+        successor?.cleanup();
         release.resolve();
         if (owned) {
           await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
-          owned.admission.cleanupAdmittedRun({ force: true });
+          owned.admission.cleanupAdmittedRun();
           clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
         }
         holdDispatch.mockRestore();

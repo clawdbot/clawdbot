@@ -634,7 +634,7 @@ describe("queued collector session projection", () => {
       admission.activeRunAbort.markExecutionStarted();
       context.chatRunState.getOrCreate(extraRunId).buffer = "Additional run partial";
       const cleanup = () => {
-        admission.cleanupAdmittedRun({ force: true });
+        admission.cleanupAdmittedRun();
         clearAgentRunContext(extraRunId);
       };
       admission.activeRunAbort.controller.signal.addEventListener(
@@ -729,7 +729,7 @@ describe("queued collector session projection", () => {
       } finally {
         cleanup();
         if (foreignAdmission) {
-          foreignAdmission.cleanupAdmittedRun({ force: true });
+          foreignAdmission.cleanupAdmittedRun();
           clearAgentRunContext(foreignRunId);
         }
       }

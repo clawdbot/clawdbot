@@ -364,7 +364,7 @@ it.each([
       registration.controller.signal.removeEventListener("abort", parentAbort);
       clearActiveEmbeddedRun(parentId, parent, parentKey);
       clearActiveEmbeddedRun("running", child, childKey("running"));
-      registration.cleanup({ force: true });
+      registration.cleanup();
       expect(isEmbeddedAgentRunAbortableForRunId("parent")).toBe(true);
     }
   },

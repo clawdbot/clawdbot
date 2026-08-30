@@ -409,14 +409,14 @@ describe("pending spawn invocation authority", () => {
       release.resolve();
       acceptedGate.resolve();
       await forwarded;
-      childController?.cleanup({ force: true });
+      childController?.cleanup();
       await wrappedOutcome;
       host?.close();
       if (replacementAuthority) {
         releaseAgentRunDelegatedAuthority(replacementAuthority);
       }
       admission.close();
-      parent.cleanup({ force: true });
+      parent.cleanup();
     }
   });
 
@@ -544,7 +544,7 @@ describe("pending spawn invocation authority", () => {
           expect(subagentRuns.get(runId)?.execution.status).toBe("queued");
           expect(findTaskByRunId(runId)?.status).toBe("queued");
           admission.close();
-          parent.cleanup({ force: true });
+          parent.cleanup();
           expect(parent.controller.signal.aborted).toBe(false);
         }
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
@@ -572,7 +572,7 @@ describe("pending spawn invocation authority", () => {
         await forwarded;
         await pending;
         admission.close();
-        parent.cleanup({ force: true });
+        parent.cleanup();
       }
     },
   );
@@ -648,7 +648,7 @@ describe("pending spawn invocation authority", () => {
       lease?.release();
       await cancellation;
       admission.close();
-      parent.cleanup({ force: true });
+      parent.cleanup();
     }
   });
 });
