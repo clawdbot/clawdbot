@@ -2448,7 +2448,7 @@ src/cli/update-cli/update-command-plugins.ts	1
 src/cli/update-cli/update-command-post-update.ts	2
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	6
-src/commands/agent-via-gateway.ts	11
+src/commands/agent-via-gateway.ts	7
 src/commands/agents.commands.bind.ts	5
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
