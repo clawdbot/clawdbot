@@ -722,31 +722,55 @@ describe("input file MIME sniffing", () => {
     }
   });
 
-  it("passes the caller abort signal through PDF extraction", async () => {
-    const controller = new AbortController();
-    let extractionSignal: AbortSignal | undefined;
-    detectMimeMock.mockResolvedValueOnce("application/pdf");
-    extractPdfContentMock.mockImplementationOnce((params: { signal?: AbortSignal }) => {
-      extractionSignal = params.signal;
-      return Promise.resolve({ text: "", images: [] });
-    });
+  it("waits for cancellable PDF shutdown before reporting a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let extractionSignal: AbortSignal | undefined;
+      let releaseShutdown: (() => void) | undefined;
+      const shutdown = new Promise<void>((resolve) => {
+        releaseShutdown = resolve;
+      });
+      detectMimeMock.mockResolvedValueOnce("application/pdf");
+      extractPdfContentMock.mockImplementationOnce(async (params: { signal?: AbortSignal }) => {
+        extractionSignal = params.signal;
+        await new Promise<void>((resolve) => {
+          params.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await shutdown;
+        throw params.signal?.reason;
+      });
 
-    await extractFileContentFromSource({
-      source: {
-        type: "base64",
-        data: Buffer.from("%PDF-1.4\n").toString("base64"),
-        mediaType: "application/pdf",
-        filename: "scan.pdf",
-      },
-      limits: createFileSourceLimits(["application/pdf"]),
-      signal: controller.signal,
-    });
+      const execution = extractFileContentFromSource({
+        source: {
+          type: "base64",
+          data: Buffer.from("%PDF-1.4\n").toString("base64"),
+          mediaType: "application/pdf",
+          filename: "scan.pdf",
+        },
+        limits: createFileSourceLimits(["application/pdf"]),
+        signal: new AbortController().signal,
+      });
+      let settled = false;
+      void execution.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
 
-    expect(extractionSignal).toBeInstanceOf(AbortSignal);
-    expect(extractionSignal?.aborted).toBe(false);
-    controller.abort(new Error("client disconnected"));
-    expect(extractionSignal?.aborted).toBe(true);
-    expect(extractionSignal?.reason).toEqual(new Error("client disconnected"));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(extractionSignal?.aborted).toBe(true);
+      expect(extractionSignal?.reason).toEqual(new Error("PDF extraction timed out after 1ms"));
+      expect(settled).toBe(false);
+
+      releaseShutdown?.();
+      await expect(execution).rejects.toThrow("PDF extraction timed out after 1ms");
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

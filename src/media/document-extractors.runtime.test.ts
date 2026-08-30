@@ -1,4 +1,7 @@
 // Document extractor runtime tests cover lazy document extraction adapters.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
@@ -10,8 +13,12 @@ vi.mock("../plugins/document-extractors.runtime.js", () => ({
   resolvePluginDocumentExtractors: resolvePluginDocumentExtractorsMock,
 }));
 
-import { createDocumentExtractorCapacityError } from "../plugins/document-extractor-types.js";
 import { extractDocumentContent } from "./document-extractors.runtime.js";
+
+function processWorkerCount(): number {
+  const workers = (process.report.getReport() as { workers?: unknown[] }).workers;
+  return Array.isArray(workers) ? workers.length : 0;
+}
 
 describe("extractDocumentContent", () => {
   beforeEach(() => {
@@ -122,53 +129,62 @@ describe("extractDocumentContent", () => {
     expect(newExtract).toHaveBeenCalledOnce();
   });
 
-  it("preserves capacity failures after matching extractors are exhausted", async () => {
-    const capacityError = createDocumentExtractorCapacityError("extractor queue is full");
-    resolvePluginDocumentExtractorsMock.mockReturnValue([
-      {
-        id: "pdf",
-        pluginId: "document-extract",
-        label: "PDF",
-        mimeTypes: ["application/pdf"],
-        extract: vi.fn().mockRejectedValue(capacityError),
-      },
-    ]);
-
-    await expect(
-      extractDocumentContent({
-        buffer: Buffer.from("pdf"),
-        mimeType: "application/pdf",
-        maxPages: 1,
-        maxPixels: 100,
-        minTextChars: 10,
-        config: {},
-      }),
-    ).rejects.toBe(capacityError);
-  });
-
-  it("passes caller cancellation to the selected extractor", async () => {
+  it("terminates isolated extraction before rejecting caller cancellation", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-document-worker-"));
+    const pluginId = "delayed-document-extract";
+    const pluginDir = path.join(fixtureRoot, pluginId);
+    const startedMarker = path.join(fixtureRoot, "started");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(path.join(pluginDir, "package.json"), '{"type":"module"}\n');
+    await fs.writeFile(
+      path.join(pluginDir, "document-extractor.js"),
+      `
+        import fs from "node:fs/promises";
+        export function createDelayedDocumentExtractor() {
+          return {
+            id: "delayed",
+            label: "Delayed",
+            mimeTypes: ["application/pdf"],
+            async extract() {
+              await fs.writeFile(${JSON.stringify(startedMarker)}, "started");
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              return { text: "completed after disconnect", images: [] };
+            },
+          };
+        }
+      `,
+    );
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", fixtureRoot);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     const controller = new AbortController();
-    const extract = vi.fn().mockResolvedValue({ text: "pdf text", images: [] });
-    resolvePluginDocumentExtractorsMock.mockReturnValue([
-      {
-        id: "pdf",
-        pluginId: "document-extract",
-        label: "PDF",
-        mimeTypes: ["application/pdf"],
-        extract,
-      },
-    ]);
-
-    await extractDocumentContent({
+    const baselineWorkers = processWorkerCount();
+    const pending = extractDocumentContent({
       buffer: Buffer.from("pdf"),
       mimeType: "application/pdf",
       maxPages: 1,
       maxPixels: 100,
       minTextChars: 10,
       signal: controller.signal,
-      config: {},
+      config: { plugins: { allow: [pluginId] } },
     });
 
-    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+    try {
+      await vi.waitFor(async () => {
+        await expect(fs.readFile(startedMarker, "utf8")).resolves.toBe("started");
+      });
+      expect(processWorkerCount()).toBeGreaterThan(baselineWorkers);
+
+      controller.abort(new Error("client disconnected"));
+
+      await expect(pending).rejects.toThrow("client disconnected");
+      await vi.waitFor(() => expect(processWorkerCount()).toBe(baselineWorkers));
+    } finally {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("document worker test cleanup"));
+      }
+      await Promise.allSettled([pending]);
+      vi.unstubAllEnvs();
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
   });
 });

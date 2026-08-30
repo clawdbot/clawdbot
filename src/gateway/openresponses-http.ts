@@ -37,10 +37,6 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
-import {
-  DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
-  isDocumentExtractorCapacityError,
-} from "../plugins/document-extractor-types.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
@@ -526,7 +522,10 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const abortController = new AbortController();
-  const stopWatchingMediaDisconnect = watchClientDisconnect(req, res, abortController);
+  let onClientDisconnect: (() => void) | undefined;
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+    onClientDisconnect?.();
+  });
   const prompt = buildAgentPrompt(payload.input);
 
   // Count URL sources request-wide, but replay media only from the current user turn.
@@ -621,27 +620,16 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
-    stopWatchingMediaDisconnect();
+    stopWatchingDisconnect();
     if (abortController.signal.aborted) {
-      return true;
-    }
-    if (isDocumentExtractorCapacityError(err)) {
-      res.setHeader("Retry-After", "1");
-      sendJson(res, 503, {
-        error: {
-          message: "Document extraction is temporarily busy; retry shortly.",
-          type: "service_unavailable",
-          code: DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
-        },
-      });
       return true;
     }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid request");
     return true;
   }
-  stopWatchingMediaDisconnect();
   if (abortController.signal.aborted) {
+    stopWatchingDisconnect();
     return true;
   }
 
@@ -658,6 +646,7 @@ export async function handleOpenResponsesHttpRequest(
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;
   } catch (err) {
+    stopWatchingDisconnect();
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendInvalidRequest(res, "invalid tool configuration");
     return true;
@@ -679,9 +668,11 @@ export async function handleOpenResponsesHttpRequest(
       isInvalidGatewayModelError(err) ||
       isGatewaySessionKeyOverrideError(err)
     ) {
+      stopWatchingDisconnect();
       sendInvalidRequest(res, err.message);
       return true;
     }
+    stopWatchingDisconnect();
     throw err;
   }
   const responseSessionScope = createResponseSessionScope({
@@ -705,6 +696,7 @@ export async function handleOpenResponsesHttpRequest(
     senderIsOwner,
   });
   if (!sessionAuth.allowed) {
+    stopWatchingDisconnect();
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
     return true;
   }
@@ -723,6 +715,7 @@ export async function handleOpenResponsesHttpRequest(
     .join("\n\n");
 
   if (!prompt.message) {
+    stopWatchingDisconnect();
     sendInvalidRequest(res, "Missing user message in `input`.");
     return true;
   }
@@ -760,7 +753,6 @@ export async function handleOpenResponsesHttpRequest(
       : undefined;
 
   if (!stream) {
-    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -910,7 +902,6 @@ export async function handleOpenResponsesHttpRequest(
   let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
-  let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeStatus: ResponseResource["status"] | null = null;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
@@ -1184,11 +1175,11 @@ export async function handleOpenResponsesHttpRequest(
   res.once("finish", releaseStreamRootWork);
   res.once("close", releaseStreamRootWork);
 
-  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+  onClientDisconnect = () => {
     closed = true;
     unsubscribe();
     releaseStreamRootWork();
-  });
+  };
 
   void (async () => {
     try {

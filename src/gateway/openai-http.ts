@@ -1021,12 +1021,15 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const abortController = new AbortController();
-  const stopWatchingMediaDisconnect = watchClientDisconnect(req, res, abortController);
+  let onClientDisconnect: (() => void) | undefined;
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+    onClientDisconnect?.();
+  });
   let images: ImageContent[];
   try {
     images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal);
   } catch (err) {
-    stopWatchingMediaDisconnect();
+    stopWatchingDisconnect();
     if (abortController.signal.aborted) {
       return true;
     }
@@ -1034,12 +1037,13 @@ export async function handleOpenAiHttpRequest(
     sendInvalidRequest(res, "Invalid image_url content in `messages`.");
     return true;
   }
-  stopWatchingMediaDisconnect();
   if (abortController.signal.aborted) {
+    stopWatchingDisconnect();
     return true;
   }
 
   if (!prompt.message && images.length === 0) {
+    stopWatchingDisconnect();
     sendInvalidRequest(res, "Missing user message in `messages`.");
     return true;
   }
@@ -1075,7 +1079,6 @@ export async function handleOpenAiHttpRequest(
     : commandInput;
 
   if (!stream) {
-    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await agentCommandFromGatewayIngress(
         gatewayCommandInput,
@@ -1194,7 +1197,6 @@ export async function handleOpenAiHttpRequest(
   let observedTerminalLifecycle = false;
   let terminalStreamError: { message: string; type: string; code?: string } | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
-  let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
     if (closed || finalizeScheduled || !finalizeRequested) {
@@ -1345,11 +1347,11 @@ export async function handleOpenAiHttpRequest(
   res.once("finish", releaseStreamRootWork);
   res.once("close", releaseStreamRootWork);
 
-  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
+  onClientDisconnect = () => {
     closed = true;
     unsubscribe();
     releaseStreamRootWork();
-  });
+  };
 
   writeAssistantRoleChunk(res, streamIdentity);
 

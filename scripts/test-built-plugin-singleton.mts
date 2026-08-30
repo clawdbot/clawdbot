@@ -1,9 +1,9 @@
-// Smoke-tests built plugin artifacts, the loader singleton, and the runtime overlay.
+// Smoke-tests the built plugin loader singleton and bundled plugin runtime overlay.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
@@ -29,70 +29,6 @@ assert.equal(typeof clearPluginCommands, "function", "clearPluginCommands missin
 assert.equal(typeof getPluginCommandSpecs, "function", "getPluginCommandSpecs missing");
 assert.equal(typeof getPluginModuleLoaderStats, "function", "plugin loader stats missing");
 assert.equal(typeof matchPluginCommand, "function", "matchPluginCommand missing");
-
-// Tsdown may hoist the extractor implementation into a root chunk while leaving
-// its worker in the plugin directory. Exercise the emitted default resolver so
-// a source-only URL assertion cannot miss a broken package layout.
-const documentExtractorPath = path.join(
-  repoRoot,
-  "dist",
-  "extensions",
-  "document-extract",
-  "document-extractor.js",
-);
-const expectedDocumentWorkerPath = path.join(
-  repoRoot,
-  "dist",
-  "extensions",
-  "document-extract",
-  "document-extractor.worker.js",
-);
-assert.ok(
-  fs.existsSync(documentExtractorPath),
-  `missing document extractor build output: ${documentExtractorPath}`,
-);
-
-const { createPdfDocumentExtractor } = await import(pathToFileURL(documentExtractorPath).href);
-assert.equal(
-  typeof createPdfDocumentExtractor,
-  "function",
-  "built PDF document extractor export missing",
-);
-
-let resolvedDocumentWorkerUrl: URL | undefined;
-const workerProbeError = new Error("built PDF worker path probe");
-const documentExtractor = createPdfDocumentExtractor({
-  createWorker: (url: URL) => {
-    resolvedDocumentWorkerUrl = url;
-    throw workerProbeError;
-  },
-});
-assert.equal(typeof documentExtractor.extract, "function", "built PDF extractor is invalid");
-await assert.rejects(
-  documentExtractor.extract({
-    buffer: new Uint8Array(),
-    mimeType: "application/pdf",
-    maxPages: 1,
-    maxPixels: 1,
-    minTextChars: 1,
-    signal: new AbortController().signal,
-  }),
-  (error: unknown) => error === workerProbeError,
-);
-assert.ok(resolvedDocumentWorkerUrl, "built PDF extractor did not resolve a worker URL");
-assert.equal(
-  path.resolve(fileURLToPath(resolvedDocumentWorkerUrl)),
-  expectedDocumentWorkerPath,
-  "built PDF extractor resolved the wrong worker artifact",
-);
-assert.ok(
-  fs.existsSync(expectedDocumentWorkerPath),
-  `missing built PDF worker artifact: ${expectedDocumentWorkerPath}`,
-);
-assert.ok(
-  fs.statSync(expectedDocumentWorkerPath).isFile(),
-  `built PDF worker artifact is not a file: ${expectedDocumentWorkerPath}`,
-);
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-smoke-"));
 const pluginId = "build-smoke-plugin";
