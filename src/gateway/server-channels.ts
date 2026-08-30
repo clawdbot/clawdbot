@@ -33,7 +33,10 @@ import {
   runtimeForLogger,
   type SubsystemLogger,
 } from "../logging/subsystem.js";
-import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
+import {
+  createPluginCapabilityLease,
+  withPluginHttpRouteRegistry,
+} from "../plugins/http-registry.js";
 import { withPluginCommandAccountStartScope } from "../plugins/plugin-command-account-start-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
@@ -656,6 +659,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         // cannot race into duplicate provider boots for the same account.
         const abort = new AbortController();
         store.aborts.set(id, abort);
+        // Account routes live on this task's abort lifetime: revoking on abort
+        // reclaims them for a replacement start, so a timed-out stop that
+        // abandons this task cannot leave its route blocking the successor.
+        const routeLease = createPluginCapabilityLease();
+        abort.signal.addEventListener("abort", () => routeLease.revoke(), { once: true });
         clearPluginCommandCatalogOwner(store, id);
         let handedOffTask = false;
         let startAccountLifetimeActive = false;
@@ -923,7 +931,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               };
               const routeRegistry = getPluginHttpRouteRegistry?.();
               startAccountTask = routeRegistry
-                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
+                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount, routeLease)
                 : runStartAccount();
             });
             if (!startAccountTask) {

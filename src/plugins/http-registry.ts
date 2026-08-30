@@ -17,6 +17,51 @@ type PluginHttpRouteRegistrationLease = {
   retain: (unregister: () => void) => () => void;
 };
 
+export type PluginCapabilityLease = PluginHttpRouteRegistrationLease & {
+  assertActive: (capability: string) => void;
+  revoke: () => void;
+};
+
+// One lease per runtime lifetime (plugin service, channel account task, ...).
+// Registrations retain their unregister through it, so revoke reclaims the
+// lifetime's routes; assertActive gates capability-issued work.
+export function createPluginCapabilityLease(): PluginCapabilityLease {
+  let active = true;
+  const cleanups = new Set<() => void>();
+  const assertActive = (capability: string) => {
+    if (!active) {
+      throw new Error(`plugin service ${capability} is no longer active`);
+    }
+  };
+  const retain = (cleanup: () => void): (() => void) => {
+    if (!active) {
+      cleanup();
+      assertActive("capability lease");
+    }
+    const release = () => {
+      if (cleanups.delete(release)) {
+        cleanup();
+      }
+    };
+    cleanups.add(release);
+    return release;
+  };
+  return {
+    isActive: () => active,
+    assertActive,
+    retain,
+    revoke: () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+    },
+  };
+}
+
 const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
   registry: PluginRegistry;
   leases: readonly PluginHttpRouteRegistrationLease[];

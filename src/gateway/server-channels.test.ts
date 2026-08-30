@@ -25,6 +25,7 @@ import {
   runtimeForLogger,
 } from "../logging/subsystem.js";
 import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -271,6 +272,7 @@ function createManager(options?: {
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
   tryRecoverAutostartSuppression?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
+  getPluginHttpRouteRegistry?: () => PluginRegistry;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -303,6 +305,9 @@ function createManager(options?: {
       : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
+      : {}),
+    ...(options?.getPluginHttpRouteRegistry
+      ? { getPluginHttpRouteRegistry: options.getPluginHttpRouteRegistry }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -1900,6 +1905,49 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.reconnectAttempts).toBe(0);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("lets a recovery replacement reclaim the abandoned task's HTTP route", async () => {
+    const routeRegistry = createEmptyPluginRegistry();
+    const startAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
+      registerPluginHttpRoute({
+        path: `/discord/interactions/${accountId}`,
+        handler: () => true,
+        auth: "plugin",
+        match: "exact",
+        pluginId: "discord",
+        source: "discord-interactions",
+        accountId,
+        throwOnFailure: true,
+        registry: routeRegistry,
+      });
+      // A stuck drain: this task never settles and never unregisters its route.
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+
+    // The timed-out stop abandons the stuck task, so the two-call recovery
+    // contract starts a replacement. The replacement must be able to register
+    // the same account route instead of crash-looping on a conflict.
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const accountRoutes = (routeRegistry.httpRoutes ?? []).filter(
+      (route) => route.path === `/discord/interactions/${DEFAULT_ACCOUNT_ID}`,
+    );
+    expect(accountRoutes).toHaveLength(1);
+    expect(accountRoutes[0]?.source).toBe("discord-interactions");
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
     expect(account?.lastError).toBeNull();
   });
 
