@@ -280,6 +280,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
 - Preflight transcription only processes the **first** untranscribed audio attachment for mention detection, even when the main phase prefers the last attachment or processes all attachments. Additional audio attachments follow the configured policy during the main media-understanding phase; an empty preflight result does not mark an attachment as transcribed.
+- The preflight transcript stays in the model-facing message when later media or link processing adds context. A separate channel envelope does not replace that prepared text.
 
 ## Related
 
