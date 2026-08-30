@@ -36,6 +36,7 @@ import {
 import {
   createPluginCapabilityLease,
   withPluginHttpRouteRegistry,
+  type PluginCapabilityLease,
 } from "../plugins/http-registry.js";
 import { withPluginCommandAccountStartScope } from "../plugins/plugin-command-account-start-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -322,6 +323,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
+  // Route leases outlive their start closure: a later start discarding an
+  // abandoned task must reclaim that task's routes without reaching into the
+  // dead closure. Keyed by the abort controller so entries die with the task.
+  const routeLeaseByAbort = new WeakMap<AbortController, PluginCapabilityLease>();
   const restarts = new Map<string, RetrySupervisor>();
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
@@ -622,6 +627,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               recoveryStopTimedOut.delete(rKey);
               recoveryStartRequested.delete(rKey);
               restarts.delete(rKey);
+              // Confirmed abandonment: the stuck task never settled, so its
+              // route lease is the only thing blocking this successor. Revoke
+              // it here — not at stop abort — so the drain window keeps the
+              // route off-limits to other accounts.
+              const staleAbort = store.aborts.get(id);
+              if (staleAbort) {
+                routeLeaseByAbort.get(staleAbort)?.revoke();
+              }
               store.aborts.delete(id);
               store.tasks.delete(id);
               clearedTimedOutRecoveryTask = true;
@@ -659,11 +672,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         // cannot race into duplicate provider boots for the same account.
         const abort = new AbortController();
         store.aborts.set(id, abort);
-        // Account routes live on this task's abort lifetime: revoking on abort
-        // reclaims them for a replacement start, so a timed-out stop that
-        // abandons this task cannot leave its route blocking the successor.
+        // Account routes live on this task's ownership lease. It is revoked at
+        // terminal cleanup or successor discard — never on abort: stopChannel
+        // aborts before its graceful-drain wait, and freeing the route there
+        // would let another account bind it outside the route-conflict guard.
         const routeLease = createPluginCapabilityLease();
-        abort.signal.addEventListener("abort", () => routeLease.revoke(), { once: true });
+        routeLeaseByAbort.set(abort, routeLease);
         clearPluginCommandCatalogOwner(store, id);
         let handedOffTask = false;
         let startAccountLifetimeActive = false;
@@ -1035,7 +1049,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
                 // The settled task may have left background work racing on this
                 // signal. Abort before the replacement starts so two account
-                // instances can never share a live lifetime.
+                // instances can never share a live lifetime, and reclaim its
+                // route lease so the replacement can rebind the same route.
+                routeLease.revoke();
                 abort.abort();
                 try {
                   await startChannelInternal(channelId, id, {
@@ -1088,7 +1104,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   store.aborts.delete(id);
                 }
                 // See the timed-out-stop restart above: never start the crash
-                // replacement while the predecessor's signal is unaborted.
+                // replacement while the predecessor's signal is unaborted, and
+                // reclaim its route lease so the replacement can rebind.
+                routeLease.revoke();
                 abort.abort();
                 await startChannelInternal(channelId, id, {
                   preserveRestartAttempts: true,
@@ -1101,6 +1119,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
             })
             .finally(() => {
+              // Terminal cleanup: this task can no longer serve its routes, so
+              // reclaim anything its own teardown failed to unregister.
+              routeLease.revoke();
               if (store.tasks.get(id) === trackedPromise) {
                 store.tasks.delete(id);
               }
@@ -1134,6 +1155,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             await cleanupTaskScopedApprovalRuntime("channel startup cleanup failed");
           }
           if (!handedOffTask && store.aborts.get(id) === abort) {
+            // Failed before handoff: no terminal `.finally()` will run for this
+            // attempt, so reclaim any route its boot already registered.
+            routeLease.revoke();
             store.aborts.delete(id);
           }
         }

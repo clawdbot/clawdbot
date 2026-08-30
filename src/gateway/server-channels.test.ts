@@ -1951,6 +1951,65 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toBeNull();
   });
 
+  it("keeps the route off-limits to other accounts while a stop is draining", async () => {
+    const routeRegistry = createEmptyPluginRegistry();
+    const startAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
+      registerPluginHttpRoute({
+        path: `/discord/interactions/${accountId}`,
+        handler: () => true,
+        auth: "plugin",
+        match: "exact",
+        pluginId: "discord",
+        source: "discord-interactions",
+        accountId,
+        throwOnFailure: true,
+        registry: routeRegistry,
+      });
+      // A stuck drain: this task never settles and never unregisters its route.
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    // Let the stop reach its abort so the probe lands inside the drain window.
+    await vi.advanceTimersByTimeAsync(0);
+    // The draining task still owns its route: another account configured with
+    // the same canonical path must stay rejected by the route-conflict guard
+    // until the task is abandoned, or the account-policy takeover returns
+    // through the drain window.
+    expect(() =>
+      registerPluginHttpRoute({
+        path: `/discord/interactions/${DEFAULT_ACCOUNT_ID}`,
+        handler: () => true,
+        auth: "plugin",
+        match: "exact",
+        pluginId: "discord",
+        source: "discord-interactions",
+        accountId: "foreign",
+        throwOnFailure: true,
+        registry: routeRegistry,
+      }),
+    ).toThrow(/route conflict/);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const accountRoutes = (routeRegistry.httpRoutes ?? []).filter(
+      (route) => route.path === `/discord/interactions/${DEFAULT_ACCOUNT_ID}`,
+    );
+    expect(accountRoutes).toHaveLength(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toBeNull();
+  });
+
   it("keeps the second recovery task running when the stale task rejects", async () => {
     const releaseFirstTask = createDeferred();
     let startCount = 0;
