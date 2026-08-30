@@ -2,6 +2,7 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import type { SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -16,7 +17,6 @@ import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
   removeDeliveredQueuedChatSendForRun,
-  sameQueuedDeliveryVersion,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
@@ -239,7 +239,9 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     if (result.status === "ready") {
-      const hydratedAttachments = durableDeliveredAttachments(result.item.attachments);
+      const hydratedAttachments = durableDeliveredAttachments(
+        result.update.attachments ?? stored.attachments,
+      );
       if (hydratedAttachments) {
         return commit({
           ...stored,

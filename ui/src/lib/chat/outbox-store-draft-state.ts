@@ -53,18 +53,21 @@ export function rememberDraftAttempt(
   bySession.set(storeSessionKey, Math.max(bySession.get(storeSessionKey) ?? 0, draftRevision));
 }
 
-export function rememberedDraftRevision(
+export function readDraftRevisionState(
   storage: Storage,
   storageKey: string,
   storeSessionKey: string,
-): number {
-  return draftRevisionHighWaterByStorage.get(storage)?.get(storageKey)?.get(storeSessionKey) ?? 0;
-}
-
-export function rememberedDraftAttempt(
-  storage: Storage,
-  storageKey: string,
-  storeSessionKey: string,
-): number {
-  return draftAttemptHighWaterByStorage.get(storage)?.get(storageKey)?.get(storeSessionKey) ?? 0;
+  storedRevision: number | undefined,
+): { committed: number; latestAttempt: number } {
+  const committed = Math.max(
+    storedRevision ?? 0,
+    draftRevisionHighWaterByStorage.get(storage)?.get(storageKey)?.get(storeSessionKey) ?? 0,
+  );
+  return {
+    committed,
+    latestAttempt: Math.max(
+      committed,
+      draftAttemptHighWaterByStorage.get(storage)?.get(storageKey)?.get(storeSessionKey) ?? 0,
+    ),
+  };
 }

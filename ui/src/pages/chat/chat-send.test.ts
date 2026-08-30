@@ -7209,7 +7209,9 @@ describe("handleSendChat", () => {
         expectDefined(stored.queue[0], "stored input"),
       );
       expect(
-        hydrated.status === "ready" ? hydrated.item.attachments?.map(getChatAttachmentDataUrl) : [],
+        hydrated.status === "ready"
+          ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
+          : [],
       ).toEqual(dataUrls);
       expect(host.chatMessage).toBe("newer input");
       expect(host.request).not.toHaveBeenCalled();
@@ -7249,7 +7251,7 @@ describe("handleSendChat", () => {
     recovery.mockReturnValue(originalRecovery);
     const hydrated = await prepareOutboxPayload(host, queued);
     expect(
-      hydrated.status === "ready" ? hydrated.item.attachments?.map(getChatAttachmentDataUrl) : [],
+      hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
     ).toEqual(dataUrls);
     expect(host.chatMessage).toBe("newer input");
     expect(host.request).not.toHaveBeenCalled();
@@ -7323,7 +7325,7 @@ describe("handleSendChat", () => {
         ),
       ),
     ).toEqual(dataUrls.map((url) => url.split(",")[1]));
-    expect(hydrated).toMatchObject({ status: "ready", item: { attachmentPayload: reference } });
+    expect(hydrated).toMatchObject({ status: "ready", update: { attachmentPayload: reference } });
     expect(write).toHaveBeenCalledTimes(1);
 
     await retryReconnectableQueuedChatSends(recovered);
@@ -7450,9 +7452,9 @@ describe("handleSendChat", () => {
         pending.push(second);
         releaseRead.resolve();
         const [valid, joined] = await Promise.all([first, second]);
-        expect(valid).toMatchObject({ status: "ready", item: { attachmentPayload: reference } });
+        expect(valid).toMatchObject({ status: "ready", update: { attachmentPayload: reference } });
         expect(
-          valid.status === "ready" ? valid.item.attachments?.map(getChatAttachmentDataUrl) : [],
+          valid.status === "ready" ? valid.update.attachments?.map(getChatAttachmentDataUrl) : [],
         ).toEqual(dataUrls);
         const stored = await readPayload(payloadOwner, reference);
         const retained = expectDefined(
@@ -7471,7 +7473,9 @@ describe("handleSendChat", () => {
         if (!reason) {
           expect(read).toHaveBeenCalledTimes(1);
           expect(
-            joined.status === "ready" ? joined.item.attachments?.map(getChatAttachmentDataUrl) : [],
+            joined.status === "ready"
+              ? joined.update.attachments?.map(getChatAttachmentDataUrl)
+              : [],
           ).toEqual(dataUrls);
         }
       } finally {

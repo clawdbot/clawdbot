@@ -35,9 +35,6 @@ import {
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
   isQueuedMessageBeingEdited,
-  isQueuedMessageRemovalBlocked,
-  isQueuedMessageReorderBlocked,
-  isQueuedMessageRetryBlocked,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
@@ -390,9 +387,6 @@ describe("queued message edit round-trip", () => {
       beginQueuedMessageEdit(host as never, original.id);
 
       expect(isQueuedMessageBeingEdited(peer as never, original.id)).toBe(true);
-      expect(isQueuedMessageRemovalBlocked(peer as never, original.id)).toBe(true);
-      expect(isQueuedMessageReorderBlocked(peer as never, original.id)).toBe(true);
-      expect(isQueuedMessageRetryBlocked(peer as never, original.id)).toBe(true);
       expect(moveQueuedChatMessage(peer as never, original.id, 0)).toBe("rejected");
       await retryQueuedChatMessage(peer as never, original.id);
       await steerQueuedChatMessage(peer as never, original.id);

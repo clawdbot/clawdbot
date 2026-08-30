@@ -244,7 +244,7 @@ describe("server-owned pending input display", () => {
         if (prepared.status !== "ready") {
           throw new Error(`Could not prepare custody attachment: ${prepared.reason}`);
         }
-        queued = prepared.item;
+        queued = { ...queued, ...prepared.update };
         expect(queued.attachmentPayload).toBeDefined();
       }
       const reference = queued.attachmentPayload;

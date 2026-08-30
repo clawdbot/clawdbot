@@ -1,5 +1,6 @@
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -26,7 +27,6 @@ import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
-  sameQueuedDeliveryVersion,
   syncVisibleChatQueueProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";

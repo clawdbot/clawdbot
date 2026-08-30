@@ -318,7 +318,7 @@ describe("chat composer persistence", () => {
     const editedPane = createState({ chatMessage: "draft from the other pane" });
     expect(persistChatComposerState(editedPane)).toBe(true);
 
-    expect(untouchedPersistence.persistForRouteSwitch()).toBe(true);
+    expect(untouchedPersistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
     expect(loadChatComposerSnapshot(editedPane, editedPane.sessionKey)?.draft).toBe(
       "draft from the other pane",
     );
@@ -337,12 +337,11 @@ describe("chat composer persistence", () => {
     olderPersistence.schedule();
     newerPane.chatMessage = "newer draft";
     newerPersistence.schedule();
-    expect(newerPersistence.persistForRouteSwitch()).toBe(true);
+    expect(newerPersistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
 
     vi.advanceTimersByTime(200);
 
     expect(loadChatComposerSnapshot(newerPane, newerPane.sessionKey)?.draft).toBe("newer draft");
-    expect(olderPersistence.persistForRouteSwitch()).toBe(false);
     expect(olderPersistence.persistForRouteSwitchResult().status).toBe("conflict");
 
     olderPane.chatMessage = "newest draft after conflict";
@@ -391,7 +390,7 @@ describe("chat composer persistence", () => {
     olderPersistence.schedule();
     clearingPane.chatMessage = "";
     clearingPersistence.schedule();
-    expect(clearingPersistence.persistForRouteSwitch()).toBe(true);
+    expect(clearingPersistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
 
     vi.advanceTimersByTime(200);
 
@@ -421,7 +420,7 @@ describe("chat composer persistence", () => {
       sessionKey: "global",
       agentId: "alpha",
     });
-    expect(persistence.persistForRouteSwitch()).toBe(true);
+    expect(persistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
     expect(persistence.scopeForRouteSwitch()).toEqual({
       sessionKey: "global",
       agentId: "alpha",
@@ -439,7 +438,7 @@ describe("chat composer persistence", () => {
     state.chatMessage = "draft from route input";
     persistence.schedule();
 
-    expect(persistence.persistForRouteSwitch()).toBe(true);
+    expect(persistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.draft).toBe("draft from route input");
   });
 
@@ -1387,7 +1386,7 @@ describe("chat composer persistence", () => {
     persistence.start();
     offline.chatMessage = "";
     persistence.schedule();
-    expect(persistence.persistForRouteSwitch()).toBe(true);
+    expect(persistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
 
     for (let index = 0; index < 21; index += 1) {
       const sessionKey = `agent:draft-${index}:thread`;

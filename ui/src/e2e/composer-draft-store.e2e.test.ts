@@ -675,7 +675,6 @@ suite.define(() => {
             expectedRevision: 0,
             revision: 59,
             text: "stale attachment draft",
-            attachments: [],
             storedAttachments: null,
             writeId: "stale-missing-payload",
           });

@@ -231,14 +231,13 @@ export async function prepareDurableComposerRecovery(
     const values: unknown[] = await requestResult(
       store.index(OWNER_INDEX).getAll(ownerKey({ ...owner, scopeKey: "" })),
     );
+    const records = values.map(parseStoredDraft).filter((record) => record !== null);
     const entries: DurableComposerRecoveryEntry[] = [];
-    let activeCount = values.filter((value) => {
-      const record = parseStoredDraft(value);
-      return record && isActiveDraft(record) && !isLegacyChatDraft(record);
-    }).length;
-    for (const value of values) {
-      const record = parseStoredDraft(value);
-      if (!record || !isLegacyChatDraft(record)) {
+    let activeCount = records.filter(
+      (record) => isActiveDraft(record) && !isLegacyChatDraft(record),
+    ).length;
+    for (const record of records) {
+      if (!isLegacyChatDraft(record)) {
         continue;
       }
       if (
@@ -253,7 +252,9 @@ export async function prepareDurableComposerRecovery(
         ...owner,
         scopeKey: `${CHAT_SCOPE_PREFIX}${originalScope ? storedChatOutboxScopeKey(originalScope) : record.scopeKey}`,
       };
-      const destination = await requestResult(store.get(recordKey(scope)));
+      const destination = identifiable
+        ? await requestResult(store.get(recordKey(scope)))
+        : undefined;
       const retired = parseStoredDraft(destination);
       // Only an exact known target can retire its older draft. Today's config
       // cannot identify an old global bucket or retarget a qualified main key.
