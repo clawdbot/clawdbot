@@ -970,6 +970,37 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
+  it("skips Windows-only passEnv entries on non-Windows hosts without warnings", async () => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+    const warn = vi.fn();
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      warn,
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: ["WINDIR", "SYSTEMROOT"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.WINDIR).toBeUndefined();
+    expect(plan.environment.SYSTEMROOT).toBeUndefined();
+    const passEnvWarnings = warn.mock.calls.filter((call) =>
+      String(call[0]).includes("blocked by host-env security policy"),
+    );
+    expect(passEnvWarnings).toHaveLength(0);
+  });
 
   it("includes passEnv values for plugin-managed exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({

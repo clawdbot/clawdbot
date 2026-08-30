@@ -71,6 +71,10 @@ const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.token",
 ]);
 const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
+// These Windows service environment names only exist on Windows; on other
+// hosts they are absent and evaluating them for passEnv yields nothing but
+// false-positive security warnings.
+const WINDOWS_ONLY_PASS_ENV_KEYS = new Set(["SYSTEMROOT", "WINDIR"]);
 
 function configContainsSecretRef(config: OpenClawConfig | undefined): boolean {
   if (!config) {
@@ -408,6 +412,14 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
       continue;
     }
     for (const rawKey of execProvider.passEnv ?? []) {
+      // Windows-only service environment names are inert on non-Windows hosts;
+      // evaluating them here would only produce false-positive security warnings.
+      if (
+        process.platform !== "win32" &&
+        WINDOWS_ONLY_PASS_ENV_KEYS.has(rawKey.trim().toUpperCase())
+      ) {
+        continue;
+      }
       const key = normalizeEnvVarKey(rawKey, { portable: true });
       if (!key) {
         params.warn?.(
