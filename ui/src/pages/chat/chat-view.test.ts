@@ -954,6 +954,28 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
+  it.each(["run", "request"])("omits redundant %s error details", (source) => {
+    const container = renderChatView(
+      source === "run"
+        ? { runError: { summary: "Gateway unavailable" } }
+        : { error: "Gateway unavailable" },
+    );
+    const alert = requireElement(container, ".chat-error", "chat run error");
+
+    expect(alert.querySelector("details")).toBeNull();
+    expect(alert.textContent).toContain("Gateway unavailable");
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+  });
+
+  it("ignores whitespace-only differences when deciding whether details add information", () => {
+    const container = renderChatView({
+      runError: { summary: "Gateway unavailable\n  Gateway   unavailable  " },
+    });
+
+    expect(container.querySelector(".chat-error details")).toBeNull();
+    expect(container.querySelector(".chat-error strong")?.textContent).toBe("Gateway unavailable");
+  });
+
   it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
     vi.mocked(chatMessage.renderMessageGroup).mockRestore();
@@ -1057,6 +1079,9 @@ describe("chat run error", () => {
       expect(alert.getAttribute("role")).toBe("alert");
       const details = requireElement(alert, "details", "error disclosure");
       expect(details.hasAttribute("open")).toBe(false);
+      expect(requireElement(details, "summary strong", "error summary").textContent).toBe(
+        "Error: gateway disconnected",
+      );
       expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(diagnostic);
       expect(alert.querySelector("img")).toBeNull();
       expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
