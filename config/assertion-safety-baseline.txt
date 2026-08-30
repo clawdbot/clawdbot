@@ -1590,7 +1590,6 @@ packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/session-transcript-corpus.ts	1
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
 packages/memory-host-sdk/src/host/sqlite.ts	1
-packages/memory-host-sdk/src/host/types.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	6
 packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2

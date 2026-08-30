@@ -1,4 +1,7 @@
-import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveMemoryIndexIdentityReason,
+  type MemoryEmbeddingProbeResult,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -62,12 +65,7 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
-  const reason =
-    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
-    typeof indexIdentity.reason === "string"
-      ? indexIdentity.reason
-      : undefined;
+  const reason = resolveMemoryIndexIdentityReason(status);
   if (!reason) {
     return null;
   }
@@ -364,6 +362,11 @@ export async function runMemoryStatus(
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
       lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
       lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
+    } else if (status.lastSyncError) {
+      lines.push(`${label("Last sync error")} ${warn(status.lastSyncError)}`);
+      lines.push(
+        `${label("Fix")} ${muted(`Run: openclaw memory status --index --agent ${agentId}`)}`,
+      );
     }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));

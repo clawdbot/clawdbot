@@ -1,4 +1,5 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 export type MemorySource = "memory" | "sessions";
 
 export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
@@ -147,8 +148,8 @@ export type MemoryProviderStatus = {
   files?: number;
   chunks?: number;
   dirty?: boolean;
-  /** Sources currently being refreshed by an admitted sync. */
-  pendingSyncSources?: MemorySource[];
+  /** Redacted failure from the newest admitted sync without a newer successful sync. */
+  lastSyncError?: string;
   workspaceDir?: string;
   dbPath?: string;
   extraPaths?: MemoryExtraPath[];
@@ -187,28 +188,28 @@ export type MemoryProviderStatus = {
   custom?: Record<string, unknown>;
 };
 
+export function resolveMemoryIndexIdentityReason(
+  status: Pick<MemoryProviderStatus, "custom">,
+): string | undefined {
+  const identity = asNullableRecord(status.custom?.indexIdentity);
+  if (identity?.status !== "mismatched" && identity?.status !== "missing") {
+    return undefined;
+  }
+  const reason = typeof identity.reason === "string" ? identity.reason.trim() : "";
+  return reason || "memory index identity is missing or mismatched";
+}
+
 export function resolveMemorySearchStaleness(
-  status: Pick<MemoryProviderStatus, "dirty" | "pendingSyncSources" | "custom">,
+  status: Pick<MemoryProviderStatus, "custom" | "lastSyncError">,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
-  const identity = status.custom?.indexIdentity as Record<string, unknown> | undefined;
-  const identityReason =
-    (identity?.status === "mismatched" || identity?.status === "missing") &&
-    typeof identity.reason === "string"
-      ? identity.reason.trim()
-      : undefined;
-  const refreshingSessionsOnly =
-    status.dirty === true &&
-    status.pendingSyncSources?.length === 1 &&
-    status.pendingSyncSources[0] === "sessions";
-  if ((!status.dirty || refreshingSessionsOnly) && !identityReason) {
+  const reason = resolveMemoryIndexIdentityReason(status) ?? status.lastSyncError?.trim();
+  if (!reason) {
     return null;
   }
   return {
     stale: true,
-    warning: identityReason
-      ? `Memory index is stale: ${identityReason}. Search results may be incomplete.`
-      : "Memory index is dirty. Search results may be incomplete.",
+    warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
     action: `Run: openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`,
   };
 }

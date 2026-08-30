@@ -377,6 +377,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        this.syncOutcomes.recordActiveFailure(err);
         log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
         return;
       }
