@@ -42,14 +42,13 @@ function runOpenWebUiWorkspace(workspaceDir: string) {
 }
 
 describe("workspace fixture assertions", () => {
-  it("writes explicit owners for the shared-workspace agents", () => {
+  it("writes only the shared-workspace ownership inputs needed by the delete smoke", () => {
     const root = tempDirs.make("openclaw-fixture-workspace-");
     const { result, stateDir, workspace } = runAgentsDeleteConfig(root);
 
     expect(result.status).toBe(0);
     expect(JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8")).agents).toEqual({
       ownership: "explicit",
-      defaults: { heartbeat: { agentId: "main" } },
       entries: { main: { workspace }, ops: { workspace } },
     });
   });

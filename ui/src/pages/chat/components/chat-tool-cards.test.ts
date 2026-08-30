@@ -1059,7 +1059,6 @@ describe("tool-cards", () => {
         },
         {
           expanded: true,
-          sessionKey: "main",
           onToggleExpanded: vi.fn(),
           onOpenSidebar,
         },
