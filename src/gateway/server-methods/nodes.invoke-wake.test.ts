@@ -1384,6 +1384,33 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
   });
 
+  it("retries a direct wake after the system clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    const nodeId = "ios-node-clock-rollback";
+    mockDirectWakeConfig(nodeId);
+    mocks.sendApnsBackgroundWake.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+
+    await expect(maybeWakeNodeWithApns(nodeId)).resolves.toMatchObject({
+      path: "sent",
+      throttled: false,
+    });
+    vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+
+    await expect(maybeWakeNodeWithApns(nodeId)).resolves.toMatchObject({
+      path: "sent",
+      throttled: false,
+    });
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
+  });
+
   it("does not share an in-flight wake with a replacement pairing generation", async () => {
     const nodeId = "ios-node-replacement-in-flight";
     const generationOne = { nodeId, key: "generation-1" };

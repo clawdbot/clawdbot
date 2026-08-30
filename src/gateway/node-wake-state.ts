@@ -124,10 +124,12 @@ export async function runNodeWakeAttempt(params: {
   if (owner.inFlightWake) {
     return await owner.inFlightWake;
   }
+  const now = Date.now();
   if (
     !params.force &&
     owner.lastWakeAtMs > 0 &&
-    Date.now() - owner.lastWakeAtMs < params.throttleMs
+    now >= owner.lastWakeAtMs &&
+    now - owner.lastWakeAtMs < params.throttleMs
   ) {
     return { available: true, throttled: true, path: "throttled", durationMs: 0 };
   }
@@ -155,7 +157,12 @@ export async function runNodeWakeNudgeAttempt(params: {
   attempt: () => Promise<NodeWakeNudgeAttempt>;
 }): Promise<NodeWakeNudgeAttempt> {
   const owner = getOrCreateNodeWakeOwner(params.nodeId, params.pairingGeneration);
-  if (owner.lastNudgeAtMs > 0 && Date.now() - owner.lastNudgeAtMs < params.throttleMs) {
+  const now = Date.now();
+  if (
+    owner.lastNudgeAtMs > 0 &&
+    now >= owner.lastNudgeAtMs &&
+    now - owner.lastNudgeAtMs < params.throttleMs
+  ) {
     return params.throttled();
   }
   const result = await params.attempt();

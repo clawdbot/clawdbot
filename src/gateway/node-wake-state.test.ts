@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureNodeWakeLifecycle,
   clearNodeWakeState,
@@ -23,6 +23,10 @@ const sentWake: NodeWakeAttempt = {
 
 beforeEach(() => {
   resetNodeWakeStateForTest();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("node wake lifecycle ownership", () => {
@@ -123,6 +127,33 @@ describe("node wake coordination", () => {
     });
   });
 
+  it("allows a wake retry after the system clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    const attempt = vi.fn(async (markAttempted: () => void) => {
+      markAttempted();
+      return sentWake;
+    });
+
+    await runNodeWakeAttempt({
+      nodeId: "node-clock-rollback",
+      force: false,
+      throttleMs: 60_000,
+      attempt,
+    });
+    vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+
+    await expect(
+      runNodeWakeAttempt({
+        nodeId: "node-clock-rollback",
+        force: false,
+        throttleMs: 60_000,
+        attempt,
+      }),
+    ).resolves.toEqual(sentWake);
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
   it("tracks reconnect-nudge throttle independently from wake throttle", async () => {
     const sent = await runNodeWakeNudgeAttempt({
       nodeId: "node-1",
@@ -141,5 +172,40 @@ describe("node wake coordination", () => {
     expect(throttled.reason).toBe("throttled");
     expect(getNodeWakeStateSnapshot("node-1")?.lastWakeAtMs).toBe(0);
     expect(getNodeWakeStateSnapshot("node-1")?.lastNudgeAtMs).toBeGreaterThan(0);
+  });
+
+  it("allows a reconnect nudge after the system clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    const attempt = vi.fn(async () => ({
+      sent: true,
+      throttled: false,
+      reason: "sent" as const,
+      durationMs: 1,
+    }));
+    const throttled = () => ({
+      sent: false,
+      throttled: true,
+      reason: "throttled" as const,
+      durationMs: 0,
+    });
+
+    await runNodeWakeNudgeAttempt({
+      nodeId: "node-clock-rollback",
+      throttleMs: 60_000,
+      throttled,
+      attempt,
+    });
+    vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+
+    await expect(
+      runNodeWakeNudgeAttempt({
+        nodeId: "node-clock-rollback",
+        throttleMs: 60_000,
+        throttled,
+        attempt,
+      }),
+    ).resolves.toMatchObject({ reason: "sent" });
+    expect(attempt).toHaveBeenCalledTimes(2);
   });
 });
