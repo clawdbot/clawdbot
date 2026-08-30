@@ -1,6 +1,9 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { registerSessionStateWatch } from "./session-state-events.js";
 import {
   deleteSessionUpstreamLink,
@@ -151,5 +154,21 @@ describe("session upstream links", () => {
     );
 
     expect(listWatchedSessionUpstreamLinks(database).get("claude")).toHaveLength(2);
+  });
+
+  it("fails closed for ambiguous legacy same-key upstream links", () => {
+    const database = createDatabaseOptions();
+    upsertLink("global", "claude", database, "main");
+    upsertLink("global", "claude", database, "ops");
+    openOpenClawStateDatabase(database)
+      .db.prepare(
+        `INSERT INTO session_watch_cursors
+         (watcher_session_key, target_session_key, last_seen_sequence, notified_sequence,
+          material_sequence, provenance, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("agent:main:main", "global", 0, 0, 0, "explicit", 1);
+
+    expect(listWatchedSessionUpstreamLinks(database)).toEqual(new Map());
   });
 });
