@@ -266,6 +266,9 @@ export async function maybeRepairMacGatewayServiceEnvQuotes(params: {
       !(await confirmDoctorServiceRepair(params.prompter, {
         message: `Rewrite ${detected.keys.length} quote-corrupted value(s) in ${shortenHomePath(detected.envFilePath)} now?`,
         initialValue: true,
+        // The strip is shape-based and could alter a deliberately quoted
+        // value; a noninteractive doctor --fix must never auto-approve it.
+        requiresInteractiveConfirmation: true,
       }))
     ) {
       continue;

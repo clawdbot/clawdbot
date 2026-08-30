@@ -58,6 +58,25 @@ it("warns and repairs the corrupted env file when the operator accepts", async (
   expect(await fs.readFile(envFilePath, "utf8")).toContain("export AWS_REGION='us-east-1'");
 });
 
+it("requires interactive confirmation so noninteractive --fix cannot auto-strip", async () => {
+  const { env } = await seedCorruptedEnvFile();
+  const prompter = makePrompter(true);
+
+  await maybeRepairMacGatewayServiceEnvQuotes({
+    prompter,
+    platform: "darwin",
+    env,
+    noteFn: vi.fn(),
+  });
+
+  // The prompter contract: requiresInteractiveConfirmation blocks the
+  // shouldAutoApproveDoctorFix shortcut and declines when prompting is
+  // impossible, so an unattended doctor --fix never strips ambiguous values.
+  expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith(
+    expect.objectContaining({ requiresInteractiveConfirmation: true }),
+  );
+});
+
 it("warns but leaves the file untouched when the operator declines", async () => {
   const { env, envFilePath } = await seedCorruptedEnvFile();
   const before = await fs.readFile(envFilePath, "utf8");
