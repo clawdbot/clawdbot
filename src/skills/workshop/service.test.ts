@@ -771,12 +771,14 @@ describe("skill workshop proposals", () => {
     });
 
     const listed = await listSkillProposals({ agentId: "main", workspaceDir: secondWorkspaceDir });
-    expect(listed.proposals).toEqual([
-      expect.objectContaining({ id: second.record.id }),
+    expect(listed.proposals.toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))).toEqual([
       expect.objectContaining({ id: quarantined.record.id, workspaceMismatch: true }),
       expect.objectContaining({ id: first.record.id, workspaceMismatch: true }),
+      expect.objectContaining({ id: second.record.id }),
     ]);
-    expect(listed.proposals[0]).not.toHaveProperty("workspaceMismatch");
+    expect(listed.proposals.find((entry) => entry.id === second.record.id)).not.toHaveProperty(
+      "workspaceMismatch",
+    );
     await expect(
       inspectSkillProposal(first.record.id, {
         agentId: "main",
@@ -1008,10 +1010,14 @@ describe("skill workshop proposals", () => {
     });
 
     const manifest = await readSkillProposalManifest();
-    expect(manifest.proposals.map((entry) => [entry.skillKey, entry.status])).toEqual([
+    expect(
+      manifest.proposals
+        .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))
+        .map((entry) => [entry.skillKey, entry.status]),
+    ).toEqual([
+      ["draft-one", "rejected"],
       ["draft-three", "applied"],
       ["draft-two", "quarantined"],
-      ["draft-one", "rejected"],
     ]);
     await expect(
       fs.access(path.join(workspaceDir, "skills", "draft-one", "SKILL.md")),

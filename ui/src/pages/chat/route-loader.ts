@@ -18,7 +18,6 @@ import {
 import {
   buildAgentMainSessionKey,
   isUiGlobalSessionKey,
-  isUiGlobalScopeConfigured,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
@@ -181,14 +180,6 @@ function mainSessionKey(
   context: ApplicationContext,
   target: Extract<SessionPathTarget, { kind: "main" }>,
 ): string {
-  if (
-    isUiGlobalScopeConfigured({
-      agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
-    })
-  ) {
-    return "global";
-  }
   return buildAgentMainSessionKey({
     agentId: target.agentId,
     mainKey: configuredMainKey(context),
@@ -379,8 +370,6 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey,
-      // Global keys omit the agent; the route must retain that owner separately.
-      ...(isUiGlobalSessionKey(sessionKey) ? { agentId: target.agentId } : {}),
       ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search

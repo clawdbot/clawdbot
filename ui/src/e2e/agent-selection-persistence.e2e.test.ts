@@ -98,7 +98,11 @@ async function hasOpenClawStartup(gateway: MockGatewayControls): Promise<boolean
     const params = request.params as
       | { agentId?: unknown; limit?: unknown; sessionKey?: unknown }
       | undefined;
-    return params?.agentId === "openclaw" && params.sessionKey === "global" && params.limit === 100;
+    return (
+      params?.agentId === "openclaw" &&
+      params.sessionKey === "agent:openclaw:main" &&
+      params.limit === 100
+    );
   });
 }
 

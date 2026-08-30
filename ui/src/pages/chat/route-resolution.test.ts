@@ -110,65 +110,55 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
-  it.each([
-    { mainKey: "main", face: "chat", preferenceDerived: false },
-    { mainKey: "main", face: "dashboard", preferenceDerived: false },
-    { mainKey: "main", face: "chat", preferenceDerived: true },
-    { mainKey: "workspace", face: "chat", preferenceDerived: false },
-    { mainKey: "workspace", face: "dashboard", preferenceDerived: false },
-    { mainKey: "workspace", face: "chat", preferenceDerived: true },
-  ] as const)(
-    "resolves global $face ownership with $mainKey (preference=$preferenceDerived)",
-    async ({ mainKey, face, preferenceDerived }) => {
-      const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
-      const { context, list } = contextFor(({ agentId, search }) =>
-        agentId === "research" && search === "global" ? result([globalRow]) : result([]),
-      );
-      context.agents.state.agentsList = {
-        defaultId: "main",
-        mainKey,
-        scope: "global",
-        agents: [],
-      };
-      context.gateway.snapshot.hello = {
-        snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "main",
-            mainKey,
-            mainSessionKey: "global",
-          },
+  it("resolves a non-default agent's canonical global face from its scoped row", async () => {
+    const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
+    const { context, list } = contextFor(({ agentId, search }) =>
+      agentId === "research" && search === "global" ? result([globalRow]) : result([]),
+    );
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    };
+    context.gateway.snapshot.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "global",
         },
-      } as ApplicationContext["gateway"]["snapshot"]["hello"];
+      },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
 
-      const location = {
-        pathname: `/${face}/research`,
-        search: preferenceDerived ? `?${SESSION_FACE_PREFERENCE_PARAM}=1` : "",
+    await expect(
+      loadChatRoute(
+        context,
+        {
+          pathname: "/chat/research",
+          search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+          hash: "",
+        },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "global",
+      agentId: "research",
+      draft: undefined,
+      face: "dashboard",
+      canonicalLocation: { pathname: "/dashboard/research", search: "", hash: "" },
+      canonicalLocationSource: {
+        pathname: "/chat/research",
+        search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
         hash: "",
-      };
-      await expect(
-        loadChatRoute(context, location, face, new AbortController().signal),
-      ).resolves.toEqual({
-        kind: "session",
-        sessionKey: "global",
-        agentId: "research",
-        draft: undefined,
-        face: preferenceDerived ? "dashboard" : face,
-        ...(preferenceDerived
-          ? {
-              canonicalLocation: { pathname: "/dashboard/research", search: "", hash: "" },
-              canonicalLocationSource: location,
-            }
-          : {}),
-      });
-      if (preferenceDerived) {
-        expect(list).toHaveBeenCalledWith(
-          expect.objectContaining({ agentId: "research", search: "global" }),
-        );
-      } else {
-        expect(list).not.toHaveBeenCalled();
-      }
-    },
-  );
+      },
+    });
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research", search: "global" }),
+    );
+  });
 
   it("applies an uncached stored face to a preference-derived open", async () => {
     const dashboardRow = row({ boardFace: "dashboard" });
