@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
+import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -13,17 +14,11 @@ import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-tu
 import { commandReply } from "../command-gates.js";
 import { extractSubagentMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel, resolveSubagentTargetFromRuns } from "../subagents-utils.js";
+import { formatRunLabel } from "../subagents-utils.js";
 
 export type { ChatMessage } from "../commands-subagents-text.js";
 
-const COMMAND = "/subagents";
-const COMMAND_AGENTS = "/agents";
-const ACTIONS = new Set(["list", "log", "info", "help"]);
-
 export const RECENT_WINDOW_MINUTES = 30;
-
-type SubagentsAction = "list" | "log" | "info" | "agents" | "help";
 
 type SubagentsCommandParams = Parameters<CommandHandler>[0];
 
@@ -38,30 +33,65 @@ export function resolveSubagentEntryForToken(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): { entry: SubagentRunRecord } | { reply: CommandHandlerResult } {
-  const readIndex = buildSubagentRunReadIndex();
-  const resolved = resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: RECENT_WINDOW_MINUTES,
-    label: (entry) => formatRunLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    isActive: (entry) =>
-      !entry.execution.endedAt ||
-      Math.max(0, readIndex.countPendingDescendantRuns(entry.childSessionKey)) > 0,
-    errors: {
-      missingTarget: "Missing subagent id.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent id: ${value}`,
-    },
-  });
-  if (!resolved.entry) {
-    return { reply: commandReply(`⚠️ ${resolved.error ?? "Unknown subagent."}`) };
+  const fail = (message: string) => ({ reply: commandReply(`⚠️ ${message}`) });
+  const trimmed = normalizeOptionalString(token);
+  if (!trimmed) {
+    return fail("Missing subagent id.");
   }
-  return { entry: resolved.entry };
+  const readIndex = buildSubagentRunReadIndex();
+  const { latest, active, recent } = buildSubagentRunView({
+    runs,
+    recentMinutes: RECENT_WINDOW_MINUTES,
+    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
+  });
+  if (trimmed === "last") {
+    const entry = latest[0];
+    return entry ? { entry } : fail("Unknown subagent.");
+  }
+  const numericOrder = [...active, ...recent];
+  if (/^\d+$/.test(trimmed)) {
+    const entry = numericOrder[Number.parseInt(trimmed, 10) - 1];
+    return entry ? { entry } : fail(`Invalid subagent index: ${trimmed}`);
+  }
+  if (trimmed.includes(":")) {
+    const entry = latest.find((run) => run.childSessionKey === trimmed);
+    return entry ? { entry } : fail(`Unknown subagent session: ${trimmed}`);
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const match = (entries: SubagentRunRecord[], ambiguity: string) => {
+    if (entries.length > 1) {
+      return fail(`${ambiguity}: ${trimmed}`);
+    }
+    const entry = entries[0];
+    return entry ? { entry } : undefined;
+  };
+  return (
+    match(
+      numericOrder.filter((entry) => normalizeLowercaseStringOrEmpty(entry.taskName) === lowered),
+      "Ambiguous subagent label",
+    ) ??
+    match(
+      latest.filter((entry) => normalizeLowercaseStringOrEmpty(formatRunLabel(entry)) === lowered),
+      "Ambiguous subagent label",
+    ) ??
+    match(
+      numericOrder.filter((entry) =>
+        normalizeLowercaseStringOrEmpty(entry.taskName).startsWith(lowered),
+      ),
+      "Ambiguous subagent label prefix",
+    ) ??
+    match(
+      latest.filter((entry) =>
+        normalizeLowercaseStringOrEmpty(formatRunLabel(entry)).startsWith(lowered),
+      ),
+      "Ambiguous subagent label prefix",
+    ) ??
+    match(
+      latest.filter((entry) => entry.runId.startsWith(trimmed)),
+      "Ambiguous run id prefix",
+    ) ??
+    fail(`Unknown subagent id: ${trimmed}`)
+  );
 }
 
 export function resolveRequesterSessionKey(
@@ -80,33 +110,6 @@ export function resolveRequesterSessionKey(
   }
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
-}
-
-export function resolveHandledPrefix(normalized: string): string | null {
-  return normalized.startsWith(COMMAND)
-    ? COMMAND
-    : normalized.startsWith(COMMAND_AGENTS)
-      ? COMMAND_AGENTS
-      : null;
-}
-
-export function resolveSubagentsAction(params: {
-  handledPrefix: string;
-  restTokens: string[];
-}): SubagentsAction | null {
-  if (params.handledPrefix === COMMAND) {
-    const [actionRaw] = params.restTokens;
-    const action = (normalizeLowercaseStringOrEmpty(actionRaw) || "list") as SubagentsAction;
-    if (!ACTIONS.has(action)) {
-      return null;
-    }
-    params.restTokens.splice(0, 1);
-    return action;
-  }
-  if (params.handledPrefix === COMMAND_AGENTS) {
-    return "agents";
-  }
-  return null;
 }
 
 export function buildSubagentsHelp() {

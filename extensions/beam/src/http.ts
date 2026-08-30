@@ -17,14 +17,10 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-function firstHeader(req: IncomingMessage, name: string): string | undefined {
-  const value = req.headers[name];
-  return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
-}
-
 type BeamRequestClient = {
   clientIp: string;
   scopes: readonly string[];
+  profileId?: string;
 };
 
 function currentRequestClient(req: IncomingMessage): BeamRequestClient {
@@ -32,6 +28,7 @@ function currentRequestClient(req: IncomingMessage): BeamRequestClient {
   return {
     clientIp: client?.clientIp ?? req.socket.remoteAddress ?? "unknown",
     scopes: client?.connect?.scopes ?? [],
+    profileId: client?.authenticatedUserProfile?.profileId,
   };
 }
 
@@ -76,11 +73,6 @@ export function createBeamRequestHandler(params: {
     }
 
     try {
-      const contentLength = Number(firstHeader(req, "content-length"));
-      if (Number.isFinite(contentLength) && contentLength > BEAM_MAX_BODY_BYTES) {
-        sendJson(res, 413, { ok: false, error: "Payload Too Large" });
-        return true;
-      }
       const body = await readJsonWebhookBodyOrReject({
         req,
         res,
@@ -101,6 +93,8 @@ export function createBeamRequestHandler(params: {
       const existing = await params.store.get(parsed.value.beamId);
       await params.store.put({
         ...parsed.value,
+        // An anonymous replacement must not inherit a previous publisher's identity.
+        ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
         createdAt: existing?.createdAt ?? receivedAt,
         receivedAt,
       });
@@ -110,6 +104,7 @@ export function createBeamRequestHandler(params: {
         url: buildControlUiCatalogSharePath({
           shareRoute: BEAM_SESSION_SHARE_ROUTE,
           threadId: parsed.value.beamId,
+          displayName: parsed.value.title,
           basePath: params.resolveControlUiBasePath(),
         }),
       });

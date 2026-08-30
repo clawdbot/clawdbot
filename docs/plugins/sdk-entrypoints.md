@@ -162,6 +162,12 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  Transcript items may include a `sender` with a qualified `SessionParticipant`
+  identity and optional display label or avatar. Supply only source-known
+  attribution; the viewer and the session adopter are not transcript authors.
+  Core resolves profile identities against current profile data, including merges.
+  User items without attribution display as **User**.
+
   Native source titles are presentation, not unique session labels. When adopting
   a new source, pass its title as `displayName` to the owner-authorized
   [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot
@@ -191,6 +197,12 @@ export default definePluginEntry({
   limit and set `nextCursor` when more may exist. The Control UI resolves only
   one result with no next page; multiple rows or `nextCursor` are explicitly
   ambiguous and never select the first row.
+
+  Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
+  bounded slug as regular session links. Return the title in the catalog row's
+  `name`; the Control UI uses it to refresh the decorative slug. Only the id
+  suffix selects the transcript. Bare-id and stale-title links remain valid,
+  and titles never resolve an ambiguous id.
 
   `routeSegment` must not use the first segment of a built-in Control UI route
   or alias, and it must be unique across active session catalogs. Invalid,

@@ -9,12 +9,13 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
+import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -125,21 +126,6 @@ const loadStatusQueueRuntime = createLazyPromise(() => import("./status-queue.ru
 const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
-
-// Context lookup stays synchronous/non-refreshing so status output does not
-// trigger provider/catalog IO while rendering a command response.
-function resolveStatusRuntimeContextTokens(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): number | undefined {
-  return resolveContextTokensForModel({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    allowAsyncLoad: false,
-  });
-}
 
 function shouldLoadUsageSummary(params: {
   provider?: string;
@@ -597,17 +583,18 @@ export async function buildStatusReplyParts(
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
-    cfg,
-    provider: activeStatusProvider,
-    model: modelRefs.active.model || model,
-  });
-  const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
-    ? (runtimeContextTokens ??
-      (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
-        ? contextTokens
-        : undefined))
-    : undefined;
+  const preparedContextTokens =
+    typeof contextTokens === "number" && contextTokens > 0 ? contextTokens : undefined;
+  const selectedCatalogEntry = findModelInCatalog(
+    thinkingCatalog ?? [],
+    selectedLookupProvider,
+    selectedLookupModel,
+  );
+  const initialActiveCatalogEntry = findModelInCatalog(
+    thinkingCatalog ?? [],
+    activeProvider,
+    modelRefs.active.model || model,
+  );
   const requestedThinkLevel =
     resolvedThinkLevel ??
     explicitThinkingDefault ??
@@ -665,7 +652,16 @@ export async function buildStatusReplyParts(
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    runtimeContextTokens: statusRuntimeContextTokens,
+    selectedContextWindow: selectedCatalogEntry?.contextWindow,
+    selectedContextTokens:
+      selectedCatalogEntry?.contextTokens ??
+      (selectedCatalogEntry && !activeRuntimeIsAuthoritative ? preparedContextTokens : undefined),
+    thinkingCatalog,
+    runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
+    runtimeContextTokens:
+      activeRuntimeIsAuthoritative && (initialActiveCatalogEntry || fallbackState.active)
+        ? preparedContextTokens
+        : undefined,
     sessionEntry,
     sessionKey,
     parentSessionKey,

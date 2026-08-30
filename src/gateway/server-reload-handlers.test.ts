@@ -453,6 +453,7 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
   loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
 }));
@@ -5192,6 +5193,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await vi.advanceTimersByTimeAsync(0);
       await expect(deferredPromotion).resolves.toBe("deferred-a");
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
 
       const reloadError = harness.nextReloadError();
       harness.writeConfig(harness.invalidConfig, "invalid-b", 2);
@@ -5220,6 +5222,7 @@ describe("gateway Gmail hot reload handlers", () => {
       hoisted.activeTaskBlockers.length = 0;
       await vi.advanceTimersByTimeAsync(5_000);
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
 
       const acceptedWithLogging = {
         ...harness.deferredConfig,
@@ -5230,6 +5233,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await vi.advanceTimersByTimeAsync(0);
       await expect(revertPromotion).resolves.toBe("accepted-a-plus-logging");
       await vi.advanceTimersByTimeAsync(0);
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
       expect(harness.terminalPolicy.isEnabled()).toBe(false);
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(3, acceptedWithLogging, {
         reason: "reload",
@@ -5257,6 +5261,44 @@ describe("gateway Gmail hot reload handlers", () => {
     }
   });
 
+  it("keeps unchanged config unsettled across a pending plugin metadata restart", async () => {
+    vi.useFakeTimers();
+    const watcher = new chokidar.FSWatcher();
+    const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher);
+    const harness = createManagedRestartSequenceHarness();
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "metadata-restart-blocker" }));
+
+    try {
+      expect(harness.reloader.isConfigReloadSettled()).toBe(true);
+      const promotion = harness.nextPromotion();
+      harness.reloader.notifyPluginMetadataChanged();
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(promotion).resolves.toBe("initial");
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+
+      watcher.emit("change", "/tmp/openclaw.json");
+      await vi.advanceTimersByTimeAsync(300);
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(harness.initialConfig);
+      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+
+      hoisted.activeTaskBlockers.length = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
+      expect(harness.requestRecoveryRestart).toHaveBeenCalledWith(
+        "config reload: plugin metadata changed",
+        undefined,
+      );
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+    } finally {
+      hoisted.activeTaskBlockers.length = 0;
+      await harness.reloader.stop();
+      watch.mockRestore();
+    }
+  });
+
   it("does not emit a prepared config restart after managed shutdown starts", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
@@ -5274,19 +5316,29 @@ describe("gateway Gmail hot reload handlers", () => {
       return makePreparedSecretsSnapshot(config);
     });
 
-    harness.writeConfig(harness.deferredConfig, "shutdown-restart", 1);
-    await vi.advanceTimersByTimeAsync(0);
-    await preflightStarted;
+    try {
+      expect(harness.reloader.isConfigReloadSettled()).toBe(true);
+      harness.writeConfig(harness.deferredConfig, "shutdown-restart", 1);
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      await preflightStarted;
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
 
-    const stopPromise = harness.reloader.stop();
-    releasePreflight?.();
-    await stopPromise;
+      const stopPromise = harness.reloader.stop();
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
+      releasePreflight?.();
+      await stopPromise;
+      expect(harness.reloader.isConfigReloadSettled()).toBe(false);
 
-    expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
-    expect(harness.promoteSnapshot).not.toHaveBeenCalled();
-    expect(harness.logReload.info).toHaveBeenCalledWith(
-      "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-    );
+      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(harness.promoteSnapshot).not.toHaveBeenCalled();
+      expect(harness.logReload.info).toHaveBeenCalledWith(
+        "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
+      );
+    } finally {
+      releasePreflight?.();
+      await harness.reloader.stop();
+    }
   });
 
   it.each([
@@ -7329,11 +7381,15 @@ describe("deferred channel reload abort generation", () => {
         );
       }
       vi.useFakeTimers();
-      const request = submitWrite(nextConfig, "same-write", 1);
+      let request: Promise<RuntimeConfigWriteApplicationStatus> | undefined;
 
       try {
+        expect(reloader.isConfigReloadSettled()).toBe(true);
+        request = submitWrite(nextConfig, "same-write", 1);
+        expect(reloader.isConfigReloadSettled()).toBe(false);
         await vi.advanceTimersByTimeAsync(10);
         expect(channels.stop).toHaveBeenCalledOnce();
+        expect(reloader.isConfigReloadSettled()).toBe(false);
         blocker = tryBeginGatewayRootWorkAdmission();
         if (!blocker) {
           throw new Error("Expected unrelated gateway request admission");
@@ -7380,10 +7436,13 @@ describe("deferred channel reload abort generation", () => {
         }
         expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(watchedConfig);
         expect(logReload.error).not.toHaveBeenCalled();
+        expect(reloader.isConfigReloadSettled()).toBe(successor !== "prepared refresh failure");
       } finally {
         continuePlugin.resolve();
         blocker?.release();
-        await reloader.stop();
+        const stopping = reloader.stop();
+        await vi.advanceTimersByTimeAsync(500);
+        await stopping;
         await request;
         await successorRequest;
         watch.mockRestore();

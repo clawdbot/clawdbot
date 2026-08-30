@@ -82,6 +82,7 @@ openclaw-chat-page {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .chat-error:has(details[open]) {

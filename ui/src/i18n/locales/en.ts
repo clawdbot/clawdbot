@@ -1866,6 +1866,10 @@ export const en: TranslationMap = {
         label: "Phosphor",
         description: "Green on glass",
       },
+      crt: {
+        label: "CRT",
+        description: "Console mono",
+      },
     },
     textSizes: {
       small: "Small",
@@ -5872,6 +5876,9 @@ export const en: TranslationMap = {
         "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
+      discard: "Discard",
+      discardPendingMessage:
+        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
@@ -5882,6 +5889,8 @@ export const en: TranslationMap = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
+        blockedByUnconfirmed:
+          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",

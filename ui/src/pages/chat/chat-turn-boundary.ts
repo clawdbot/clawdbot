@@ -13,11 +13,13 @@ export function safeNormalizeMessage(message: unknown): NormalizedMessage | null
   }
 }
 
+function isForwardedSessionMessage(message: unknown): boolean {
+  const provenance = asRecord(asRecord(message)?.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
 export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-  });
+  return group.messages.some(({ message }) => isForwardedSessionMessage(message));
 }
 
 function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {

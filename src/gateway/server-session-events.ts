@@ -354,7 +354,6 @@ async function handleTranscriptUpdateBroadcast(
     agentId: eventAgentId,
     includeSession: true,
     activeRunState,
-    status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
   });
   if (message === undefined) {
     // A committed batch or unavailable selected row must invalidate

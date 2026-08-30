@@ -4610,6 +4610,165 @@ exit ${exitCode}
     },
   );
 
+  it.each([
+    ["direct failure", 42, false],
+    ["substitution failure", 42, false],
+    ["assertion after success", 43, false],
+    ["signal after success", 143, false],
+    ["expected negative", 0, false],
+    ["direct failure", 42, true],
+  ] as const)(
+    "retains self-upgrade RPC evidence through the actual launcher: %s (exit %s, blocked publication: %s)",
+    (scenario, expectedStatus, blockedPublication) => {
+      const workDir = tempDirs.make("openclaw-self-upgrade-diagnostics-");
+      const artifacts = join(workDir, "private");
+      const publicRoot = join(workDir, "public");
+      const fixtureRoot = join(workDir, "historical");
+      const pluginRoot = join(fixtureRoot, "dist/extensions/qa-channel");
+      mkdirSync(join(fixtureRoot, "extensions/qa-channel"), { recursive: true });
+      mkdirSync(pluginRoot, { recursive: true });
+      writeFileSync(
+        join(fixtureRoot, "extensions/qa-channel/package.json"),
+        '{"version":"2026.4.25"}',
+      );
+      for (const file of ["package.json", "openclaw.plugin.json", "index.js", "setup-entry.js"]) {
+        writeFileSync(join(pluginRoot, file), "{}");
+      }
+      if (blockedPublication) {
+        writeFileSync(publicRoot, "not a directory");
+      }
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+        "utf8",
+      );
+      const setup = source.split('\necho "Installing declared source package')[0];
+      const rpcStart = source.indexOf("gateway_call() {");
+      const rpcEnd = source.indexOf("\n}\n", rpcStart);
+      expect(rpcStart).toBeGreaterThan(0);
+      expect(rpcEnd).toBeGreaterThan(rpcStart);
+      const rpc = source.slice(rpcStart, rpcEnd + 3);
+      const call = 'gateway_call wizard.start \'{}\' "$WIZARD_START_JSON" "$WIZARD_START_ERR"';
+      const invocation =
+        scenario === "expected negative"
+          ? `if ${call}; then exit 99; fi\nprintf continued >"$ARTIFACT_DIR/continued"\nrun_completed=1`
+          : scenario === "substitution failure"
+            ? `result="$( ${call} )"`
+            : `${call}\nCURRENT_PHASE=assert-source-wizard\n${scenario === "signal after success" ? 'kill -TERM "$$"' : "exit 43"}`;
+      writeFileSync(
+        join(workDir, "inner-probe.sh"),
+        `${setup}\n${rpc}\n
+cleanup() { printf "cleanup replacement\\n" >"$WIZARD_START_ERR"; }
+CURRENT_PHASE=source-wizard
+${invocation}
+`,
+      );
+      const rpcStatus = scenario.includes("after success") ? 0 : 42;
+      const binDir = join(workDir, "bin");
+      writeExecutables(binDir, {
+        git: `#!/usr/bin/env bash
+case " $* " in
+  *" archive "*) exec tar -C "$TEST_FIXTURE_ROOT" -cf - . ;;
+  *" rev-parse "*) printf 'be8c24633aaa7ef0425ae1178f096ee8dd6226c0\\n' ;;
+esac
+`,
+        corepack: "#!/bin/sh\nexit 0\n",
+        openclaw: `#!/bin/sh
+printf '{"ok":${rpcStatus === 0},"fixture":"named RPC response"}\\n'
+printf 'controlled RPC stderr token=SELF_UPGRADE_SECRET\\n' >&2
+exit ${rpcStatus}
+`,
+        docker: `#!/usr/bin/env bash
+if [ "$1" = run ]; then
+  printf '%s\\n' "$@" >"$TMPDIR/docker-args"
+  cd "$TEST_REPO_ROOT"
+  exec bash "$TMPDIR/inner-probe.sh"
+fi
+exit 0
+`,
+      });
+      const result = spawnSync(
+        "bash",
+        [join(process.cwd(), "scripts/e2e/update-run-package-self-upgrade-docker.sh")],
+        {
+          encoding: "utf8",
+          cwd: workDir,
+          env: {
+            ...process.env,
+            HOME: workDir,
+            TMPDIR: workDir,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+            TEST_REPO_ROOT: process.cwd(),
+            TEST_FIXTURE_ROOT: fixtureRoot,
+            OPENCLAW_SKIP_DOCKER_BUILD: "1",
+            OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1",
+            OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR: artifacts,
+            OPENCLAW_UPDATE_RUN_SELF_UPGRADE_RUNTIME_ROOT: join(workDir, "runtime"),
+            OPENCLAW_DOCKER_ALL_LOG_DIR: publicRoot,
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
+      expect(readFileSync(join(artifacts, "wizard-start.err"), "utf8")).toBe(
+        "cleanup replacement\n",
+      );
+      expect(readFileSync(join(workDir, "docker-args"), "utf8")).not.toContain(publicRoot);
+      if (expectedStatus === 0) {
+        expect(readFileSync(join(artifacts, "continued"), "utf8")).toBe("continued");
+        expect(existsSync(publicRoot)).toBe(false);
+        expect(existsSync(join(artifacts, "diagnostics/raw.json"))).toBe(false);
+      } else if (blockedPublication) {
+        expect(result.stderr).toContain("diagnostics missing");
+      } else {
+        expect(existsSync(publicRoot)).toBe(true);
+        const directories = readdirSync(publicRoot);
+        expect(directories).toHaveLength(1);
+        const uploaded = join(publicRoot, directories[0]!);
+        expect(readdirSync(uploaded)).toEqual(["failure.json"]);
+        const text = readFileSync(join(uploaded, "failure.json"), "utf8");
+        expect(text).not.toContain("SELF_UPGRADE_SECRET");
+        expect(text).not.toContain("cleanup replacement");
+        const report = JSON.parse(text);
+        expect(report).toMatchObject({
+          phase: scenario.includes("after success") ? "assert-source-wizard" : "source-wizard",
+          exitStatus: expectedStatus,
+          signal: scenario === "signal after success" ? "SIGTERM" : null,
+          lastRpc: {
+            name: "wizard-start",
+            stdout: expect.stringContaining("named RPC response"),
+            stderr: expect.stringContaining("controlled RPC stderr"),
+          },
+        });
+      }
+    },
+  );
+
+  it.each(["config-recipe", "../config-recipe", "wizard-not-a-declared-rpc"])(
+    "rejects candidate-selected private RPC evidence: %s",
+    (rpcName) => {
+      const workDir = tempDirs.make("openclaw-rpc-diagnostics-contract-");
+      const artifacts = join(workDir, "private");
+      mkdirSync(join(artifacts, "diagnostics"), { recursive: true });
+      writeFileSync(join(artifacts, "diagnostics/last-rpc"), rpcName);
+      writeFileSync(join(artifacts, "config-recipe.json"), "PRIVATE_RPC_SELECTION_SENTINEL");
+      const captured = runSurvivorDiagnostics("capture", artifacts, ["source-wizard", "42"]);
+      expect(captured.status, captured.stderr).toBe(0);
+      const rawPath = join(artifacts, "diagnostics/raw.json");
+      const raw = readFileSync(rawPath, "utf8");
+      expect(raw).not.toContain("PRIVATE_RPC_SELECTION_SENTINEL");
+      const snapshot = JSON.parse(raw);
+      expect(snapshot.lastRpc).toBeUndefined();
+      // Revalidate at publication too: candidate-authored snapshots cannot broaden the contract.
+      snapshot.lastRpc = { name: rpcName, stdout: "PRIVATE_RPC_SELECTION_SENTINEL", stderr: "" };
+      writeFileSync(rawPath, JSON.stringify(snapshot));
+      const uploaded = join(workDir, "public");
+      const published = runSurvivorDiagnostics("publish", artifacts, [uploaded]);
+      expect(published.status, published.stderr).toBe(0);
+      const text = readFileSync(join(uploaded, "failure.json"), "utf8");
+      expect(text).not.toContain("PRIVATE_RPC_SELECTION_SENTINEL");
+      expect(JSON.parse(text).lastRpc).toBeUndefined();
+    },
+  );
+
   it.each([false, true])(
     "publishes only on the host and preserves Docker outcomes (published baseline: %s)",
     (publishedBaseline) => {

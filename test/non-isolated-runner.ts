@@ -8,6 +8,11 @@ import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../src/process/gateway-work-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../src/shared/global-singleton.js";
 import {
   type CustomElementTracking,
@@ -482,6 +487,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.unstubAllEnvs();
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
+    // Reject suspended admission waiters before async cleanup. The final reset
+    // reopens admission only after those old waiters have observed this fence.
+    if (isGatewayWorkAdmissionClosed()) {
+      markGatewayRestartDraining();
+    }
     resetOpenClawGlobalRunState();
     resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
@@ -494,6 +504,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     clearNamedPluginRuntimeStoresForTest();
     dropTrackedRepoOwnedCustomElements();
     resetSharedDocumentBody();
+    // Gateway admission survives production close. Retire file-owned roots after
+    // runtime cleanup, before another file can inherit their leases or drain fence.
+    resetGatewayWorkAdmission();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
     resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);

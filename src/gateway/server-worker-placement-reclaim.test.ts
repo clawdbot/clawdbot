@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -40,10 +41,15 @@ afterEach(async () => {
 
 async function scenario(
   name: string,
-  destroyFailure: boolean,
-  beforeStop = false,
-  staged = false,
-  failedRetry = false,
+  {
+    destroyFailure = false,
+    beforeStop = false,
+    staged = false,
+    failedRetry = false,
+    blockedInspection = false,
+    cancellationNeedsRecovery = false,
+    pendingDispatch = false,
+  } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-"));
   roots.push(root);
@@ -95,6 +101,7 @@ async function scenario(
   const harness = createHarness(placements, {
     workspacePath: worktreePath,
     ...(failedRetry ? { failAt: "sync" as const } : {}),
+    runReclaimPreparation: barriers.runReclaimPreparation,
     runReclaimBarrier: barriers.runReclaimBarrier,
     runFailedReclaimBarrier: barriers.runFailedReclaimBarrier,
     ...(destroyFailure
@@ -146,6 +153,16 @@ async function scenario(
     );
   }
   const coordinated = coordinateWorkerPlacementDispatch(harness.service);
+  const provisionEntered = createDeferred();
+  const releaseProvision = createDeferred();
+  if (pendingDispatch) {
+    vi.mocked(harness.environments.create).mockImplementationOnce(async () => {
+      provisionEntered.resolve();
+      await releaseProvision.promise;
+      return harness.ready;
+    });
+  }
+  let dispatching: ReturnType<typeof coordinated.dispatch> | undefined;
   let active;
   if (failedRetry) {
     await expect(coordinated.dispatch(REQUEST)).rejects.toThrow("sync failed");
@@ -153,8 +170,17 @@ async function scenario(
     expect(active.state).toBe("failed");
     expect(harness.environments.get(active.environmentId!)?.state).toBe("destroying");
   } else {
-    active = await coordinated.dispatch(REQUEST);
-    expect(active.state).toBe("active");
+    dispatching = coordinated.dispatch(
+      blockedInspection ? { ...REQUEST, executionMode: "remote-exec" } : REQUEST,
+    );
+    if (pendingDispatch) {
+      await provisionEntered.promise;
+      active = placements.get(REQUEST.sessionId)!;
+      expect(active.state).toBe("provisioning");
+    } else {
+      active = await dispatching;
+      expect(active.state).toBe("active");
+    }
   }
   const admit = (runId: string) =>
     admitWorkerStopChat({
@@ -167,10 +193,45 @@ async function scenario(
       runId,
     });
   const oldRunId = name + "-before-stop-complete";
+  const running = blockedInspection ? await admit(name + "-running").promise : undefined;
+  let cancellationRecovery: Promise<void> | undefined;
+  if (running?.ok) {
+    running.value.activeRunAbort.controller.signal.addEventListener("abort", () => {
+      if (cancellationNeedsRecovery) {
+        // Real worker failure completion joins placement recovery before releasing admission.
+        cancellationRecovery = coordinated.reconcileActive().finally(() => {
+          running.value.cleanupAdmittedRun();
+        });
+      } else {
+        running.value.cleanupAdmittedRun();
+      }
+    });
+  }
+  const inspectionEntered = createDeferred();
+  const releaseInspection = createDeferred();
+  if (blockedInspection) {
+    vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
+      inspectionEntered.resolve();
+      await releaseInspection.promise;
+    });
+  }
+  const sweep = blockedInspection ? coordinated.reconcileActive() : undefined;
+  if (sweep) {
+    await inspectionEntered.promise;
+  }
+  let abortedDuringInspection = false;
+  let destroyedDuringInspection = false;
   let old!: ReturnType<typeof admit>;
   let reclaimResult: { ok: boolean; state?: string; message?: string } | undefined;
   const reserveOld = () => {
     old = admit(oldRunId);
+    if (blockedInspection || pendingDispatch) {
+      void old.promise.then((result) => {
+        if (result.ok) {
+          result.value.cleanupAdmittedRun();
+        }
+      });
+    }
     const reservation = context.dedupe.get(pendingChatSendDedupeKey(oldRunId));
     if (beforeStop) {
       expect((reservation?.payload as { status?: string } | undefined)?.status).toBe("accepted");
@@ -189,12 +250,29 @@ async function scenario(
         return { ok: false, message: error.message };
       },
     );
-    await barrierEntered.promise;
-    if (!beforeStop) {
+    if (blockedInspection) {
+      await setImmediate();
+      abortedDuringInspection =
+        running?.ok === true && running.value.activeRunAbort.controller.signal.aborted;
+      destroyedDuringInspection = vi.mocked(harness.environments.destroy).mock.calls.length > 0;
+      reserveOld();
+      await setImmediate();
+      releaseInspection.resolve();
+    }
+    if (pendingDispatch) {
+      await setImmediate();
+      reserveOld();
+      releaseProvision.resolve();
+      active = await dispatching!;
+    }
+    await Promise.race([barrierEntered.promise, reclaim]);
+    if (!beforeStop && !blockedInspection && !pendingDispatch) {
       reserveOld();
     }
     releaseBarrier.resolve();
     reclaimResult = await reclaim;
+    await sweep;
+    await cancellationRecovery;
   };
   if (beforeStop) {
     // A preceding lifecycle owner holds ingress pending while Stop joins that
@@ -249,14 +327,42 @@ async function scenario(
     preexistingResponses: old.respond.mock.calls,
     explicitNewAdmissionAccepted: freshResult.ok,
     approvalAttachRevocationCount: revocations.length,
+    abortedDuringInspection,
+    destroyedDuringInspection,
     harnessOrder: [...harness.log],
   };
   context.chatRunState.clear();
+  if (running?.ok) {
+    running.value.cleanupAdmittedRun();
+    clearAgentRunContext(name + "-running", running.value.lifecycleGeneration);
+  }
   return report;
 }
 
+it.each([false, true])(
+  "Stop cancels before unrelated inspection releases (recovery=%s)",
+  async (cancellationNeedsRecovery) => {
+    const r = await scenario(`blocked-inspection-${cancellationNeedsRecovery}`, {
+      blockedInspection: true,
+      cancellationNeedsRecovery,
+    });
+    expect(r.abortedDuringInspection).toBe(true);
+    expect(r.destroyedDuringInspection).toBe(false);
+    expect(r.preexistingAdmissionAccepted).toBe(false);
+    expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
+    expect(r.explicitNewAdmissionAccepted).toBe(true);
+  },
+);
+
+it("Stop fences ingress during provisioning without cancelling its dispatch producer", async () => {
+  const r = await scenario("pending-dispatch", { pendingDispatch: true });
+  expect(r.preexistingAdmissionAccepted).toBe(false);
+  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
+  expect(r.explicitNewAdmissionAccepted).toBe(true);
+});
+
 it("successful Stop cancels a preexisting send waiting on its lifecycle fence", async () => {
-  const r = await scenario("successful-stop", false);
+  const r = await scenario("successful-stop");
   expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
   expect(r.explicitNewAdmissionAccepted).toBe(true);
   expect(
@@ -265,7 +371,7 @@ it("successful Stop cancels a preexisting send waiting on its lifecycle fence", 
   ).toBe(false);
 });
 it("provider stop failure plus successful recovery still cancels preexisting ingress", async () => {
-  const r = await scenario("failed-stop-recovered-cleanup", true);
+  const r = await scenario("failed-stop-recovered-cleanup", { destroyFailure: true });
   expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
   expect(r.explicitNewAdmissionAccepted).toBe(true);
   expect(
@@ -275,13 +381,17 @@ it("provider stop failure plus successful recovery still cancels preexisting ing
 });
 
 it("a reservation preceding Stop cannot revive a successfully reclaimed worker", async () => {
-  const r = await scenario("pre-stop-reservation", false, true);
+  const r = await scenario("pre-stop-reservation", { beforeStop: true });
   expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
   expect(r.explicitNewAdmissionAccepted).toBe(true);
   expect(r.preexistingAdmissionAccepted).toBe(false);
 });
 it("accepted staged reclaim recovers provider cleanup but must reject pre-Stop ingress", async () => {
-  const r = await scenario("accepted-staged-stop-recovery", true, true, true);
+  const r = await scenario("accepted-staged-stop-recovery", {
+    destroyFailure: true,
+    beforeStop: true,
+    staged: true,
+  });
   expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
   expect(r.finalPlacementState).toBe("reclaimed");
   expect(r.pendingWorkspaceResults).toBe(0);
@@ -292,7 +402,11 @@ it("accepted staged reclaim recovers provider cleanup but must reject pre-Stop i
 it.each([false, true])(
   "Stop of an already failed placement cancels pending ingress (before=%s)",
   async (beforeStop) => {
-    const r = await scenario(`failed-retry-${beforeStop}`, true, beforeStop, false, true);
+    const r = await scenario(`failed-retry-${beforeStop}`, {
+      destroyFailure: true,
+      beforeStop,
+      failedRetry: true,
+    });
     expect(r.reclaimResult).toEqual({ ok: true, state: "local" });
     expect(r.environmentState).toBe("destroyed");
     expect(r.providerDestroyAttempts).toBe(2);

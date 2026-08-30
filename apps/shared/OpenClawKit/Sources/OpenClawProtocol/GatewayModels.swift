@@ -5540,6 +5540,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
     public let text: String?
     public let timestamp: String?
     public let model: String?
+    public let sender: SessionParticipant?
     public let truncated: Bool?
     public let raw: AnyCodable?
 
@@ -5549,6 +5550,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         text: String? = nil,
         timestamp: String? = nil,
         model: String? = nil,
+        sender: SessionParticipant? = nil,
         truncated: Bool? = nil,
         raw: AnyCodable? = nil)
     {
@@ -5557,6 +5559,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         self.text = text
         self.timestamp = timestamp
         self.model = model
+        self.sender = sender
         self.truncated = truncated
         self.raw = raw
     }

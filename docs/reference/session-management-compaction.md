@@ -195,6 +195,8 @@ Two different concepts:
 1. **Model context window**: hard cap per model (tokens visible to the model). Comes from the model catalog and can be overridden via config.
 2. **Session store counters**: rolling stats written into the session row (used for `/status` and dashboards). `contextTokens` is a runtime estimate/reporting value - do not treat it as a strict guarantee.
 
+Completed turns update session counters even when no compaction occurred. An ordered context replacement takes precedence over earlier model usage; if its size is unknown, the counters are marked stale instead of borrowing an older request's total. A superseded run cannot overwrite the current writer's counters.
+
 More on limits: [/reference/token-use](/reference/token-use).
 
 ## Compaction: what it is

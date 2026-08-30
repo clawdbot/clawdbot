@@ -837,6 +837,11 @@ catalog, API-key auth, and dynamic model resolution.
         from the same SDK entrypoint.
       </Tab>
       <Tab title="Realtime transcription">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeTranscriptionProviders(cfg, providerIds)`. This discovers
+        providers named in plugin-local config without broadening the active
+        registry or bypassing plugin enablement and allow/deny policy.
+
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` - the shared
         helper handles proxy capture, reconnect backoff, close flushing, ready
         handshakes, audio queueing, and close-event diagnostics. Your plugin
@@ -885,6 +890,14 @@ catalog, API-key auth, and dynamic model resolution.
         compatible transcription APIs.
       </Tab>
       <Tab title="Realtime voice">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
+        ordinary catalog discovery; per-call candidates do not change that catalog.
+        Automatic realtime voice and Voice Call transcription selection uses declared alias config as
+        defaults, with earlier aliases preferred and canonical values taking precedence.
+        An explicitly selected alias still overrides canonical config without inheriting
+        settings from other aliases.
+
         ```typescript
         api.registerRealtimeVoiceProvider({
           id: "acme-ai",

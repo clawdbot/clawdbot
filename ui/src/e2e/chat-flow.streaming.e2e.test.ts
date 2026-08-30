@@ -438,7 +438,9 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
         const alert = page.locator(".chat-error");
-        await alert.locator("summary").getByText(errorText).waitFor({ timeout: 10_000 });
+        await alert.getByText("Error details", { exact: true }).click();
+        await alert.getByText(errorText, { exact: true }).waitFor({ timeout: 10_000 });
+        await alert.getByText("Error details", { exact: true }).click();
         expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
         expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);

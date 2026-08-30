@@ -26,6 +26,8 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { projectSessionParticipant } from "../session-identity-projection.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
 import {
@@ -535,14 +537,22 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(
-        true,
-        await provider.read({
-          ...providerRequest,
-          agentId: authorization.agentId,
-          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
-        }),
-      );
+      const page = await provider.read({
+        ...providerRequest,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+      });
+      const profiles = new Map<string, SessionActorProfileIdentity | undefined>();
+      respond(true, {
+        ...page,
+        items: page.items.map((item) =>
+          item.sender?.identity.type === "profile"
+            ? Object.assign({}, item, {
+                sender: projectSessionParticipant(item.sender.identity, profiles),
+              })
+            : item,
+        ),
+      });
     } catch (error) {
       const details = catalogError(error);
       respond(

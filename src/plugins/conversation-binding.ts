@@ -2,15 +2,15 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import {
-  createConversationBindingRecord,
-  resolveConversationBindingRecord,
-  unbindConversationBindingRecord,
-} from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { buildChannelAccountKey } from "../infra/outbound/session-binding-normalization.js";
+import {
+  getSessionBindingService,
+  type ConversationRef,
+  type SessionBindingScope,
+} from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -171,8 +171,6 @@ function addPendingPluginBindingRequest(request: PendingPluginBindingRequest): v
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
   approvalsCache: PluginBindingApprovalsState | null;
-  approvalsLoaded: boolean;
-  approvalsSaveChain: Promise<void>;
 };
 
 type PluginConversationBindingState = {
@@ -197,19 +195,12 @@ const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState
   () => ({
     fallbackNoticeBindingIds: new Set<string>(),
     approvalsCache: null,
-    approvalsLoaded: false,
-    approvalsSaveChain: Promise.resolve(),
   }),
   (state) => {
     state.fallbackNoticeBindingIds.clear();
     state.approvalsCache = null;
-    state.approvalsLoaded = false;
   },
 );
-
-function getPluginBindingGlobalState(): PluginBindingGlobalState {
-  return pluginBindingGlobalState;
-}
 
 function normalizeConversation(params: PluginBindingConversation): PluginBindingConversation {
   return {
@@ -272,14 +263,6 @@ function buildApprovalScopeKey(params: {
     normalizeChannel(params.channel),
     params.accountId.trim() || "default",
   ].join("::");
-}
-
-export function buildPluginBindingIdentity(params: PluginBindingIdentity): PluginBindingIdentity {
-  return {
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    pluginRoot: params.pluginRoot,
-  };
 }
 
 function logPluginBindingLifecycleEvent(params: {
@@ -363,13 +346,9 @@ function createApprovalRequestId(): string {
   return crypto.randomBytes(9).toString("base64url");
 }
 
-function openApprovalsDatabase() {
-  return openOpenClawStateDatabase();
-}
-
 function loadApprovalsFromDatabase(): PluginBindingApprovalsState {
   try {
-    const database = openApprovalsDatabase();
+    const database = openOpenClawStateDatabase();
     const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
@@ -396,8 +375,7 @@ function loadApprovalsFromDatabase(): PluginBindingApprovalsState {
   }
 }
 
-async function persistApprovalEntry(entry: PluginBindingApprovalEntry): Promise<void> {
-  const state = getPluginBindingGlobalState();
+function persistApprovalEntry(entry: PluginBindingApprovalEntry): void {
   const row = {
     plugin_root: entry.pluginRoot,
     channel: normalizeChannel(entry.channel),
@@ -406,37 +384,26 @@ async function persistApprovalEntry(entry: PluginBindingApprovalEntry): Promise<
     plugin_name: entry.pluginName ?? null,
     approved_at: entry.approvedAt,
   };
-  const writeApprovals = state.approvalsSaveChain
-    .catch(() => undefined)
-    .then(() => {
-      runOpenClawStateWriteTransaction(({ db }) => {
-        const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
-        executeSqliteQuerySync(
-          db,
-          approvalsDb
-            .insertInto("plugin_binding_approvals")
-            .values(row)
-            .onConflict((conflict) =>
-              conflict.columns(["plugin_root", "channel", "account_id"]).doUpdateSet({
-                plugin_id: (eb) => eb.ref("excluded.plugin_id"),
-                plugin_name: (eb) => eb.ref("excluded.plugin_name"),
-                approved_at: (eb) => eb.ref("excluded.approved_at"),
-              }),
-            ),
-        );
-      });
-    });
-  state.approvalsSaveChain = writeApprovals.catch(() => undefined);
-  await writeApprovals;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      approvalsDb
+        .insertInto("plugin_binding_approvals")
+        .values(row)
+        .onConflict((conflict) =>
+          conflict.columns(["plugin_root", "channel", "account_id"]).doUpdateSet({
+            plugin_id: (eb) => eb.ref("excluded.plugin_id"),
+            plugin_name: (eb) => eb.ref("excluded.plugin_name"),
+            approved_at: (eb) => eb.ref("excluded.approved_at"),
+          }),
+        ),
+    );
+  });
 }
 
 function getApprovals(): PluginBindingApprovalsState {
-  const state = getPluginBindingGlobalState();
-  if (!state.approvalsLoaded || !state.approvalsCache) {
-    state.approvalsCache = loadApprovalsFromDatabase();
-    state.approvalsLoaded = true;
-  }
-  return state.approvalsCache;
+  return (pluginBindingGlobalState.approvalsCache ??= loadApprovalsFromDatabase());
 }
 
 function hasPersistentApproval(params: {
@@ -455,14 +422,10 @@ function hasPersistentApproval(params: {
   );
 }
 
-async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise<void> {
-  // Persist before publishing the grant into the in-memory cache. hasPersistentApproval
-  // auto-approves later binds from this cache, so a failed SQLite write must not leave the
-  // runtime more permissive than disk: on throw the cache stays untouched and the user is
-  // re-prompted, instead of silently auto-approving a grant that never persisted.
-  await persistApprovalEntry(entry);
-  // Recompute from the current cache after the await so a concurrent allow-always persisted
-  // during the write is not dropped by a stale pre-await snapshot.
+function addPersistentApproval(entry: PluginBindingApprovalEntry): void {
+  // Persist before publishing the grant: a failed SQLite write must not leave the
+  // cache auto-approving later binds with permission that never reached disk.
+  persistApprovalEntry(entry);
   const key = buildApprovalScopeKey(entry);
   const approvals = getApprovals().approvals.filter(
     (existing) =>
@@ -473,9 +436,7 @@ async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise
       }) !== key,
   );
   approvals.push(entry);
-  const state = getPluginBindingGlobalState();
-  state.approvalsCache = { approvals };
-  state.approvalsLoaded = true;
+  pluginBindingGlobalState.approvalsCache = { approvals };
 }
 
 function buildBindingMetadata(params: {
@@ -568,7 +529,7 @@ function resolvePluginConversationBindingState(params: {
   conversation: PluginBindingConversation;
 }): PluginConversationBindingState {
   const ref = toConversationRef(params.conversation);
-  const record = resolveConversationBindingRecord(ref);
+  const record = getSessionBindingService().resolveByConversation(ref);
   const binding = toPluginConversationBinding(record);
   return {
     ref,
@@ -589,37 +550,6 @@ function resolveOwnedPluginConversationBinding(params: {
     return null;
   }
   return withConversationBindingContext(state.binding, params.conversation);
-}
-
-function bindConversationFromIdentity(params: {
-  identity: PluginBindingIdentity;
-  conversation: PluginBindingConversation;
-  summary?: string;
-  detachHint?: string;
-  data?: Record<string, unknown>;
-}): Promise<PluginConversationBinding> {
-  return bindConversationNow({
-    identity: buildPluginBindingIdentity(params.identity),
-    conversation: params.conversation,
-    summary: params.summary,
-    detachHint: params.detachHint,
-    data: params.data,
-  });
-}
-
-function bindConversationFromRequest(
-  request: Pick<
-    PendingPluginBindingRequest,
-    "pluginId" | "pluginName" | "pluginRoot" | "conversation" | "summary" | "detachHint" | "data"
-  >,
-): Promise<PluginConversationBinding> {
-  return bindConversationFromIdentity({
-    identity: buildPluginBindingIdentity(request),
-    conversation: request.conversation,
-    summary: request.summary,
-    detachHint: request.detachHint,
-    data: request.data,
-  });
 }
 
 function buildApprovalEntryFromRequest(
@@ -657,7 +587,7 @@ export async function bindConversationNow(params: {
       accountId: ref.accountId,
       conversationId: ref.conversationId,
     });
-  const record = await createConversationBindingRecord({
+  const record = await getSessionBindingService().bind({
     targetSessionKey,
     targetKind: "session",
     conversation: ref,
@@ -719,20 +649,34 @@ export function buildPluginBindingErrorText(binding: PluginConversationBinding):
   return `The bound plugin ${resolvePluginBindingDisplayName(binding)} hit an error handling this message. This conversation is still bound to that plugin.${buildDetachHintSuffix(binding.detachHint)}`;
 }
 
-export function hasShownPluginBindingFallbackNotice(bindingId: string): boolean {
+function buildPluginBindingFallbackNoticeKey(bindingId: string, scope?: SessionBindingScope) {
   const normalized = bindingId.trim();
+  // Adapter binding IDs are local to their channel/account, just like mutations.
+  return normalized && scope
+    ? JSON.stringify([buildChannelAccountKey(scope), normalized])
+    : normalized;
+}
+
+export function hasShownPluginBindingFallbackNotice(
+  bindingId: string,
+  scope?: SessionBindingScope,
+): boolean {
+  const normalized = buildPluginBindingFallbackNoticeKey(bindingId, scope);
   if (!normalized) {
     return false;
   }
-  return getPluginBindingGlobalState().fallbackNoticeBindingIds.has(normalized);
+  return pluginBindingGlobalState.fallbackNoticeBindingIds.has(normalized);
 }
 
-export function markPluginBindingFallbackNoticeShown(bindingId: string): void {
-  const normalized = bindingId.trim();
+export function markPluginBindingFallbackNoticeShown(
+  bindingId: string,
+  scope?: SessionBindingScope,
+): void {
+  const normalized = buildPluginBindingFallbackNoticeKey(bindingId, scope);
   if (!normalized) {
     return;
   }
-  getPluginBindingGlobalState().fallbackNoticeBindingIds.add(normalized);
+  pluginBindingGlobalState.fallbackNoticeBindingIds.add(normalized);
 }
 
 function buildPendingReply(request: PendingPluginBindingRequest): ReplyPayload {
@@ -834,8 +778,8 @@ export async function requestPluginConversationBinding(params: {
   }
 
   if (state.binding && state.binding.pluginRoot === params.pluginRoot) {
-    const rebound = await bindConversationFromIdentity({
-      identity: buildPluginBindingIdentity(params),
+    const rebound = await bindConversationNow({
+      identity: params,
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
@@ -859,8 +803,8 @@ export async function requestPluginConversationBinding(params: {
       accountId: state.ref.accountId,
     })
   ) {
-    const bound = await bindConversationFromIdentity({
-      identity: buildPluginBindingIdentity(params),
+    const bound = await bindConversationNow({
+      identity: params,
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
@@ -919,9 +863,10 @@ export async function detachPluginConversationBinding(params: {
   if (!binding) {
     return { removed: false };
   }
-  await unbindConversationBindingRecord({
+  await getSessionBindingService().unbind({
     bindingId: binding.bindingId,
     reason: "plugin-detach",
+    scope: binding,
   });
   logPluginBindingLifecycleEvent({
     event: "detached",
@@ -972,9 +917,15 @@ export async function resolvePluginConversationBindingApproval(params: {
     return { status: "denied", request };
   }
   if (params.decision === "allow-always") {
-    await addPersistentApproval(buildApprovalEntryFromRequest(request));
+    addPersistentApproval(buildApprovalEntryFromRequest(request));
   }
-  const binding = await bindConversationFromRequest(request);
+  const binding = await bindConversationNow({
+    identity: request,
+    conversation: request.conversation,
+    summary: request.summary,
+    detachHint: request.detachHint,
+    data: request.data,
+  });
   logPluginBindingLifecycleEvent({
     event: "approved",
     pluginId: request.pluginId,

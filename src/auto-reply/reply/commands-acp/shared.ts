@@ -54,8 +54,8 @@ export type AcpAction =
   | "install"
   | "help";
 
-export type AcpSpawnThreadMode = "auto" | "here" | "off";
-export type AcpSpawnBindMode = "here" | "off";
+type AcpSpawnThreadMode = "auto" | "here" | "off";
+type AcpSpawnBindMode = "here" | "off";
 
 type ParsedSpawnInput = {
   agentId: string;

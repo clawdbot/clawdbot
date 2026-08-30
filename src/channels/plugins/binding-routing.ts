@@ -176,7 +176,11 @@ export function resolveRuntimeConversationBindingRoute(
   }
 
   if (params.touchBinding !== false) {
-    getSessionBindingService().touch(bindingRecord.bindingId);
+    getSessionBindingService().touch(
+      bindingRecord.bindingId,
+      undefined,
+      bindingRecord.conversation,
+    );
   }
   const pluginId = resolvePluginOwnedRuntimeBindingPluginId(bindingRecord);
   if (pluginId) {

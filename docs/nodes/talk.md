@@ -38,6 +38,13 @@ their current ephemeral-token and WebRTC data-channel flow.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+OpenAI GA browser Talk keeps provider conversation order even when an assistant
+reply finishes before the user's transcription or item announcements arrive out
+of order. Text streams immediately in the call view; late predecessor metadata
+places it beside the correct reply. Stopping a call drains finalized speech,
+skips unfinished transcriptions, and records a browser console warning for
+missing transcriptions or unresolved conversation links.
+
 Google Live saves complete utterances during the call, including Gemini 3.1
 transcriptions that omit an explicit transcription-finished flag. Partial text
 stays provisional until the provider's completion boundary.
@@ -64,6 +71,10 @@ microphone stream granted after cancellation.
 Browser Talk acquires the microphone before creating the provider session, so
 time spent granting permission does not consume a short-lived connection token.
 If session creation fails, Talk releases the microphone before reporting the error.
+
+If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
+without ending the call or inventing a transcript. You can speak again; audio
+responses continue independently of input transcription.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

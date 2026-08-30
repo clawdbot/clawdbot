@@ -1040,6 +1040,7 @@ posixIt.each(["main-ancestor", "release-tag", "release-branch-head", "floating-m
     const publicationBase = releaseBranch ? release : "main";
     const report = await maturityRun({
       realClock: true,
+      realDrain: false,
       env: {
         ...maturityEnvironment,
         EXPECTED_SHA: floating ? "" : head,

@@ -12,10 +12,10 @@ import { afterAll } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const templateDirs = createTempDirTracker();
-let performanceTemplate: string | undefined;
+const performanceTemplates = new Map<"base" | "publish", string>();
 afterAll(() => {
   templateDirs.cleanup();
-  performanceTemplate = undefined;
+  performanceTemplates.clear();
 });
 
 export type PerformanceFixtureOptions = {
@@ -65,9 +65,11 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     run(cwd, "commit", "-m", "fixture report");
   };
   const reuseDefault = !options.baseline && !options.duplicate;
+  const templateKind = options.mode === "publish" ? "publish" : "base";
+  const template = reuseDefault ? performanceTemplates.get(templateKind) : undefined;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-  if (reuseDefault && performanceTemplate) {
-    cpSync(performanceTemplate, workspace, copyOptions);
+  if (template) {
+    cpSync(template, workspace, copyOptions);
   } else {
     mkdirSync(temp, { recursive: true });
     mkdirSync(seed);
@@ -87,26 +89,29 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
     run(workspace, "add", "src");
     run(workspace, "commit", "-m", "fixture target");
+    mkdirSync(reports);
+    if (options.mode === "publish") {
+      run(reports, "init", "--initial-branch=main");
+      run(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git");
+      // Keep FETCH_HEAD's source description valid when the snapshot is copied.
+      run(reports, "fetch", "--depth=1", path.relative(reports, remote), "main");
+      run(reports, "checkout", "-B", "main", "FETCH_HEAD");
+      run(reports, "config", "core.hooksPath", "/dev/null");
+      commitReport(reports, dest);
+      write(path.join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
+    }
     if (reuseDefault) {
       // Snapshot complete repositories before any scenario mutation. Copies own
       // their refs, index and objects; no live process or absolute remote is shared.
-      const template = templateDirs.make("openclaw-performance-template-");
+      const template = templateDirs.make(`openclaw-performance-${templateKind}-template-`);
       cpSync(workspace, template, copyOptions);
-      performanceTemplate = template;
+      performanceTemplates.set(templateKind, template);
     }
   }
   const target = run(workspace, "rev-parse", "HEAD");
-  mkdirSync(reports);
   let reportCommit = "a".repeat(40);
   if (options.mode === "publish") {
-    run(reports, "init", "--initial-branch=main");
-    run(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git");
-    run(reports, "fetch", "--depth=1", remote, "main");
-    run(reports, "checkout", "-B", "main", "FETCH_HEAD");
-    run(reports, "config", "core.hooksPath", "/dev/null");
-    commitReport(reports, dest);
     reportCommit = run(reports, "rev-parse", "HEAD");
-    write(path.join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
     if (options.race) {
       commitReport(seed, "openclaw-performance/main/200-1/mock-provider");
       run(seed, "push", remote, "HEAD:main");

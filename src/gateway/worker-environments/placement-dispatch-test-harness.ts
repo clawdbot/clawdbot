@@ -30,6 +30,9 @@ import {
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    runReclaimPreparation?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runReclaimPreparation"];
     runReclaimBarrier?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runReclaimBarrier"];
@@ -396,6 +399,8 @@ export function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
+    runReclaimPreparation:
+      options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
       environments,
       hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,

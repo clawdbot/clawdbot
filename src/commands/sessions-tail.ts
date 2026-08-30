@@ -274,6 +274,7 @@ async function followSelections(
               error,
             )}`,
           );
+          runtime.exit(1);
         }
       }
     }, FOLLOW_INTERVAL_MS);

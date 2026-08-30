@@ -410,7 +410,8 @@ describe("monitorLineProvider lifecycle", () => {
           accountId: "default",
           turn: { record: {} },
         } as unknown as Parameters<typeof onMessage>[0],
-        {} as Parameters<typeof onMessage>[1],
+        // Admission always hands the turn its live config; an empty one is unreachable.
+        { cfg: {} } as Parameters<typeof onMessage>[1],
       );
 
       const prepared = resolvedTurn?.delivery.preparePayload?.({
@@ -430,6 +431,64 @@ describe("monitorLineProvider lifecycle", () => {
       expect(line?.flexMessage).toBeDefined();
     } finally {
       // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
+  });
+
+  it("paces block replies with the humanDelay the turn's own config carries", async () => {
+    // humanDelay lives on the agent, but only the dispatcher can act on it, so a
+    // turn that never forwards it paces every block reply at zero.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { dispatcherOptions?: { humanDelay?: unknown } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
+          replyToken: "reply-token",
+          route: { accountId: "default", agentId: "ops", sessionKey: "line:U1" },
+          isGroup: false,
+          accountId: "default",
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {
+          // The per-agent entry wins, so a turn reading only the defaults would
+          // pace at the wrong interval rather than not at all.
+          cfg: {
+            agents: {
+              defaults: { humanDelay: { mode: "natural" } },
+              entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
+            },
+          },
+        } as Parameters<typeof onMessage>[1],
+      );
+
+      expect(resolvedTurn?.dispatcherOptions?.humanDelay).toEqual({
+        mode: "custom",
+        minMs: 3_000,
+        maxMs: 4_000,
+      });
+    } finally {
       await monitor.stop();
     }
   });
@@ -470,7 +529,8 @@ describe("monitorLineProvider lifecycle", () => {
           skillFilter: ["triage"],
           turn: { record: {} },
         } as unknown as Parameters<typeof onMessage>[0],
-        {} as Parameters<typeof onMessage>[1],
+        // Admission always hands the turn its live config; an empty one is unreachable.
+        { cfg: {} } as Parameters<typeof onMessage>[1],
       );
 
       expect(resolvedTurn?.replyOptions?.skillFilter).toEqual(["triage"]);

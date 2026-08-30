@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { touchConversationBindingRecord } from "../../bindings/records.js";
 import { logVerbose } from "../../globals.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -63,7 +63,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     logKind: "fast_abort" | "fast_approve";
   }) => {
     if (pluginOwnedBinding) {
-      touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+      getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
@@ -181,7 +181,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
-    touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+    getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
     params.replyOptions ??= {};
     if (
       shouldBypassPluginOwnedBindingForCommand(
@@ -308,13 +308,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               }),
             };
           }
-          if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
+          if (
+            !hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId, pluginOwnedBinding)
+          ) {
             const didSendNotice = await sendBindingNotice(
               { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
               "additive",
             );
             if (didSendNotice) {
-              markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
+              markPluginBindingFallbackNoticeShown(
+                pluginOwnedBinding.bindingId,
+                pluginOwnedBinding,
+              );
             }
           }
           break;

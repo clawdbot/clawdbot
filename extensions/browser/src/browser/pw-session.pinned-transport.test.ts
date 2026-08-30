@@ -79,7 +79,7 @@ afterEach(async () => {
 });
 
 describe("pw-session Playwright CDP transport", () => {
-  it("keeps HTTP fallback managed while releasing contextless non-browser targets", async () => {
+  it("keeps HTTP fallback managed while releasing only root contextless non-browser targets", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => {
       server.once("listening", () => resolve());
@@ -110,9 +110,20 @@ describe("pw-session Playwright CDP transport", () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ url: transportUrl });
     const browser = makeBrowser("A", "https://example.com");
+    let transport: import("playwright-core").ConnectOverCDPTransport | undefined;
     connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
       expect(typeof transportArg).not.toBe("string");
-      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      return browser.browser;
+    }) as never);
+
+    try {
+      await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toEqual([
+        expect.objectContaining({ targetId: "A" }),
+      ]);
+      if (!transport) {
+        throw new Error("missing Playwright CDP transport");
+      }
       const delivered: object[] = [];
       // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onmessage property.
       transport.onmessage = (message) => delivered.push(message);
@@ -126,6 +137,7 @@ describe("pw-session Playwright CDP transport", () => {
         "auction_worklet",
         "other",
         "page",
+        "iframe",
       ];
       for (const [index, type] of contextlessTargetTypes.entries()) {
         socket.send(
@@ -145,18 +157,35 @@ describe("pw-session Playwright CDP transport", () => {
         { type: "other", browserContextId: "default-context" },
         { type: "service_worker", browserContextId: "default-context" },
       ];
-      const forwardedTargets = forwardedTargetInfos.map((targetInfo, index) => ({
+      const forwardedTargets = [
+        ...forwardedTargetInfos.map((targetInfo) => ({
+          targetInfo,
+          sessionId: undefined,
+          waitingForDebugger: true,
+        })),
+        ...["worker", "iframe"].flatMap((type) =>
+          [true, false].map((waitingForDebugger) => ({
+            targetInfo: { type },
+            sessionId: "parent-session",
+            waitingForDebugger,
+          })),
+        ),
+      ].map(({ targetInfo, sessionId, waitingForDebugger }, index) => ({
         method: "Target.attachedToTarget",
+        sessionId,
         params: {
           sessionId: `forwarded-session-${index}`,
           targetInfo: { targetId: `forwarded-target-${index}`, ...targetInfo },
-          waitingForDebugger: true,
+          waitingForDebugger,
         },
       }));
       for (const event of forwardedTargets) {
         socket.send(JSON.stringify(event));
       }
 
+      await vi.waitFor(() => {
+        expect(delivered).toEqual(forwardedTargets);
+      });
       await vi.waitFor(() => {
         expect(commands).toHaveLength(contextlessTargetTypes.length);
       });
@@ -197,18 +226,15 @@ describe("pw-session Playwright CDP transport", () => {
           }),
         ),
       );
-      await vi.waitFor(() => {
-        expect(delivered).toEqual(forwardedTargets);
+      const socketClosed = new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
       });
       transport.close();
-      return browser.browser;
-    }) as never);
-
-    try {
-      await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toEqual([
-        expect.objectContaining({ targetId: "A" }),
-      ]);
+      await socketClosed;
+      expect(delivered).toEqual(forwardedTargets);
+      expect(commands).toHaveLength(contextlessTargetTypes.length * 2);
     } finally {
+      transport?.close();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
