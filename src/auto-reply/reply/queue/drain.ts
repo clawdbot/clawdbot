@@ -437,7 +437,7 @@ function historyImageIdentity(image: { messageId?: string; path: string }): stri
 }
 
 function collectQueuedPromptMedia(
-  items: FollowupRun[],
+  items: InternalFollowupRun[],
 ): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
   Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout" | "historyImages"> {
   const images: NonNullable<FollowupRun["images"]> = [];
@@ -452,27 +452,43 @@ function collectQueuedPromptMedia(
   // duplicates and dropping whatever arrived last. The batch reuses the per-turn
   // limit, so a collected turn never carries more retained images than one turn could.
   const historyImages: NonNullable<InternalFollowupRun["historyImages"]> = [];
+  // Pick the survivors before building anything, walking newest item first: a
+  // rolling window re-reads mostly the same images, so filling the budget in queue
+  // order spends it on the oldest and drops the newly arrived one - the image the
+  // member is most likely asking about.
+  const keptHistoryIdentities = new Set<string>();
+  for (const item of items.toReversed()) {
+    const candidates = item.historyImages ?? [];
+    if (candidates.length === 0 || item.images?.length !== candidates.length) {
+      continue;
+    }
+    for (const image of candidates.toReversed()) {
+      if (keptHistoryIdentities.size >= RECENT_HISTORY_IMAGE_LIMIT) {
+        break;
+      }
+      keptHistoryIdentities.add(historyImageIdentity(image));
+    }
+  }
   const seenHistoryImages = new Set<string>();
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
-    const internalItem = item as InternalFollowupRun;
-    const itemHistoryImages = internalItem.historyImages ?? [];
+    const itemHistoryImages = item.historyImages ?? [];
     // A retained image already carried by an earlier item in this batch is dropped,
     // but the rest of that item still travels: successive turns re-read a growing
     // window, so skipping a partly-seen item whole would discard the newest image.
-    const takenHistoryIndexes = itemHistoryImages.flatMap((image, index) =>
-      seenHistoryImages.has(historyImageIdentity(image)) ? [] : [index],
-    );
+    const takenHistoryIndexes = itemHistoryImages.flatMap((image, index) => {
+      const identity = historyImageIdentity(image);
+      return keptHistoryIdentities.has(identity) && !seenHistoryImages.has(identity) ? [index] : [];
+    });
     // Per-image selection needs provenance and payload index-aligned, which is what
     // a history-carrying turn produces: it only inherits images when it brought none
     // of its own. Should that ever not hold, the item travels whole rather than being
     // sliced against an alignment this cannot confirm - dropping a member's image is
     // the worse failure, and the per-turn resolver still bounds what one item carries.
     const canSelectPerImage = item.images?.length === itemHistoryImages.length;
-    const historyBudget = Math.max(0, RECENT_HISTORY_IMAGE_LIMIT - historyImages.length);
     const keptHistoryIndexes = canSelectPerImage
-      ? takenHistoryIndexes.slice(0, historyBudget)
+      ? takenHistoryIndexes
       : itemHistoryImages.map((_, index) => index);
     // Every retained image here is already in the batch, so the item adds nothing.
     if (itemHistoryImages.length > 0 && canSelectPerImage && keptHistoryIndexes.length === 0) {
@@ -492,7 +508,7 @@ function collectQueuedPromptMedia(
     imageOrder.push(...itemImageOrder);
     if (currentTurnImagesPrepared) {
       const allSlots: MediaImageLayout["slots"] =
-        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+        item.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
       const itemSlots: MediaImageLayout["slots"] = keepsEveryImage
         ? allSlots
         : keptHistoryIndexes.flatMap((index) => allSlots[index] ?? []);
@@ -504,7 +520,7 @@ function collectQueuedPromptMedia(
         ),
       );
       suppressedFactIndexes.push(
-        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
+        ...(item.mediaImageLayout?.suppressedFactIndexes ?? []).map(
           (factIndex) => factIndex + mediaOffset,
         ),
       );
