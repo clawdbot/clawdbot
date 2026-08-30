@@ -84,11 +84,31 @@ export class AcpTranslatorSessionLifecycle {
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);
+    // Pre-fetch available commands BEFORE arming the snapshot delivery timer.
+    // The lazy command-module import yields to the event loop; if that yield
+    // happens after the snapshot's setTimeout(0) is armed, the snapshot
+    // notification can overtake the session/new RPC response. Resolving
+    // commands first ensures no async yield occurs between arming the timer
+    // and returning the result.
+    const availableCommands = await this.sessionUpdates.prepareAvailableCommands();
+    // Defer notification delivery past the RPC response boundary so the client
+    // receives session/new result before session_info_update. The guard fences
+    // the deferred callback by the captured session instance: after close the
+    // store removes this object, and a resume with the same ID creates a new
+    // one, so the stale callback is suppressed instead of leaking.
+    const deliveryGuard = () => this.sessionStore.getSession(session.sessionId) === session;
     await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
       record: true,
+      deferDelivery: true,
+      deliveryGuard,
     });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: true });
+    await this.sessionUpdates.sendAvailableCommands(session, {
+      record: true,
+      deferDelivery: true,
+      deliveryGuard,
+      availableCommands,
+    });
     const { configOptions, modes } = sessionSnapshot;
     return {
       sessionId: session.sessionId,
@@ -244,11 +264,26 @@ export class AcpTranslatorSessionLifecycle {
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
+    // Pre-fetch commands before arming the snapshot timer (same invariant
+    // as newSession: the lazy import yield must not let the snapshot timer
+    // fire before the handler returns).
+    const availableCommands = await this.sessionUpdates.prepareAvailableCommands();
+    // Same deferred-delivery contract as newSession: the resume result must
+    // reach the client before session_info_update. Guard by the captured
+    // session instance to suppress stale callbacks after close-then-resume.
+    const deliveryGuard = () => this.sessionStore.getSession(session.sessionId) === session;
     await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
       record: false,
+      deferDelivery: true,
+      deliveryGuard,
     });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
+    await this.sessionUpdates.sendAvailableCommands(session, {
+      record: false,
+      deferDelivery: true,
+      deliveryGuard,
+      availableCommands,
+    });
     const { configOptions, modes } = sessionSnapshot;
     return { configOptions, modes };
   }

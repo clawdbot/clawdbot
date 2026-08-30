@@ -43,6 +43,14 @@ export class AcpTranslatorSessionUpdates {
     this.stopped = true;
   }
 
+  /** Pre-fetches available commands so callers can resolve them before arming
+  deferred delivery timers. The lazy command-module import yields to the
+  event loop; if that yield happens after a snapshot timer is armed, the
+  snapshot notification can overtake the RPC response. */
+  prepareAvailableCommands(): Promise<AvailableCommand[]> {
+    return this.options.getAvailableCommands();
+  }
+
   async startLedgerSession(
     session: AcpTranslatorLedgerSessionRef,
     options: { complete: boolean; reset?: boolean },
@@ -139,8 +147,44 @@ export class AcpTranslatorSessionUpdates {
     update: SessionUpdate;
     record?: boolean;
     waitForDelivery?: boolean;
+    // Defer only the wire delivery past the current synchronous return so the
+    // caller's JSON-RPC result reaches the client before this notification.
+    // The ledger write is still awaited before emit resolves, so follow-up
+    // reads see the recorded update immediately. The guard fences the deferred
+    // callback against a close-then-resume-same-ID race: if the captured
+    // session instance no longer matches the store's current instance, the
+    // notification is suppressed instead of leaking into a new lifecycle.
+    deferDelivery?: boolean;
+    deliveryGuard?: () => boolean;
   }): Promise<void> {
     if (this.stopped) {
+      return;
+    }
+    if (params.deferDelivery) {
+      const recording =
+        params.record && params.sessionKey
+          ? this.recordLedgerUpdate({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+              ...(params.runId ? { runId: params.runId } : {}),
+              update: params.update,
+            })
+          : undefined;
+      await recording;
+      const guard = params.deliveryGuard;
+      setTimeout(() => {
+        if (this.stopped || (guard && !guard())) {
+          return;
+        }
+        void this.options.connection
+          .sessionUpdate({ sessionId: params.sessionId, update: params.update })
+          .catch((err: unknown) => {
+            this.options.log(
+              `session update delivery failed for ${params.sessionId}: ${String(err)}`,
+            );
+          });
+      }, 0);
       return;
     }
     const delivery = this.options.connection.sessionUpdate({
@@ -169,16 +213,25 @@ export class AcpTranslatorSessionUpdates {
 
   async sendAvailableCommands(
     session: AcpTranslatorSessionRef,
-    options: { record: boolean },
+    options: {
+      record: boolean;
+      deferDelivery?: boolean;
+      deliveryGuard?: () => boolean;
+      availableCommands?: AvailableCommand[];
+    },
   ): Promise<void> {
+    const availableCommands =
+      options.availableCommands ?? (await this.options.getAvailableCommands());
     await this.emit({
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
       ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
       record: options.record,
+      deferDelivery: options.deferDelivery,
+      ...(options.deliveryGuard ? { deliveryGuard: options.deliveryGuard } : {}),
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: await this.options.getAvailableCommands(),
+        availableCommands,
       },
     });
   }
