@@ -10,8 +10,6 @@ Docker is **optional**. Use it for an isolated, throwaway gateway environment or
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
-Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
-
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
