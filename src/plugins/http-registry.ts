@@ -72,7 +72,7 @@ type PluginHttpRouteLifetime = {
 };
 const attachRouteLifetimeByEntry = new WeakMap<
   PluginHttpRouteRegistration,
-  (leases: readonly PluginHttpRouteRegistrationLease[]) => void
+  (leases: readonly PluginHttpRouteRegistrationLease[]) => (() => void) | undefined
 >();
 
 const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
