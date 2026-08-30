@@ -6,6 +6,7 @@ import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-sk
 import { t } from "../../../i18n/index.ts";
 import {
   canonicalUiSessionKeyForPersistence,
+  isUiGlobalScopeConfigured,
   normalizeAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../../lib/sessions/session-key.ts";
@@ -163,8 +164,9 @@ function renderTaskTranscript(params: {
   const selectedSession = params.chat.sessions?.sessions.find(
     (row) =>
       (row.key !== "global" ||
-        normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
-          normalizeAgentId(params.task.agentId)) &&
+        (isUiGlobalScopeConfigured(params.host) &&
+          normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
+            normalizeAgentId(params.task.agentId))) &&
       uiSessionRowMatchesSelectedChat(params.host, row.key, params.sessionKey),
   );
   return html`<div class="sidebar-content chat-task-detail__content">

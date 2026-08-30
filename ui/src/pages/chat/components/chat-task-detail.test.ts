@@ -136,6 +136,7 @@ describe("task detail panel", () => {
   it.each([
     {
       name: "uses qualified child session archive attribution",
+      scope: "per-sender" as const,
       sessionsResultAgentId: "main",
       childRow: {
         key: "agent:work:task-child",
@@ -150,6 +151,7 @@ describe("task detail panel", () => {
     },
     {
       name: "uses raw global child metadata for the owning agent",
+      scope: "global" as const,
       sessionsResultAgentId: "work",
       childRow: {
         key: "global",
@@ -163,7 +165,23 @@ describe("task detail panel", () => {
       expected: "Archived by Global Owner",
     },
     {
+      name: "rejects raw global child metadata in per-sender scope",
+      scope: "per-sender" as const,
+      sessionsResultAgentId: "work",
+      childRow: {
+        key: "global",
+        kind: "global",
+        updatedAt: 2_000,
+        archived: true,
+        archivedAt: 2_000,
+        archivedBy: { type: "human", id: "per-sender-owner", label: "Per-Sender Owner" },
+      } satisfies GatewaySessionRow,
+      childSessionKey: "agent:work:main",
+      expected: undefined,
+    },
+    {
       name: "rejects raw global child metadata from a different agent",
+      scope: "global" as const,
       sessionsResultAgentId: "main",
       childRow: {
         key: "global",
@@ -176,7 +194,7 @@ describe("task detail panel", () => {
       childSessionKey: "agent:work:main",
       expected: undefined,
     },
-  ])("$name", async ({ sessionsResultAgentId, childRow, childSessionKey, expected }) => {
+  ])("$name", async ({ scope, sessionsResultAgentId, childRow, childSessionKey, expected }) => {
     const task: TaskSummary = {
       id: "task-child",
       taskId: "task-child",
@@ -200,6 +218,7 @@ describe("task detail panel", () => {
       client: createGatewayBrowserClientFixture({ request }),
       connected: true,
       hello: null,
+      agentsList: { defaultId: "main", mainKey: "main", scope },
       sessionsResultAgentId,
     };
     const parentRow: GatewaySessionRow = {
@@ -249,7 +268,7 @@ describe("task detail panel", () => {
     if (expected) {
       expect(container.textContent).toContain(expected);
     } else {
-      expect(container.textContent).not.toContain("Wrong Owner");
+      expect(container.textContent).not.toContain(`Archived by ${childRow.archivedBy.label}`);
     }
     transcript.hostDisconnected();
   });
