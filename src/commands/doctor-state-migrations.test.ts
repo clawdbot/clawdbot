@@ -1930,6 +1930,53 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
   });
 
+  it("isolates a throwing shouldReplaceExistingEntry into a warning instead of crashing", async () => {
+    // A buggy/third-party channel plugin's shouldReplaceExistingEntry throwing
+    // must not crash doctor/gateway startup or skip unrelated migration plans.
+    const root = makeDoctorStateDir();
+    const sourcePath = path.join(root, "legacy-exploding.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test exploding cache",
+        sourcePath,
+        targetPath: "plugin state:test.exploding-cache",
+        pluginId: "telegram",
+        namespace: "test.exploding-cache",
+        maxEntries: 4,
+        scopeKey: "scope",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "conflict", value: { body: "new" } }],
+        shouldReplaceExistingEntry: () => {
+          throw new Error("plugin exploded");
+        },
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.exploding-cache",
+        maxEntries: 4,
+      });
+      await store.register("scope:conflict", { body: "existing" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("Failed migrating Test exploding cache")]),
+    );
+    // The failed plan's source is not archived, and migration did not crash.
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
   it("imports the newest entries first when the namespace lacks room for every missing entry", async () => {
     const root = makeDoctorStateDir();
     const sourcePath = path.join(root, "legacy-cache.json");
