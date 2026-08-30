@@ -1,4 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
+import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import {
   cleanupTempPaths,
@@ -58,27 +63,40 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       mode: "code-mode",
       tools: { codeMode: { enabled: true } },
       cancel: false,
+      timeout: false,
     },
     {
       mode: "tool-search-tools",
       tools: { toolSearch: { enabled: true, mode: "tools" } },
       cancel: false,
+      timeout: false,
     },
     {
       mode: "tool-search-directory",
       tools: { toolSearch: { enabled: true, mode: "directory" } },
       cancel: false,
+      timeout: false,
     },
     {
       mode: "cancelled-code-mode",
       tools: { codeMode: { enabled: true } },
       cancel: true,
+      timeout: false,
+    },
+    {
+      mode: "timed-out-code-mode",
+      tools: { codeMode: { enabled: true } },
+      cancel: true,
+      timeout: true,
     },
   ] as const)(
     "clears the $mode run catalog when preparation fails or is cancelled",
-    async ({ mode, tools, cancel }) => {
+    async ({ mode, tools, cancel, timeout }) => {
       const runId = `run-catalog-diagnostics-${mode}`;
       const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
+      if (timeout) {
+        diagnosticsError.name = "TimeoutError";
+      }
       const abortController = new AbortController();
       let catalogRef: ToolSearchCatalogRef | undefined;
       const logDiagnostics = vi.fn(() => {
@@ -92,7 +110,16 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
           throw diagnosticsError;
         }
       });
-      hoisted.createOpenClawCodingToolsMock.mockImplementation(() => catalogProbeTools());
+      const cleanup = vi.fn(async (_reason: string) => {});
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
+        const toolOptions = options as NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+        toolOptions.registerRunCleanup?.(cleanup);
+        return catalogProbeTools();
+      });
+      const events: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => events.push(event), {
+        include: ["run.completed"],
+      });
 
       const attempt = createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -112,7 +139,30 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         },
       });
 
-      await expect(attempt).rejects.toBe(diagnosticsError);
+      try {
+        if (timeout) {
+          await expect(attempt).rejects.toMatchObject({
+            cause: diagnosticsError,
+            terminalOutcome: { status: "timeout" },
+          });
+        } else {
+          await expect(attempt).rejects.toBe(diagnosticsError);
+        }
+      } finally {
+        unsubscribe();
+      }
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(
+        timeout ? "timeout" : cancel ? "cancel" : "completion",
+      );
+      if (timeout) {
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "run.completed",
+            runId,
+            outcome: "aborted",
+          }),
+        );
+      }
       expect(logDiagnostics).toHaveBeenCalledOnce();
       expect(catalogRef).toBeDefined();
       expect(catalogRef?.current).toBeUndefined();

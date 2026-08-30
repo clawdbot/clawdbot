@@ -482,12 +482,16 @@ export function createEmbeddedAttemptExternalAbortController(input: {
   let isCompactionPendingOrRetrying: (() => boolean) | undefined;
   let isCompactionInFlight: (() => boolean) | undefined;
   let removeListener: (() => void) | undefined;
+  let abortHandled = false;
 
   const onAbort = () => {
     const signal = input.abortSignal;
-    if (!signal) {
+    if (!signal || abortHandled) {
       return;
     }
+    // Preparation checkpoints and the listener share classification and side effects.
+    // Mark before handoff because aborting live work can synchronously re-enter.
+    abortHandled = true;
     input.state.markExternalAbort();
     const reason = getAbortReason(signal);
     const isTimeout = reason ? isSignalTimeoutReason(reason) : false;
@@ -526,11 +530,8 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     if (!signal?.aborted) {
       return undefined;
     }
-    const abortError = createAttemptAbortError(signal);
-    input.state.markAborted();
-    input.state.markExternalAbort();
-    input.state.setPromptError(abortError);
-    return abortError;
+    onAbort();
+    return createAttemptAbortError(signal);
   };
 
   return {
