@@ -1051,7 +1051,7 @@ describe("release candidate checklist", () => {
       { runAttempt: 0 },
       { repository: "other/openclaw" },
       { workflowName: "Other workflow" },
-      { workflowPath: ".github/workflows/ci.yml" },
+      { workflowPath: ".github/workflows/unrelated.yml" },
       { event: "push" },
       { status: "in_progress" },
       { conclusion: "failure" },
