@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Installer finalization:** cancel and reap watchdog sleeps after completed probes, removing repeated five-second delays without shortening probe timeouts.
 - **Control UI global sessions:** preserve the selected agent's session in the composer so usage, goals, progress, and thinking options survive agent switches without reusing another agent's stale row.
 - **Image analysis startup:** prepare selected model providers and keep configuration reads independent of full runtime loading, avoiding unrelated discovery and redundant model resolution while preserving credentials and runtime cleanup.
 - **Browser extension relay:** route Runtime binding callbacks only to registered clients and preserve shared bindings during client cleanup, preventing raw callback payloads from reaching unrelated Playwright sessions.
