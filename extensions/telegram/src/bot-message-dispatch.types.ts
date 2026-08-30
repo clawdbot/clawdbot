@@ -50,6 +50,7 @@ export type DispatchTelegramMessageParams = {
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
     onDeferredHeartbeat?: () => void;
+    deferredHeartbeatIntervalMs?: number;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };

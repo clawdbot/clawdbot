@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -21,6 +22,7 @@ describe("followup queue in-flight ownership", () => {
       clearFollowupQueue(key);
     }
     keys.clear();
+    vi.useRealTimers();
   });
 
   const createKey = (suffix: string) => {
@@ -160,6 +162,112 @@ describe("followup queue in-flight ownership", () => {
     }
 
     await expect.poll(() => getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("heartbeats a pending lifecycle while an earlier delivery is in flight", async () => {
+    vi.useFakeTimers();
+    const key = createKey("deferred-heartbeat-behind-active");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const onDeferredHeartbeat = vi.fn();
+    const active = createRun({ prompt: "active" });
+    const pending = {
+      ...createRun({ prompt: "pending" }),
+      turnAdoptionLifecycle: {
+        onAdopted: async () => {},
+        onDeferredHeartbeat,
+        deferredHeartbeatIntervalMs: 1_000,
+      },
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      if (run === active) {
+        entered.resolve();
+        await release.promise;
+      }
+      completeFollowupRunLifecycle(run);
+    };
+
+    try {
+      expect(enqueueFollowupRun(key, active, createSettings("old"), "none", runFollowup)).toBe(
+        true,
+      );
+      await entered.promise;
+      expect(enqueueFollowupRun(key, pending, createSettings("old"), "none")).toBe(true);
+      expect(onDeferredHeartbeat).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(onDeferredHeartbeat).toHaveBeenCalledTimes(4);
+      expect(getExistingFollowupQueue(key)?.items).toEqual([active, pending]);
+    } finally {
+      release.resolve();
+    }
+
+    await vi.runAllTimersAsync();
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("stops deferred heartbeats after queue ownership is lost", async () => {
+    vi.useFakeTimers();
+    const key = createKey("deferred-heartbeat-owner-loss");
+    const onDeferredHeartbeat = vi.fn();
+    const onAbandoned = vi.fn();
+    const pending: FollowupRun = {
+      ...createRun({ prompt: "pending" }),
+      turnAdoptionLifecycle: {
+        onAdopted: async () => {},
+        onDeferredHeartbeat,
+        deferredHeartbeatIntervalMs: 1_000,
+        onAbandoned,
+      },
+    };
+
+    expect(enqueueFollowupRun(key, pending, createSettings("old"), "none", undefined, false)).toBe(
+      true,
+    );
+    expect(onDeferredHeartbeat).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(3);
+
+    getExistingFollowupQueue(key)?.items.splice(0, 1);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(3);
+    completeFollowupRunLifecycle(pending);
+    expect(onAbandoned).toHaveBeenCalledOnce();
+  });
+
+  it("keeps deferred heartbeats alive until adoption succeeds", async () => {
+    vi.useFakeTimers();
+    const key = createKey("deferred-heartbeat-adoption-retry");
+    const onDeferredHeartbeat = vi.fn();
+    const onAdopted = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("adoption failed"))
+      .mockResolvedValueOnce();
+    const pending: FollowupRun = {
+      ...createRun({ prompt: "pending" }),
+      turnAdoptionLifecycle: {
+        onAdopted,
+        onDeferredHeartbeat,
+        deferredHeartbeatIntervalMs: 1_000,
+      },
+    };
+
+    expect(enqueueFollowupRun(key, pending, createSettings("old"), "none", undefined, false)).toBe(
+      true,
+    );
+    expect(onDeferredHeartbeat).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(2);
+
+    await expect(admitFollowupRunLifecycle(pending)).rejects.toThrow("adoption failed");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(3);
+
+    await expect(admitFollowupRunLifecycle(pending)).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(3);
   });
 
   it("protects a collect group and counts only active identities still present", async () => {

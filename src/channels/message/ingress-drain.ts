@@ -366,6 +366,7 @@ export function createChannelIngressDrain<
           armStallWatchdog(state);
         }
       },
+      deferredHeartbeatIntervalMs: Math.max(1, Math.floor(adoptionStallTimeoutMs / 3)),
       onAdoptionFinalizing: () => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
           return;
