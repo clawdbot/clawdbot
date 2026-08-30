@@ -160,6 +160,7 @@ export function buildEmbeddedRunPayloads(params: {
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
+  runStopReason?: string;
   deferAssistantTimeoutError?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
@@ -431,7 +432,11 @@ export function buildEmbeddedRunPayloads(params: {
       useMarkdown,
     });
     if (failureWarning) {
-      const normalizedWarning = normalizeTextForComparison(failureWarning.text);
+      // A restart intentionally aborts the active tool while the Gateway takes over.
+      // Present that lifecycle transition without converting it into a tool failure.
+      const isRestartStatus = params.runStopReason === "restart";
+      const warningText = isRestartStatus ? "Gateway restarting…" : failureWarning.text;
+      const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {
             if (!item.text) {
@@ -443,10 +448,14 @@ export function buildEmbeddedRunPayloads(params: {
         : false;
       if (!duplicateWarning) {
         replyItems.push({
-          text: failureWarning.text,
-          isError: true,
-          nonTerminalToolErrorWarning:
-            hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+          text: warningText,
+          ...(!isRestartStatus
+            ? {
+                isError: true,
+                nonTerminalToolErrorWarning:
+                  hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+              }
+            : {}),
         });
       }
     }
