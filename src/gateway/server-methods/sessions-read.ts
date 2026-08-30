@@ -61,7 +61,6 @@ import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -557,7 +556,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
       ? createSessionListEntryFilter({ client, cfg })
       : undefined;
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
     const previews: SessionsPreviewEntry[] = [];
 
     for (const key of keys) {
@@ -570,23 +568,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
+        // Each preview resumes after a yield; read its canonical row from the current store.
+        const target = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
           agentId: requestedAgent.agentId,
+          exactRead: true,
+          readOnly: true,
         });
-        // Fixed stores share a legacy path but resolve to owner-specific SQLite databases. Keep
-        // synthetic misses from poisoning another agent's real store entry in this batch.
-        const storeCacheKey = `${cachedStoreTarget.agentId}\u0000${cachedStoreTarget.storePath}`;
-        const store = storeCache.get(storeCacheKey) ?? cachedStoreTarget.store;
-        storeCache.set(storeCacheKey, store);
-        const target = resolveGatewaySessionStoreTarget({
-          cfg,
-          key,
-          agentId: requestedAgent.agentId,
-          store,
-        });
-        const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
+        const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
         if (!entry?.sessionId || roleVisibilityFilter?.(target.canonicalKey, entry) === false) {
           previews.push({ key, status: "missing", items: [] });
           continue;

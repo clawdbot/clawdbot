@@ -20,11 +20,13 @@ function openFile(body: string) {
   const filePath = path.join(tempDirs.make("openclaw-ui-read-"), "asset.txt");
   fs.writeFileSync(filePath, body);
   const fd = fs.openSync(filePath, "r");
+  vi.spyOn(fs, "closeSync");
   return { filePath, fd, size: fs.fstatSync(fd).size };
 }
 
 function expectClosed(fd: number) {
-  expect(() => fs.fstatSync(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+  // Observe release itself: after awaiting the read, another worker may reuse the fd number.
+  expect(fs.closeSync).toHaveBeenCalledWith(fd);
 }
 
 describe("pinned Control UI file reads", () => {
