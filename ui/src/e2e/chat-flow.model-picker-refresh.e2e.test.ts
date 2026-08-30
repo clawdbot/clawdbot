@@ -117,8 +117,21 @@ suite.define(() => {
         await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isDisabled(),
       ).toBe(false);
 
-      // The background result still owns the authoritative apply once it lands.
+      // Discovery invalidates the session projection; only that projection can update readiness.
+      await gateway.deferNext("chat.metadata");
       await gateway.resolveDeferred("models.list", {
+        models: [
+          { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+          { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+        ],
+      });
+      const metadataRequest = await gateway.waitForRequest("chat.metadata");
+      expect(metadataRequest.params).toEqual({ agentId: "main", sessionKey: "main" });
+      expect(
+        await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible(),
+      ).toBe(true);
+      await gateway.resolveDeferred("chat.metadata", {
+        commands: [],
         models: [
           { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
           { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },

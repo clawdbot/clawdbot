@@ -78,8 +78,8 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
-    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
-    senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
+    JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
+    JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
     previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
@@ -251,6 +251,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.pendingInputs === next.pendingInputs &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&

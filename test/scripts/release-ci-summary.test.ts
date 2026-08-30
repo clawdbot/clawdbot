@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
+  composeReleaseAttemptJobs,
+  MAX_RELEASE_ARTIFACT_BYTES,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -40,6 +42,7 @@ import {
   validateRequestedEvidenceReuse,
   validateTrustedProducerIdentity,
 } from "../../scripts/release-ci-summary.mjs";
+import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
@@ -385,28 +388,28 @@ describe("Release Decision artifact polling", () => {
     ).toBeUndefined();
   });
 
-  it("treats transient download transport failures as unavailable this poll", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      expect(
-        tryReadReleaseDecisionArtifact(parent, "123", "openclaw/openclaw", () => {
-          throw Object.assign(new Error("HTTP 503: Server Error"), {
-            stderr: "HTTP 503: Server Error",
-          });
-        }),
-      ).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("release decision artifact unavailable this poll"),
-      );
-    } finally {
-      warn.mockRestore();
-    }
-  });
+  it.each(["HTTP 503: Server Error", "HTTP 403: secondary rate limit"])(
+    "treats transient download transport failure %s as unavailable this poll",
+    (message) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect(
+          tryReadReleaseDecisionArtifact(parent, "123", "openclaw/openclaw", () => {
+            throw Object.assign(new Error(message), { stderr: message });
+          }),
+        ).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("release decision artifact unavailable this poll"),
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
   it("keeps authentication and invocation failures hard", () => {
     for (const message of [
       "HTTP 401: Bad credentials",
-      "HTTP 403: secondary rate limit",
       "unknown flag: --name\nUsage: gh run download",
     ]) {
       expect(() =>
@@ -511,6 +514,7 @@ function artifactDigest(bytes: Buffer): string {
 }
 
 function rawManifest({
+  candidateBinding,
   evidenceReuse,
   rerunGroup = "all",
   runId = "29090000000",
@@ -520,6 +524,7 @@ function rawManifest({
   workflowRefType,
   workflowSha,
 }: {
+  candidateBinding?: unknown;
   evidenceReuse?: unknown;
   rerunGroup?: string;
   runId?: string;
@@ -529,6 +534,7 @@ function rawManifest({
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
 }): {
+  candidateBinding?: unknown;
   childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
   controls: Record<string, unknown>;
   evidenceReuse?: unknown;
@@ -548,6 +554,7 @@ function rawManifest({
   workflowSha?: string;
 } {
   return {
+    ...(candidateBinding === undefined ? {} : { candidateBinding }),
     childRuns: {
       normalCi: "101",
       npmTelegram: "",
@@ -863,6 +870,25 @@ describe("release CI summary child correlation", () => {
       args: ["--validate-run", "29071366025", "--verifier-source-file", "/tmp/verifier.mjs"],
       message: "requires --verifier-source-sha",
     },
+    {
+      args: ["--validate-run", "29071366025", "--expected-run-attempts-json", "[]"],
+      message: "requires a JSON object",
+    },
+    {
+      args: ["--validate-run", "29071366025", "--expected-run-attempts-json", '{"29071366025":0}'],
+      message: "must be a positive integer",
+    },
+    {
+      args: [
+        "--validate-run",
+        "29071366025",
+        "--expected-run-attempts-json",
+        JSON.stringify(
+          Object.fromEntries(Array.from({ length: 10 }, (_, index) => [index + 1, 1])),
+        ),
+      ],
+      message: "must contain 1-9 run IDs",
+    },
     { args: ["--unknown"], message: "unknown or incomplete argument" },
   ])("rejects invalid CLI arguments before GitHub access: $message", ({ args, message }) => {
     const result = spawnSync(process.execPath, [resolve(SCRIPT), ...args], {
@@ -1053,7 +1079,7 @@ describe("release CI summary child correlation", () => {
       const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
       try {
         const archivePath = join(root, "manifest.zip");
-        const manifest = { runAttempt: 1, runId: "29071366025" };
+        const manifest = { runAttempt: 1, runId: "29071366025", evidence: "x".repeat(128 * 1024) };
         const archive = makeStoredZip({
           [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
         });
@@ -1073,14 +1099,14 @@ describe("release CI summary child correlation", () => {
         ).toThrow(`must contain only ${MANIFEST_ARTIFACT_ENTRY}`);
 
         const oversizedManifestArchive = makeStoredZip({
-          [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(128 * 1024 + 1),
+          [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(MAX_RELEASE_ARTIFACT_BYTES + 1),
         });
         writeFileSync(archivePath, oversizedManifestArchive);
         expect(() =>
           readManifestArtifactArchive(archivePath, artifactDigest(oversizedManifestArchive)),
         ).toThrow("artifact entry size is invalid");
 
-        const oversizedArchive = Buffer.alloc(256 * 1024 + 1);
+        const oversizedArchive = Buffer.alloc(MAX_RELEASE_ARTIFACT_BYTES + 8 * 1024 + 1);
         writeFileSync(archivePath, oversizedArchive);
         expect(() =>
           readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),
@@ -1357,15 +1383,18 @@ describe("release CI summary child correlation", () => {
       ].join("\n");
     };
 
-    const evidence = validateReleaseRunEvidence(
-      {
-        repository: "openclaw/openclaw",
-        runId: fixture.runId,
-        verifierSourceContent: readFileSync(SCRIPT),
-        verifierSourceSha: "c".repeat(40),
-      },
-      fixture.client,
-    );
+    const validate = (expectedRunAttempts?: Record<string, number>) =>
+      validateReleaseRunEvidence(
+        {
+          expectedRunAttempts,
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      );
+    const evidence = validate();
     expect(evidence.children).toEqual([
       expect.objectContaining({
         compositeJobsSha256: releaseChecksEvidence.compositeJobsSha256,
@@ -1374,32 +1403,73 @@ describe("release CI summary child correlation", () => {
       }),
     ]);
 
+    for (const [expectedRunAttempts, message] of [
+      [{ [fixture.runId]: 1, [String(fixture.childRun.id)]: 2 }, "parent run attempt changed"],
+      [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 1 }, "child run attempt changed"],
+      [{ [fixture.runId]: 2 }, "expected run attempts omitted"],
+      [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2, "999": 1 }, "unvalidated run IDs"],
+    ] as const) {
+      expect(() => validate(expectedRunAttempts)).toThrow(message);
+    }
+
+    const staleJobs = [
+      {
+        acceptedRunAttempt: 1,
+        completedAt: firstAttemptJob.completed_at,
+        conclusion: firstAttemptJob.conclusion,
+        name: firstAttemptJob.name,
+        startedAt: firstAttemptJob.started_at,
+        status: firstAttemptJob.status,
+        url: firstAttemptJob.html_url,
+      },
+    ];
+    const staleEvidence = {
+      compositeJobsSha256: releaseCompositeJobsSha256({
+        effectiveRunAttempt: 1,
+        jobs: staleJobs,
+        plannedRunAttempt: 1,
+      }),
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: 1,
+      jobs: staleJobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runId: String(fixture.childRun.id),
+      triggeringActor: "github-actions[bot]",
+    };
+    manifest.childEvidence.releaseChecks = staleEvidence;
+    expect(() => validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 })).toThrowError(
+      expect.objectContaining({
+        message: "successful parent manifest predates OpenClaw Release Checks attempt 2",
+        refreshable: true,
+      }),
+    );
+
+    manifest.childEvidence.releaseChecks = releaseChecksEvidence;
+    const loadManifest = client.loadManifest.bind(client);
+    client.loadManifest = () => undefined as never;
+    expect(() => validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 })).toThrowError(
+      expect.objectContaining({
+        message: `successful parent run is missing its release validation manifest: ${fixture.runId}`,
+        refreshable: true,
+      }),
+    );
+    client.loadManifest = loadManifest;
+
     releaseChecksEvidence.jobs[0]!.conclusion = "failure";
-    expect(() =>
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).toThrow("composite digest is invalid");
+    let malformedError: unknown;
+    try {
+      validate();
+    } catch (error) {
+      malformedError = error;
+    }
+    expect(malformedError).toMatchObject({ message: expect.stringContaining("digest is invalid") });
+    expect(malformedError).not.toHaveProperty("refreshable");
 
     releaseChecksEvidence.jobs[0]!.conclusion = "success";
     fixture.childRun.actor = { login: "release-operator" };
-    expect(() =>
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ),
-    ).toThrow("execution plan child dispatch tuple mismatch");
+    expect(() => validate()).toThrow("execution plan child dispatch tuple mismatch");
   });
 
   it("rejects a parent recovery that reruns a sealed child dispatch slot", () => {
@@ -2098,6 +2168,50 @@ describe("release CI summary child correlation", () => {
     ]);
   });
 
+  it("derives distinct titles for every phased release child", () => {
+    expect(
+      expectedChildDispatches("29090000000", 3, "release/2026.7.1", 3)
+        .filter(({ manifestKey }) =>
+          [
+            "releaseChecksIndependent",
+            "releaseChecksCandidate",
+            "pluginPrereleaseIndependent",
+            "pluginPrereleaseCandidate",
+          ].includes(manifestKey),
+        )
+        .map(({ displayTitle, manifestKey, parentJobName }) => ({
+          displayTitle,
+          manifestKey,
+          parentJobName,
+        })),
+    ).toEqual([
+      {
+        displayTitle:
+          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-independent",
+        manifestKey: "pluginPrereleaseIndependent",
+        parentJobName: "Run plugin prerelease independent validation",
+      },
+      {
+        displayTitle:
+          "Plugin Prerelease full-release-validation-29090000000-3-plugin-prerelease-candidate",
+        manifestKey: "pluginPrereleaseCandidate",
+        parentJobName: "Run plugin prerelease candidate validation",
+      },
+      {
+        displayTitle:
+          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-independent",
+        manifestKey: "releaseChecksIndependent",
+        parentJobName: "Run release checks independent validation",
+      },
+      {
+        displayTitle:
+          "OpenClaw Release Checks full-release-validation-29090000000-3-release-checks-candidate",
+        manifestKey: "releaseChecksCandidate",
+        parentJobName: "Run release checks candidate validation",
+      },
+    ]);
+  });
+
   it("ignores same-SHA and nearby-name runs without the exact parent dispatch binding", () => {
     const expected = "OpenClaw Performance full-release-validation-29090000000-3";
     const exact = {
@@ -2205,6 +2319,60 @@ describe("release CI summary child correlation", () => {
     );
   });
 
+  it("validates mixed-case composite job ordering using the producer contract", () => {
+    const composite = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: [
+            { conclusion: "success", name: "qa smoke ci", status: "completed" },
+            { conclusion: "success", name: "QA Smoke CI", status: "completed" },
+          ],
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    const releaseChecksEvidence = {
+      compositeJobsSha256: composite.sha256,
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: composite.effectiveRunAttempt,
+      jobs: composite.jobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: composite.plannedRunAttempt,
+      repository: "openclaw/openclaw",
+      runId: "404",
+      triggeringActor: "github-actions[bot]",
+    };
+    const raw = Object.assign(rawManifest({}), {
+      childEvidence: {
+        releaseChecks: releaseChecksEvidence,
+      },
+    });
+
+    expect(() =>
+      validateParentManifest(raw, {
+        runAttempt: 2,
+        runId: "29090000000",
+      }),
+    ).not.toThrow();
+
+    const reversedJobs = composite.jobs.toReversed();
+    const reversedCompositeJobsSha256 = releaseCompositeJobsSha256({
+      effectiveRunAttempt: composite.effectiveRunAttempt,
+      jobs: reversedJobs,
+      plannedRunAttempt: composite.plannedRunAttempt,
+    });
+    releaseChecksEvidence.compositeJobsSha256 = reversedCompositeJobsSha256;
+    releaseChecksEvidence.jobs = reversedJobs;
+
+    expect(() =>
+      validateParentManifest(raw, {
+        runAttempt: 2,
+        runId: "29090000000",
+      }),
+    ).toThrow("release validation child job identity is duplicated: releaseChecks");
+  });
+
   it("requires the npm Telegram child for all-validation with an effective package spec", () => {
     const raw = rawManifest({});
     raw.childRuns.npmTelegram = "505";
@@ -2283,6 +2451,37 @@ describe("release CI summary child correlation", () => {
         workflowSha: "c".repeat(40),
       }),
     ).toThrow("release validation manifest workflow SHA mismatch");
+  });
+
+  it("binds v3 manifests to the candidate sealed by the execution plan", () => {
+    const workflowSha = "b".repeat(40);
+    const candidateBinding = fullReleaseCandidateBindingFixture({
+      releaseProfile: "beta",
+      releaseSoak: false,
+      targetSha: "a".repeat(40),
+      toolingSha: workflowSha,
+      upgradeSurvivorScenarios: "",
+    });
+    const manifest = validateParentManifest(
+      rawManifest({ candidateBinding, version: 3, workflowSha }),
+      {
+        candidateBinding,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      },
+    );
+    expect(manifest.candidateBinding).toEqual(candidateBinding);
+    expect(() =>
+      validateParentManifest(rawManifest({ candidateBinding: null, version: 3, workflowSha }), {
+        candidateBinding,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("candidate differs from the immutable plan");
   });
 
   it("requires v3 manifests to record artifact-only performance publication", () => {

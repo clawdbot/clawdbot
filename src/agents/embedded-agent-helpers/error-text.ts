@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isGenericProviderInternalError,
@@ -27,6 +28,8 @@ import {
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
+  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+  renderFormatErrorCopy,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
@@ -36,8 +39,6 @@ const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
-const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
-  "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
   "The selected model was not found by the provider. Check the model id or choose a different model.";
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -69,6 +70,14 @@ export function formatAssistantErrorText(
   }
   if (!raw) {
     return "LLM request failed with an unknown error.";
+  }
+  const formatCopy = renderFormatErrorCopy(raw);
+  const formatStatus = extractErrorHttpStatus(raw)?.code;
+  if (
+    (formatStatus === 400 || formatStatus === 422) &&
+    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
+  ) {
+    return formatCopy;
   }
   const providerOwner = opts?.providerOwner?.id ?? opts?.provider;
   const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
@@ -250,7 +259,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    return formatCopy;
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
@@ -298,14 +307,20 @@ export function formatUserFacingAssistantErrorText(
   const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
-  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
-  const rawProviderSchemaError =
-    friendlyError?.startsWith("LLM request rejected:") ||
-    parsedErrorType.includes("invalid_request");
-  const safeFriendlyError = rawPassthrough
-    ? rawProviderSchemaError
-      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
-      : undefined
-    : friendlyError;
+  const structuredSchemaDetail = [
+    parseApiErrorInfo(rawError ?? ""),
+    parseApiErrorInfo(typeof msg.errorBody === "string" ? msg.errorBody.trim() : ""),
+  ].find((error) => error?.type?.toLowerCase().includes("invalid_request"))?.message;
+  const schemaFriendlyError =
+    friendlyError === PROVIDER_SCHEMA_REJECTION_USER_TEXT ||
+    friendlyError?.startsWith("LLM request rejected:");
+  const safeFriendlyError =
+    structuredSchemaDetail && schemaFriendlyError
+      ? renderFormatErrorCopy(structuredSchemaDetail)
+      : rawPassthrough
+        ? schemaFriendlyError
+          ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+          : undefined
+        : friendlyError;
   return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }

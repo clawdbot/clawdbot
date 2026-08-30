@@ -6,6 +6,29 @@ import {
 import type { GatewayClient } from "./types.js";
 
 describe("gateway client identity", () => {
+  it("sender provenance comes only from a live verified profile", () => {
+    const profile = {
+      profileId: "profile-id",
+      displayName: "Person",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    expect(
+      gatewayClientSenderFields({ authenticatedUserId: "profile-id" } as GatewayClient),
+    ).toEqual({ sender: { id: "profile-id" } });
+    expect(
+      gatewayClientSenderFields({ authenticatedUserProfile: profile } as GatewayClient),
+    ).toEqual({
+      sender: { id: "profile-id", name: "Person", identity: { type: "profile", id: "profile-id" } },
+    });
+    expect(
+      gatewayClientSenderFields({
+        authenticatedUserProfile: profile,
+        internal: { syntheticClient: true },
+      } as GatewayClient).sender,
+    ).not.toHaveProperty("identity");
+  });
+
   it("overrides sender attribution without replacing the authorizing identity", () => {
     const client = {
       authenticatedUserProfile: {
@@ -16,7 +39,11 @@ describe("gateway client identity", () => {
       },
       internal: {
         syntheticClient: true,
-        senderAttribution: { id: "alice", name: "Suggested by Alice" },
+        senderAttribution: {
+          id: "alice",
+          name: "Suggested by Alice",
+          identity: { type: "profile", id: "alice" },
+        },
       },
     } as GatewayClient;
 
@@ -26,7 +53,11 @@ describe("gateway client identity", () => {
       label: "Owner",
     });
     expect(gatewayClientSenderFields(client)).toEqual({
-      sender: { id: "alice", name: "Suggested by Alice" },
+      sender: {
+        id: "alice",
+        name: "Suggested by Alice",
+        identity: { type: "profile", id: "alice" },
+      },
     });
   });
 

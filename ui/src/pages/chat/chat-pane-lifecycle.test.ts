@@ -17,8 +17,8 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
-import { applySelectedChatAgent } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { applySelectedChatAgent } from "./chat-state-refresh.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -877,7 +877,7 @@ describe("chat pane connection lifecycle", () => {
   });
 
   it("advances session ownership once per same-client connection transition", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const initialGeneration = pane.connectionGeneration;
     const snapshot = { ...pane.context.gateway.snapshot, client };
@@ -997,7 +997,7 @@ describe("chat pane connection lifecycle", () => {
   ])(
     "retires pending global model selection state when the selected agent changes for $sessionKey",
     ({ sessionKey, mainKey }) => {
-      const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+      const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
       const retireModelOverride = vi.fn();
       const sessions = { retireModelOverride } as unknown as SessionCapability;
       const { state } = createTestChatPane({ client, sessions });

@@ -9,8 +9,9 @@ import {
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SkillCommandSpec } from "../skills/types.js";
+import type { CommandTurnContext } from "./command-turn-context.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
-import { normalizeCommandBody } from "./commands-registry-normalize.js";
+import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
@@ -201,6 +202,35 @@ export function findCommandByNativeName(
       supportsNativeProvider(command, provider) &&
       mapNativeCommandNames(command).some(({ normalizedName }) => normalizedName === normalized),
   );
+}
+
+/** Returns true only when the command owner permits handler work beside an active run. */
+export function isActiveRunSafeCommandTurn(params: {
+  commandTurn: CommandTurnContext;
+  cfg: OpenClawConfig;
+  provider?: string;
+}): boolean {
+  const { commandTurn } = params;
+  if (
+    (commandTurn.kind !== "native" && commandTurn.kind !== "text-slash") ||
+    !commandTurn.authorized
+  ) {
+    return false;
+  }
+  const command =
+    commandTurn.kind === "native"
+      ? commandTurn.commandName
+        ? findCommandByNativeName(commandTurn.commandName, params.provider, {
+            includeBundledChannelFallback: false,
+          })
+        : undefined
+      : (
+          resolveTextCommand(commandTurn.body ?? "", params.cfg) ??
+          (commandTurn.commandName
+            ? resolveTextCommand(`/${commandTurn.commandName}`, params.cfg)
+            : null)
+        )?.command;
+  return command?.activeRunSafe === true;
 }
 
 /** Formats a command and optional raw argument string as slash-command text. */

@@ -24,6 +24,31 @@ const MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS = 2000;
 
 const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
+export function formatSlackUnavailableMedia(params: {
+  body: string;
+  files?: (SlackFile & { reason: string })[];
+  unavailableMediaCount: number;
+  prependUnavailable?: boolean;
+}): string {
+  let fileReferences = params.files
+    ?.map((file) => `${formatSlackFileReference(file)} unavailable (${file.reason})`)
+    .join(", ");
+  if (fileReferences && fileReferences.length > MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS) {
+    fileReferences = `${truncateUtf16Safe(fileReferences, MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS)}; … (file references truncated)`;
+  }
+  const fileBlock = fileReferences ? `[Slack file: ${fileReferences}]` : undefined;
+  const body = [params.body, fileBlock].filter(Boolean).join("\n");
+  if (params.unavailableMediaCount === 0) {
+    return body;
+  }
+  const notice = `[slack ${
+    params.unavailableMediaCount > 1 ? `${params.unavailableMediaCount} attachments` : "attachment"
+  } unavailable]`;
+  return params.prependUnavailable
+    ? [notice, fileBlock, params.body].filter(Boolean).join("\n")
+    : formatInboundMediaUnavailableText({ body, notice });
+}
+
 function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[] {
   const seen = new Set<string>();
   const mentionIds: string[] = [];
@@ -120,14 +145,6 @@ export async function resolveSlackMessageContent(params: {
   const effectiveDirectMedia = attachmentContent?.media.length ? attachmentContent.media : null;
   const mediaPlaceholder = effectiveDirectMedia?.map((item) => item.placeholder).join(" ");
 
-  let fileOnlyFallback = attachmentContent?.files
-    ?.map((file) => `${formatSlackFileReference(file)} unavailable (${file.reason})`)
-    .join(", ");
-  // Excess files remain accounted for without adding an unbounded prompt block.
-  if (fileOnlyFallback && fileOnlyFallback.length > MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS) {
-    fileOnlyFallback = `${truncateUtf16Safe(fileOnlyFallback, MAX_SLACK_UNAVAILABLE_FILE_TEXT_CHARS)}; … (file references truncated)`;
-  }
-
   let botAttachmentText: string | undefined;
   if (params.isBotMessage && !attachmentContent?.text) {
     const botAttachmentTextParts: string[] = [];
@@ -175,24 +192,14 @@ export async function resolveSlackMessageContent(params: {
   const renderedAttachmentText = renderSlackUserMentions(textParts[1], renderedMentions);
   const renderedBotAttachmentText = renderSlackUserMentions(textParts[2], renderedMentions);
 
-  let rawBody =
-    [
-      renderedMessageText,
-      renderedAttachmentText,
-      renderedBotAttachmentText,
-      mediaPlaceholder,
-      fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined,
-    ]
+  const body =
+    [renderedMessageText, renderedAttachmentText, renderedBotAttachmentText, mediaPlaceholder]
       .filter(Boolean)
       .join("\n") || "";
-  const unavailableMediaCount = attachmentContent?.unavailableMediaCount ?? 0;
-  if (unavailableMediaCount > 0) {
-    rawBody = formatInboundMediaUnavailableText({
-      body: rawBody,
-      notice: `[slack ${
-        unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"
-      } unavailable]`,
-    });
-  }
+  const rawBody = formatSlackUnavailableMedia({
+    body,
+    files: attachmentContent?.files,
+    unavailableMediaCount: attachmentContent?.unavailableMediaCount ?? 0,
+  });
   return rawBody ? { rawBody, effectiveDirectMedia } : null;
 }

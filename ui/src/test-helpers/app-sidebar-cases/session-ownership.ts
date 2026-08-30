@@ -143,6 +143,7 @@ describe("AppSidebar session ownership", () => {
           instanceId: "bob-browser",
           user: {
             id: "profile-bob",
+            identity: { type: "profile", id: "profile-bob" },
             name: "Bob",
             avatarUrl: "/api/users/profile-bob/avatar?v=99",
           },
@@ -565,7 +566,12 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected archive attribution rows");
     }
     archived.archived = true;
-    archived.archivedBy = { type: "human", id: "profile-bob", label: "Bob" };
+    archived.archivedBy = {
+      type: "human",
+      id: "profile-bob",
+      identity: { type: "profile", id: "profile-bob" },
+      label: "Bob",
+    };
     setEffectiveOwner(archived, { type: "human", id: "profile-ada", label: "Ada" });
     setEffectiveOwner(collaborator, { type: "human", id: "profile-bob", label: "Bob" });
     result.owners = [
@@ -586,8 +592,8 @@ describe("AppSidebar session ownership", () => {
     // so Bob is excluded while owner Ada must stay visible as a viewer.
     const archivedFacepile = sidebar.querySelector(
       '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
-    ) as (HTMLElement & { excludeUserId?: string }) | null;
-    expect(archivedFacepile?.excludeUserId).toBe("profile-bob");
+    ) as HTMLElementTagNameMap["openclaw-viewer-facepile"] | null;
+    expect(archivedFacepile?.excludeIdentity).toEqual(archived.archivedBy.identity);
 
     setEffectiveOwner(collaborator, { type: "human", id: "profile-ada", label: "Ada" });
     result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
@@ -597,7 +603,7 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
     const soloFacepile = sidebar.querySelector(
       '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
-    ) as (HTMLElement & { excludeUserId?: string }) | null;
-    expect(soloFacepile?.excludeUserId).toBeUndefined();
+    ) as HTMLElementTagNameMap["openclaw-viewer-facepile"] | null;
+    expect(soloFacepile?.excludeIdentity).toBeUndefined();
   });
 });

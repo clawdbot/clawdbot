@@ -6,7 +6,11 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
-import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { Value } from "typebox/value";
+import {
+  SessionRunStatusSchema,
+  type SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
@@ -74,7 +78,11 @@ const SessionListRowOutputSchema = Type.Object(
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
     label: Type.Optional(Type.String()),
-    category: Type.Optional(Type.String()),
+    group: Type.Optional(
+      Type.String({
+        description: 'Custom sidebar group membership; unrelated to kind "group" (group chats).',
+      }),
+    ),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -84,15 +92,7 @@ const SessionListRowOutputSchema = Type.Object(
     model: Type.Optional(Type.String()),
     contextTokens: Type.Optional(Type.Number()),
     totalTokens: Type.Optional(Type.Number()),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("failed"),
-        Type.Literal("killed"),
-        Type.Literal("timeout"),
-      ]),
-    ),
+    status: Type.Optional(SessionRunStatusSchema),
     abortedLastRun: Type.Optional(Type.Boolean()),
     childSessions: Type.Optional(Type.Array(Type.String())),
     messages: Type.Optional(Type.Array(Type.Unknown())),
@@ -128,13 +128,7 @@ type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
-  return value === "running" ||
-    value === "done" ||
-    value === "failed" ||
-    value === "killed" ||
-    value === "timeout"
-    ? value
-    : undefined;
+  return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
 }
 
 /** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
@@ -362,7 +356,8 @@ export function createSessionsListTool(opts?: {
           typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
         const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const rowLabel = readStringValue(entry.label);
-        const category = readStringValue(entry.category);
+        // Gateway rows carry groups under the legacy wire field `category`.
+        const group = readStringValue(entry.category);
         const displayName = readStringValue(entry.displayName);
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
@@ -414,7 +409,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           ...(rowLabel ? { label: rowLabel } : {}),
-          ...(category ? { category } : {}),
+          ...(group ? { group } : {}),
           ...(displayName ? { displayName } : {}),
           ...(derivedTitle ? { derivedTitle } : {}),
           ...(lastMessagePreview ? { lastMessagePreview } : {}),

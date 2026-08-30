@@ -108,9 +108,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
     private let onExec: @Sendable (ExecHostRequest) async -> ExecHostResponse
     private let onUnexpectedStop: @Sendable (ExecApprovalsSocketServer) -> Void
     private let stateLock = NSLock()
-    private var socketFD: Int32 = -1
-    private var socketIdentity: ExecApprovalsSocketPathIdentity?
-    private var socketLifecycleLease: ExecApprovalsSocketLifecycleLease?
+    private var openedSocket: OpenedSocket?
     private var acceptTask: Task<Void, Never>?
     private var clients: [UUID: ExecApprovalsSocketClientSession] = [:]
     private var shutdownTask: Task<Void, Never>?
@@ -131,7 +129,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
     }
 
     var isListening: Bool {
-        self.stateLock.withLock { self.isRunning && self.socketFD >= 0 }
+        self.stateLock.withLock { self.isRunning && self.openedSocket != nil }
     }
 
     func start() async -> Bool {
@@ -141,7 +139,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
             return true
         }
         guard shouldStart else {
-            return self.stateLock.withLock { self.socketFD >= 0 }
+            return self.stateLock.withLock { self.openedSocket != nil }
         }
 
         return await withCheckedContinuation { continuation in
@@ -172,15 +170,15 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
             self.acceptTask = nil
             let clients = Array(self.clients.values)
             self.clients.removeAll()
-            let lifecycleLease = self.socketLifecycleLease
-            self.socketLifecycleLease = nil
+            let openedSocket = self.openedSocket
+            self.openedSocket = nil
             acceptTask?.cancel()
             for client in clients {
                 client.cancel()
             }
-            self.closeOwnedSocket(fd: self.socketFD, identity: self.socketIdentity, lifecycleLease: nil)
-            self.socketFD = -1
-            self.socketIdentity = nil
+            if let openedSocket {
+                self.closeOwnedSocket(openedSocket)
+            }
             // Hold the path lease until all admitted work has unwound. A new
             // listener must not overlap commands still owned by this generation.
             let shutdownTask = Task.detached {
@@ -188,7 +186,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
                 for client in clients {
                     await client.wait()
                 }
-                lifecycleLease?.release()
+                openedSocket?.lifecycleLease.release()
             }
             self.shutdownTask = shutdownTask
             return shutdownTask
@@ -197,16 +195,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
 
     private func runAcceptLoop(onReady: @escaping @Sendable (Bool) -> Void) async {
         let shouldOpen = self.stateLock.withLock { self.isRunning && !Task.isCancelled }
-        guard shouldOpen else {
-            self.stateLock.withLock {
-                self.isRunning = false
-                self.acceptTask = nil
-            }
-            onReady(false)
-            return
-        }
-
-        guard let openedSocket = self.openSocket() else {
+        guard shouldOpen, let openedSocket = self.openSocket() else {
             self.stateLock.withLock {
                 self.isRunning = false
                 self.acceptTask = nil
@@ -218,16 +207,12 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
 
         let shouldAccept = self.stateLock.withLock {
             guard self.isRunning, !Task.isCancelled else { return false }
-            self.socketFD = fd
-            self.socketIdentity = openedSocket.identity
-            self.socketLifecycleLease = openedSocket.lifecycleLease
+            self.openedSocket = openedSocket
             return true
         }
         guard shouldAccept else {
-            self.closeOwnedSocket(
-                fd: fd,
-                identity: openedSocket.identity,
-                lifecycleLease: openedSocket.lifecycleLease)
+            self.closeOwnedSocket(openedSocket)
+            openedSocket.lifecycleLease.release()
             onReady(false)
             return
         }
@@ -248,7 +233,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
                 break
             }
             self.stateLock.withLock {
-                guard self.isRunning, self.socketFD == fd else {
+                guard self.isRunning, self.openedSocket?.fd == fd else {
                     close(client)
                     return
                 }
@@ -278,28 +263,19 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
         }
     }
 
-    private func closeOwnedSocket(
-        fd: Int32,
-        identity: ExecApprovalsSocketPathIdentity?,
-        lifecycleLease: ExecApprovalsSocketLifecycleLease?)
-    {
-        if fd >= 0 {
-            _ = shutdown(fd, SHUT_RDWR)
-            close(fd)
+    private func closeOwnedSocket(_ socket: OpenedSocket) {
+        _ = shutdown(socket.fd, SHUT_RDWR)
+        close(socket.fd)
+        do {
+            // The caller retains the lease through this identity check and unlink;
+            // shutdown also keeps it until admitted work has drained.
+            try ExecApprovalsSocketPathGuard.removeSocket(
+                at: self.socketPath,
+                ifIdentityMatches: socket.identity)
+        } catch {
+            self.logger
+                .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
         }
-        if !self.socketPath.isEmpty, let identity {
-            do {
-                // Keep the cross-process lease through the identity check and
-                // unlink so no replacement can bind between those operations.
-                try ExecApprovalsSocketPathGuard.removeSocket(
-                    at: self.socketPath,
-                    ifIdentityMatches: identity)
-            } catch {
-                self.logger
-                    .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-        lifecycleLease?.release()
     }
 
     #if DEBUG
@@ -315,7 +291,12 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
         do {
             try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
             lifecycleLease = try ExecApprovalsSocketLifecycleLease.acquire(for: self.socketPath)
-            try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            do {
+                try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            } catch {
+                lifecycleLease.release()
+                throw error
+            }
         } catch {
             self.logger
                 .error("exec approvals socket path hardening failed: \(error.localizedDescription, privacy: .public)")
@@ -373,27 +354,21 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
             lifecycleLease.release()
             return nil
         }
+        let openedSocket = OpenedSocket(fd: fd, identity: identity, lifecycleLease: lifecycleLease)
         if chmod(self.socketPath, 0o600) != 0 {
             self.logger.error("exec approvals socket chmod failed")
-            self.closeOwnedSocket(
-                fd: fd,
-                identity: identity,
-                lifecycleLease: lifecycleLease)
+            self.closeOwnedSocket(openedSocket)
+            lifecycleLease.release()
             return nil
         }
         if listen(fd, 16) != 0 {
             self.logger.error("exec approvals socket listen failed")
-            self.closeOwnedSocket(
-                fd: fd,
-                identity: identity,
-                lifecycleLease: lifecycleLease)
+            self.closeOwnedSocket(openedSocket)
+            lifecycleLease.release()
             return nil
         }
         self.logger.info("exec approvals socket listening at \(self.socketPath, privacy: .public)")
-        return OpenedSocket(
-            fd: fd,
-            identity: identity,
-            lifecycleLease: lifecycleLease)
+        return openedSocket
     }
 
     private func handleClient(handle: FileHandle) async {
@@ -434,7 +409,7 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
                 let request = try JSONDecoder().decode(ExecHostSocketRequest.self, from: data)
                 let response = await self.handleExecRequest(request)
                 try Task.checkCancellation()
-                try self.sendExecResponse(handle: handle, response: response)
+                try self.sendResponse(handle: handle, response: response)
                 return
             }
         } catch {
@@ -451,15 +426,11 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
         decision: ExecApprovalDecision) throws
     {
         let response = ExecApprovalSocketDecision(type: "decision", id: id, decision: decision)
-        let data = try JSONEncoder().encode(response)
-        var payload = data
-        payload.append(0x0A)
-        try handle.write(contentsOf: payload)
+        try self.sendResponse(handle: handle, response: response)
     }
 
-    private func sendExecResponse(handle: FileHandle, response: ExecHostResponse) throws {
-        let data = try JSONEncoder().encode(response)
-        var payload = data
+    private func sendResponse(handle: FileHandle, response: some Encodable) throws {
+        var payload = try JSONEncoder().encode(response)
         payload.append(0x0A)
         try handle.write(contentsOf: payload)
     }
@@ -510,19 +481,6 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
             payload: response.payload,
             error: response.error)
     }
-
-    #if DEBUG
-    func testExecHostTimestampFailureReason(_ timestamp: Int) async -> String? {
-        let response = await self.handleExecRequest(ExecHostSocketRequest(
-            type: "exec",
-            id: "timestamp-test",
-            nonce: "nonce",
-            ts: timestamp,
-            hmac: "unauthenticated",
-            requestJson: #"{"command":["/usr/bin/true"]}"#))
-        return response.error?.reason
-    }
-    #endif
 
     private func hmacHex(nonce: String, ts: Int, requestJson: String) -> String {
         let key = SymmetricKey(data: Data(self.token.utf8))

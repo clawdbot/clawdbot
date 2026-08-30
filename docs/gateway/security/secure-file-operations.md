@@ -13,9 +13,10 @@ It is a **library guardrail** for trusted OpenClaw code that receives untrusted 
 
 OpenClaw sets fs-safe's optional native helper to **off** by default:
 
-- native platform packages are optional and may be absent from minimal installs;
 - the guarded JavaScript paths support OpenClaw's normal filesystem operations;
 - disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
+
+The OpenClaw package includes fs-safe's prebuilt native helpers for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. No separate platform package, download, or compiler is needed. Loading these helpers remains optional.
 
 OpenClaw only changes the _default_. An explicit setting always wins:
 
@@ -23,7 +24,7 @@ OpenClaw only changes the _default_. An explicit setting always wins:
 # Default OpenClaw behavior: guarded JavaScript fs-safe paths.
 OPENCLAW_FS_SAFE_NATIVE_MODE=off
 
-# Prefer native primitives when the platform package is installed.
+# Prefer native primitives when the bundled platform helper loads.
 OPENCLAW_FS_SAFE_NATIVE_MODE=auto
 
 # Fail closed when an operation needs native support and the binding is unavailable.
@@ -52,15 +53,17 @@ This covers OpenClaw's normal threat model: trusted gateway code handling untrus
 
 ## What native acceleration adds
 
-The optional platform package provides policy-free filesystem primitives used by fs-safe for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`; macOS uses descriptor-relative component checks and `renameatx_np`; Windows uses handle-relative operations and replacement-disabled rename.
+The bundled native helper provides policy-free filesystem primitives used by fs-safe for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`; macOS uses descriptor-relative component checks and `renameatx_np`; Windows uses handle-relative operations and replacement-disabled rename.
 
 The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows; it does not turn fs-safe into a sandbox.
 
-If your deployment requires those native primitives, install the matching optional platform package and set:
+If your package deployment requires those native primitives, set:
 
 ```bash
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
+
+In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone portable worker bundles do not carry these native assets; their managed launch environment does not forward fs-safe mode overrides.
 
 ## Plugin and core guidance
 

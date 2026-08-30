@@ -10,19 +10,25 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
-import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import {
+  ensureStagedInputDirectory,
+  stagedInputDirectory,
+  stagedInputFileName,
+} from "../../media/staged-inputs.js";
+import { getMediaDir } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
-const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
+/** Maximum size of one file copied into an agent sandbox or staging workspace. */
+export const SANDBOX_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // Attachment indexes are the staging identity. Callers use this map to detect
@@ -84,10 +90,8 @@ export async function stageSandboxMedia(params: {
   const usedNames = new Set<string>();
   const staged = new Map<number, string>();
   const stagedUrlAliases = new Set<number>();
-  const hostWorkspaceStagingDir =
-    !sandbox && !ctx.MediaRemoteHost
-      ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
-      : undefined;
+  const inputDirectory = stagedInputDirectory(crypto.randomUUID());
+  let stagingReady = false;
 
   for (const entry of pathEntries) {
     const source = await resolveStageableMediaSource(entry.path);
@@ -103,24 +107,22 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const fileName = allocateStagedFileName(source.pathForFileName, usedNames);
-    if (!fileName) {
-      continue;
-    }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
-    const relativeDest =
-      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
-        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
-        : fileName;
+    const relativeDest = path.join(inputDirectory, fileName);
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
+      if (!stagingReady) {
+        await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory);
+        stagingReady = true;
+      }
       if (ctx.MediaRemoteHost) {
         await stageRemoteFileIntoRoot({
           remoteHost: ctx.MediaRemoteHost,
           remotePath: source.physicalPath,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
         });
       } else {
         const copySource = await fs.realpath(source.physicalPath).catch(() => source.physicalPath);
@@ -128,14 +130,12 @@ export async function stageSandboxMedia(params: {
           sourcePath: copySource,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
+          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
         });
       }
     } catch (err) {
       if (err instanceof FsSafeError && err.code === "too-large") {
-        logVerbose(
-          `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source.physicalPath}`,
-        );
+        console.warn(`Inbound media staging skipped for ${fileName}: ${err.message}`);
       } else {
         logVerbose(`Failed to stage inbound media path ${source.physicalPath}: ${String(err)}`);
       }
@@ -259,9 +259,11 @@ async function stageLocalFileIntoRoot(params: {
   maxBytes?: number;
 }): Promise<void> {
   const root = await fsRoot(params.rootDir);
-  await root.copyIn(params.relativeDestPath, params.sourcePath, {
+  const source = await readLocalFileSafely({
+    filePath: params.sourcePath,
     maxBytes: params.maxBytes,
   });
+  await root.create(params.relativeDestPath, source.buffer);
 }
 
 async function stageRemoteFileIntoRoot(params: {
@@ -352,11 +354,8 @@ async function isAllowedSourcePath(params: {
   }
 }
 
-function allocateStagedFileName(source: string, usedNames: Set<string>): string | null {
-  const baseName = path.basename(source);
-  if (!baseName) {
-    return null;
-  }
+function allocateStagedFileName(source: string, usedNames: Set<string>): string {
+  const baseName = stagedInputFileName(path.basename(source));
   const parsed = path.parse(baseName);
   let fileName = baseName;
   let suffix = 1;

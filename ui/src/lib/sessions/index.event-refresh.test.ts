@@ -618,7 +618,7 @@ describe("event-driven session list refresh", () => {
       emitEvent({
         type: "event",
         event: "sessions.changed",
-        payload: { sessionKey: key, reason: "delete" },
+        payload: { sessionKey: key, sessionId: "deleted-generation", reason: "delete" },
       });
       expect(sessions.state.deletedSessions).toEqual([
         { key, retireBeforeRevision: expect.any(Number) },

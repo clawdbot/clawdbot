@@ -668,7 +668,7 @@ export async function invokeHeartbeatAgentRun(
       OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
       AccountId: delivery.accountId,
       MessageThreadId: delivery.threadId,
-      Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+      InternalTurnSource: hasExecCompletion ? "exec" : hasCronEvents ? "cron" : "heartbeat",
       SessionKey: runSessionKey,
       AgentId: agentId,
     },

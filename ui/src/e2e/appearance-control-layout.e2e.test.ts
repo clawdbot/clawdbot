@@ -71,7 +71,7 @@ suite.define(() => {
         const theme = page.locator("#settings-appearance-theme");
         const grid = theme.locator(".settings-theme-grid");
         for (const [width, expectedColumns] of [
-          [560, 2],
+          [560, 3],
           [320, 1],
         ] as const) {
           await page.setViewportSize({ height: 1000, width });

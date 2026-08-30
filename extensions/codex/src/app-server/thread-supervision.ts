@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -35,7 +36,6 @@ import type {
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import {
-  CodexThreadBindingConflictAfterCleanupError,
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
@@ -125,6 +125,49 @@ export async function materializePendingSupervisionBranch(
 
   let bindingCommitted = false;
   let provisionalCleanupSafe = true;
+  let cleanupExpected: CodexAppServerPendingSupervisionBranch | undefined = pending;
+  const trackPendingSupervisionArtifacts = async (cleanupThreadIds: string[]): Promise<void> => {
+    const expected = pending;
+    // Native creation is already a fact, even if tracking never writes or throws
+    // after writing. Keep artifact ownership separate from the durable CAS snapshot.
+    pending = withPendingSupervisionCleanup(pending, cleanupThreadIds);
+    let updated: boolean;
+    try {
+      updated = await params.bindingStore.mutate(params.bindingIdentity, {
+        kind: "patch-pending-supervision-branch",
+        expected,
+        pending,
+      });
+    } catch (error) {
+      try {
+        const current = await params.bindingStore.read(params.bindingIdentity);
+        if (matchesPendingSupervisionState(current, pending)) {
+          cleanupExpected = pending;
+        } else if (matchesPendingSupervisionState(current, expected)) {
+          cleanupExpected = expected;
+        } else {
+          throw new CodexThreadBindingConflictError(
+            pending.sourceThreadId,
+            "verifying supervised Codex cleanup tracking",
+          );
+        }
+      } catch (verificationError) {
+        provisionalCleanupSafe = false;
+        throw new CodexAppServerUnsafeSubscriptionError(
+          `Codex supervised branch cleanup tracking could not be verified: ${cleanupThreadIds.join(", ")}`,
+          { cause: new AggregateError([error, verificationError], undefined, { cause: error }) },
+        );
+      }
+      throw error;
+    }
+    cleanupExpected = updated ? pending : undefined;
+    if (!updated) {
+      throw new CodexThreadBindingConflictError(
+        pending.sourceThreadId,
+        "tracking supervised Codex branch cleanup",
+      );
+    }
+  };
   try {
     const probeParams = buildPendingSupervisionProbeForkParams(params, pending);
     const rawProbeResponse = await params.lifecycleTiming.measure(
@@ -150,7 +193,7 @@ export async function materializePendingSupervisionBranch(
       sourceThreadId: pending.sourceThreadId,
       role: "model probe",
     });
-    pending = await trackPendingSupervisionArtifacts(params, pending, [probeThreadId]);
+    await trackPendingSupervisionArtifacts([probeThreadId]);
     params.throwIfAborted();
     const probeResponse = assertCodexThreadForkResponse(rawProbeResponse);
     if (params.restrictedToolSurface) {
@@ -218,10 +261,7 @@ export async function materializePendingSupervisionBranch(
       otherThreadId: probeThreadId,
       role: "canonical branch",
     });
-    pending = await trackPendingSupervisionArtifacts(params, pending, [
-      probeThreadId,
-      finalThreadId,
-    ]);
+    await trackPendingSupervisionArtifacts([probeThreadId, finalThreadId]);
     params.throwIfAborted();
     const startResponse = assertCodexThreadStartResponse(rawStartResponse);
     assertExactSupervisionModelSelection(startResponse, {
@@ -267,7 +307,7 @@ export async function materializePendingSupervisionBranch(
             { cause: error },
           );
         }
-        pending = await trackPendingSupervisionArtifacts(params, pending, []);
+        await trackPendingSupervisionArtifacts([]);
         throw error;
       }
     }
@@ -285,7 +325,7 @@ export async function materializePendingSupervisionBranch(
     if (!(await archiveSupervisionArtifact(params.client, probeThreadId))) {
       throw new Error(`Failed to archive temporary Codex model probe: ${probeThreadId}`);
     }
-    pending = await trackPendingSupervisionArtifacts(params, pending, [finalThreadId]);
+    await trackPendingSupervisionArtifacts([finalThreadId]);
     const historyCoveredThrough = new Date().toISOString();
     const bindingModelProvider = params.normalizeBindingModelProvider(
       params.attempt.authProfileId,
@@ -368,28 +408,21 @@ export async function materializePendingSupervisionBranch(
     if (bindingCommitted) {
       throw error;
     }
-    // The tracking CAS owner already cleaned every known artifact. Its stale
-    // pending snapshot must not drive another cleanup or binding mutation.
-    if (error instanceof CodexThreadBindingConflictAfterCleanupError) {
-      throw error;
-    }
     if (!provisionalCleanupSafe) {
       await params.abandonClient();
       throw error;
     }
     const cleanup = await cleanPendingSupervisionArtifacts(params.client, pending);
+    const nextPending = withPendingSupervisionCleanup(pending, cleanup.remaining);
     let cleanupStateError: unknown;
-    if (cleanup.remaining.length !== (pending.cleanupThreadIds?.length ?? 0)) {
-      const nextPending = withPendingSupervisionCleanup(pending, cleanup.remaining);
+    // A rejected tracking CAS permits artifact compensation, never a successor write.
+    if (cleanupExpected && !isDeepStrictEqual(cleanupExpected, nextPending)) {
       try {
-        const updated = await params.bindingStore.mutate(params.bindingIdentity, {
+        await params.bindingStore.mutate(params.bindingIdentity, {
           kind: "patch-pending-supervision-branch",
-          expected: pending,
+          expected: cleanupExpected,
           pending: nextPending,
         });
-        if (updated) {
-          pending = nextPending;
-        }
       } catch (stateError) {
         cleanupStateError = stateError;
       }
@@ -400,19 +433,18 @@ export async function materializePendingSupervisionBranch(
       await params.abandonClient();
     }
     if (cleanupStateError) {
-      const cause = new AggregateError([error, cleanupStateError]);
+      const cause = new AggregateError(
+        [error, cleanupStateError],
+        "Codex supervised branch cleanup state could not be recorded",
+        { cause: error },
+      );
       if (unsafeCleanup) {
         throw new CodexAppServerUnsafeSubscriptionError(
           "Codex supervised branch cleanup state could not be recorded",
           { cause },
         );
       }
-      const aggregateError = new AggregateError(
-        [error, cleanupStateError],
-        "Codex supervised branch cleanup state could not be recorded",
-        { cause: error },
-      );
-      throw aggregateError;
+      throw cause;
     }
     if (cleanup.remaining.length > 0) {
       throw new CodexAppServerUnsafeSubscriptionError(
@@ -622,37 +654,6 @@ async function recoverPendingSupervisionArtifacts(
     throw new CodexThreadBindingConflictError(
       pending.sourceThreadId,
       "recovering a supervised Codex branch",
-    );
-  }
-  return next;
-}
-
-async function trackPendingSupervisionArtifacts(
-  params: PendingSupervisionMaterializationParams,
-  pending: CodexAppServerPendingSupervisionBranch,
-  cleanupThreadIds: string[],
-): Promise<CodexAppServerPendingSupervisionBranch> {
-  const next = withPendingSupervisionCleanup(pending, cleanupThreadIds);
-  const updated = await params.bindingStore.mutate(params.bindingIdentity, {
-    kind: "patch-pending-supervision-branch",
-    expected: pending,
-    pending: next,
-  });
-  if (!updated) {
-    const cleanupFailed: string[] = [];
-    for (const threadId of cleanupThreadIds) {
-      if (!(await archiveSupervisionArtifact(params.client, threadId))) {
-        cleanupFailed.push(threadId);
-      }
-    }
-    if (cleanupFailed.length > 0) {
-      throw new CodexAppServerUnsafeSubscriptionError(
-        `Codex supervised branch CAS cleanup failed: ${cleanupFailed.join(", ")}`,
-      );
-    }
-    throw new CodexThreadBindingConflictAfterCleanupError(
-      pending.sourceThreadId,
-      "tracking supervised Codex branch cleanup",
     );
   }
   return next;

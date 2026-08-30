@@ -25,6 +25,7 @@ import {
   normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
+  supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./upgrade-survivor-policy.mjs";
 
 export { DEFAULT_LIVE_RETRIES };
@@ -53,7 +54,6 @@ export const RELEASE_PATH_PROFILE = "release-path";
 
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
-type PublishedReleaseVersion = { year: number; month: number; patch: number };
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
@@ -260,56 +260,6 @@ function filterUpgradeSurvivorScenariosForTarget(
   );
   const supportedScenarios = new Set(targetScenarios);
   return scenarios.filter((scenario) => supportedScenarios.has(scenario));
-}
-
-function parsePublishedReleaseVersion(spec: string | undefined): PublishedReleaseVersion | null {
-  const match = /^openclaw@([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(spec ?? "");
-  if (!match) {
-    return null;
-  }
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    patch: Number(match[3]),
-  };
-}
-
-function comparePublishedReleaseVersion(a: PublishedReleaseVersion, b: PublishedReleaseVersion) {
-  return a.year - b.year || a.month - b.month || a.patch - b.patch;
-}
-
-function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec: string | undefined) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
-}
-
-function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec: string | undefined) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
-}
-
-function supportsUpgradeSurvivorScenarioAtBaseline(
-  scenario: string | undefined,
-  baselineSpec: string | undefined,
-) {
-  return (
-    (scenario !== "plugin-deps-cleanup" ||
-      supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
-    (scenario !== "acpx-openclaw-tools-bridge" ||
-      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
-  );
 }
 
 function expandedUpgradeSurvivorLaneName(
@@ -578,26 +528,6 @@ function upgradeSurvivorBaselineVersionForLane(poolLane: DockerE2eLane): string 
   return /(?:^|\/|@)(\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(spec ?? "")?.[1] ?? null;
 }
 
-function configuredChannelIdsForLane(poolLane: DockerE2eLane, scenario: string): Set<string> {
-  const channelIds = new Set<string>();
-  const baselineVersion = upgradeSurvivorBaselineVersionForLane(poolLane);
-  const resolveConfigSteps = resolveUpgradeSurvivorConfigStepsForBaseline as (
-    scenario: string,
-    baselineVersion: string | null,
-  ) => ReturnType<typeof resolveUpgradeSurvivorConfigStepsForBaseline>;
-  for (const step of resolveConfigSteps(scenario, baselineVersion)) {
-    if (step.argv?.[0] !== "config" || step.argv?.[1] !== "set") {
-      continue;
-    }
-    const match = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "");
-    const channelId = match?.[1];
-    if (channelId) {
-      channelIds.add(channelId);
-    }
-  }
-  return channelIds;
-}
-
 export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLane[]): string[] {
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
@@ -612,8 +542,21 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
       requiredPackages.add(packageName);
     }
-    for (const channelId of configuredChannelIdsForLane(poolLane, scenario)) {
-      configuredChannelIds.add(channelId);
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
+      scenario,
+      upgradeSurvivorBaselineVersionForLane(poolLane),
+    );
+    for (const step of steps) {
+      for (const packageName of step.prepublishPluginPackages ?? []) {
+        requiredPackages.add(packageName);
+      }
+      if (step.argv[0] !== "config" || step.argv[1] !== "set") {
+        continue;
+      }
+      const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "")?.[1];
+      if (channelId) {
+        configuredChannelIds.add(channelId);
+      }
     }
   }
   for (const packageName of (officialExternalChannelCatalog.entries ?? [])

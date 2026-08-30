@@ -308,7 +308,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const abortSessionKey =
       canonicalKey === "global" && requestedGlobalAgentId ? "global" : resolvedAbortSessionKey;
     const abortAgentId = requestedGlobalAgentId ?? activeRunAgentId;
-    if (embeddedRun) {
+    // Controller-backed runs must keep the requester checks and lifecycle cleanup below.
+    if (embeddedRun && !activeRun) {
       const aborted = embeddedRun.abort();
       respond(true, {
         ok: true,
@@ -324,11 +325,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    // Capture run kinds before the abort because abortChatRunById deletes entries
-    // from chatAbortControllers synchronously. We use this snapshot to choose the
-    // correct dedupe namespace: agent-kind runs use "agent:" (their runId equals
-    // their idempotency key), while chat-send runs use "chat:" so the abort
-    // snapshot does not collide with the agent RPC dedupe cache.
+    // Snapshot before abort can remove controllers. Agent run IDs are idempotency
+    // keys, so preserve their dedupe namespace instead of colliding with chat.send.
     const preAbortRunKinds = new Map<string, "chat-send" | "agent" | undefined>();
     if (requestedRunId) {
       preAbortRunKinds.set(requestedRunId, activeRun?.kind);

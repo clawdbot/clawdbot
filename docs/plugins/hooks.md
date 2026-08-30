@@ -1020,6 +1020,32 @@ message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
 
+Runtime takeovers should forward `ctx.onAgentRunStart`,
+`ctx.userTurnTranscriptRecorder`, and optional
+`ctx.prepareAssistantTranscriptMessage` to their runtime helper. The ACP dispatch
+helper forwards all three automatically. Share the recorder so the runtime and
+Gateway do not append the same user turn independently; mark runtime
+persistence only after a successful transcript write.
+
+The host-provided preparer records display ownership before the canonical
+assistant append, using original runtime text captured before transcript-only
+hooks. It preserves raw content and IDs and grants no file access or write
+authority. Keep it in process and bound to its owning turn; after that turn
+aborts, is replaced, or completes, it returns the message unchanged.
+
+The optional third `onAgentRunStart` argument can offer
+`completionSource: "reply-dispatch"` with a `getResult()` callback. The host must
+return `"reply-dispatch"` synchronously to accept completion ownership; observers
+and other callback results leave lifecycle completion unchanged. Wrappers must
+forward every callback argument and its return value. After dispatch settles,
+`getResult()` supplies the canonical `terminalOutcome` and, when an
+assistant write succeeded, its `assistantTranscript` receipt (target, message
+ID, idempotency key, and optional projection anchor). The host then emits one
+chat completion from the delivered, post-hook payloads while retaining runtime
+lifecycle events. A receipt prevents a duplicate append; it does not authorize
+writes to a replaced session. Omit this declaration for runtimes whose event
+stream already owns chat completion.
+
 Use `eligibleDispatchKinds: ["acp"]` for an ACP-only dispatcher. The host
 classifies the resolved target, including conversation bindings, and passes
 `ctx.dispatchKind` as `acp` or `agent`. Stored ACP metadata and ACP session keys

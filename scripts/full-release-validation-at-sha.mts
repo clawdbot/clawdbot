@@ -15,9 +15,11 @@ import {
   classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import { execGhRead } from "./lib/plain-gh.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
@@ -32,7 +34,6 @@ export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
 export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 15 * 60_000;
 const FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS = 2;
 const RELEASE_DECISION_FILE = "full-release-decision.json";
-const MAX_RELEASE_DECISION_BYTES = 128 * 1024;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
@@ -361,9 +362,17 @@ export function verifyTargetRef(
       );
     }
   } else if (extendedStableMatch) {
-    if (targetVersion !== extendedStableMatch[1]) {
+    const branchVersion = parseReleaseVersion(extendedStableMatch[1]!);
+    const candidateVersion = parseReleaseVersion(targetVersion);
+    if (
+      branchVersion === null ||
+      candidateVersion === null ||
+      classifyReleaseTrain(candidateVersion) !== "extended-stable" ||
+      candidateVersion.year !== branchVersion.year ||
+      candidateVersion.month !== branchVersion.month
+    ) {
       throw new Error(
-        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
+        `Target package version ${targetVersion} does not belong to extended-stable branch ${targetRef}; expected a final ${branchVersion?.year}.${branchVersion?.month}.PATCH version with PATCH >= 33`,
       );
     }
   } else if (tagMatch && targetVersion !== tagMatch[1]) {
@@ -663,7 +672,7 @@ export function tryReadReleaseDecision(
         `Release Decision artifact ${artifactName} omitted ${RELEASE_DECISION_FILE}.`,
       );
     }
-    if (statSync(decisionPath).size > MAX_RELEASE_DECISION_BYTES) {
+    if (statSync(decisionPath).size > MAX_RELEASE_ARTIFACT_BYTES) {
       throw new Error(`Release Decision artifact ${artifactName} exceeds the size limit.`);
     }
     return validateReleaseDecisionPayload(JSON.parse(readFileSync(decisionPath, "utf8")), {

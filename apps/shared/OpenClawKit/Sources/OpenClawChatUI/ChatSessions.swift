@@ -366,6 +366,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var isBackground: Bool?
     public var label: String?
     public var category: String?
+    public var color: String?
     public var pinned: Bool?
     public var pinnedAt: Double?
     public var archived: Bool?
@@ -454,6 +455,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         thinkingDefault: String? = nil,
         label: String? = nil,
         category: String? = nil,
+        color: String? = nil,
         pinned: Bool? = nil,
         pinnedAt: Double? = nil,
         archived: Bool? = nil,
@@ -499,6 +501,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.isBackground = isBackground
         self.label = label
         self.category = category
+        self.color = color
         self.pinned = pinned
         self.pinnedAt = pinnedAt
         self.archived = archived

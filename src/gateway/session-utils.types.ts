@@ -16,7 +16,6 @@ import type {
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionParticipant } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -36,6 +35,7 @@ import type {
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 
 // Shared Gateway session response contracts. Server methods, UI adapters, and
 // tests import these types so list/patch/preview payloads evolve together.
@@ -103,6 +103,8 @@ export type GatewaySessionRow = {
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   icon?: string;
+  /** Named sidebar tint (SESSION_COLOR_IDS). */
+  color?: string;
   channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
@@ -241,7 +243,7 @@ export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults,
  * carry exactly one agent's catalog; unscoped listings carry one per configured
  * agent so row projections stay owner-scoped.
  */
-export type SessionListModelCatalog = ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
+export type SessionListModelCatalog = ReadonlyMap<string, PreparedGatewayModelCatalog | undefined>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;

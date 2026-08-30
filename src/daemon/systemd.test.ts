@@ -91,6 +91,7 @@ vi.mock("./exec-file.js", () => {
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import * as systemdExec from "./systemd-exec.js";
+import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -105,7 +106,6 @@ import {
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserServiceAccount,
-  resolveSystemdUserUnitPath,
   startSystemdService,
   stageSystemdService,
   stopSystemdService,
@@ -1430,7 +1430,7 @@ describe("readSystemdServiceRuntime", () => {
   });
 });
 
-describe("resolveSystemdUserUnitPath", () => {
+describe("resolveSystemdUnitPath", () => {
   it.each([
     {
       name: "uses default service name when OPENCLAW_PROFILE is unset",
@@ -1468,7 +1468,7 @@ describe("resolveSystemdUserUnitPath", () => {
       expected: "/home/test/.config/systemd/user/custom-unit.service",
     },
   ])("$name", ({ env, expected }) => {
-    expect(resolveSystemdUserUnitPath(env)).toBe(expected);
+    expect(resolveSystemdUnitPath(env)).toBe(expected);
   });
 });
 
@@ -2021,7 +2021,7 @@ describe("readSystemdServiceExecStart", () => {
   it("reads manager-expanded EnvironmentFile globs in deterministic precedence order", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-glob-"));
     const env = { HOME: home };
-    const unitPath = resolveSystemdUserUnitPath(env);
+    const unitPath = resolveSystemdUnitPath(env);
     const environmentDir = path.join(home, "env.d");
     try {
       await fs.mkdir(path.dirname(unitPath), { recursive: true });
@@ -2309,7 +2309,7 @@ describe("stageSystemdService", () => {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-stage-test",
     };
-    const unitPath = resolveSystemdUserUnitPath(env);
+    const unitPath = resolveSystemdUnitPath(env);
     const envFilePath = path.join(stateDir, "gateway.systemd.env");
     const nodeEnvFilePath = path.join(stateDir, "node.systemd.env");
 
@@ -3067,7 +3067,7 @@ describe("systemd service install and uninstall", () => {
       OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
       OPENCLAW_SERVICE_KIND: "node",
     };
-    const unitPath = resolveSystemdUserUnitPath(env);
+    const unitPath = resolveSystemdUnitPath(env);
     const nodeEnvFilePath = path.join(stateDir, "node.systemd.env");
 
     try {
@@ -3580,7 +3580,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-user-unit-"));
     const home = path.join(tempHomeRoot, "home");
     const env = { HOME: home };
-    const unitPath = resolveSystemdUserUnitPath(env);
+    const unitPath = resolveSystemdUnitPath(env);
     try {
       await fs.mkdir(path.dirname(unitPath), { recursive: true });
       await run({ env, unitPath });

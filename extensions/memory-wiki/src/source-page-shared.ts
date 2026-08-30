@@ -43,6 +43,7 @@ export async function writeImportedSourcePage(params: {
   pagePath: string;
   group: MemoryWikiImportedSourceGroup;
   state: ImportedSourceState;
+  prepareWrite?: () => Promise<unknown>;
   buildRendered: (raw: string, updatedAt: string) => string;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
   const shouldSkip = await shouldSkipImportedSourceWrite({
@@ -59,6 +60,9 @@ export async function writeImportedSourcePage(params: {
     return { pagePath: params.pagePath, changed: false, created: false };
   }
 
+  // Source metadata checks stay outside vault activation. This boundary keeps
+  // unchanged import polls from validating and rereading every retained page.
+  await params.prepareWrite?.();
   const vault = await fsRoot(params.vaultRoot);
   const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
     if (

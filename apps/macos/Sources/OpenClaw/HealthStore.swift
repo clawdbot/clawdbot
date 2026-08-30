@@ -166,7 +166,7 @@ final class HealthStore {
 
     private static func describeProbeFailure(_ probe: HealthSnapshot.ChannelSummary.Probe) -> String {
         let elapsed = probe.elapsedMs.map { "\(Int($0))ms" }
-        if let error = probe.error, error.lowercased().contains("timeout") || probe.status == nil {
+        if let error = probe.error, error.lowercased().contains("timeout") {
             if let elapsed { return "Health check timed out (\(elapsed))" }
             return "Health check timed out"
         }

@@ -661,18 +661,35 @@ describe("createCopilotToolBridge", () => {
     expect(hiddenExecute).not.toHaveBeenCalled();
   });
 
-  it("reports code mode as disengaged when the config leaves it off", async () => {
-    const result = await createCopilotToolBridge({
-      attemptParams: {
-        config: { tools: { codeMode: false } },
-        runId: "run-no-code-mode",
-        sessionKey: "agent:agent-1:main",
-      } as never,
-      createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
-    });
-
-    expect(result.codeModeEngaged).toBe(false);
-  });
+  it.each([
+    { configured: false, override: undefined },
+    { configured: true, override: false },
+  ])(
+    "keeps the direct surface when configured=$configured, invocation=$override",
+    async ({ configured, override }) => {
+      const result = await createCopilotToolBridge({
+        attemptParams: {
+          config: {
+            tools: { codeMode: configured, toolSearch: false },
+            agents: {
+              entries: { "agent-1": {} },
+              defaults: { models: { "github-copilot/gpt-4o": { codeMode: configured } } },
+            },
+          },
+          codeModeOverride: override,
+          runId: "run-no-code-mode",
+          sessionKey: "agent:agent-1:main",
+        },
+        createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
+      });
+      try {
+        expect(result.codeModeEngaged).toBe(false);
+        expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual(["read"]);
+      } finally {
+        result.cleanup?.();
+      }
+    },
+  );
 
   it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
     const createOpenClawCodingTools = vi.fn(async () => [
@@ -1103,27 +1120,31 @@ describe("createCopilotToolBridge", () => {
       expect(getOpts().sessionKey).toBe("fallback-key");
     });
 
-    it("computes modelApi, modelContextWindowTokens, modelCompat, and modelHasVision from attemptParams.model", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
+    it.each([undefined, 8000])(
+      "uses the effective read context (%s) with prepared model capabilities",
+      async (contextTokenBudget) => {
+        const { createOpenClawCodingTools, getOpts } = captureCall();
 
-      await createCopilotToolBridge({
-        attemptParams: {
-          model: {
-            api: "openai-responses",
-            contextWindow: 200_000,
-            input: ["text", "image"],
-            compat: { some: "shape" },
-          },
-        } as never,
-        createOpenClawCodingTools,
-      });
+        await createCopilotToolBridge({
+          attemptParams: {
+            contextTokenBudget,
+            model: {
+              api: "openai-responses",
+              contextWindow: 200_000,
+              input: ["text", "image"],
+              compat: { some: "shape" },
+            },
+          } as never,
+          createOpenClawCodingTools,
+        });
 
-      const opts = getOpts();
-      expect(opts.modelApi).toBe("openai-responses");
-      expect(opts.modelContextWindowTokens).toBe(200_000);
-      expect(opts.modelHasVision).toBe(true);
-      expect(opts.modelCompat).toEqual({ some: "shape" });
-    });
+        const opts = getOpts();
+        expect(opts.modelApi).toBe("openai-responses");
+        expect(opts.modelContextWindowTokens).toBe(contextTokenBudget ?? 200_000);
+        expect(opts.modelHasVision).toBe(true);
+        expect(opts.modelCompat).toEqual({ some: "shape" });
+      },
+    );
 
     it("modelHasVision is false when model.input does not include 'image'", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
@@ -2054,6 +2075,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const observeToolTerminal = vi.fn(() => ({
       executionStarted: true,
       sideEffectEvidence: true,
+      effectReceipt: { state: "uncertain" as const },
     }));
     const sdkTool = await convertOpenClawToolToSdkToolForTest(
       makeTool({ execute, name: "message" }),

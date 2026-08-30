@@ -15,6 +15,7 @@ import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatInputHistoryState } from "./input-history.ts";
 import type { QueuedMessageEdit } from "./queued-message-edit.ts";
+import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ChatScrollHost } from "./scroll.ts";
 import type { ToolStreamHost } from "./tool-stream.ts";
 
@@ -27,6 +28,8 @@ export type ChatHost = ChatInputHistoryState &
   ToolStreamHost &
   ChatCommandHost & {
     sessions: SessionCapability;
+    /** Initial placement owns admission even while transport loss hides its content. */
+    hasPendingInitialTurn?: (sessionKey: string) => boolean;
     client: GatewayBrowserClient | null;
     connected: boolean;
     connectionEpoch: number;
@@ -50,7 +53,7 @@ export type ChatHost = ChatInputHistoryState &
     chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
-    chatRunError?: { summary: string } | null;
+    chatRunError?: ChatRunError | null;
     lastError: string | null;
     chatError?: string | null;
     hello: GatewayHelloOk | null;

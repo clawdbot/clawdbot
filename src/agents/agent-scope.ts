@@ -55,9 +55,6 @@ export {
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
-  type AgentSelectionContext,
-  type AgentWorkspaceProvisioning,
-  type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
@@ -303,7 +300,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
 
 export { resolveAgentIdFromSessionKey };
 
-export function resolveSessionAgentIds(params: {
+export function resolveSessionAgentIdsStrict(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string | undefined;
@@ -360,14 +357,18 @@ export function resolveSessionAgentIds(params: {
   return { defaultAgentId, sessionAgentId };
 }
 
-export function resolveSessionAgentId(params: {
+export const resolveSessionAgentIds = resolveSessionAgentIdsStrict;
+
+export function resolveSessionAgentIdStrict(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string;
   fallbackAgentId?: string;
 }): string {
-  return resolveSessionAgentIds(params).sessionAgentId;
+  return resolveSessionAgentIdsStrict(params).sessionAgentId;
 }
+
+export const resolveSessionAgentId = resolveSessionAgentIdStrict;
 
 export function resolveAgentExecutionContract(
   cfg: OpenClawConfig | undefined,
@@ -485,7 +486,7 @@ function resolveFirstModelFallbacksOverride(
   return undefined;
 }
 
-export type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
+type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
 
 export type SubagentModelConfigSelectionResult = {
   raw: AgentModelConfig;
@@ -538,7 +539,7 @@ export function resolveSubagentModelFallbacksOverride(
   return undefined;
 }
 
-function resolveSubagentSpawnModelFallbacksOverride(
+export function resolveSubagentSpawnModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {

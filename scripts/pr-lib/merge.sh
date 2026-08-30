@@ -26,13 +26,6 @@ print_file_list_with_limit() {
   fi
 }
 
-auto_merge_unavailable_error() {
-  local log_file="$1"
-  rg -q -i -- \
-    'auto[- ]merge.*(not allowed|not enabled|not available|unavailable|not configured|not supported|must be enabled)|(not allowed|not enabled|not available|unavailable|not configured|not supported|must be enabled).*auto[- ]merge' \
-    "$log_file"
-}
-
 record_crabbox_landing_parent_audit() {
   local landed_sha="$1"
   local expected_parent_sha="$2"
@@ -93,6 +86,8 @@ record_crabbox_landing_parent_audit() {
 
 # shellcheck source=scripts/pr-lib/crabbox-merge-bypass.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
+# shellcheck source=scripts/pr-lib/merge-outcome.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh"
 
 mainline_drift_requires_sync() {
   local mainline_base="$1"
@@ -119,7 +114,7 @@ mainline_drift_requires_sync() {
   # Compare only mainline commits since the prepared lineage base. The remote
   # GraphQL commit has a different parent but its verified tree shares this
   # lineage, so its PR files must not look like incoming mainline drift.
-  git diff --name-only "${mainline_base}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
+  git diff --name-only "${mainline_base}..${PR_MAIN_SHA}" | sed '/^$/d' | sort -u > "$delta_file"
   git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file"
   comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || true
 
@@ -161,15 +156,18 @@ mainline_drift_requires_sync() {
 merge_verify() {
   local pr="$1"
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
 
-  require_artifact .local/prep.env
+  require_artifact .local/prep.env || return 1
+  require_artifact .local/gates.env || return 1
   # shellcheck disable=SC1091
-  source .local/prep.env
-  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
+  source .local/gates.env || return 1
+  # shellcheck disable=SC1091
+  source .local/prep.env || return 1
+  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" || return 1
 
   local json
-  json=$(pr_meta_json "$pr")
+  json=$(gh_plain pr view "$pr" --json state,isDraft,headRefOid) || return 1
   local is_draft
   is_draft=$(printf '%s\n' "$json" | jq -r .isDraft)
   if [ "$is_draft" = "true" ]; then
@@ -195,11 +193,18 @@ merge_verify() {
     exit 1
   fi
 
-  mark_pr_operation_side_effects_started
-  # Wait only for the attached CI workflow here. The direct required-check
-  # query below remains the merge authority, so optional contexts cannot stall it.
-  node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
-    --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
+  mark_pr_operation_side_effects_started || return 1
+  if [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
+    # The stamp selects the owner, not proof. Revalidate before skipping the
+    # PR-only watcher, which cannot observe accepted hosted release gates.
+    derive_prepare_gate_change_plan "$PREP_HEAD_SHA" || return 1
+    run_hosted_prepare_gates "$pr" "$PREP_HEAD_SHA" "$PREPARE_GATE_CHANGELOG_ONLY" || return 1
+  else
+    # Local/Crabbox preparation retains the attached-CI wait. Required checks
+    # below remain merge authority; optional contexts cannot stall this path.
+    node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
+      --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
+  fi
   local checks_json
   local checks_err_file
   local checks_exit_status
@@ -228,21 +233,26 @@ merge_verify() {
     esac
   fi
   rm -f "$checks_err_file"
-  if ! printf '%s\n' "$checks_json" | jq -e 'type == "array"' >/dev/null; then
+  # merge_run calls this function in an OR-list, disabling Bash errexit.
+  # Validate every row so malformed evidence cannot fall through as green.
+  if ! printf '%s\n' "$checks_json" | jq -e '
+    type == "array" and all(.[]; type == "object" and
+      (.bucket | IN("pass", "fail", "pending", "skipping", "cancel")))
+  ' >/dev/null; then
     echo "Merge verify failed: GitHub returned invalid required-check evidence." >&2
     return 1
   fi
   local required_count
-  required_count=$(printf '%s\n' "$checks_json" | jq 'length')
+  required_count=$(printf '%s\n' "$checks_json" | jq 'length') || return 1
   if [ "$required_count" -eq 0 ]; then
     echo "No required checks configured for this PR."
   fi
-  printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"'
+  printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"' || return 1
 
   local failed_required
-  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail" or .bucket=="skipping")] | length')
+  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket!="pass" and .bucket!="pending")] | length') || return 1
   local pending_required
-  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length')
+  pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
 
   if [ "$pending_required" -gt 0 ]; then
     echo "Required checks are still pending."
@@ -259,9 +269,9 @@ merge_verify() {
     MERGE_USE_CRABBOX_ADMIN_BYPASS=true
   fi
 
-  git fetch origin main
-  git fetch origin "pull/$pr/head:pr-$pr" --force
-  if ! git merge-base --is-ancestor origin/main "pr-$pr"; then
+  refresh_main_snapshot || return 1
+  git fetch origin "pull/$pr/head:pr-$pr" --force || return 1
+  if ! git merge-base --is-ancestor "$PR_MAIN_SHA" "refs/heads/pr-$pr"; then
     echo "PR branch is behind main."
     if mainline_drift_requires_sync \
       "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
@@ -287,13 +297,12 @@ merge_verify() {
 
 prepare_squash_merge_body() {
   local pr="$1" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
-  local main_sha source_trailers
-  main_sha=$(git rev-parse --verify refs/remotes/origin/main) || return 1
+  local source_trailers
   # GraphQL publication can collapse local fixups. Preserve their reviewed
   # trailers, excluding main's ancestry, rather than inspecting current HEAD.
   source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
     --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
-    --format='%(trailers:key=Co-authored-by,only,unfold)' "$main_sha..$source_head") || return 1
+    --format='%(trailers:key=Co-authored-by,only,unfold)' "$PR_MAIN_SHA..$source_head") || return 1
   [ -n "$source_trailers" ] || return 0
 
   local repo_nwo preview
@@ -353,7 +362,31 @@ $source_trailers"
 merge_run() {
   local pr="$1"
   local auto_merge_requested="${2:-false}"
-  enter_worktree "$pr" false
+  local recovery_oid="${3:-}" recovery_record="" recovery_actor=""
+  local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
+  local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION
+  merge_outcome_init "$pr" || return 1
+  if [ -n "$recovery_oid" ]; then
+    if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
+        .phase == "intent" and .accepted == false and .route == "immediate"
+      ' >/dev/null; then
+      merge_outcome_stop "operator recovery requires the exact retained unaccepted immediate intent; no attempt was authorized"
+      return 1
+    fi
+    recovery_record="$MERGE_OUTCOME_RECORD"
+  elif [ -n "$MERGE_OUTCOME_OID" ]; then
+    # Reconciliation needs neither the old worktree nor its prepare artifacts.
+    merge_outcome_resume "$pr"
+    return
+  fi
+  enter_worktree "$pr" false || return 1
+  # Earlier wrappers captured output at dispatch without recording intent. Even
+  # an empty capture may represent a submitted request; never overwrite that evidence.
+  if [ -z "$recovery_oid" ] && has_worktree_merge_output .; then
+    merge_outcome_stop "prior merge output exists without an outcome record; preserve the captures and reconcile the earlier request manually"
+    return 1
+  fi
 
   local required
   for required in \
@@ -369,60 +402,16 @@ merge_run() {
 
   validate_review_artifact_data || return 1
   require_ready_review_recommendation || return 1
-  merge_verify "$pr"
+  merge_verify "$pr" || return 1
   # shellcheck disable=SC1091
   source .local/prep.env
 
-  local pr_meta_json
-  pr_meta_json=$(read_pr_view_json "$pr" "state,isDraft") || exit 1
-  local is_draft
-  is_draft=$(printf '%s\n' "$pr_meta_json" | jq -r .isDraft)
-  if [ "$is_draft" = "true" ]; then
-    echo "PR is draft; stop."
-    exit 1
-  fi
-
-  delete_remote_pr_head_branch_after_merge() {
-    local head_json head_ref
-    if ! head_json=$(gh pr view "$pr" --json headRefName,headRepository,headRepositoryOwner); then
-      echo "Warning: unable to read PR head metadata for remote branch cleanup"
-      return 0
-    fi
-    head_ref=$(printf '%s\n' "$head_json" | jq -r '.headRefName // ""')
-    if [ -z "$head_ref" ]; then
-      return 0
-    fi
-
-    local repo_owner repo_name
-    repo_owner=$(printf '%s\n' "$head_json" | jq -r '.headRepositoryOwner.login // ""')
-    repo_name=$(printf '%s\n' "$head_json" | jq -r '.headRepository.name // ""')
-    if [ -z "$repo_owner" ] || [ -z "$repo_name" ]; then
-      echo "Warning: unable to resolve head repository for remote branch cleanup"
-      return 0
-    fi
-
-    local encoded_ref delete_error matching_refs
-    encoded_ref=$(jq -rn --arg value "heads/$head_ref" '$value|@uri')
-    if delete_error=$(gh_plain api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" 2>&1); then
-      return 0
-    fi
-
-    # GitHub may auto-delete the head before cleanup. Only a fresh, valid ref
-    # listing proves absence; longer prefix siblings are not the target.
-    if matching_refs=$(gh_plain api -X GET "repos/$repo_owner/$repo_name/git/matching-refs/$encoded_ref") &&
-      printf '%s\n' "$matching_refs" | jq -se --arg ref "refs/heads/$head_ref" '
-        length == 1 and (.[0] | type == "array" and
-          all(.[]; (.ref | type == "string" and startswith($ref)) and .ref != $ref))
-      ' >/dev/null; then
-      return 0
-    fi
-
-    echo "Warning: failed to delete remote branch $repo_owner/$repo_name:$head_ref"
-    printf '%s\n' "$delete_error" >&2
-    return 0
-  }
-
   local merge_method="${OPENCLAW_PR_MERGE_METHOD:-squash}"
+  if [ -n "$recovery_oid" ] && ! printf '%s\n' "$recovery_record" | jq -e \
+    --arg head "$PREP_HEAD_SHA" --arg method "$merge_method" '.head == $head and .method == $method' >/dev/null; then
+    merge_outcome_stop "operator recovery requires the retained prepared head and merge method"
+    return 1
+  fi
   local merge_flag
   local merge_label
   case "$merge_method" in
@@ -465,186 +454,142 @@ merge_run() {
     [ -z "$merge_body_file" ] || merge_args+=(--body-file "$merge_body_file")
   fi
 
-  local crabbox_final_main_sha=""
-  local merge_submitted=false
-  local state=""
-  # Auto-merge is only a post-verification landing strategy. Keep every
-  # artifact, exact-head, required-check, and drift check in merge_verify.
-  if [ "$auto_merge_requested" = "true" ]; then
-    local auto_meta
-    auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
-    local auto_head_sha
-    auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
-    if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
-      echo "PR head changed before auto-merge enablement (expected $PREP_HEAD_SHA, got $auto_head_sha)."
-      exit 1
+  local crabbox_final_main_sha="" route=immediate
+  local admission_attempt previous_observation=""
+  # Only fresh admission waits for calculation; retained intent reconciles immediately.
+  # Pin all other facts and each projection as soon as it becomes known.
+  for admission_attempt in 1 2 3; do
+    merge_outcome_observe "$pr" || return 1
+    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$PREP_HEAD_SHA" --argjson recovery "${recovery_record:-null}" '
+      .pr.state == "OPEN" and .pr.headRefOid == $head and .pr.baseRefName == "main" and
+      .pr.isDraft == false and .pr.mergeable != "CONFLICTING" and
+      .pr.autoMergeRequest == null and .pr.isInMergeQueue == false and
+      ($recovery == null or .pr.id == $recovery.prId)
+    ' >/dev/null; then
+      merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
+      return 1
     fi
-
-    local mergeable
-    local merge_state_status
-    local existing_auto_method
-    mergeable=$(printf '%s\n' "$auto_meta" | jq -r '.mergeable // "UNKNOWN"')
-    merge_state_status=$(printf '%s\n' "$auto_meta" | jq -r '.mergeStateStatus // "UNKNOWN"')
-    existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
-
-    if [ "$mergeable" = "CONFLICTING" ]; then
-      echo "PR is not mergeable: GitHub reports merge conflicts."
-      exit 1
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+      del(.pr.mergeable,.pr.mergeStateStatus) == ($previous | del(.pr.mergeable,.pr.mergeStateStatus)) and
+      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+    ' >/dev/null; then
+      merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
+      return 1
     fi
-
-    if [ -n "$existing_auto_method" ]; then
-      echo "Auto-merge is already enabled with $existing_auto_method; re-arming it as pinned SQUASH."
-      if ! gh_plain pr merge "$pr" --disable-auto >.local/merge-output.log 2>&1; then
-        print_relevant_log_excerpt .local/merge-output.log
-        exit 1
-      fi
-      auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
-      auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
-      mergeable=$(printf '%s\n' "$auto_meta" | jq -r '.mergeable // "UNKNOWN"')
-      merge_state_status=$(printf '%s\n' "$auto_meta" | jq -r '.mergeStateStatus // "UNKNOWN"')
-      existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
-      if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
-        echo "PR head changed while re-arming auto-merge (expected $PREP_HEAD_SHA, got $auto_head_sha)."
-        exit 1
-      fi
-      if [ -n "$existing_auto_method" ]; then
-        echo "Auto-merge remained enabled after GitHub accepted the disable request."
-        exit 1
-      fi
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
+      break
     fi
-
-    if [ "$mergeable" != "MERGEABLE" ] || [ "$merge_state_status" != "BEHIND" ]; then
-      echo "Auto-merge eligibility not met (mergeable=$mergeable, mergeStateStatus=$merge_state_status; expected MERGEABLE/BEHIND)."
-      echo "Falling back to the current immediate pinned merge behavior."
-    else
-      # GitHub's EnablePullRequestAutoMergeInput contract keeps expectedHeadOid
-      # as the head that must match to allow the eventual merge.
-      if gh_plain pr merge "$pr" \
-        --auto \
-        --squash \
-        "${merge_args[@]}" \
-        >.local/merge-output.log 2>&1
-      then
-        auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
-        auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
-        state=$(printf '%s\n' "$auto_meta" | jq -r .state)
-        existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
-        if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
-          echo "PR head changed while enabling auto-merge (expected $PREP_HEAD_SHA, got $auto_head_sha)."
-          exit 1
-        elif [ "$state" = "MERGED" ]; then
-          merge_submitted=true
-          merge_label="squash auto-merge"
-        elif [ "$existing_auto_method" = "SQUASH" ]; then
-          echo "AUTO-MERGE ENABLED for PR #$pr at $PREP_HEAD_SHA."
-          echo "GitHub will land it via squash when required checks and branch up-to-dateness are satisfied."
-          return 0
-        else
-          echo "GitHub accepted the auto-merge command but did not report a squash auto-merge request."
-          print_relevant_log_excerpt .local/merge-output.log
-          exit 1
-        fi
-      else
-        auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,autoMergeRequest") || exit 1
-        auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
-        existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
-        if [ "$auto_head_sha" = "$PREP_HEAD_SHA" ] && [ -n "$existing_auto_method" ]; then
-          echo "Auto-merge enablement was inconclusive; clearing the observed $existing_auto_method request to fail closed."
-          if ! gh_plain pr merge "$pr" --disable-auto >>.local/merge-output.log 2>&1; then
-            print_relevant_log_excerpt .local/merge-output.log
-            exit 1
-          fi
-          auto_meta=$(gh pr view "$pr" --json state,headRefOid,autoMergeRequest)
-          auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
-          existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
-          if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ] || [ -n "$existing_auto_method" ]; then
-            echo "Unable to prove the inconclusive auto-merge request was cleared at the verified head."
-            exit 1
-          fi
-          echo "The inconclusive auto-merge request was cleared safely; re-run merge-run to retry."
-          exit 1
-        fi
-        if ! auto_merge_unavailable_error .local/merge-output.log; then
-          print_relevant_log_excerpt .local/merge-output.log
-          exit 1
-        fi
-        echo "GitHub auto-merge is unavailable for this repository or branch protection; falling back to the current immediate pinned merge behavior."
-        print_relevant_log_excerpt .local/merge-output.log
-      fi
+    if [ "$admission_attempt" -eq 3 ]; then
+      merge_outcome_stop "mergeability remained UNKNOWN after 3 observations; stopped before intent/dispatch"
+      return 1
+    fi
+    if [ "$admission_attempt" -eq 1 ]; then
+      echo "Waiting for GitHub mergeability to settle (up to 3 observations, waiting 1 then 2 seconds for UNKNOWN samples)."
+    fi
+    previous_observation="$MERGE_OBSERVATION"
+    sleep "$admission_attempt"
+  done
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
+    route="admin"
+    merge_args=(--admin "${merge_args[@]}")
+    merge_label="admin squash with trusted Crabbox infrastructure proof"
+  elif [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.isMergeQueueEnabled)" = true ]; then
+    route=queue
+    merge_label="merge queue (requested $merge_method)"
+  elif [ "$auto_merge_requested" = true ]; then
+    # Select once before intent; CLEAN needs no auto request. No dispatch error
+    # can authorize a second route or request.
+    case "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.pr | .mergeable + "/" + .mergeStateStatus')" in
+      MERGEABLE/CLEAN) ;;
+      MERGEABLE/BEHIND)
+        route=auto
+        merge_args=(--auto "${merge_args[@]}")
+        merge_label="squash auto-merge"
+        ;;
+      *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
+    esac
+  fi
+  if [ -n "$recovery_oid" ] && [ "$route" != immediate ]; then
+    merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
+    return 1
+  fi
+  # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
+  # Reject known client-side refusals before recording non-retryable intent.
+  if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
+    .pr | .isMergeQueueEnabled == false and
+    (.mergeStateStatus == "DIRTY" or ($route == "immediate" and (.mergeStateStatus | IN("BLOCKED", "BEHIND"))))
+  ' >/dev/null; then
+    merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
+    return 1
+  fi
+  local observed_main candidate_tree
+  observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
+  if [ "$merge_method" = squash ] && [ "$route" != queue ]; then
+    candidate_tree=$(git merge-tree --write-tree "$observed_main" "$PREP_HEAD_SHA") || {
+      merge_outcome_stop "cannot establish prepared-head merge tree (conflict or unavailable objects)"; return 1;
+    }
+    if [ "$candidate_tree" = "$(git rev-parse "$observed_main^{tree}")" ]; then
+      echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
+      return 1
     fi
   fi
-
-  if [ "$merge_submitted" != "true" ]; then
-    if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
-      if ! verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA"; then
-        echo "Crabbox merge bypass evidence is not sufficient." >&2
-        exit 1
-      fi
-      crabbox_final_main_sha=$(jq -er '
-        .mainSha
-        | select(type == "string" and test("^[0-9a-f]{40}$"))
-      ' .local/merge-crabbox-bypass.json) || {
-        echo "Crabbox merge bypass did not preserve the final protected-main SHA." >&2
-        exit 1
-      }
-      merge_label="admin squash with trusted Crabbox infrastructure proof"
-      if ! gh_plain pr merge "$pr" \
-        --admin \
-        "$merge_flag" \
-        "${merge_args[@]}" \
-        >.local/merge-output.log 2>&1
-      then
-        print_relevant_log_excerpt .local/merge-output.log
-        exit 1
-      fi
-    else
-      if ! gh_plain pr merge "$pr" \
-        "$merge_flag" \
-        "${merge_args[@]}" \
-        >.local/merge-output.log 2>&1
-      then
-        print_relevant_log_excerpt .local/merge-output.log
-        exit 1
-      fi
-    fi
+  if [ -n "$recovery_oid" ]; then
+    recovery_actor=$(gh_plain api --hostname "$MERGE_REPO_HOST" user --jq '.login | select(type == "string" and length > 0)') || return 1
+    [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
-
-  if [ -z "$state" ]; then
-    state=$(gh pr view "$pr" --json state --jq .state)
+  merge_outcome_stable "$pr" || return 1
+  if [ "$route" = admin ]; then
+    verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
+    crabbox_final_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+    [ "$crabbox_final_main_sha" = "$observed_main" ] || {
+      merge_outcome_stop "main changed during final admin admission"; return 1;
+    }
   fi
-  if [ "$state" != "MERGED" ]; then
-    echo "Landing not finalized yet (state=$state), waiting up to 15 minutes..."
-    local i
-    for i in $(seq 1 90); do
-      sleep 10
-      state=$(gh pr view "$pr" --json state --jq .state)
-      if [ "$state" = "MERGED" ]; then
-        break
-      fi
-    done
+  local intent attempt
+  attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
+  intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
+    --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" '
+    {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
+     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
+  ') || return 1
+  if [ -n "$recovery_oid" ]; then
+    # This records a new operator decision, not proof that the prior request failed.
+    # The outcome CAS consumes that exact decision and retains the old intent as a parent.
+    intent=$(printf '%s\n' "$intent" | jq -c --arg outcome "$recovery_oid" \
+      --argjson previous "$recovery_record" --arg actor "$recovery_actor" \
+      '.recovery={outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"}') || return 1
   fi
-
-  if [ "$state" != "MERGED" ]; then
-    echo "PR state is $state after waiting."
-    exit 1
+  mark_pr_operation_side_effects_started
+  merge_outcome_write "$intent" || return 1
+  local merge_output=".local/merge-output.$attempt.log"
+  # Both success and failure are reconciled. A killed process leaves intent for
+  # the next invocation; an OPEN read can never authorize another dispatch. Each
+  # attempt owns an exclusive capture, so recovery cannot overwrite earlier evidence.
+  if (
+    set -o noclobber
+    exec >"$merge_output" || exit 125
+    exec 2>&1
+    gh_plain pr merge "$pr" --repo "$MERGE_REPO_URL" "$merge_flag" "${merge_args[@]}"
+  ); then
+    merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.accepted=true')" || return 1
+  else
+    # Do not read a capture we could not create; it may be somebody else's symlink.
+    [ "$?" -eq 125 ] || print_relevant_log_excerpt "$merge_output"
   fi
-
+  merge_outcome_reconcile "$pr" || return 1
+  [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)" != intent ] || return 0
   local landed_sha
-  landed_sha=$(gh pr view "$pr" --json mergeCommit --jq '.mergeCommit.oid')
-  if [ -z "$landed_sha" ] || [ "$landed_sha" = "null" ]; then
-    echo "Landed commit SHA missing."
-    exit 1
-  fi
-  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
-    record_crabbox_landing_parent_audit "$landed_sha" "$crabbox_final_main_sha" || exit 1
+  landed_sha=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed)
+  if [ "$route" = admin ]; then
+    record_crabbox_landing_parent_audit "$landed_sha" "$crabbox_final_main_sha" || return 1
   fi
   local repo_nwo
-  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  repo_nwo="$MERGE_REPO_NAME"
 
-  local landed_sha_url="https://github.com/$repo_nwo/commit/$landed_sha"
-  local prep_sha_url="https://github.com/$repo_nwo/pull/$pr/commits/$PREP_HEAD_SHA"
+  local landed_sha_url="$MERGE_REPO_URL/commit/$landed_sha"
+  local prep_sha_url="$MERGE_REPO_URL/pull/$pr/commits/$PREP_HEAD_SHA"
 
-  local ok=0
   local comment_body
   printf -v comment_body \
     'Merged via %s.\n\n- Prepared head SHA: [%s](%s)\n- Landed commit: [%s](%s)' \
@@ -667,41 +612,51 @@ merge_run() {
       "$(jq -r .expectedParentSha .local/merge-crabbox-parent-audit.json)" \
       "$(jq -r .actualParentSha .local/merge-crabbox-parent-audit.json)"
   fi
-  local comment_url=""
-  local comment_err_file
-  comment_err_file=$(mktemp)
-  local attempt
-  for attempt in 1 2 3; do
-    if comment_url=$(
-      gh_plain api \
-        --method POST \
-        "repos/{owner}/{repo}/issues/$pr/comments" \
-        --raw-field "body=$comment_body" \
-        --jq '.html_url // empty' \
-        2>"$comment_err_file"
-    ) && [ -n "$comment_url" ]; then
-      ok=1
-      break
-    fi
-    sleep 2
-  done
-  rm -f "$comment_err_file"
-  [ "$ok" -eq 1 ] || { echo "Failed to post PR comment after retries"; exit 1; }
+  comment_body+=$'\n\n'"<!-- openclaw-merge:$attempt -->"
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commenting"')" || return 1
+  local comment_url
+  if ! comment_url=$(gh_plain api --hostname "$MERGE_REPO_HOST" --method POST \
+    "repos/$repo_nwo/issues/$pr/comments" --raw-field "body=$comment_body" --jq '.html_url // empty') ||
+    [ -z "$comment_url" ]; then
+    echo "Merge confirmed; completion comment outcome uncertain. No second POST or cleanup. Run scripts/pr merge-run $pr for read-only reconciliation."
+    return 1
+  fi
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commented"')" || return 1
 
+  # Only this uninterrupted completion path owns cleanup. The exact-head lease
+  # protects advanced/different-head recreations, but cannot detect same-SHA recreation.
+  local head_json head_ref head_repo cleanup_complete=true
+  if head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefName,headRepository,headRepositoryOwner) &&
+    head_ref=$(printf '%s\n' "$head_json" | jq -er '.headRefName | select(type == "string" and length > 0)') &&
+    head_repo=$(printf '%s\n' "$head_json" | jq -er '.headRepositoryOwner.login + "/" + .headRepository.name | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') &&
+    git check-ref-format "refs/heads/$head_ref"; then
+    local cleanup_error ref_status=0
+    if ! cleanup_error=$(git push --force-with-lease="refs/heads/$head_ref:$PREP_HEAD_SHA" \
+      "https://$MERGE_REPO_HOST/$head_repo.git" ":refs/heads/$head_ref" 2>&1); then
+      # GitHub may already have deleted the branch, or the delete response was
+      # lost. Only a successful advertisement with no exact ref proves absence.
+      git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$head_repo.git" "refs/heads/$head_ref" >/dev/null || ref_status=$?
+      if [ "$ref_status" -ne 2 ]; then
+        cleanup_complete=false
+        echo "Warning: remote cleanup pending; branch changed or inaccessible. Inspect $head_repo:$head_ref; never delete it by name without verifying ownership."
+        printf '%s\n' "$cleanup_error" >&2
+      fi
+    fi
+  else
+    cleanup_complete=false
+    echo "Warning: remote cleanup pending; unable to verify head branch metadata."
+  fi
   local root
   root=$(repo_root)
-  cd "$root"
-  delete_remote_pr_head_branch_after_merge
-  remove_worktree_if_present ".worktrees/pr-$pr"
-  delete_local_branch_if_safe "temp/pr-$pr"
-  delete_local_branch_if_safe "pr-$pr"
-  delete_local_branch_if_safe "pr-$pr-prep"
-
-  local pr_url
-  pr_url=$(gh pr view "$pr" --json url --jq .url)
-
-  echo "merge-run complete for PR #$pr"
+  cd "$root" || return 1
+  cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
+  if [ "$cleanup_complete" = true ]; then
+    merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+    echo "merge-run complete for PR #$pr"
+  else
+    echo "Merge confirmed; completion pending: inspect cleanup warnings. Recovery will not delete branches or worktrees."
+  fi
   echo "landed commit: $landed_sha"
   echo "completion comment: $comment_url"
-  echo "$pr_url"
+  echo "$MERGE_REPO_URL/pull/$pr"
 }

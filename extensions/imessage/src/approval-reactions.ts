@@ -57,7 +57,7 @@ type IMessageApprovalReactionHandleResult =
   | {
       handled: true;
       stopPolling: true;
-      stopPollingReason: "resolved" | "not-found" | "resolver-error";
+      stopPollingReason: "resolved" | "not-found";
     };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
@@ -593,7 +593,9 @@ export async function handleIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
     );
-    return { handled: true, stopPolling: true, stopPollingReason: "resolver-error" };
+    // Non-terminal resolver errors must reach the durable ingress drain.
+    // Returning here would commit the claim and lose the operator's reaction.
+    throw error;
   }
 }
 

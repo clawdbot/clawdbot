@@ -110,6 +110,7 @@ struct ChatGatewayRequestTests {
             agentID: "reviewer",
             label: .some(nil),
             category: .some(nil),
+            color: .some(nil),
             pinned: true,
             archived: nil,
             unreadPatch: nil)
@@ -119,8 +120,26 @@ struct ChatGatewayRequestTests {
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["label"]?.value is NSNull)
         #expect(request.params["category"]?.value is NSNull)
+        #expect(request.params["color"]?.value is NSNull)
         #expect(request.params["pinned"]?.value as? Bool == true)
         #expect(request.params["archived"] == nil)
+    }
+
+    @Test(arguments: ["blue", nil] as [String?])
+    func `session color patch sets names without changing unrelated fields`(color: String?) throws {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:work",
+            agentID: "main",
+            label: nil,
+            category: nil,
+            color: color.map { .some($0) },
+            pinned: nil,
+            archived: nil,
+            unreadPatch: nil)
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["color"] as? String == color)
+        #expect(object.count == (color == nil ? 2 : 3))
     }
 
     @Test func `session read acknowledgement encodes an absent manual marker as null`() {
@@ -305,7 +324,7 @@ struct ChatGatewayRequestTests {
         #expect(delete.params["name"]?.value as? String == "Personal")
     }
 
-    @Test func `rename clear archive and fork use session mutation contracts`() {
+    @Test func `rename clear archive delete and fork use session mutation contracts`() {
         let rename = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -335,11 +354,16 @@ struct ChatGatewayRequestTests {
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
             agentID: nil)
+        let delete = OpenClawChatGatewayRequests.deleteSession(
+            sessionKey: "agent:main:child",
+            agentID: nil)
 
         #expect(rename.params["label"]?.value is NSNull)
         #expect(archive.params["archived"]?.value as? Bool == true)
         #expect(archive.params["expectedSessionId"]?.value as? String == "session-child")
         #expect(archive.timeoutMs == 600_000)
+        #expect(delete.method == "sessions.delete")
+        #expect(delete.timeoutMs == 600_000)
         #expect(restore.params["expectedSessionId"]?.value as? String == "session-child")
         #expect(restore.timeoutMs == 15000)
         #expect(fork.method == "sessions.create")
@@ -391,7 +415,8 @@ struct ChatGatewayRequestTests {
         #expect(request.params["thinking"]?.value as? String == "low")
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
-        #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+        let json = try #require(String(bytes: encoded, encoding: .utf8))
+        #expect(json.contains("a.png"))
     }
 
     @Test func `send request omits inherited thinking override`() {
@@ -671,6 +696,7 @@ struct ChatGatewayPayloadCodecTests {
             "reason": AnyCodable("message"),
             "updatedAt": AnyCodable(200),
         ])
+        #expect(partial?.colorPresent == false)
         #expect(partial?.agentStatusPresent == false)
         #expect(partial?.observerDigestPresent == false)
         #expect(partial?.statusPresent == false)
@@ -679,11 +705,14 @@ struct ChatGatewayPayloadCodecTests {
         let cleared = try? decode([
             "sessionKey": AnyCodable("main"),
             "reason": AnyCodable("patch"),
+            "color": AnyCodable(NSNull()),
             "agentStatus": AnyCodable(NSNull()),
             "observerDigest": AnyCodable(NSNull()),
             "status": AnyCodable(NSNull()),
             "lastRunError": AnyCodable(NSNull()),
         ])
+        #expect(cleared?.colorPresent == true)
+        #expect(cleared?.color == nil)
         #expect(cleared?.agentStatusPresent == true)
         #expect(cleared?.observerDigestPresent == true)
         #expect(cleared?.statusPresent == true)
@@ -694,9 +723,11 @@ struct ChatGatewayPayloadCodecTests {
         let data = Data("""
         {
           "sessionKey": null,
+          "color": null,
           "status": null,
           "session": {
             "key": "agent:main:child",
+            "color": "blue",
             "agentId": "main",
             "parentSessionKey": "agent:main:parent",
             "status": "running",
@@ -710,6 +741,8 @@ struct ChatGatewayPayloadCodecTests {
         let event = try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data)
         #expect(event.reason.isEmpty)
         #expect(event.sessionKey == nil)
+        #expect(event.color == nil)
+        #expect(event.colorPresent)
         #expect(event.agentId == "main")
         #expect(event.parentSessionKey == "agent:main:parent")
         #expect(event.status == nil)
@@ -727,6 +760,7 @@ struct ChatGatewayPayloadCodecTests {
             reason: "run-progress",
             updatedAt: 200,
             lastReadAt: 100,
+            color: nil,
             agentStatus: .init(note: "Reviewing", expiresAt: 500, attention: "hand"),
             observerDigest: .init(
                 runId: "run-1",
@@ -739,10 +773,13 @@ struct ChatGatewayPayloadCodecTests {
             hasActiveRun: true,
             activeRunIds: ["run-1"],
             startedAt: 50,
-            endedAt: nil)
+            endedAt: nil,
+            colorPresent: true)
 
         let data = try JSONEncoder().encode(event)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["colorPresent"] == nil)
+        #expect(object["color"] is NSNull)
         #expect(object["agentStatusPresent"] == nil)
         #expect(object["observerDigestPresent"] == nil)
         #expect(object["statusPresent"] == nil)

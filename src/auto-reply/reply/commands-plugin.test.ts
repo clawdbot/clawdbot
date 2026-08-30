@@ -23,6 +23,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { buildCommandContext } from "./commands-context.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
@@ -690,6 +691,67 @@ describe("handlePluginCommand", () => {
       reply: { text: "approved" },
     });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "Gateway command routed to its originating channel",
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "whatsapp",
+    },
+    {
+      name: "provider taking precedence over a different surface",
+      Provider: "whatsapp",
+      Surface: "webchat",
+      OriginatingChannel: undefined,
+    },
+  ])("keeps binding selection and execution aligned for $name", async (route) => {
+    const handler = registerTestCommand();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const commandBody = "/card";
+    const ctx = finalizeInboundContext({
+      Provider: route.Provider,
+      Surface: route.Surface,
+      OriginatingChannel: route.OriginatingChannel,
+      Body: commandBody,
+      CommandBody: commandBody,
+      CommandSource: "text",
+      CommandAuthorized: true,
+      SenderId: "test-user",
+      From: "test-user",
+      To: "test-bot",
+    });
+    const replyOptions: NonNullable<HandleCommandsParams["opts"]> &
+      PluginCommandExecutionReplyOptions = {};
+
+    expect(shouldBypassPluginOwnedBindingForCommand(ctx, cfg, replyOptions)).toBe(true);
+    expect(replyOptions[PLUGIN_COMMAND_DISPATCH]?.kind).toBe("plugin");
+    const params = buildPluginParams(commandBody, cfg);
+    params.ctx = ctx;
+    params.opts = replyOptions;
+    params.command = buildCommandContext({
+      ctx,
+      cfg,
+      sessionKey: params.sessionKey,
+      isGroup: false,
+      triggerBodyNormalized: commandBody,
+      commandAuthorized: true,
+    });
+
+    await expect(handlePluginCommand(params, true)).resolves.toEqual({
+      shouldContinue: false,
+      reply: { text: "from plugin" },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(firstCommandContext(handler)).toMatchObject({
+      channel: "whatsapp",
+      commandBody,
+      sessionKey: params.sessionKey,
+    });
   });
 
   it("carries one binding selection into dispatch without rematching a replacement registry", async () => {

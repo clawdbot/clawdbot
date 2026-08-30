@@ -166,7 +166,10 @@ async function runPdfPrompt(params: {
 }> {
   const requestedCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  let preparedRuntimeLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>;
+  let preparedRuntimeLease: Pick<
+    Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>,
+    "snapshot" | "release"
+  >;
   if (params.preparedModelRuntime) {
     preparedRuntimeLease = { snapshot: params.preparedModelRuntime, release: () => {} };
   } else {
@@ -557,6 +560,7 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPath, {
               maxBytes,
               localRoots,
+              ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
               // Forward the run abort signal into the fetch layer so an abort

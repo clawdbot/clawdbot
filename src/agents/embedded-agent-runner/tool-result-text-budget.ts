@@ -32,26 +32,27 @@ export function estimateToolResultTextChars(
   return chars;
 }
 
-export function sliceToolResultTextToBudget(
+function sliceToolResultTextBudget(
   text: string,
   maxChars: number,
-  options: ToolResultTextBudgetOptions = {},
+  options: ToolResultTextBudgetOptions,
+  fromEnd: boolean,
 ): string {
   const budget = Math.max(0, Math.floor(maxChars));
-  if (estimateToolResultTextChars(text, options) <= budget) {
+  if (text.length <= budget && estimateToolResultTextChars(text, options) <= budget) {
     return text;
   }
-
   let best = "";
   let low = 0;
-  let high = text.length;
+  // Every UTF-16 unit costs at least one budget unit, so longer candidates cannot fit.
+  let high = Math.min(text.length, budget);
   while (low <= high) {
     const midpoint = Math.floor((low + high) / 2);
-    const candidate = sliceUtf16Safe(text, 0, midpoint);
+    const candidate = fromEnd
+      ? sliceUtf16Safe(text, text.length - midpoint)
+      : sliceUtf16Safe(text, 0, midpoint);
     if (estimateToolResultTextChars(candidate, options) <= budget) {
-      if (candidate.length > best.length) {
-        best = candidate;
-      }
+      best = candidate;
       low = midpoint + 1;
     } else {
       high = midpoint - 1;
@@ -60,30 +61,18 @@ export function sliceToolResultTextToBudget(
   return best;
 }
 
+export function sliceToolResultTextToBudget(
+  text: string,
+  maxChars: number,
+  options: ToolResultTextBudgetOptions = {},
+): string {
+  return sliceToolResultTextBudget(text, maxChars, options, false);
+}
+
 export function sliceToolResultTextTailToBudget(
   text: string,
   maxChars: number,
   options: ToolResultTextBudgetOptions = {},
 ): string {
-  const budget = Math.max(0, Math.floor(maxChars));
-  if (estimateToolResultTextChars(text, options) <= budget) {
-    return text;
-  }
-
-  let best = "";
-  let low = 0;
-  let high = text.length;
-  while (low <= high) {
-    const midpoint = Math.floor((low + high) / 2);
-    const candidate = sliceUtf16Safe(text, midpoint);
-    if (estimateToolResultTextChars(candidate, options) <= budget) {
-      if (candidate.length > best.length) {
-        best = candidate;
-      }
-      high = midpoint - 1;
-    } else {
-      low = midpoint + 1;
-    }
-  }
-  return best;
+  return sliceToolResultTextBudget(text, maxChars, options, true);
 }

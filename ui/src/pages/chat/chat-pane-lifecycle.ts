@@ -30,6 +30,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   discardStateStagedAttachments,
@@ -55,10 +56,13 @@ import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
 } from "./chat-pane-startup-subscriptions.ts";
-import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
+import {
+  applySelectedChatAgent,
+  refreshPageChat,
+  retireChatMetadataRequests,
+} from "./chat-state-refresh.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
@@ -543,9 +547,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
     chatState.addCleanup(this.context.gateway.subscribe((next) => this.applyGatewaySnapshot(next)));
     chatState.addCleanup(
-      this.context.agentSelection.subscribe((next) =>
-        applySelectedChatAgent(this.state, next.selectedId),
-      ),
+      this.context.agentSelection.subscribe((next) => {
+        applySelectedChatAgent(this.state, next.selectedId);
+        if (this.state) {
+          void syncSelectedSessionMessageSubscription(this.state);
+        }
+      }),
     );
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
     chatState.addCleanup(
@@ -573,7 +580,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             invalidateChatAvatarCache(state);
             invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
-            retireChatMetadataRequests(state);
             void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
@@ -686,6 +692,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   override disconnectedCallback() {
     if (this.state) {
+      retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
         // MCP app teardown can delay DOM removal after pane close. Finalize any
         // attachment that completed during that delay instead of leaking it.

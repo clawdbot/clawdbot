@@ -9,6 +9,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import type { SessionActor } from "../config/sessions/session-entry-provenance.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 /** Display row derived from a persisted session entry. */
@@ -29,6 +30,7 @@ export type SessionDisplayRow = {
   sessionStartedAt?: number;
   lastInteractionAt?: number;
   label?: string;
+  color?: string;
   status?: SessionEntry["status"];
   visibility?: SessionEntry["visibility"];
   createdActor?: SessionEntry["createdActor"];
@@ -80,6 +82,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     sessionStartedAt: entry?.sessionStartedAt,
     lastInteractionAt: entry?.lastInteractionAt,
     label: entry?.label,
+    color: entry?.color,
     status: entry?.status,
     visibility: entry?.visibility ?? "shared",
     createdActor: entry?.createdActor,
@@ -144,7 +147,7 @@ export function formatSessionModelCell(model: string | null | undefined, rich: b
   return rich ? theme.info(label) : label;
 }
 
-function formatSessionActor(actor: NonNullable<SessionEntry["createdActor"]>): string {
+function formatSessionActor(actor: SessionActor): string {
   return actor.label?.trim() || actor.id?.trim() || actor.type;
 }
 

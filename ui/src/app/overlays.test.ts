@@ -563,6 +563,37 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
+  it("keeps a projected approval's resolve failure visible", async () => {
+    let resolveAttempts = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolveAttempts += 1;
+      return resolveAttempts === 1
+        ? Promise.reject(new Error("gateway unavailable"))
+        : Promise.resolve({ ok: true });
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    const projectedApproval = {
+      ...approval("approval-projected", 1_000),
+      kind: "exec" as const,
+    };
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.get(projectedApproval.id)).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.has(projectedApproval.id)).toBe(false);
+    overlays.dispose();
+  });
+
   it("surfaces a connection error when a rendered approval races a disconnect", async () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),

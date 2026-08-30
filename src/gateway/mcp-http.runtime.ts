@@ -211,8 +211,6 @@ export class McpLoopbackToolCache {
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",
-      params.execSession?.execSecurity ?? "",
-      params.execSession?.execAsk ?? "",
       params.execSession?.execNode ?? "",
       params.execSession?.permissionMode ?? "",
       params.execOverrides?.mode ?? "",

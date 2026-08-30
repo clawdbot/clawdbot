@@ -50,7 +50,7 @@ import {
   extractStructuredSvgAttachments,
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
-  type AttachmentItem,
+  type AssistantAttachmentItem,
   type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
@@ -283,14 +283,19 @@ export function renderGroupedMessage(
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   const actionText = opts.actionMarkdown ?? displayMarkdown;
   const assistantAttachments = normalizedMessage.content.filter(
-    (item): item is AttachmentItem => item.type === "attachment",
+    (item): item is AssistantAttachmentItem =>
+      item.type === "attachment" || item.type === "attachment_error",
   );
   const attachmentUrls = new Set<string>();
   const visibleAttachments = [
     ...assistantAttachments,
     ...extractStructuredSvgAttachments(message),
     ...extractTranscriptAttachments(message),
-  ].filter(({ attachment }) => {
+  ].filter((item) => {
+    if (item.type === "attachment_error") {
+      return true;
+    }
+    const { attachment } = item;
     if (attachmentUrls.has(attachment.url)) {
       return false;
     }
@@ -303,7 +308,8 @@ export function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = displayMarkdown ? displayMarkdown : null;
+  const markdown =
+    (normalizedRole === "user" ? opts.actionMarkdown : undefined) ?? (displayMarkdown || null);
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -320,6 +326,7 @@ export function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
+    hasImages ? "chat-bubble--with-images" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
@@ -538,6 +545,7 @@ export function renderGroupedMessage(
                         imageRenderOptions,
                         onOpenSidebar,
                         opts.onAssistantAttachmentLoaded,
+                        normalizedRole === "assistant",
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -614,6 +622,7 @@ export function renderGroupedMessage(
               imageRenderOptions,
               onOpenSidebar,
               opts.onAssistantAttachmentLoaded,
+              normalizedRole === "assistant",
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

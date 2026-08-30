@@ -37,10 +37,19 @@ export function createResponseDeliveryWaiter(
 
 const OFFER_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
 
-export function respondOfferText(res: ServerResponse, statusCode: number, body: string): void {
+/**
+ * The one writer for every offer-endpoint response, error text and SDP answer
+ * alike, so no caller sets the security headers by hand and forgets one.
+ */
+export function respondRealtimeOffer(
+  res: ServerResponse,
+  statusCode: number,
+  body: string,
+  contentType = OFFER_TEXT_CONTENT_TYPE,
+): void {
   res.statusCode = statusCode;
   res.setHeader("cache-control", "no-store");
-  res.setHeader("content-type", OFFER_TEXT_CONTENT_TYPE);
+  res.setHeader("content-type", contentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.end(body);
 }

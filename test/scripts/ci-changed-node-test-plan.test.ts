@@ -66,6 +66,7 @@ it.each([
   [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
   [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
   [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
   [
@@ -89,6 +90,7 @@ it.each([
   [[".github/workflows/ci.yml"], allDockerSeedLanes],
   [["scripts/lib/ci-changed-node-test-plan.mts"], allDockerSeedLanes],
   [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts\\e2e\\lib\\mcp-code-mode\\scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
 ])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
   expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
@@ -240,6 +242,14 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
+  });
+
+  it.each([
+    "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+    "extensions/browser/src/browser/extension-install.test-support.ts",
+    "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  ])("keeps the built native-host proof selected when only %s changes", (changedPath) => {
+    expect(hasBuildArtifactAffectingChange([changedPath])).toBe(true);
   });
 
   it("classifies prompt-snapshot impact by surface and generator import graph", () => {

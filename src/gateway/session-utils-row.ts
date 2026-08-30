@@ -30,6 +30,7 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -42,7 +43,6 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import {
-  hasSessionCreatorProfileProvenance,
   projectSessionActor,
   projectSessionOwner,
   projectSessionParticipants,
@@ -115,9 +115,10 @@ export function buildGatewaySessionRow(params: {
     entry,
     params.rowContext?.userProfileIdentityById,
     cfg,
-  ).filter(
-    (participant) => JSON.stringify(participant.identity) !== JSON.stringify(owner?.actor.identity),
   );
+  if (owner?.actor.identity) {
+    participants.delete(JSON.stringify(owner.actor.identity));
+  }
   const observerDigest =
     entry?.observerDigest &&
     // Strictly newer: a run end and restart can share a millisecond, and the
@@ -350,12 +351,12 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
-  // its own agent's completed catalog instead of a shared default-agent catalog.
+  // Entries and provider policy must stay bound to the same prepared agent owner;
+  // the Gateway startup registry can contain a different set of plugins.
+  const preparedCatalog =
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
   const rowModelCatalog =
-    params.modelCatalog instanceof Map
-      ? params.modelCatalog.get(sessionAgentId)
-      : params.modelCatalog;
+    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
@@ -369,7 +370,7 @@ export function buildGatewaySessionRow(params: {
     entry,
     modelCatalog: thinkingModelCatalog,
     rowContext,
-    providerPolicySource: lightweight ? "active" : undefined,
+    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
   });
   const catalogEntry =
     rowModelCatalog && rowModelProvider && rowModel
@@ -454,17 +455,18 @@ export function buildGatewaySessionRow(params: {
       entry?.createdActor,
       rowContext?.userProfileIdentityById,
       cfg,
-      hasSessionCreatorProfileProvenance(entry),
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
-    participants: participants.length ? participants.slice(0, 4) : undefined,
-    participantCount: participants.length || undefined,
+    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: gatewayKind,
     label: entry?.label,
     icon: entry?.icon,
+    color: entry?.color,
     channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,

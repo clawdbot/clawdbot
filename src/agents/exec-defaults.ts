@@ -13,8 +13,6 @@ import {
   type ExecTarget,
   maxAsk,
   minSecurity,
-  normalizeExecAsk,
-  normalizeExecSecurity,
   normalizeExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
@@ -24,48 +22,22 @@ import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
+import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mode.js";
 
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
   SessionEntry,
-  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd" | "permissionMode" | "sandbox"
+  "execHost" | "execNode" | "execCwd" | "permissionMode" | "sandbox"
 >;
 
-// Resolved exec config layers come from global config, agent config, legacy
-// session fields, and per-call overrides.
-type ResolvedExecConfig = {
+// Resolved exec config layers come from global config, agent config, and per-call overrides.
+export type ExecPolicyOverrides = {
   host?: ExecTarget;
   mode?: ExecMode;
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
 };
-
-export type ExecPolicyOverrides = Omit<ResolvedExecConfig, "mode">;
-
-// Legacy/config resolution keeps the most specific mode/security/ask while
-// preserving policy bounds from approvals and sandbox availability later.
-type LayeredExecPolicy = {
-  mode?: ExecMode;
-  security: ExecSecurity;
-  ask: ExecAsk;
-};
-
-function applySessionLegacyExecPolicyLayer(
-  base: LayeredExecPolicy,
-  sessionEntry?: ExecSessionDefaults,
-): LayeredExecPolicy {
-  const security = normalizeExecSecurity(sessionEntry?.execSecurity);
-  const ask = normalizeExecAsk(sessionEntry?.execAsk);
-  if (security !== null || ask !== null) {
-    return {
-      security: security ?? base.security,
-      ask: ask ?? base.ask,
-    };
-  }
-  return base;
-}
 
 // Gather the shared config state once so exec resolution applies one
 // agent/global/session precedence order.
@@ -80,8 +52,8 @@ function resolveExecConfigState(params: {
   cfg: OpenClawConfig;
   host: ExecTarget;
   agentId: string | undefined;
-  agentExec?: ResolvedExecConfig;
-  globalExec?: ResolvedExecConfig;
+  agentExec?: ExecPolicyOverrides;
+  globalExec?: ExecPolicyOverrides;
 } {
   const cfg = params.cfg ?? {};
   const resolvedAgentId =
@@ -173,10 +145,17 @@ export function resolveExecDefaults(params: {
   });
   const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
   const sessionPermissionPolicy = params.sessionEntry?.permissionMode
-    ? resolveSessionPermissionCoreToolPolicy({ mode: params.sessionEntry.permissionMode })
+    ? resolveSessionPermissionExecPolicy(
+        { mode: params.sessionEntry.permissionMode },
+        params.execOverrides,
+      )
     : undefined;
+  // Full sessions bypass host floors only while effective security remains full;
+  // ask-only tightening still applies without restoring those floors.
+  const bypassHostApprovalFloors =
+    params.sessionEntry?.permissionMode === "full" && sessionPermissionPolicy?.security === "full";
   const approvalDefaults =
-    resolved.effectiveHost === "sandbox" || sessionPermissionPolicy?.bypassHostApprovalFloors
+    resolved.effectiveHost === "sandbox" || bypassHostApprovalFloors
       ? undefined
       : resolveExecApprovalsFromFile({
           file: params.execApprovals ?? loadExecApprovals(),
@@ -186,19 +165,21 @@ export function resolveExecDefaults(params: {
             ask: "off",
           },
         }).agent;
-  const basePolicy: LayeredExecPolicy = {
-    security: approvalDefaults?.security ?? defaultSecurity,
-    ask: approvalDefaults?.ask ?? "off",
-  };
-  const layeredPolicy: LayeredExecPolicy = sessionPermissionPolicy
-    ? { mode: sessionPermissionPolicy.execMode, security: defaultSecurity, ask: "off" }
-    : applyExecPolicyLayer(
-        applySessionLegacyExecPolicyLayer(
-          applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
-          params.sessionEntry,
+  const layeredPolicy =
+    sessionPermissionPolicy ??
+    applyExecPolicyLayer(
+      applyExecPolicyLayer(
+        applyExecPolicyLayer(
+          {
+            security: approvalDefaults?.security ?? defaultSecurity,
+            ask: approvalDefaults?.ask ?? "off",
+          },
+          globalExec,
         ),
-        params.execOverrides,
-      );
+        agentExec,
+      ),
+      params.execOverrides,
+    );
   const modePolicy = resolveExecModePolicy(layeredPolicy);
   // Approval files bound every policy source except explicit admin-only full sessions.
   const security =

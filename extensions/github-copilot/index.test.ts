@@ -78,6 +78,7 @@ type GithubCopilotTestModelCatalogProvider = {
 };
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
@@ -93,6 +94,29 @@ afterAll(() => {
   vi.doUnmock("./register.runtime.js");
   vi.resetModules();
 });
+
+async function runDeviceAuthWithFakeTimers<T>(
+  run: (openUrl: (url: string) => Promise<void>) => T | Promise<T>,
+): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let notifyDeviceCodeShown!: () => void;
+    const deviceCodeShown = new Promise<void>((resolve) => {
+      notifyDeviceCodeShown = resolve;
+    });
+    const pending = Promise.resolve(run(async () => notifyDeviceCodeShown()));
+    const openedBeforeCompletion = await Promise.race([
+      deviceCodeShown.then(() => true),
+      pending.then(() => false),
+    ]);
+    expect(openedBeforeCompletion).toBe(true);
+    // Browser handoff follows the profile, device-code, and prompt work.
+    await vi.advanceTimersByTimeAsync(1_000);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 async function createAgentDir() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-copilot-test-"));
@@ -1344,20 +1368,22 @@ describe("github-copilot plugin", () => {
     });
 
     try {
-      const result = await method.run({
-        config: {},
-        env: {},
-        agentDir,
-        workspaceDir: "/tmp/workspace",
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        opts: {},
-        secretInputMode: "plaintext",
-        allowSecretRefPrompt: false,
-        isRemote: false,
-        openUrl: vi.fn(),
-        oauth: { createVpsAwareHandlers: vi.fn() },
-      } as never);
+      const result = await runDeviceAuthWithFakeTimers((openUrl) =>
+        method.run({
+          config: {},
+          env: {},
+          agentDir,
+          workspaceDir: "/tmp/workspace",
+          prompter,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          opts: {},
+          secretInputMode: "plaintext",
+          allowSecretRefPrompt: false,
+          isRemote: false,
+          openUrl,
+          oauth: { createVpsAwareHandlers: vi.fn() },
+        } as never),
+      );
 
       expect(prompter.confirm).toHaveBeenCalledWith({
         message: "GitHub Copilot auth already exists. Re-run login?",
@@ -1413,11 +1439,13 @@ describe("github-copilot plugin", () => {
     });
   }
 
-  async function withTty<T>(fn: () => Promise<T>): Promise<T> {
+  async function runDeviceAuthWithTty<T>(
+    fn: (openUrl: (url: string) => Promise<void>) => Promise<T>,
+  ): Promise<T> {
     const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     try {
-      return await fn();
+      return await runDeviceAuthWithFakeTimers(fn);
     } finally {
       vi.unstubAllGlobals();
       if (isTtyDescriptor) {
@@ -1446,8 +1474,8 @@ describe("github-copilot plugin", () => {
       note: vi.fn(),
     };
 
-    const result = await withTty(
-      async () =>
+    const result = await runDeviceAuthWithTty(
+      async (openUrl) =>
         await method.run({
           config: {
             models: {
@@ -1463,7 +1491,7 @@ describe("github-copilot plugin", () => {
           secretInputMode: "plaintext",
           allowSecretRefPrompt: false,
           isRemote: false,
-          openUrl: vi.fn(),
+          openUrl,
           oauth: { createVpsAwareHandlers: vi.fn() },
         } as never),
     );
@@ -1506,8 +1534,8 @@ describe("github-copilot plugin", () => {
       note: vi.fn(),
     };
 
-    const result = await withTty(
-      async () =>
+    const result = await runDeviceAuthWithTty(
+      async (openUrl) =>
         await method.run({
           config: {},
           env: {},
@@ -1519,7 +1547,7 @@ describe("github-copilot plugin", () => {
           secretInputMode: "plaintext",
           allowSecretRefPrompt: false,
           isRemote: false,
-          openUrl: vi.fn(),
+          openUrl,
           oauth: { createVpsAwareHandlers: vi.fn() },
         } as never),
     );
@@ -1564,8 +1592,8 @@ describe("github-copilot plugin", () => {
       note: vi.fn(),
     };
 
-    const result = await withTty(
-      async () =>
+    const result = await runDeviceAuthWithTty(
+      async (openUrl) =>
         await method.run({
           config: {},
           env: { COPILOT_GITHUB_DOMAIN: "acme.ghe.com" },
@@ -1577,7 +1605,7 @@ describe("github-copilot plugin", () => {
           secretInputMode: "plaintext",
           allowSecretRefPrompt: false,
           isRemote: false,
-          openUrl: vi.fn(),
+          openUrl,
           oauth: { createVpsAwareHandlers: vi.fn() },
         } as never),
     );
@@ -1669,8 +1697,8 @@ describe("github-copilot plugin", () => {
       note: vi.fn(),
     };
 
-    const result = await withTty(
-      async () =>
+    const result = await runDeviceAuthWithTty(
+      async (openUrl) =>
         await method.run({
           config: {},
           env: { COPILOT_GITHUB_DOMAIN: "env-tenant.ghe.com" },
@@ -1682,7 +1710,7 @@ describe("github-copilot plugin", () => {
           secretInputMode: "plaintext",
           allowSecretRefPrompt: false,
           isRemote: false,
-          openUrl: vi.fn(),
+          openUrl,
           oauth: { createVpsAwareHandlers: vi.fn() },
         } as never),
     );

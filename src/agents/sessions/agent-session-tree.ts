@@ -5,12 +5,14 @@ import {
 } from "../runtime/index.js";
 import { AgentSessionExecution } from "./agent-session-execution.js";
 import { extractTextContent, normalizeBranchSummaryResult } from "./agent-session-utils.js";
+import { createCompactionRuntime } from "./compaction/runtime.js";
 import type {
   ExtensionRunner,
   ReplacedSessionContext,
   TreePreparation,
 } from "./extensions/index.js";
 import type { BranchSummaryEntry } from "./session-manager.js";
+import { recordSessionModelUsage } from "./session-model-usage.js";
 
 export abstract class AgentSessionTree extends AgentSessionExecution {
   // =========================================================================
@@ -136,6 +138,9 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
             replaceInstructions,
             reserveTokens: branchSummarySettings.reserveTokens,
             streamFn: this.agent.streamFn,
+            runtime: createCompactionRuntime((usage) =>
+              recordSessionModelUsage(this.sessionManager, usage),
+            ),
           }),
         );
         if (result.aborted) {

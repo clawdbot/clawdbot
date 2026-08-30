@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
+import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
@@ -865,36 +866,30 @@ PY
 });
 
 describe("toStreamingMarkdownHtml", () => {
-  it("keeps appended-prefix splitting below repeated full-rescan cost", () => {
-    const splitIncrementally = splitStableStreamingMarkdown as (
-      markdown: string,
-      streamKey: string,
-    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+  it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";
-    // The ratio catches a reverted full-rescan path without making runner load
-    // part of the assertion by spending most of the test timeout on the baseline.
     for (let index = 0; index < 48; index += 1) {
       prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(30)}\n`;
       prefixes.push(prefix);
     }
-    const measure = (streamKey?: string) => {
-      const startedAt = performance.now();
-      for (const value of prefixes) {
-        if (streamKey) {
-          splitIncrementally(value, streamKey);
-        } else {
-          splitStableStreamingMarkdown(value);
-        }
-      }
-      return performance.now() - startedAt;
-    };
-    measure("line-scan-warmup");
-    const fullRescanMs = measure();
-    const incrementalMs = measure("line-scan-regression");
+    // A full rescan revisits the completed disclosure on every chunk. Observe
+    // the real scanner instead of comparing sub-millisecond wall-clock times.
+    const scanDisclosure = vi.spyOn(markdownDetails, "scanMarkdownDisclosureLine");
+    try {
+      const fullSplits = prefixes.map((value) => splitStableStreamingMarkdown(value));
+      expect(scanDisclosure).toHaveBeenCalledTimes(prefixes.length);
+      scanDisclosure.mockClear();
 
-    expect(incrementalMs).toBeLessThan(fullRescanMs / 5);
-  }, 5_000);
+      const incrementalSplits = prefixes.map((value) =>
+        splitStableStreamingMarkdown(value, "line-scan-regression"),
+      );
+      expect(incrementalSplits).toEqual(fullSplits);
+      expect(scanDisclosure).toHaveBeenCalledTimes(1);
+    } finally {
+      scanDisclosure.mockRestore();
+    }
+  });
 
   it("keeps chunked-prefix splits identical to full splits", () => {
     const splitIncrementally = splitStableStreamingMarkdown as (

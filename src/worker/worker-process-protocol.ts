@@ -1,13 +1,43 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
-import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  parseWorkerLaunchDescriptor,
+  type WorkerLaunchDescriptor,
+  type WorkerLaunchPlan,
+} from "./launch-descriptor.js";
 import { parseWorkerAdmissionDeadlineResult } from "./worker-connection-contract.js";
+import { WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES } from "./worker-connection-endpoint.js";
 import type { WorkerRuntimeResult } from "./worker.runtime.js";
 
 /** Private JSONL protocol between one node supervisor and its environment-owned worker. */
 export type WorkerProcessInput =
   | { type: "turn"; turnId: string; descriptor: WorkerLaunchDescriptor }
   | { type: "cancel"; turnId: string };
+
+export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(descriptor: T) {
+  return { type: "turn" as const, turnId: descriptor.assignment.turnId, descriptor };
+}
+
+export function measureWorkerProcessTurnBytes(plan: WorkerLaunchPlan): number {
+  // The node supplies the endpoint privately. Replace only its JSON null placeholder
+  // with the parser-owned bound; the managed envelope is the sender's exact shape.
+  return (
+    Buffer.byteLength(
+      JSON.stringify(buildWorkerProcessTurn({ ...plan, connectionEndpoint: null })),
+    ) -
+    "null".length +
+    WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES
+  );
+}
+
+export function serializeWorkerProcessInput(message: WorkerProcessInput): string {
+  const json = JSON.stringify(message);
+  if (Buffer.byteLength(json, "utf8") > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
+    throw new Error("managed worker request exceeds the protocol payload limit");
+  }
+  return `${json}\n`;
+}
 
 export type WorkerProcessResult = {
   type: "result";

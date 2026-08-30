@@ -670,7 +670,7 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
       (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-      sidebar.sessionKey = "catalog:codex:gateway%3Alocal:thread-1";
+      sidebar.sessionKey = "agent:main:catalog:codex:gateway%3Alocal:thread-1";
       await sidebar.updateComplete;
 
       const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
@@ -691,7 +691,7 @@ describe("AppSidebar catalog session rows", () => {
       ]
         .filter((row) => !row.closest('[data-session-section^="catalog:"]'))
         .map((row) => row.getAttribute("data-session-key"));
-      expect(chatRows).not.toContain("catalog:codex:gateway%3Alocal:thread-1");
+      expect(chatRows).not.toContain(sidebar.sessionKey);
     } finally {
       vi.useRealTimers();
     }

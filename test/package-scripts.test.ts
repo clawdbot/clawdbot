@@ -138,11 +138,7 @@ describe("package scripts", () => {
     expect(directNodeEnvScripts).toEqual([]);
   });
 
-  it.each([
-    { scriptName: "build:docker", expectedCount: 2 },
-    { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
-    { scriptName: "build:strict-smoke", expectedCount: 1 },
-  ])(
+  it.each([{ scriptName: "build:docker", expectedCount: 2 }])(
     "runs TypeScript steps in $scriptName through the tooling bootstrap",
     ({ scriptName, expectedCount }) => {
       const script = expectDefined(
@@ -163,9 +159,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs browser extension bootstrap E2E against real Chromium", () => {
+  it("builds the native host before browser bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "pnpm build && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
@@ -183,7 +179,7 @@ describe("package scripts", () => {
 
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
+      "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
     );
   });
 
@@ -349,6 +345,11 @@ describe("package scripts", () => {
     expect(readWindowsCiCoverageScript()).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",
     );
+    expect(
+      readWindowsCiPartScripts()
+        .flatMap(readWindowsCiTargets)
+        .filter((target) => target === "test/scripts/install-ps1.test.ts"),
+    ).toHaveLength(1);
   });
 
   it("runs env launcher coverage in Windows CI", () => {

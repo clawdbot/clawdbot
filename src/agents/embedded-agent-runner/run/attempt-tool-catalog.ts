@@ -93,6 +93,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     ? createCodeModeTools({
         config: attempt.config,
         runtimeConfig: attempt.config,
+        modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
         agentId: input.sessionAgentId,
         sessionKey: input.sandboxSessionKey,
         sessionId: attempt.sessionId,
@@ -114,7 +115,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
     toolSearchConfig,
     forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
-    forceCodeModeControls: attempt.forceCodeModeTools,
     sessionId: attempt.sessionId,
     sessionKey: input.sandboxSessionKey,
     agentId: input.sessionAgentId,

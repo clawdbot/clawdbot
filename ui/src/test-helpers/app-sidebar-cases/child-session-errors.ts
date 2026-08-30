@@ -55,6 +55,13 @@ describe("AppSidebar child-session load errors", () => {
         expect(alert?.getAttribute("role")).toBe("alert");
         expect(alert?.textContent).toContain(visibleError);
       });
+      const mountedAlert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
+      harness.publishList({
+        result: sessionResult([{ ...parentSession(parentKey, childKey), updatedAt: 2 }]),
+      });
+      await sidebar.updateComplete;
+      expect(harness.list).toHaveBeenCalledOnce();
+      expect(sidebar.querySelector(`[data-child-session-error="${parentKey}"]`)).toBe(mountedAlert);
       if (failure !== visibleError) {
         expect(sidebar.textContent).not.toContain(failure);
       }

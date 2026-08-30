@@ -29,10 +29,28 @@ export const ChatHistoryParamsSchema = closedObject({
   cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/** Accepted input awaiting a turn, separate from canonical model history. */
+export const ChatPendingInputsPageSchema = closedObject({
+  items: Type.Array(
+    closedObject({
+      id: NonEmptyString,
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+      message: Type.Unknown(),
+      acceptedAt: Type.Number(),
+      state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+    }),
+    { maxItems: 20 },
+  ),
+  total: Type.Integer({ minimum: 0 }),
+  nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
 
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
@@ -47,6 +65,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   agentsList: Type.Optional(Type.Unknown()),
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
+  pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
 });
 
 /** Normal cursor discontinuity; clients recover with a fresh tail request. */
@@ -60,9 +79,16 @@ export const ChatHistoryCursorResultSchema = Type.Union([
   ChatHistoryResetResultSchema,
 ]);
 
-/** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
+/** Lightweight metadata; session scope preserves the persisted auth-profile selection. */
 export const ChatMetadataParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
+    }),
+  ),
 });
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */

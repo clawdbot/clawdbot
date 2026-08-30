@@ -162,11 +162,19 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  Native source titles are presentation, not unique session labels. When adopting
+  a new source, pass its title as `displayName` to the owner-authorized
+  [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot
+  with the new row. Keep source identity independent of naming, preserve existing
+  labels and snapshots on reuse or recovery, and do not resync native renames.
+
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
   `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
   validation, node payload validation, host projection, adopted-session
-  projection, per-host publication, read routing, single-flight continuation,
-  and terminal plan routing. The provider must supply its local store reads,
+  projection, per-host publication, read routing, single-flight continuation
+  per resolved agent and source, and terminal plan routing. Different agents
+  do not share in-flight adoption results; adopted-source lookup keys remain
+  host/thread pairs. The provider must supply its local store reads,
   identifiers and commands, error text, capability projection, continuation
   availability and persistence operations, upstream-activity check, and terminal
   executable/arguments. There are no default continuation, capability-mutation,
@@ -310,9 +318,11 @@ CLI registration:
   `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
   machine-readable stdout modes that are not selected solely by `--json`.
   Parse command tokens with `getRootOptionAwareCommandPath` from
-  `openclaw/plugin-sdk/cli-argv`. Keep the resolver in lightweight CLI metadata
-  and share it with full registration. Nested descriptors do not expose this
-  field.
+  `openclaw/plugin-sdk/cli-argv`. Keep the descriptor in a lightweight
+  plugin-local module and reuse it from both `cli-metadata.ts` and full
+  registration; do not import runtime barrels to construct metadata.
+  Meeting runtime shells accept that descriptor through `cli.descriptor`.
+  Nested descriptors do not expose `machineOutput`.
 - Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
   they land under `openclaw nodes` (equivalent to
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).

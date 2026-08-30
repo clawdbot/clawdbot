@@ -10,7 +10,6 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
-import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -30,24 +29,6 @@ const mocks = getPreparedModelRuntimeMocks();
 describe("prepared model runtime snapshots", () => {
   beforeEach(() => {
     resetPreparedModelRuntimeHarness();
-  });
-
-  it("allows a direct serialized build without a lifecycle generation guard", async () => {
-    const input = {
-      config: {},
-      agentDir: "/tmp/direct-prepared-model-runtime-build",
-      readOnly: true,
-    };
-    const build = startSerializedSnapshotBuild(input, new Map(), 1_000, "static");
-
-    await expect(build.pending).resolves.toMatchObject({
-      snapshot: {
-        agentDir: input.agentDir,
-        config: input.config,
-      },
-      pluginGeneration: expect.any(Object),
-    });
-    await expect(build.completion).resolves.toBeUndefined();
   });
 
   it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {
@@ -343,11 +324,15 @@ describe("prepared model runtime snapshots", () => {
           {
             id: "selected",
             model: { primary: "anthropic/claude-sonnet-5" },
+            models: {
+              "anthropic/claude-sonnet-5": { agentRuntime: { id: "selected-runtime" } },
+            },
             modelPolicy: { allow: ["vllm/*"] },
           },
           {
             id: "sibling",
             model: { primary: "ollama/sibling" },
+            models: { "ollama/sibling": { agentRuntime: { id: "sibling-runtime" } } },
             modelPolicy: { allow: ["sibling-only/*"] },
           },
         ],
@@ -359,6 +344,7 @@ describe("prepared model runtime snapshots", () => {
         },
       },
     } as OpenClawConfig;
+    mocks.runtimeSyntheticAuthProviderRefs = ["selected-runtime", "sibling-runtime"];
 
     await publishPreparedModelRuntimeSnapshot({
       agentId: "selected",
@@ -370,8 +356,11 @@ describe("prepared model runtime snapshots", () => {
       config,
       "/tmp/prepared-model-runtime-selected-provider-scope",
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "vllm"],
+        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "selected-runtime", "vllm"],
       }),
+    );
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ syntheticAuthProviderRefs: ["selected-runtime"] }),
     );
   });
 
@@ -405,7 +394,7 @@ describe("prepared model runtime snapshots", () => {
         workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
       }),
     );
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "nvidia",
         id: "nemotron-static",
@@ -481,7 +470,7 @@ describe("prepared model runtime snapshots", () => {
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
     ]);
     expect(snapshot.modelCatalog.entries).toEqual([]);
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "openai",
         id: "gpt-5.4",
@@ -530,7 +519,7 @@ describe("prepared model runtime snapshots", () => {
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "nvidia", modelId: "nemotron-static", model: runtimeModel },
     ]);
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "nvidia",
         id: "nemotron-static",
@@ -601,7 +590,7 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/prepared-model-runtime-unsupported-api",
     });
 
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
       {
         provider: "custom",
         id: "custom-static",

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -143,6 +144,63 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     );
   });
 
+  it.each(["ignored", "selected"] as const)(
+    "settles both Git writers when %s fails first",
+    async (firstFailure) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-workspace-list-writers-"));
+      const workspace = path.join(root, "workspace");
+      const temporaryDirectory = path.join(root, "transfer");
+      await fs.mkdir(workspace);
+      await git(workspace, "init", "--quiet");
+      await fs.writeFile(path.join(workspace, ".worktreeinclude"), "selected.txt\n");
+      const started = createDeferred();
+      const release = { ignored: createDeferred(), selected: createDeferred() };
+      const errors = {
+        ignored: new Error("ignored inventory writer failed"),
+        selected: new Error("selected inventory writer failed"),
+      };
+      const observed = new Set<string>();
+      const originalOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const target = args[0];
+        if (typeof target === "string" && path.dirname(target) === temporaryDirectory) {
+          const name = path.basename(target);
+          if (name === "ignored" || name === "selected") {
+            observed.add(name);
+            started.resolve();
+            await release[name].promise;
+            throw errors[name];
+          }
+        }
+        return await originalOpen(...args);
+      });
+      const operation = createWorkspaceGitTransferList({
+        gitRoot: workspace,
+        temporaryDirectory,
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
+      });
+      const settled = vi.fn();
+      void operation.then(settled, settled);
+      try {
+        await Promise.race([started.promise, operation]);
+        expect(observed).toEqual(new Set(["ignored", "selected"]));
+        release[firstFailure].resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).not.toHaveBeenCalled();
+        release.ignored.resolve();
+        release.selected.resolve();
+        await expect(operation).rejects.toBe(errors.ignored);
+      } finally {
+        release.ignored.resolve();
+        release.selected.resolve();
+        await operation.catch(() => undefined);
+      }
+    },
+  );
+
   it("fully persists a filtered Git transfer list after a positive short write", async () => {
     const root = tempDirs.make("openclaw-workspace-filter-short-write-");
     const preparedListPath = path.join(root, "prepared");
@@ -216,8 +274,13 @@ describe("runWorkspaceInventoryCommandToFile", () => {
 
   it("omits derived artifacts from outbound Git file lists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-files-"));
-    const files = [
+    const retainedFiles = [
       "src/keep.ts",
+      "openclaw-inbound-project/report.txt",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
+    ];
+    const files = [
+      ...retainedFiles,
       "__pycache__/fizzbuzz.cpython-314.pyc",
       "generated.pyc",
       "generated.pyo",
@@ -228,6 +291,8 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       ".ruff_cache/state",
       "node_modules/pkg/index.js",
       ".DS_Store",
+      "openclaw-inbound-12345678-1234-4234-8234-123456789abc/report.pdf",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789abc/photo.png",
     ];
     const temporaryDirectory = path.join(root, "..", `${path.basename(root)}-transfer`);
     const initOutputPath = path.join(root, "..", `${path.basename(root)}-git-init-output`);
@@ -252,9 +317,9 @@ describe("runWorkspaceInventoryCommandToFile", () => {
         timeoutMs: 10_000,
       });
 
-      expect((await fs.readFile(outputPath, "utf8")).split("\0").filter(Boolean)).toEqual([
-        "src/keep.ts",
-      ]);
+      expect((await fs.readFile(outputPath, "utf8")).split("\0").filter(Boolean)).toEqual(
+        retainedFiles.toSorted(),
+      );
     } finally {
       await Promise.all([
         fs.rm(root, { recursive: true, force: true }),

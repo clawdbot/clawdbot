@@ -27,6 +27,21 @@ Pick a setup workflow based on how often you want updates and whether you want t
   not prepare the full source tree.
 - Docker (optional; only for containerized setup/e2e - see [Docker](/install/docker))
 
+Use the pnpm version pinned in `package.json`. The workspace applies a seven-day
+publication cooldown to npm dependencies, with trusted `@openai/codex` and
+`@openai/codex-*` packages exempt. The standalone pnpm toolchain is managed separately.
+
+For npm tooling that reads the project's `.npmrc`, use npm **11.19 or newer** for
+install and `npm pack` cooldowns and Codex exclusions. Node 22's bundled npm 10
+ignores these settings; Node runtime support does not imply support for its
+bundled npm as a source resolver. [Published/global installs](/install) do not
+inherit the repository's `.npmrc`. Source installs continue to use pnpm.
+
+pnpm owns root and plugin-local dependencies, including workspace links and
+versions that differ between packages. Postinstall and build preparation preserve
+those trees. If an older checkout pruned plugin-local dependencies, run
+`pnpm install --frozen-lockfile` after updating to restore them before testing.
+
 ## Tailoring strategy (so updates do not hurt)
 
 If you want "100% tailored to me" _and_ easy updates, keep your customization in:

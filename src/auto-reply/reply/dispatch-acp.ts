@@ -30,6 +30,7 @@ import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision
 import type { ChatType } from "../../channels/chat-type.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -43,16 +44,19 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import {
-  prepareChannelParticipantObservation,
-  recordAcceptedSessionParticipantInput,
-} from "../../sessions/session-participant-input.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { cleanDeferredFinalText, shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
-import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRun,
+  ReplyDispatchAssistantTranscript,
+  SourceReplyDeliveryMode,
+} from "../get-reply-options.types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
@@ -463,6 +467,9 @@ export async function tryDispatchAcpReplyCore(params: {
   shouldSendFullToolDetails: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
+  onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+  userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
@@ -482,6 +489,8 @@ export async function tryDispatchAcpReplyCore(params: {
     return null;
   }
   const canonicalSessionKey = acpResolution.sessionKey;
+  const transcriptSessionId =
+    acpResolution.kind === "ready" ? acpResolution.entry?.sessionId : undefined;
   const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
   const participantTarget = {
     agentId: acpAgentId,
@@ -626,6 +635,7 @@ export async function tryDispatchAcpReplyCore(params: {
   const requestId = resolveAcpRequestId(params.ctx);
   const existingRunId = normalizeOptionalString(params.runId);
   const auditOnly = existingRunId === undefined;
+  let completionSource: ReplyDispatchRun["completionSource"] | undefined;
   const auditRunId = existingRunId ?? generateSecureUuid();
   const auditRuntime = await loadDispatchAcpAuditRuntime();
   const auditToolTracker = auditRuntime.createAcpToolLifecycleTracker();
@@ -635,17 +645,27 @@ export async function tryDispatchAcpReplyCore(params: {
   let auditStopReason: string | undefined;
   let auditResultStatus: "completed" | "cancelled" | undefined;
   let runtimeTurnWasCancelled = false;
+  let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
+  let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
   const emitAuditStart = () => {
     if (auditStarted) {
       return;
     }
     auditStarted = true;
+    const completionOwner = params.onAgentRunStart?.(auditRunId, undefined, {
+      completionSource: "reply-dispatch",
+      getResult: () => ({ assistantTranscript, terminalOutcome }),
+    });
+    // Observers and channel wrappers also install this callback. Only an explicit
+    // synchronous acknowledgement transfers chat completion away from lifecycle events.
+    completionSource = completionOwner === "reply-dispatch" ? completionOwner : undefined;
     auditRuntime.emitAcpLifecycleStart({
       runId: auditRunId,
       sessionKey: canonicalSessionKey,
       agentId: acpAgentId,
       startedAt: Date.now(),
       auditOnly,
+      completionSource,
     });
   };
   const emitAuditEnd = () => {
@@ -654,7 +674,7 @@ export async function tryDispatchAcpReplyCore(params: {
     }
     emitAuditStart();
     auditFinished = true;
-    auditRuntime.emitAcpLifecycleEnd({
+    terminalOutcome = auditRuntime.emitAcpLifecycleEnd({
       runId: auditRunId,
       toolTracker: auditToolTracker,
       sessionKey: canonicalSessionKey,
@@ -663,6 +683,7 @@ export async function tryDispatchAcpReplyCore(params: {
       ...(auditStopReason ? { stopReason: auditStopReason } : {}),
       ...(auditResultStatus ? { resultStatus: auditResultStatus } : {}),
       auditOnly,
+      completionSource,
     });
   };
   const emitAuditError = (error: unknown) => {
@@ -671,7 +692,7 @@ export async function tryDispatchAcpReplyCore(params: {
     }
     emitAuditStart();
     auditFinished = true;
-    auditRuntime.emitAcpLifecycleError({
+    terminalOutcome = auditRuntime.emitAcpLifecycleError({
       runId: auditRunId,
       toolTracker: auditToolTracker,
       sessionKey: canonicalSessionKey,
@@ -679,6 +700,7 @@ export async function tryDispatchAcpReplyCore(params: {
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       ...(auditTerminalOutcome ? { terminalOutcome: auditTerminalOutcome } : {}),
       auditOnly,
+      completionSource,
       error,
     });
   };
@@ -690,29 +712,25 @@ export async function tryDispatchAcpReplyCore(params: {
   let turnDispatched = false;
   // Exactly one transcript record per turn: a failure after the success write
   // (e.g. finalization throwing) must not append the same user turn twice.
-  let transcriptPersisted = false;
+  let transcriptPersistenceAttempted = false;
   const persistTranscript = async (finalText: string): Promise<void> => {
-    if (transcriptPersisted) {
+    if (transcriptPersistenceAttempted) {
       return;
     }
-    transcriptPersisted = true;
-    try {
-      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
-      await persistAcpDispatchTranscript({
-        cfg: params.cfg,
-        sessionKey: canonicalSessionKey,
-        promptText: transcriptPromptText,
-        finalText,
-        meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
-        threadId: params.ctx.MessageThreadId,
-      });
-    } catch (error) {
-      logVerbose(
-        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
-          error,
-        )}`,
-      );
-    }
+    transcriptPersistenceAttempted = true;
+    const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+    assistantTranscript = await persistAcpDispatchTranscript({
+      cfg: params.cfg,
+      sessionKey: canonicalSessionKey,
+      expectedSessionId: transcriptSessionId,
+      promptText: transcriptPromptText,
+      finalText,
+      meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
+      threadId: params.ctx.MessageThreadId,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+      assistantIdempotencyKey: existingRunId,
+    });
   };
   let admittedRunContext: AdmittedRunContext | undefined;
   let nativeActionEvidenceRecorded = false;

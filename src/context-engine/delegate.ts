@@ -174,6 +174,8 @@ export async function delegateCompactionToRuntime(
 
   const result = await compactEmbeddedAgentSessionOnDemand({
     ...runtimeContextParams,
+    // Preserve identity for the private recovery-accounting bridge.
+    contextEngineRuntimeContext: runtimeContext,
     ...(agentId ? { agentId } : {}),
     sessionId: params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),

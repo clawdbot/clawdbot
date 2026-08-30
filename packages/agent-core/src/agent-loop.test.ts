@@ -7,9 +7,11 @@ import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
 import {
+  acknowledgeInternalToolResult,
   attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
+  attachInternalToolResultAcknowledgement,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -1185,6 +1187,47 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages).toHaveLength(2);
     expect(requestMessages[1]?.slice(-2)).toEqual([firstSteer, secondSteer]);
     expect(agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("cancels a drained steering message and permits an explicit re-enqueue", async () => {
+    const turnStarted = createDeferred();
+    const releaseTurn = createDeferred();
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        messages: [makeAssistantMessage([{ type: "text", text: "ready" }])],
+      },
+      streamFn: createTurnSequenceStream(
+        [[{ type: "text", text: "re-enqueued response" }]],
+        requestMessages,
+      ),
+    });
+    const target = { role: "user" as const, content: "cancel after drain", timestamp: 2 };
+    agent.steer(target);
+    agent.subscribe(async (event) => {
+      if (event.type === "turn_start") {
+        turnStarted.resolve();
+        await releaseTurn.promise;
+      }
+    });
+
+    const run = agent.continue();
+    await turnStarted.promise;
+    expect(agent.cancelSteeringMessage((message) => message === target)).toBe(target);
+    releaseTurn.resolve();
+    await run;
+
+    expect(requestMessages).toHaveLength(0);
+    expect(agent.state.messages).not.toContain(target);
+    expect(agent.hasQueuedMessages()).toBe(false);
+
+    agent.steer(target);
+    await agent.continue();
+
+    expect(requestMessages).toHaveLength(1);
+    expect(requestMessages[0]?.at(-1)).toBe(target);
+    expect(agent.state.messages).toContain(target);
   });
 
   it("restores drained follow-ups to their deferred queue in order", async () => {
@@ -2550,6 +2593,59 @@ describe("agentLoop tool termination", () => {
       expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
     },
   );
+
+  it.each([
+    { name: "attached", failAttachment: false, expectedAcknowledgements: 1 },
+    { name: "dropped", failAttachment: true, expectedAcknowledgements: 0 },
+  ])("acknowledges an internal tool result only after it is $name", async (testCase) => {
+    const acknowledge = vi.fn();
+    const tool: AgentTool = {
+      ...makeTool("commit_probe", []),
+      execute: async () =>
+        attachInternalToolResultAcknowledgement(
+          { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
+          acknowledge,
+        ),
+    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "commit-probe", name: tool.name, arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
+    const run = runAgentLoop(
+      [{ role: "user", content: "commit", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [tool] },
+      {
+        ...config,
+        afterToolCall: async () => ({ details: { phase: "after-call" } }),
+        afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
+      },
+      async (event) => {
+        if (
+          !testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          acknowledgeInternalToolResult(event.message);
+        }
+        if (
+          testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          throw new Error("attachment failed");
+        }
+      },
+      undefined,
+      streamFn,
+    );
+
+    if (testCase.failAttachment) {
+      await expect(run).rejects.toThrow("attachment failed");
+    } else {
+      await run;
+    }
+    expect(acknowledge).toHaveBeenCalledTimes(testCase.expectedAcknowledgements);
+  });
 
   it.each([
     ["sequential", "invalid arguments"],

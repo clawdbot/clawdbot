@@ -51,6 +51,13 @@ function scenario(): ControlUiMockGatewayScenario {
       "browser.request": {
         cases: [{ match: { method: "GET", path: "/tabs" }, response: { running: true, tabs: [] } }],
       },
+      "desktop.observe": {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=rail-tabs",
+        expiresAtMs: 60_000,
+        control: false,
+        auth: "vnc-password",
+      },
       "environments.list": {
         environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
       },
@@ -458,7 +465,9 @@ suite.define(() => {
           await sidePanel(page).locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
           await openFromPlus(page, "Desktop");
           await sidePanel(page).locator('[data-panel-slot="desktop"]:not([hidden])').waitFor();
-          await sidePanel(page).getByText("Desktop sources", { exact: true }).waitFor();
+          const desktopObserve = await gateway.waitForRequest("desktop.observe");
+          expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
+          await sidePanel(page).getByLabel("VNC password", { exact: true }).waitFor();
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
           expect(await tabLabels(page)).toEqual([
             "Files",

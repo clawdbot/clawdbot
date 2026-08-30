@@ -1,11 +1,13 @@
 // Reconcile invocation projections before grouping so summaries and expanded
 // cards consume the same calls, regardless of history/live delivery order.
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
+import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
@@ -123,7 +125,10 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       source,
       id,
       call,
-      runId: normalizeOptionalString(raw.runId) ?? normalizeOptionalString(message.runId),
+      runId:
+        normalizeOptionalString(raw.runId) ??
+        readSessionMessageIdentity(message)?.runId ??
+        normalizeOptionalString(message.runId),
       name:
         normalizeOptionalString(raw.name) ??
         normalizeOptionalString(message.toolName) ??
@@ -264,11 +269,17 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       continue;
     }
     const message = owner.source.message;
+    const metadata = asRecord(message["__openclaw"]);
+    // History already composed durable activity. An earlier live echo must not
+    // drag it across an intervening stream or above its parent call.
+    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)?.activity
+      ? owner.source.index
+      : invocation.first;
     const result = invocation.result;
     const completed = result !== undefined && result.rank > 1;
     const transcript =
       message.messageId ??
-      asRecord(message["__openclaw"])?.id ??
+      metadata?.id ??
       result?.source.message.messageId ??
       asRecord(result?.source.message["__openclaw"])?.id;
     const content = [
@@ -291,7 +302,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     const bundle = bundles.get(bundleKey);
     if (bundle) {
       bundle.item.message.content.push(...content);
-      bundle.index = Math.min(bundle.index, invocation.first);
+      bundle.index = Math.min(bundle.index, index);
       continue;
     }
     const item: ProjectedItem = {
@@ -315,7 +326,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
           : {}),
       },
     };
-    bundles.set(bundleKey, { item, index: invocation.first });
+    bundles.set(bundleKey, { item, index });
   }
   for (const { item, index } of bundles.values()) {
     const row = rows.get(index) ?? [];

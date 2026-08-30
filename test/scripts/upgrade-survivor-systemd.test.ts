@@ -153,13 +153,17 @@ setInterval(() => {}, 1000);
         environmentFiles: [environmentFile],
       }),
     );
-    const records = (): Array<{ pid: number; argv: string[]; cwd: string; value: string }> =>
-      existsSync(record)
-        ? readFileSync(record, "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line))
-        : [];
+    const records = (): Array<{ pid: number; argv: string[]; cwd: string; value: string }> => {
+      if (!existsSync(record)) return [];
+      // The restarted service appends one JSON record per line while this poller reads
+      // concurrently, so a read landing mid-append sees a torn final line. Only whole
+      // newline-terminated records count as observed starts; an unterminated tail is
+      // dropped so the poll retries instead of throwing. Earlier lines are always
+      // complete, so a parse failure there still fails the test.
+      const lines = readFileSync(record, "utf8").split("\n");
+      if (lines.at(-1) !== "") lines.pop();
+      return lines.filter((line) => line !== "").map((line) => JSON.parse(line));
+    };
     const waitForStarts = async (count: number) => {
       for (let attempt = 0; attempt < 200 && records().length < count; attempt++) {
         await delay(10);

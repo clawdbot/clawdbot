@@ -8,11 +8,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  autoMigrateLegacyPluginDoctorState,
-  detectLegacyStateMigrations,
-  resetAutoMigrateLegacyStateDirForTest,
-} from "./state-migrations.js";
+import { detectLegacyStateMigrations } from "./state-migrations.doctor.js";
+import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const registry = vi.hoisted(() => ({
   entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,

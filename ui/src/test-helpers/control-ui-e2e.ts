@@ -11,6 +11,7 @@ import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
@@ -327,6 +328,7 @@ export type ControlUiMockGatewayScenario = {
   presenceUsers?: Array<{
     self?: boolean;
     id: string;
+    identity?: AuthenticatedUser["identity"];
     name?: string;
     email?: string;
     avatarUrl?: string;
@@ -358,6 +360,8 @@ export type ControlUiMockGatewayScenario = {
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
+  sessionScope?: "agent" | "global";
+  mainSessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   /** Optional New Session defaults keyed by custom group name. */
@@ -874,6 +878,7 @@ function normalizeScenario(
 ): NormalizedControlUiMockGatewayScenario {
   const defaultAgentId = scenario.defaultAgentId?.trim() || "main";
   const sessionKey = scenario.sessionKey?.trim() || "main";
+  const mainSessionKey = scenario.mainSessionKey?.trim() || sessionKey;
   const basePathValue = scenario.basePath?.trim() ?? "";
   const basePathWithSlash = basePathValue
     ? basePathValue.startsWith("/")
@@ -919,6 +924,7 @@ function normalizeScenario(
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
+    mainSessionKey,
     methodResponses: scenario.methodResponses ?? {},
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
@@ -936,6 +942,7 @@ function normalizeScenario(
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
+    sessionScope: scenario.sessionScope ?? "agent",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -1390,6 +1397,7 @@ function installControlUiMockGateway(
         ...(user.timeZone ? { timeZone: user.timeZone } : {}),
         user: {
           id: user.id,
+          ...(user.identity ? { identity: user.identity } : {}),
           name: user.name ?? null,
           email: user.email ?? null,
           avatarUrl: user.avatarUrl ?? null,
@@ -1412,6 +1420,7 @@ function installControlUiMockGateway(
       "label",
       "category",
       "icon",
+      "color",
       "boardFace",
       "pinned",
       "unread",
@@ -1762,9 +1771,9 @@ function installControlUiMockGateway(
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
-              mainSessionKey: scenario.sessionKey,
+              mainSessionKey: scenario.mainSessionKey,
               modelConfigured: Boolean(scenario.agentModel),
-              scope: "agent",
+              scope: scenario.sessionScope,
             },
           },
           type: "hello-ok",

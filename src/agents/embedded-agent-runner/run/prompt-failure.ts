@@ -1,3 +1,4 @@
+import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
@@ -86,6 +87,18 @@ export async function handleEmbeddedPromptFailure(input: {
   traceAttempts: TraceAttempt[];
   previousRetryFailoverReason: FailoverReason | null;
 }): Promise<PromptFailureOutcome> {
+  // Only the local precheck owns this recovery; provider text cannot request it.
+  if (
+    input.promptErrorSource === "precheck" &&
+    input.promptError instanceof CompactionReplayRefreshRequiredError
+  ) {
+    const text = new CompactionReplayRefreshRequiredError().message;
+    return completeBlockedPromptFailure(input, {
+      text,
+      errorKind: "compaction_replay_refresh_required",
+      errorMessage: text,
+    });
+  }
   const promptAuthMode = input.authProfileId
     ? input.authProfileStore.profiles?.[input.authProfileId]?.type
     : undefined;
@@ -122,7 +135,7 @@ export async function handleEmbeddedPromptFailure(input: {
 
   const blockedResult = resolveBlockedPromptResult(input, errorText);
   if (blockedResult) {
-    return { action: "complete", result: blockedResult };
+    return blockedResult;
   }
 
   const promptFailoverReason =
@@ -297,7 +310,7 @@ export async function handleEmbeddedPromptFailure(input: {
 function resolveBlockedPromptResult(
   input: Parameters<typeof handleEmbeddedPromptFailure>[0],
   errorText: string,
-): EmbeddedAgentRunResult | undefined {
+): PromptFailureOutcome | undefined {
   let text: string;
   let errorKind: "role_ordering" | "image_size";
   if (/incorrect role information|roles must alternate/i.test(errorText)) {
@@ -318,16 +331,27 @@ function resolveBlockedPromptResult(
       "Please compress or resize the image and try again.";
     errorKind = "image_size";
   }
+  return completeBlockedPromptFailure(input, { text, errorKind, errorMessage: errorText });
+}
+
+function completeBlockedPromptFailure(
+  input: Parameters<typeof handleEmbeddedPromptFailure>[0],
+  copy: Pick<
+    Parameters<typeof buildEmbeddedRunBlockedResult>[0],
+    "text" | "errorKind" | "errorMessage"
+  >,
+): PromptFailureOutcome {
   const replayInvalid = input.resolveReplayInvalid();
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
-  return buildEmbeddedRunBlockedResult({
-    text,
-    errorKind,
-    errorMessage: errorText,
-    durationMs: Date.now() - input.startedAtMs,
-    agentMeta: input.buildErrorAgentMeta(),
-    attempt: input.attempt,
-    replayInvalid,
-    finalPromptText: input.attempt.finalPromptText,
-  });
+  return {
+    action: "complete",
+    result: buildEmbeddedRunBlockedResult({
+      ...copy,
+      durationMs: Date.now() - input.startedAtMs,
+      agentMeta: input.buildErrorAgentMeta(),
+      attempt: input.attempt,
+      replayInvalid,
+      finalPromptText: input.attempt.finalPromptText,
+    }),
+  };
 }

@@ -134,10 +134,36 @@ final class GatewayProcessManager {
         didSet { CanvasManager.shared.refreshDebugStatus() }
     }
 
+    /// Pause removes managed service records without changing installation responsibility.
+    /// Remember the established owner, not just that this port once answered.
+    private var gatewayOwnership: (port: Int, installation: Installation)?
+
     private(set) var log: String = ""
     private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
     private(set) var existingGatewayDetails: String?
     private(set) var lastFailureReason: String?
+
+    enum Installation {
+        case managed, external, unreadable
+
+        static let ownershipFailure =
+            "Could not read the Gateway service ownership record. Check the Gateway LaunchAgent and retry."
+    }
+
+    var installation: Installation {
+        self.installation(for: GatewayEnvironment.gatewayPort(), whenMissing: .managed)
+    }
+
+    private func installation(for port: Int, whenMissing: Installation) -> Installation {
+        if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() { return .external }
+        guard let arguments = GatewayLaunchAgentManager.launchdProgramArguments() else { return .unreadable }
+        if !arguments.isEmpty {
+            return CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: arguments) ? .managed : .external
+        }
+        if let gatewayOwnership, gatewayOwnership.port == port { return gatewayOwnership.installation }
+        return whenMissing
+    }
+
     private var desiredActive = false
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
@@ -145,7 +171,6 @@ final class GatewayProcessManager {
     private var launchAgentEnableTask: Task<[UInt64: LaunchAgentEnableResult], Never>?
     private var launchAgentEnableCurrentRequest: LaunchAgentEnableRequest?
     private var launchAgentEnablePendingRequest: LaunchAgentEnableRequest?
-    private var launchAgentEnableSupersededInvocationIDs: Set<UInt64> = []
     private var launchAgentEnableNextInvocationID: UInt64 = 0
     private var launchAgentDisableTask: Task<Void, Never>?
     private var launchAgentDisableGeneration: UInt64?
@@ -252,9 +277,6 @@ final class GatewayProcessManager {
                 // older queued change so A -> B -> A cannot finish on B.
                 current.invocationIDs.append(invocationID)
                 self.launchAgentEnableCurrentRequest = current
-                if let pending = self.launchAgentEnablePendingRequest {
-                    self.launchAgentEnableSupersededInvocationIDs.formUnion(pending.invocationIDs)
-                }
                 self.launchAgentEnablePendingRequest = nil
             } else if var pending = self.launchAgentEnablePendingRequest,
                       pending.hasSameConfiguration(as: request)
@@ -262,16 +284,12 @@ final class GatewayProcessManager {
                 pending.invocationIDs.append(invocationID)
                 self.launchAgentEnablePendingRequest = pending
             } else {
-                if let pending = self.launchAgentEnablePendingRequest {
-                    self.launchAgentEnableSupersededInvocationIDs.formUnion(pending.invocationIDs)
-                }
                 self.launchAgentEnablePendingRequest = request
             }
             let results = await task.value
             return results[invocationID] ?? .skipped
         }
 
-        self.launchAgentEnableSupersededInvocationIDs.removeAll(keepingCapacity: true)
         self.launchAgentEnablePendingRequest = request
         let task = Task { @MainActor in
             await self.drainLaunchAgentEnableRequests()
@@ -295,7 +313,6 @@ final class GatewayProcessManager {
         var results: [UInt64: LaunchAgentEnableResult] = [:]
         while let request = self.launchAgentEnablePendingRequest {
             self.launchAgentEnablePendingRequest = nil
-            self.launchAgentEnableSupersededInvocationIDs.subtract(request.invocationIDs)
             self.launchAgentEnableCurrentRequest = request
             let result = await self.performLaunchAgentEnable(request)
             let completedRequest = self.launchAgentEnableCurrentRequest ?? request
@@ -304,11 +321,6 @@ final class GatewayProcessManager {
             }
             self.launchAgentEnableCurrentRequest = nil
         }
-        for invocationID in self.launchAgentEnableSupersededInvocationIDs {
-            guard results[invocationID] == nil else { continue }
-            results[invocationID] = .skipped
-        }
-        self.launchAgentEnableSupersededInvocationIDs.removeAll(keepingCapacity: true)
         // Clear the task before returning. A later caller then starts a fresh drain instead of
         // joining a completed task after the final pending-request check.
         self.launchAgentEnableTask = nil
@@ -598,7 +610,9 @@ final class GatewayProcessManager {
             context: context,
             deadlinePolicy: .fixed(timeout: hasListener ? 6.5 : 2))
         if !hasListener, case .failed = terminal {
+            guard self.isCurrentGatewayReadiness(context) else { return true }
             self.existingGatewayDetails = nil
+            self.gatewayOwnership = nil
             return false
         }
         let published = await self.publishGatewayReadinessTerminal(terminal, context: context)
@@ -937,11 +951,7 @@ extension GatewayProcessManager {
 
     private func probeFailureDisposition(_ error: Error) -> GatewayProbeFailureDisposition {
         if self.probeFailureIsCancellation(error) { return .retryWithoutRepair }
-        if let response = error as? GatewayResponseError,
-           response.code.uppercased() == "UNAVAILABLE"
-        {
-            return .retryWithoutRepair
-        }
+        if self.probeFailureShowsStartupProgress(error) { return .retryWithoutRepair }
         if error is GatewayHealthProbeTimeout { return .retryWithRepair }
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else { return .fail }
@@ -1058,8 +1068,8 @@ extension GatewayProcessManager {
             guard await self.canPublishGatewayReadiness(instance: instance, context: context) else {
                 return false
             }
-            let replaced = context.launchAgentInstalled ||
-                self.launchAgentInstallGeneration == context.generation ||
+            let installed = context.launchAgentInstalled || self.launchAgentInstallGeneration == context.generation
+            let replaced = installed ||
                 Self.gatewayPIDChanged(from: context.endpointPIDBeforeProbe, to: instance?.pid) ||
                 Self.gatewayPIDChanged(from: startingPID, to: instance?.pid)
             let details: String?
@@ -1077,6 +1087,15 @@ extension GatewayProcessManager {
             }
             self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
             self.clearLastFailure()
+            // Only installation evidence replaces a remembered owner. A readiness path
+            // may reuse an independent listener, so its purpose does not establish ownership.
+            if installed {
+                self.gatewayOwnership = nil
+            }
+            self.gatewayOwnership = (
+                context.port,
+                self.installation(
+                    for: context.port, whenMissing: installed ? .managed : .external))
             if case .attach = context.purpose {
                 self.existingGatewayDetails = details
                 self.status = .attachedExisting(details: details)
@@ -1247,6 +1266,20 @@ extension GatewayProcessManager {
     }
 
     func setTestingStatus(_ status: Status) {
+        self.gatewayOwnership = nil
+        switch status {
+        case .running, .attachedExisting:
+            let port = GatewayEnvironment.gatewayPort()
+            let whenMissing: Installation = if case .attachedExisting = status {
+                .external
+            } else {
+                .managed
+            }
+            self.gatewayOwnership = (
+                port, self.installation(for: port, whenMissing: whenMissing))
+        case .stopped, .starting, .failed:
+            break
+        }
         self.status = status
     }
 

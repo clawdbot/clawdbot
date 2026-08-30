@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -10,6 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
+type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
 
 const {
   createLineBotMock,
@@ -18,7 +20,7 @@ const {
   runDetachedWebhookWorkMock,
   unregisterHttpMock,
 } = vi.hoisted(() => ({
-  createLineBotMock: vi.fn(() => ({
+  createLineBotMock: vi.fn((_options: LineBotOptions) => ({
     account: { accountId: "default" },
     handleWebhook: vi.fn<LineHandleWebhook>(),
     stop: vi.fn(),
@@ -135,7 +137,6 @@ vi.mock("./send.js", () => ({
   createFlexMessage: vi.fn(),
   createImageMessage: vi.fn(),
   createLocationMessage: vi.fn(),
-  createQuickReplyItems: vi.fn(),
   getUserDisplayName: vi.fn(),
   pushMessagesLine: vi.fn(),
   replyMessageLine: vi.fn(),
@@ -371,6 +372,112 @@ describe("monitorLineProvider lifecycle", () => {
       | undefined;
     expect(bot?.stop).toHaveBeenCalledOnce();
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
+
+  it("resolves a reply's presentation into LINE controls before delivering it", async () => {
+    // The turn adapter owns this preparation: core renders presentations inside
+    // the outbound send pipeline, which replies delivered here never enter.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { delivery: { preparePayload?: (payload: ReplyPayload) => ReplyPayload } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "approve?" },
+          replyToken: "reply-token",
+          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+          isGroup: true,
+          accountId: "default",
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {} as Parameters<typeof onMessage>[1],
+      );
+
+      const prepared = resolvedTurn?.delivery.preparePayload?.({
+        text: "Approve this run?",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+            },
+          ],
+        },
+      });
+      const line = prepared?.channelData?.line as { flexMessage?: unknown } | undefined;
+
+      expect(prepared?.presentation).toBeUndefined();
+      expect(line?.flexMessage).toBeDefined();
+    } finally {
+      // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
+  });
+
+  it("carries a group's skill scope into the turn that answers it", async () => {
+    // The scope is configured per group but enforced per turn: it only applies
+    // if the reply options reaching the agent carry it.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { replyOptions?: { skillFilter?: string[] } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "hi" },
+          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+          isGroup: true,
+          accountId: "default",
+          skillFilter: ["triage"],
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {} as Parameters<typeof onMessage>[1],
+      );
+
+      expect(resolvedTurn?.replyOptions?.skillFilter).toEqual(["triage"]);
+    } finally {
+      // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
   });
 
   it("dispatches shared-path webhook posts to the account matching the signature", async () => {

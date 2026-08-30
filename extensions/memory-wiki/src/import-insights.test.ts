@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { compileMemoryWikiVault } from "./compile.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -30,6 +31,7 @@ describe("listMemoryWikiImportInsights", () => {
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
       initialize: true,
     });
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
@@ -109,6 +111,12 @@ describe("listMemoryWikiImportInsights", () => {
       "utf8",
     );
 
+    await compileMemoryWikiVault(config);
+    await Promise.all([
+      fs.unlink(path.join(rootDir, "sources", "chatgpt-travel.md")),
+      fs.unlink(path.join(rootDir, "sources", "chatgpt-health.md")),
+    ]);
+
     const result = await listMemoryWikiImportInsights(config);
 
     expect(result.sourceType).toBe("chatgpt");
@@ -161,6 +169,7 @@ describe("listMemoryWikiImportInsights", () => {
   it("truncates import insight summaries without leaving lone surrogates", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-surrogate-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
       initialize: true,
     });
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
@@ -202,6 +211,8 @@ describe("listMemoryWikiImportInsights", () => {
       }),
       "utf8",
     );
+
+    await compileMemoryWikiVault(config);
 
     const result = await listMemoryWikiImportInsights(config);
 

@@ -121,9 +121,11 @@ rm -rf "$tmpdir"
 OpenClaw-owned npm plugin packages can also publish with explicit
 `bundledDependencies`. The npm publish path overlays the runtime dependency
 name list, strips dev-only workspace metadata from the published manifest,
-runs a script-free npm install for the package-local runtime dependencies,
-then packs or publishes the plugin tarball with those dependency files
-included. Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
+stages a separate package directory without source `node_modules`, and runs a
+script-free npm install there for runtime dependencies. It then packs or publishes
+the plugin tarball with those dependency files included and removes the staging
+directory. The pnpm-owned source dependency tree stays unchanged.
+Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
 memory-lancedb, Microsoft Teams, Tlon) opt out with
 `openclaw.release.bundleRuntimeDependencies: false`; they still ship a
 precisely pinned manifest, but npm resolves runtime dependencies during install
@@ -201,10 +203,11 @@ External plugins keep their runtime dependencies plugin-local.
 
 In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
 prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
-`extensions` when neither built tree is available. Postinstall and build
-preparation remove plugin-local `node_modules`, so bundled runtime resolution
-must not depend on those directories. Rebuild to pick up source edits when
-using a built tree. Source checkout development is pnpm-only; plain
+`extensions` when neither built tree is available. pnpm owns the source dependency
+trees: postinstall and build preparation preserve plugin-local versions and
+workspace links. Native Node imports resolve from each plugin package;
+packaged bundled runtime still uses the root runtime declarations above.
+Rebuild to pick up source edits when using a built tree. Source checkout development is pnpm-only; plain
 `npm install` at the repository root does not prepare the pnpm workspace.
 
 | Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
@@ -222,8 +225,9 @@ convergence remains intentionally script-disabled and continues to use the
 
 ### Native imports from a standalone source build
 
-To import an already-built `extensions/<package>/dist` directly with Node,
-explicitly prepare its host link from the source checkout root:
+To import an already-built `extensions/<package>/dist` directly with Node, use
+the host link installed by pnpm. If that link is missing, explicitly prepare it
+from the source checkout root:
 
 ```bash
 node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions/<package>
@@ -240,10 +244,9 @@ through the pnpm workspace.
 
 Preparation refuses symlinked package paths, unsafe manifests, and conflicting
 dependency paths instead of reporting success. Ordinary package builds remain
-artifact-only. Postinstall and root build preparation still remove source
-plugin-local `node_modules`, including this link; rerun the explicit preparation
-command afterward when needed. Runtime loading never performs this setup or
-runs a package manager.
+artifact-only. Postinstall and root build preparation preserve source
+plugin-local `node_modules`, including this link. Runtime loading never performs
+this setup or runs a package manager.
 
 ## Legacy cleanup
 

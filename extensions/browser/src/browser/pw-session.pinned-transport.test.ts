@@ -1,4 +1,4 @@
-// Browser tests cover pinned Playwright CDP transport behavior.
+// Browser tests cover managed Playwright CDP transport behavior.
 import { createServer } from "node:http";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { chromium } from "playwright-core";
@@ -78,7 +78,143 @@ afterEach(async () => {
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
-describe("pw-session pinned Playwright transport", () => {
+describe("pw-session Playwright CDP transport", () => {
+  it("keeps HTTP fallback managed while releasing contextless non-browser targets", async () => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => {
+      server.once("listening", () => resolve());
+    });
+    const port = (server.address() as { port: number }).port;
+    const cdpUrl = `http://127.0.0.1:${port}`;
+    const transportUrl = `ws://127.0.0.1:${port}/devtools/browser/test`;
+    const serverSocket = new Promise<import("ws").WebSocket>((resolve) => {
+      server.on("connection", (socket) => resolve(socket));
+    });
+    const commands: Array<{ id: number; method: string; params?: unknown; sessionId?: string }> =
+      [];
+    const resumeCommands: Array<{ id: number; sessionId?: string }> = [];
+    server.on("connection", (socket) => {
+      socket.addEventListener("message", (event) => {
+        const command = JSON.parse(
+          webSocketMessageToString(event.data),
+        ) as (typeof commands)[number];
+        commands.push(command);
+        if (command.method === "Runtime.runIfWaitingForDebugger") {
+          resumeCommands.push(command);
+          return;
+        }
+        socket.send(JSON.stringify({ id: command.id, result: {} }));
+      });
+    });
+    getChromeWebSocketEndpointSpy
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ url: transportUrl });
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
+      expect(typeof transportArg).not.toBe("string");
+      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      const delivered: object[] = [];
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onmessage property.
+      transport.onmessage = (message) => delivered.push(message);
+      const socket = await serverSocket;
+      const contextlessTargetTypes = [
+        "worker",
+        "shared_worker",
+        "service_worker",
+        "worklet",
+        "shared_storage_worklet",
+        "auction_worklet",
+        "other",
+        "page",
+      ];
+      for (const [index, type] of contextlessTargetTypes.entries()) {
+        socket.send(
+          JSON.stringify({
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: `contextless-session-${index}`,
+              targetInfo: { targetId: `contextless-target-${index}`, type },
+              waitingForDebugger: true,
+            },
+          }),
+        );
+      }
+      const forwardedTargetInfos = [
+        { type: "browser" },
+        { type: "page", browserContextId: "default-context" },
+        { type: "other", browserContextId: "default-context" },
+        { type: "service_worker", browserContextId: "default-context" },
+      ];
+      const forwardedTargets = forwardedTargetInfos.map((targetInfo, index) => ({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: `forwarded-session-${index}`,
+          targetInfo: { targetId: `forwarded-target-${index}`, ...targetInfo },
+          waitingForDebugger: true,
+        },
+      }));
+      for (const event of forwardedTargets) {
+        socket.send(JSON.stringify(event));
+      }
+
+      await vi.waitFor(() => {
+        expect(commands).toHaveLength(contextlessTargetTypes.length);
+      });
+      expect(commands).toEqual(
+        contextlessTargetTypes.map((_type, index) =>
+          expect.objectContaining({
+            id: expect.any(Number),
+            method: "Runtime.runIfWaitingForDebugger",
+            sessionId: `contextless-session-${index}`,
+          }),
+        ),
+      );
+      const firstResume = resumeCommands[0];
+      if (!firstResume) {
+        throw new Error("missing first contextless-target resume command");
+      }
+      socket.send(JSON.stringify({ id: firstResume.id, result: {} }));
+      await vi.waitFor(() => {
+        expect(commands).toHaveLength(contextlessTargetTypes.length + 1);
+      });
+      expect(commands.at(-1)).toEqual(
+        expect.objectContaining({
+          method: "Target.detachFromTarget",
+          params: { sessionId: "contextless-session-0" },
+        }),
+      );
+      for (const command of resumeCommands.slice(1)) {
+        socket.send(JSON.stringify({ id: command.id, result: {} }));
+      }
+      await vi.waitFor(() => {
+        expect(commands).toHaveLength(contextlessTargetTypes.length * 2);
+      });
+      expect(commands.slice(contextlessTargetTypes.length + 1)).toEqual(
+        contextlessTargetTypes.slice(1).map((_type, index) =>
+          expect.objectContaining({
+            method: "Target.detachFromTarget",
+            params: { sessionId: `contextless-session-${index + 1}` },
+          }),
+        ),
+      );
+      await vi.waitFor(() => {
+        expect(delivered).toEqual(forwardedTargets);
+      });
+      transport.close();
+      return browser.browser;
+    }) as never);
+
+    try {
+      await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toEqual([
+        expect.objectContaining({ targetId: "A" }),
+      ]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it("connects guarded Playwright CDP through the pinned WebSocket transport", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => {

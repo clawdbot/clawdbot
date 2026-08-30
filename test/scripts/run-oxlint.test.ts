@@ -65,11 +65,15 @@ function writeModule(target: string, lines: string[]): void {
 function createSignalRunner(mode: SignalScenario, target: string): void {
   if (mode === "group") {
     const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    // An empty PID read becomes 0, so failure cleanup would kill its own process
+    // group. Publish complete PID bytes before the harness can observe the file.
     writeModule(target, [
       "import { spawn } from 'node:child_process';",
-      "import { writeFileSync } from 'node:fs';",
+      "import { renameSync, writeFileSync } from 'node:fs';",
       `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-      "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid)); writeFileSync(process.env.READY_FILE, String(process.pid));",
+      "writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(child.pid));",
+      "renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
+      "writeFileSync(process.env.READY_FILE, String(process.pid));",
       "process.on('SIGTERM', () => process.exit(0));",
       "setInterval(() => {}, 1000);",
     ]);

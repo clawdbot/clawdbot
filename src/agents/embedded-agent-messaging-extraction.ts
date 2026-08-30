@@ -268,11 +268,11 @@ export function extractMessagingToolSend(
       return undefined;
     }
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
-    const to = normalizeTargetForProvider(provider, toRaw);
     const pluginExtractionArgs = { ...args, to: toRaw };
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
+    const to = normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw);
     const resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
     const threadId =
       normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);

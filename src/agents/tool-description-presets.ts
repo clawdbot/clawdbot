@@ -66,7 +66,7 @@ export function describeSessionLinkRule(base: string): string {
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "List visible sessions and sidebar categories; filter kind/label/agentId/search/activity/archive.",
+    "List visible sessions and sidebar groups; filter kind/label/agentId/search/activity/archive.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
@@ -78,6 +78,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+    "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -100,10 +101,20 @@ export function describeSessionsSendTool(): string {
   ].join(" ");
 }
 
+export function describeSubagentSpawnContext(threadAvailable: boolean): string {
+  return [
+    'Native: explicit context="isolated" starts clean; context="fork" copies requester transcript and requires the same agent.',
+    threadAvailable
+      ? "Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated."
+      : "Omitted context is isolated.",
+  ].join(" ");
+}
+
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
+  subagentThreadAvailable?: boolean;
   swarmEnabled?: boolean;
   sessionToolsVisibility?: SessionVisibilityScope;
   spawnRestricted?: boolean;
@@ -115,8 +126,8 @@ export function describeSessionsSpawnTool(options?: {
     : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
-      ? 'Spawn clean child; default `runtime="subagent"`.'
-      : 'Spawn clean child; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
+      ? 'Spawn child session; default `runtime="subagent"`.'
+      : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
   const sessionCompletionGuidance =
     options?.acpAvailable === false
       ? "After spawn, do non-overlap work. Run result returns; session output stays thread."
@@ -130,18 +141,18 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    '`visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `category` explicitly groups it; omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
+    '`visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     visibilityLine,
     ...(options?.swarmEnabled
       ? [
           "`collect=true` (swarm): parallel fan-out collector children; structured result per `outputSchema`; `groupId` groups a batch.",
         ]
       : []),
-    "Inherits parent workspace. Native task arrives as first `[Subagent Task]`.",
+    "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
     ...(options?.acpAvailable === false
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
-    'Native transcript needed: `context="fork"`; else omit/isolated.',
+    describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
     "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
     completionGuidance,
   ].join(" ");

@@ -360,6 +360,7 @@ async function createOrReuseAdoptedSession(params: {
       config: params.config,
       key: adoptionSessionKey(params.sourceThread.id, params.sourceHomeId),
       agentId: params.agentId,
+      displayName: params.sourceThread.name ?? undefined,
       thread: params.sourceThread,
       throughTurnId: pendingLastTurnId ?? null,
       recoverMatchingInitialEntry: true,

@@ -278,18 +278,12 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRul
   return true;
 }
 
-function isPackageFilesExcludedDistSubtree(
-  relativePath: string,
-  exclusions: PackageDistExclusionRules,
-): boolean {
-  // Directory exclusions end in "/"; match the root before inspecting excluded symlinks below it.
-  return isPackageFilesExcludedDistPath(`${relativePath}/`, exclusions);
-}
-
 function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
   return (
     isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
-    isPackageFilesExcludedDistSubtree(relativePath, rules.exclusions) ||
+    // npm directory exclusions can select the root itself or its trailing-slash subtree.
+    isPackageFilesExcludedDistPath(relativePath, rules.exclusions) ||
+    isPackageFilesExcludedDistPath(`${relativePath}/`, rules.exclusions) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     isOmittedPluginSdkTestPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))

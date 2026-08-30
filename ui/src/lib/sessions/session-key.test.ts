@@ -74,6 +74,12 @@ describe("parseSessionKeyParts", () => {
 describe("UI session identity", () => {
   it.each([
     {
+      name: "native catalog source IDs",
+      selectedKey: "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
+      structuralAlias: "Agent:Ops:catalog:fixture:node%3ADevBox:Thread%3AA",
+      distinctKey: "agent:ops:catalog:fixture:node%3ADevBox:thread%3Aa",
+    },
+    {
       name: "Matrix room IDs",
       selectedKey: "agent:ops:matrix:channel:!Room:Example.Org",
       structuralAlias: "Agent:Ops:Matrix:Channel:!Room:Example.Org",

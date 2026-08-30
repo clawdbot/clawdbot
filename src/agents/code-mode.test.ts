@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as codeModeExecution from "./code-mode-execution.js";
 import {
   applyCodeModeCatalog,
@@ -18,6 +19,7 @@ import {
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -25,7 +27,6 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   resolveToolSearchConfig,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -201,11 +202,11 @@ describe("Code Mode catalog and model-visible surface", () => {
 
   it("hides normal tools when only the active agent enables code mode", () => {
     const catalogRef = createToolSearchCatalogRef();
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
-        list: [{ id: "ops", tools: { codeMode: true } }],
+        entries: { ops: { tools: { codeMode: true } } },
       },
-    } as never;
+    };
     const codeModeTools = createCodeModeTools({
       config,
       runtimeConfig: config,

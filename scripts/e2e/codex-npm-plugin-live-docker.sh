@@ -68,8 +68,12 @@ else
   FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
 fi
 run_log=""
+# Signal traps inherit the harness function's log redirection. Reserve the original stdout
+# so EXIT cleanup cannot print the failure tail back into the log it is reading.
+exec 3>&1
 
 cleanup() {
+  local cleanup_status="$?"
   if [ -n "${CODEX_PLUGIN_PACK_DIR:-}" ]; then
     rm -rf "$CODEX_PLUGIN_PACK_DIR"
   fi
@@ -77,8 +81,12 @@ cleanup() {
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   fi
   if [ -n "${run_log:-}" ]; then
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$run_log" >&3 || true
+    fi
     rm -f "$run_log"
   fi
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 
@@ -490,7 +498,7 @@ PROMPT
 
 echo "Running Codex progress follow-through regression turn..."
 OPENCLAW_PACKAGE_ROOT="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
-if node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
+if openclaw_e2e_run_command node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
   "$OPENCLAW_PACKAGE_ROOT" \
   "$FOLLOWTHROUGH_SESSION_ID" \
   "$MODEL_REF" \
@@ -504,6 +512,7 @@ else
   followthrough_status=$?
 fi
 echo "followthrough_agent_status: $followthrough_status stdout_bytes=$(wc -c </tmp/openclaw-codex-followthrough.json 2>/dev/null || printf 0) stderr_bytes=$(wc -c </tmp/openclaw-codex-followthrough.err 2>/dev/null || printf 0)"
+openclaw_e2e_print_log /tmp/openclaw-codex-followthrough.log
 if [ "$followthrough_status" -ne 0 ]; then
   dump_debug_logs "$followthrough_status"
   exit "$followthrough_status"
@@ -542,7 +551,6 @@ node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-error "$p
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF
-  docker_e2e_print_log "$run_log"
   exit 1
 fi
 

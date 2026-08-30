@@ -134,7 +134,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
   });
   const remainingMs = operation.result
     ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : resolveRunStaleThresholdMs(activity) - ageMs;
+    : resolveRunStaleThresholdMs(activity, ageMs) - ageMs;
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 

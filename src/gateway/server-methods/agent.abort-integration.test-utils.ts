@@ -32,6 +32,7 @@ import {
   describe1AfterEach1,
   prime,
 } from "./agent.test-harness.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -216,10 +217,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(true);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -364,10 +362,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: requestedSessionKey, runId },
       respond: abortRespond as never,
       context,
@@ -461,10 +456,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "global", agentId: "work", runId },
       respond: abortRespond as never,
       context,
@@ -620,10 +612,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main" },
       respond: abortRespond as never,
       context,
@@ -719,10 +708,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -971,10 +957,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "global", agentId: "work", runId },
       respond: abortRespond as never,
       context,
@@ -1062,10 +1045,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -1464,10 +1444,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -1564,10 +1541,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:telegram:direct:123", runId },
       respond: abortRespond as never,
       context,
@@ -1924,10 +1898,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(capturedSignal?.aborted).toBe(false);
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -1991,10 +1962,7 @@ describe("gateway agent handler chat.abort integration", () => {
     }
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -2046,10 +2014,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -2093,10 +2058,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main", runId },
       respond: abortRespond as never,
       context,
@@ -2154,10 +2116,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:main:main" },
       respond: abortRespond as never,
       context,

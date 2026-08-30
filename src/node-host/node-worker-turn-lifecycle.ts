@@ -2,7 +2,10 @@ import { addAbortListener } from "node:events";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
-import type { WorkerProcessResult } from "../worker/worker-process-protocol.js";
+import {
+  buildWorkerProcessTurn,
+  type WorkerProcessResult,
+} from "../worker/worker-process-protocol.js";
 import type { NodeWorkerLaunchClaim, NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
 import { createNodeWorkerCredentialScrubber } from "./node-worker-output.js";
@@ -114,11 +117,7 @@ export async function startNodeWorkerTurn({
   };
   signal.addEventListener("abort", onAbort, { once: true });
   try {
-    await sendNodeWorkerInput(active.adapter, {
-      type: "turn",
-      turnId: claim.launchId,
-      descriptor,
-    });
+    await sendNodeWorkerInput(active.adapter, buildWorkerProcessTurn(descriptor));
     if (signal.aborted) {
       await cancel(claim);
     }

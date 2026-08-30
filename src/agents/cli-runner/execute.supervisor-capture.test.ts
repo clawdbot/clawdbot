@@ -18,7 +18,10 @@ import {
 } from "../../infra/diagnostic-events.js";
 import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
@@ -117,6 +120,7 @@ function buildPreparedCliRunContext(params: {
       bundleMcp: false,
       parseJsonlEvent: params.parseJsonlEvent,
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},
@@ -150,6 +154,58 @@ beforeEach(() => {
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("binds Claude image prompts to the persisted local transcript turn", async () => {
+    const entryId = "persisted-image-turn";
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "describe this" },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const message = recorder.message;
+    if (!message) {
+      throw new Error("expected prepared user turn");
+    }
+    recorder.markRuntimePersisted(message, {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.db",
+      generation: "generation-1",
+      entryId,
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 0,
+      logicalTurnId: "logical-turn-1",
+      role: "user",
+    });
+    const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
+    context.preparedBackend.backend.imageArg = "@";
+    context.params.userTurnTranscriptRecorder = recorder;
+    context.params.images = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(context);
+
+    const spawnInput = requireSupervisorSpawnInput();
+    if (!("input" in spawnInput)) {
+      throw new Error("expected direct CLI process input");
+    }
+    const prompt = spawnInput.input;
+    expect(prompt).toContain(hashCliImageTurnEntryId(entryId));
+  });
+
   it("passes native compaction as an argument and requires backend acknowledgement", async () => {
     const raw = `${JSON.stringify({ type: "system", subtype: "compacting" })}\n`;
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {

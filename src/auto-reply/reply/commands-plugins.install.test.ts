@@ -10,6 +10,15 @@ import { createCommandWorkspaceHarness } from "./commands-filesystem.test-suppor
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
+// Default-selector assertions describe a stable build; beta cases set their own identity.
+const coreVersion = vi.hoisted(() => ({ value: "2026.8.1" }));
+vi.mock("../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../version.js")>()),
+  get VERSION() {
+    return coreVersion.value;
+  },
+}));
+
 const {
   installPluginFromNpmPackArchiveMock,
   installPluginFromNpmSpecMock,
@@ -61,6 +70,18 @@ vi.mock("../../plugins/install-persistence.js", async (importOriginal) => ({
 }));
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-install-");
+
+function mockNpmPluginInstall(pluginId: string, packageName: string, version = "1.0.0"): void {
+  installPluginFromNpmSpecMock.mockResolvedValue({
+    ok: true,
+    pluginId,
+    targetDir: `/tmp/${pluginId}`,
+    version,
+    extensions: ["index.js"],
+    npmResolution: { name: packageName, version, resolvedSpec: `${packageName}@${version}` },
+  });
+  persistPluginInstallMock.mockResolvedValue({});
+}
 
 function buildPluginsParams(
   commandBodyNormalized: string,
@@ -126,6 +147,7 @@ function expectNonClawHubChatInstallRejected(
 
 describe("handleCommands /plugins install", () => {
   afterEach(async () => {
+    coreVersion.value = "2026.8.1";
     installPluginFromNpmPackArchiveMock.mockReset();
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromPathMock.mockReset();
@@ -167,19 +189,7 @@ describe("handleCommands /plugins install", () => {
         },
       },
     };
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "policy-plugin",
-      targetDir: "/tmp/policy-plugin",
-      version: "1.0.0",
-      extensions: ["index.js"],
-      npmResolution: {
-        name: "@acme/policy-plugin",
-        version: "1.0.0",
-        resolvedSpec: "@acme/policy-plugin@1.0.0",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
+    mockNpmPluginInstall("policy-plugin", "@acme/policy-plugin");
 
     await withTempHome("openclaw-command-plugins-home-", async (home) => {
       await fs.writeFile(
@@ -222,7 +232,11 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
-  it("allows npm packages matched by the official catalog", async () => {
+  it.each([
+    { version: "2026.8.1", installSpec: "@openclaw/brave-plugin" },
+    { version: "2026.8.1-beta.4", installSpec: "@openclaw/brave-plugin@beta" },
+  ])("allows official catalog npm installs on core $version", async ({ version, installSpec }) => {
+    coreVersion.value = version;
     const policyConfig: OpenClawConfig = {
       commands: { text: true, plugins: true },
       plugins: { enabled: true },
@@ -237,19 +251,7 @@ describe("handleCommands /plugins install", () => {
         },
       },
     };
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "brave",
-      targetDir: "/tmp/brave",
-      version: "1.0.0",
-      extensions: ["index.js"],
-      npmResolution: {
-        name: "@openclaw/brave-plugin",
-        version: "1.0.0",
-        resolvedSpec: "@openclaw/brave-plugin@1.0.0",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
+    mockNpmPluginInstall("brave", "@openclaw/brave-plugin");
 
     await withTempHome("openclaw-command-plugins-home-", async (home) => {
       await fs.writeFile(
@@ -267,7 +269,7 @@ describe("handleCommands /plugins install", () => {
 
       expect(result?.reply?.text).toContain('Installed plugin "brave"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
-        spec: "@openclaw/brave-plugin",
+        spec: installSpec,
         config: {
           ...policyConfig,
           agents: { entries: { main: {} } },
@@ -284,20 +286,12 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
-  it("allows npm packages matched by a bundled plugin manifest", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "discord",
-      targetDir: "/tmp/discord",
-      version: "1.0.0",
-      extensions: ["index.js"],
-      npmResolution: {
-        name: "@openclaw/discord",
-        version: "1.0.0",
-        resolvedSpec: "@openclaw/discord@1.0.0",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
+  it.each([
+    { version: "2026.8.1", installSpec: "@openclaw/discord" },
+    { version: "2026.8.1-beta.4", installSpec: "@openclaw/discord@beta" },
+  ])("allows bundled-manifest npm installs on core $version", async ({ version, installSpec }) => {
+    coreVersion.value = version;
+    mockNpmPluginInstall("discord", "@openclaw/discord");
 
     await withTempHome("openclaw-command-plugins-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
@@ -310,7 +304,7 @@ describe("handleCommands /plugins install", () => {
 
       expect(result?.reply?.text).toContain('Installed plugin "discord"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
-        spec: "@openclaw/discord",
+        spec: installSpec,
         expectedPluginId: "discord",
         trustedSourceLinkedOfficialInstall: true,
       });
@@ -346,19 +340,7 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("allows plugin ids matched by the official catalog", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "wecom-openclaw-plugin",
-      targetDir: "/tmp/wecom-openclaw-plugin",
-      version: "2026.7.2",
-      extensions: ["index.js"],
-      npmResolution: {
-        name: "@wecom/wecom-openclaw-plugin",
-        version: "2026.7.2",
-        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
+    mockNpmPluginInstall("wecom-openclaw-plugin", "@wecom/wecom-openclaw-plugin", "2026.7.2");
 
     await withTempHome("openclaw-command-plugins-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
@@ -1043,46 +1025,41 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
-  it("allows catalog npm package chat installs with alternate selectors", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "wecom-openclaw-plugin",
-      targetDir: "/tmp/wecom-openclaw-plugin",
-      version: "2026.7.2",
-      extensions: ["index.js"],
-      npmResolution: {
-        name: "@wecom/wecom-openclaw-plugin",
-        version: "2026.7.2",
-        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
+  it.each([
+    { version: "2026.8.1", installSpec: "@wecom/wecom-openclaw-plugin@latest" },
+    { version: "2026.8.1-beta.4", installSpec: "@wecom/wecom-openclaw-plugin@beta" },
+  ])(
+    "allows catalog npm @latest chat installs on core $version",
+    async ({ version, installSpec }) => {
+      coreVersion.value = version;
+      mockNpmPluginInstall("wecom-openclaw-plugin", "@wecom/wecom-openclaw-plugin", "2026.7.2");
 
-    await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const params = buildPluginsParams(
-        "/plugins install @wecom/wecom-openclaw-plugin@latest --accept-capabilities",
-        workspaceDir,
-      );
-      const result = await handlePluginsCommand(params, true);
-      if (result === null) {
-        throw new Error("expected plugin install result");
-      }
-      expect(result.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
-      expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
-        spec: "@wecom/wecom-openclaw-plugin@latest",
-        expectedPluginId: "wecom-openclaw-plugin",
-        expectedIntegrity: undefined,
-        trustedSourceLinkedOfficialInstall: true,
+      await withTempHome("openclaw-command-plugins-home-", async () => {
+        const workspaceDir = await workspaceHarness.createWorkspace();
+        const params = buildPluginsParams(
+          "/plugins install @wecom/wecom-openclaw-plugin@latest --accept-capabilities",
+          workspaceDir,
+        );
+        const result = await handlePluginsCommand(params, true);
+        if (result === null) {
+          throw new Error("expected plugin install result");
+        }
+        expect(result.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
+        expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
+          spec: installSpec,
+          expectedPluginId: "wecom-openclaw-plugin",
+          expectedIntegrity: undefined,
+          trustedSourceLinkedOfficialInstall: true,
+        });
+        expectPersistedInstall("wecom-openclaw-plugin", {
+          source: "npm",
+          spec: "@wecom/wecom-openclaw-plugin@latest",
+          installPath: "/tmp/wecom-openclaw-plugin",
+          version: "2026.7.2",
+          resolvedName: "@wecom/wecom-openclaw-plugin",
+          resolvedVersion: "2026.7.2",
+        });
       });
-      expectPersistedInstall("wecom-openclaw-plugin", {
-        source: "npm",
-        spec: "@wecom/wecom-openclaw-plugin@latest",
-        installPath: "/tmp/wecom-openclaw-plugin",
-        version: "2026.7.2",
-        resolvedName: "@wecom/wecom-openclaw-plugin",
-        resolvedVersion: "2026.7.2",
-      });
-    });
-  });
+    },
+  );
 });

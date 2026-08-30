@@ -205,6 +205,15 @@ export type WorkerProvider = {
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
   /**
+   * Resolve the exact cleanup handle for this operation, even if no machine was created.
+   * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
+   * Identity is not existence/readiness proof; destroy still owns teardown confirmation.
+   */
+  resolveAllocation: (
+    profile: WorkerProfile,
+    operationId: string,
+  ) => Promise<{ leaseId: string; sharedHost: boolean }>;
+  /**
    * Provision or adopt the lease for this operation id.
    * Repeating the same operation id must be idempotent across gateway restarts.
    */
@@ -219,7 +228,11 @@ export type WorkerProvider = {
   ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
-  /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
+  /**
+   * Throws on transient/indeterminate observation failures. `unknown` means the provider no
+   * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`
+   * proves teardown complete and lets core skip destroy.
+   */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
   /**
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic

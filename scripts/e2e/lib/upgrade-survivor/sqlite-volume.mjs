@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  assertUpgradeVolumeSharedState,
+  seedUpgradeVolumeSharedState,
+} from "./sqlite-volume-shared-state.mjs";
 
 const VOLUME_AGENT_IDS = ["main", "ops"];
 const VOLUME_CRON_CREATED_AT_MS = Date.parse("2026-07-01T10:00:00.000Z");
@@ -56,7 +60,7 @@ function readPositiveIntegerEnv(name, fallback) {
   return value;
 }
 
-function getVolumeSpec() {
+export function getVolumeSpec() {
   return {
     sessions: readPositiveIntegerEnv("OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS", 4800),
     eventsPerSession: readPositiveIntegerEnv(
@@ -67,7 +71,7 @@ function getVolumeSpec() {
   };
 }
 
-function getVolumeSessionFixture(index) {
+export function getVolumeSessionFixture(index) {
   const agentId = VOLUME_AGENT_IDS[index % VOLUME_AGENT_IDS.length];
   const paddedIndex = String(index).padStart(6, "0");
   const sessionId =
@@ -104,7 +108,7 @@ function getVolumeSessionsDir(stateDir, agentId) {
   return path.join(stateDir, "agents", agentId, "sessions");
 }
 
-function getVolumeTranscriptEvent(index, sessionId, sequence) {
+export function getVolumeTranscriptEvent(index, sessionId, sequence) {
   if (sequence === 0) {
     return {
       type: "session",
@@ -267,6 +271,7 @@ function seedUpgradeVolumeCronJobs(stateDir) {
 export function seedUpgradeVolume(stateDir) {
   seedUpgradeVolumeSessions(stateDir);
   seedUpgradeVolumeCronJobs(stateDir);
+  seedUpgradeVolumeSharedState(stateDir);
 }
 
 function assertHealthySqlite(databasePath, assertContents) {
@@ -302,6 +307,7 @@ function assertHealthySqlite(databasePath, assertContents) {
 }
 
 export function assertUpgradeVolumeMigrated(stateDir, stage) {
+  assertUpgradeVolumeSharedState(stateDir, stage);
   const spec = getVolumeSpec();
   const fixtures = getVolumeSessionFixtures(spec);
   const legacyCronPath = path.join(stateDir, "cron", "jobs.json");

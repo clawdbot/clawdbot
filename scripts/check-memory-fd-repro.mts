@@ -488,7 +488,7 @@ function sampleFds({ label, pid, workspaceRealPath }: FdSampleOptions) {
 /**
  * Reports whether a spawned child has already exited.
  */
-export function hasChildExited(child: ChildExitState) {
+function hasChildExited(child: ChildExitState) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 

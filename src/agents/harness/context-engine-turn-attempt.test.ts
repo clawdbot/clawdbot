@@ -359,7 +359,7 @@ describe("accepted context-engine turn finalization", () => {
     // to a sibling. Position order alone must not make it an accepted descendant.
     database.db
       .prepare(
-        "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position) VALUES (?, ?, ?, ?)",
+        "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position, context_eligible) VALUES (?, ?, ?, ?, 1)",
       )
       .run(
         target.sessionId,

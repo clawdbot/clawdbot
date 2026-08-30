@@ -71,8 +71,6 @@ function seedPersistedBinding(record: SessionBindingRecord): void {
       bindingDb.insertInto("current_conversation_bindings").values({
         binding_key: buildConversationKey(record.conversation),
         binding_id: record.bindingId,
-        target_agent_id: "codex",
-        target_session_id: null,
         target_session_key: record.targetSessionKey,
         channel: record.conversation.channel,
         account_id: record.conversation.accountId,
@@ -560,7 +558,7 @@ describe("generic current-conversation bindings", () => {
     });
   });
 
-  it("returns no generic bindings for session keys without an indexable agent owner", async () => {
+  it("does not match partial target keys or request aliases", async () => {
     await bindWorkspaceConversation("user:U123");
 
     expect(listGenericCurrentConversationBindingsBySession("agent:main")).toEqual([]);

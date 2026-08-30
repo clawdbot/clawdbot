@@ -216,8 +216,14 @@ overloaded: an invalid voice returns the same response. The legacy
 | Gateway-relay Talk          | Supported with Gateway-owned WebRTC and sideband                        |
 | Discord bidirectional voice | Supported with the Platform-key backend WebSocket                       |
 | Voice Call and telephony    | Supported with the Platform-key backend WebSocket                       |
-| iOS client-owned Talk       | Pending                                                                 |
+| iOS client-owned Talk       | Implemented; GPT-Live device live verification pending                  |
 | Android realtime Talk       | Pending an Android device live-proof flip; Android stays on native Talk |
+
+These rows describe implemented transport paths, not account entitlement or a
+successful live call on every device. iOS implements frameless transcripts and
+the Gateway offer exchange; Android retains an explicit GPT-Live model gate.
+For model capability limits, see [Discord voice policies](/channels/discord#voice-channels)
+and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
 The Gateway-owned WebRTC route keeps OAuth and Platform credentials away from
 relay clients. Backend WebSocket paths keep the Platform key on the Gateway;

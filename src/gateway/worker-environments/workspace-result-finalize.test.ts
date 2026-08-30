@@ -143,9 +143,6 @@ describe("concurrent worker workspace results", () => {
         const tunnel: WorkerTunnelHandle = {
           environmentId,
           ownerEpoch: 1,
-          launchTurn: async () => {
-            throw new Error("turn already completed");
-          },
           runWorkspaceCommand: async () => {
             throw new Error("unexpected workspace command");
           },

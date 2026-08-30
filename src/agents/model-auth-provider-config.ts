@@ -2,13 +2,13 @@
  * Provider-entry configuration and stored-profile binding for model auth.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   hashRuntimeConfigValue,
-} from "../config/config.js";
-import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
-import { resolveConfigSecretRef } from "../config/resolution-facts.js";
+} from "../config/runtime-snapshot.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";

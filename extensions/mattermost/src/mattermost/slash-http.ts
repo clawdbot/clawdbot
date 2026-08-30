@@ -36,7 +36,7 @@ import {
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
-  buildModelsProviderData,
+  buildPreparedModelsProviderData,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
@@ -788,7 +788,7 @@ async function handleSlashCommandAsync(params: {
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const data = await buildModelsProviderData(cfg, route.agentId);
+    const data = await buildPreparedModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       await sendMessageMattermost(`channel:${channelId}`, "No models available.", {
         cfg,

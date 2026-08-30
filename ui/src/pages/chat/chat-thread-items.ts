@@ -2,6 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
@@ -10,6 +11,7 @@ import {
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
+import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -241,13 +243,7 @@ export function findNearestAssistantMessageIndex(
     const nextDelta = next.timestamp - toolTimestamp;
     return nextDelta < previousDelta ? next.index : previous.index;
   }
-  if (previous) {
-    return previous.index;
-  }
-  if (next) {
-    return next.index;
-  }
-  return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+  return previous?.index ?? next?.index ?? assistantEntries.at(-1)?.index ?? null;
 }
 
 export function findCanvasInsertionIndex(
@@ -338,9 +334,10 @@ export function userTurnSendIdentity(message: unknown): string | null {
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
-  return isPendingSendMessage(message)
+  const id = readChatThreadMessageIdentity(message)?.id;
+  return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
     ? null
-    : (readChatThreadMessageIdentity(message)?.id ?? null);
+    : (id ?? null);
 }
 
 function transcriptMessageSourceKey(message: unknown): string | null {
@@ -461,6 +458,7 @@ function textOnlyMessageParts(message: unknown) {
   return {
     role: normalizeRoleForGrouping(normalized.role).toLowerCase(),
     senderLabel: (normalized.senderLabel ?? "").trim(),
+    senderKey: senderIdentityKey(normalized.sender),
     text: textParts.join("\n"),
   };
 }
@@ -501,7 +499,7 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
     return null;
   }
   const senderLabel = role === "user" || role === "assistant" ? parts.senderLabel : "";
-  return `${role}:${senderLabel}:${text}`;
+  return `${role}:${senderLabel}:${parts.senderKey ?? ""}:${text}`;
 }
 
 export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
@@ -579,12 +577,11 @@ export function sanitizeStreamText(text: string): string {
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
-  const runId = item.sendRunId ?? item.pendingRunId;
   return buildLocalUserMessage({
     text: item.text,
     attachments: item.attachments,
     createdAt: item.createdAt,
-    ...(runId ? { runId } : {}),
+    runId: item.sendRunId ?? item.pendingRunId,
     replyToId: item.replyToId,
     sender: item.sender,
     pending: {
@@ -607,7 +604,6 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "notice":
       return item.timestamp;
     case "stream":
-      return item.startedAt;
     case "question":
       return item.startedAt;
     case "reading-indicator":

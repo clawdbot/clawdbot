@@ -25,8 +25,13 @@ export function composerDraftSearch(draft: string): string {
 const SESSION_KEY_UUID_SUFFIX_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+type SessionNavigationContext<TRouteId extends string> = Pick<
+  ApplicationContext<TRouteId>,
+  "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
+>;
+
 type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: ApplicationContext<TRouteId>;
+  context: SessionNavigationContext<TRouteId>;
   face: BoardFace;
   sessionKey: string;
   agentId?: string;
@@ -164,7 +169,10 @@ export function sessionNavigationTarget<TRouteId extends string>(
 
   const catalogKey = parseCatalogSessionKey(row?.key ?? sessionKey);
   const targetKey = catalogKey
-    ? buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey: mainKey ?? "main" })
+    ? buildAgentMainSessionKey({
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
+        mainKey: mainKey ?? "main",
+      })
     : (row?.key ?? sessionKey);
   const pathname = pathForNonCatalogSessionKey({
     face: params.face,
