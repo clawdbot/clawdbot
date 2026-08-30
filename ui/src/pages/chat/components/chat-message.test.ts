@@ -878,6 +878,7 @@ describe("grouped chat rendering", () => {
     ({ state, label, actionLabel }) => {
       const container = document.createElement("div");
       const onRetryQueuedMessage = vi.fn();
+      const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
         container,
         createUserMessage("Attempted message", {
@@ -891,6 +892,7 @@ describe("grouped chat rendering", () => {
         "user",
         {
           onRetryQueuedMessage,
+          onDiscardQueuedMessage,
           queuedMessageAction: actionLabel
             ? { id: "attempted-send", label: actionLabel }
             : undefined,
@@ -901,13 +903,26 @@ describe("grouped chat rendering", () => {
       expect(status.dataset.sendState).toBe(state);
       expect(status.title).toBe("Delivery diagnostic");
       expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(
-        `· ${label} · ${actionLabel ?? "Retry"}`,
+        `· ${label} · ${actionLabel ?? "Retry"}${state === "unconfirmed" && !actionLabel ? " · Discard" : ""}`,
       );
       expect(status.querySelector("button")?.getAttribute("aria-label")).toBe(
         actionLabel ?? "Retry queued message",
       );
       status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
       expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+      const discard = status.querySelector<HTMLButtonElement>(".chat-send-status__discard");
+      if (state === "unconfirmed" && !actionLabel) {
+        expect(discard?.title).toBe(
+          "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
+        );
+        discard?.click();
+        expect(onDiscardQueuedMessage).toHaveBeenCalledWith("attempted-send");
+        discard?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+        expect(onDiscardQueuedMessage).toHaveBeenCalledTimes(1);
+        expect(onRetryQueuedMessage).toHaveBeenCalledTimes(1);
+      } else {
+        expect(discard).toBeNull();
+      }
     },
   );
 

@@ -4459,7 +4459,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-group-footer__meta"><span class="chat-sender-name">You</span>
               <span class="chat-send-status" data-send-state="${state}">
                 <span>·</span><span>${label}</span><span>·</span>
-                <button class="chat-send-status__retry" type="button">Retry</button>
+                <button class="chat-send-status__action chat-send-status__retry" type="button">Retry</button>
               </span>
             </div>
           </div>

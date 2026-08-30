@@ -362,7 +362,7 @@
 
 /* ── Group footer action buttons ── */
 .chat-group-footer-actions button,
-.chat-group-footer .chat-send-status__retry,
+.chat-group-footer .chat-send-status__action,
 .chat-message-actions-row button {
   background: none;
   border: none;
@@ -381,7 +381,7 @@
 }
 
 .chat-group-footer-actions button,
-.chat-group-footer .chat-send-status__retry {
+.chat-group-footer .chat-send-status__action {
   opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
 }
@@ -435,7 +435,7 @@
   color: var(--warn);
 }
 
-.chat-group-footer .chat-send-status__retry {
+.chat-group-footer .chat-send-status__action {
   width: auto;
   min-width: 0;
   min-height: 0;
@@ -447,7 +447,7 @@
   pointer-events: auto;
 }
 
-.chat-group-footer .chat-send-status__retry:hover {
+.chat-group-footer .chat-send-status__action:hover {
   color: inherit;
   text-decoration: underline;
 }

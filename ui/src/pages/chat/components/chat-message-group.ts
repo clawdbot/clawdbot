@@ -47,6 +47,7 @@ import {
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   renderStreamGroupParts,
   type StreamGroupOptions,
@@ -70,7 +71,7 @@ type ActiveContinuation = {
 
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
-type RenderMessageGroupOptions = {
+type RenderMessageGroupOptions = ChatSendStatusActions & {
   latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -114,8 +115,6 @@ type RenderMessageGroupOptions = {
   fetchLinkFavicon?: LinkFaviconFetcher;
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
-  onRetryQueuedMessage?: (id: string) => void;
-  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
   onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
@@ -556,8 +555,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? resolveIdentityHue(group.sender)
         : null;
   const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
-  const sendAction =
-    opts.queuedMessageAction?.id === sendFailure?.id ? opts.queuedMessageAction : undefined;
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
@@ -691,39 +688,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                       : null,
                     "chat-sender-name",
                   )}
-              ${sendFailure
-                ? html`<span
-                    class="chat-send-status"
-                    title=${sendFailure.error ?? nothing}
-                    data-send-state=${sendFailure.state}
-                  >
-                    <span aria-hidden="true">·</span>
-                    <span
-                      >${t(
-                        sendFailure.state === "unconfirmed"
-                          ? "chat.queue.deliveryUnconfirmed"
-                          : "chat.queue.notSent",
-                      )}</span
-                    >
-                    ${sendAction?.onAction || opts.onRetryQueuedMessage
-                      ? html`
-                          <span aria-hidden="true">·</span>
-                          <button
-                            class="chat-send-status__retry"
-                            type="button"
-                            aria-label=${sendAction?.label ?? t("chat.queue.retryQueuedMessage")}
-                            @click=${() =>
-                              sendAction?.onAction
-                                ? sendAction.onAction()
-                                : opts.onRetryQueuedMessage?.(sendFailure.id)}
-                          >
-                            ${sendAction?.label ?? t("chat.queue.retry")}
-                          </button>
-                        `
-                      : nothing}
-                  </span>`
-                : nothing}
-              ${renderMessageMeta(group.timestamp, meta)}
+              ${renderChatSendStatus(sendFailure, opts)} ${renderMessageMeta(group.timestamp, meta)}
             </div>
             ${isPeerGroup
               ? userFooterActions

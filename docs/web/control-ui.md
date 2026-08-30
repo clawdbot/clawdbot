@@ -696,8 +696,12 @@ resolve that turn with its **Retry** or **Check delivery** action first.
 If the connection drops before a send is acknowledged, reconnect checks the transcript and
 the session's active or last run ID for delivery proof. A matching run confirms receipt even
 before its transcript row appears. Without proof, an attempted message stays in the conversation
-with an amber **Delivery unconfirmed** footer and **Retry**. Check the conversation and retry only
-if the message did not arrive. Unconfirmed local commands keep their retry/discard queue controls.
+with an amber **Delivery unconfirmed** footer, **Retry**, and **Discard**. Check the conversation and retry only
+if the message did not arrive. Discard removes the pending copy from this browser's outbox; it does not
+undo or cancel work the Gateway already accepted. Later queued messages stay paused until the earlier
+unconfirmed message is resolved or discarded, and the queue explains that blockage. Discarding the
+earlier message lets the next queued message proceed when the session is ready. Unconfirmed local
+commands keep their retry/discard queue controls.
 
 Queued messages and drafts keep the conversation and agent selected when they were created.
 Switching agents, opening a split pane, or reloading does not move them to another destination.

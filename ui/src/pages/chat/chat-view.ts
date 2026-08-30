@@ -414,6 +414,7 @@ export function renderChat(props: ChatProps) {
           }
         : undefined,
       onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
+      onDiscardQueuedMessage: props.onQueueRemove,
       onSetReply: props.onSetReply,
       replyMessageAccess: props.replyMessageAccess,
       onRewindMessage: props.onRewindMessage,
