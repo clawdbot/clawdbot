@@ -1,11 +1,11 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   preflightCronModelProvider,
   resetCronModelProviderPreflightCacheForTest,
 } from "./model-preflight.runtime.js";
+import { withTestTimeout } from "./model-preflight.test-helpers.js";
 
 type StreamingProviderServer = {
   baseUrl: string;

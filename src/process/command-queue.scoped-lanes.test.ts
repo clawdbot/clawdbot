@@ -6,9 +6,9 @@ import {
   getActiveTaskCount,
   getCommandLaneSnapshot,
   resetCommandLane,
+  resetCommandQueueStateForTest,
   setCommandLaneConcurrency,
 } from "./command-queue.js";
-import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import { CommandLane } from "./lanes.js";
 
 vi.mock("../logging/diagnostic-runtime.js", () => ({
@@ -179,10 +179,8 @@ describe("scoped command lane lifecycle", () => {
     const lanes = getCommandLaneRegistryForTest();
     const fixedLanes = [
       CommandLane.Main,
-      CommandLane.SystemAgent,
       CommandLane.Cron,
       CommandLane.CronNested,
-      CommandLane.SkillWorkshopReview,
       CommandLane.Subagent,
       CommandLane.Nested,
     ];
