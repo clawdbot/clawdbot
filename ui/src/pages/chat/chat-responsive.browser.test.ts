@@ -211,6 +211,7 @@ type ChatFixtureOptions = {
   composerAttachment?: boolean;
   crowdedComposerFooter?: boolean;
   direct?: boolean;
+  goalMode?: boolean;
   sessionRailBody?: string;
   slashMenu?: boolean;
 };
@@ -708,6 +709,14 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       : ""
                   }
                   <div class="agent-chat__composer-lede">
+                  ${
+                    opts.goalMode
+                      ? `<div class="agent-chat__goal-mode">
+                        <span class="agent-chat__goal-mode-label">Goal</span>
+                        <span class="agent-chat__goal-mode-hint">Enter your objective.</span>
+                      </div>`
+                      : ""
+                  }
                   ${
                     opts.composerAttachment
                       ? `<div class="chat-attachments-preview">
@@ -1851,46 +1860,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(sizes.effort).toEqual({ height: 14, width: 14 });
       expect(sizes.microphone).toEqual({ height: 16, width: 16 });
       expect(sizes.fast).toEqual({ height: 16, width: 16 });
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("renders Goal mode as an internal composer row", async () => {
-    const page = await openBrowserPage(800, 300);
-    try {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="agent-chat__composer-shell">
-          <div class="agent-chat__input">
-            <div class="agent-chat__composer-lede">
-              <div class="agent-chat__goal-mode">Goal — Enter your objective.</div>
-            </div>
-            <div class="agent-chat__composer-input-row">What should this goal accomplish?</div>
-          </div>
-        </div>
-      </body></html>`);
-      const styles = await page.evaluate(() => {
-        const composer = getComputedStyle(
-          document.querySelector<HTMLElement>(".agent-chat__input")!,
-        );
-        const goal = getComputedStyle(
-          document.querySelector<HTMLElement>(".agent-chat__goal-mode")!,
-        );
-        return {
-          composerOverflow: composer.overflow,
-          goalBorderBottomStyle: goal.borderBottomStyle,
-          goalBorderLeftStyle: goal.borderLeftStyle,
-          goalBorderRadius: goal.borderRadius,
-          goalMarginBottom: goal.marginBottom,
-        };
-      });
-      expect(styles).toEqual({
-        composerOverflow: "hidden",
-        goalBorderBottomStyle: "solid",
-        goalBorderLeftStyle: "none",
-        goalBorderRadius: "0px",
-        goalMarginBottom: "0px",
-      });
     } finally {
       await closeBrowserPage(page);
     }
@@ -3665,6 +3634,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
       await syncFixtureComposerPopoverAnchor(page);
       await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
+      await syncFixtureComposerPopoverAnchor(page);
+      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
       const composer = await getBoundingBox(
         page,
         ".agent-chat__composer-shell > .agent-chat__input",
@@ -4104,7 +4075,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
-    const page = await openFixture(568, 320, { composerAttachment: true });
+    const page = await openFixture(568, 320, { composerAttachment: true, goalMode: true });
     try {
       await page
         .locator(".agent-chat__composer-combobox > textarea")
@@ -4154,6 +4125,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         throw new Error("Expected scroll metrics for short-landscape composer");
       }
       expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
+      expect(
+        await page
+          .locator(".agent-chat__input")
+          .evaluate((node) => getComputedStyle(node).overflowY),
+      ).toBe("auto");
       expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
 
       const scrolled = await page.evaluate(() => {
@@ -4195,6 +4171,37 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const send = expectControlRect(scrolled.send, "composer send control");
       expect(send.y).toBeGreaterThanOrEqual(scrolledShell.y - 1);
       expect(send.y + send.height).toBeLessThanOrEqual(scrolledShell.y + scrolledShell.height + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the desktop context popover visible with Goal mode active", async () => {
+    const page = await openFixture(1366, 900, { goalMode: true });
+    try {
+      const composer = await getBoundingBox(
+        page,
+        ".agent-chat__composer-shell > .agent-chat__input",
+      );
+      await page.locator(".context-ring").evaluate((node) => {
+        node.parentElement?.setAttribute("open", "");
+      });
+      await waitForLayoutSettled(page, ".context-usage__popover, .agent-chat__input");
+      const popover = await getBoundingBox(page, ".context-usage__popover");
+      expect(popover.y).toBeGreaterThanOrEqual(0);
+      expect(popover.y).toBeLessThan(composer.y);
+      const visibleAboveComposer = await page.evaluate(
+        ({ composerTop, popoverCenterX, popoverTop }) =>
+          document
+            .elementFromPoint(popoverCenterX, Math.max(popoverTop + 1, composerTop - 1))
+            ?.closest(".context-usage__popover") !== null,
+        {
+          composerTop: composer.y,
+          popoverCenterX: popover.x + popover.width / 2,
+          popoverTop: popover.y,
+        },
+      );
+      expect(visibleAboveComposer).toBe(true);
     } finally {
       await closeBrowserPage(page);
     }
