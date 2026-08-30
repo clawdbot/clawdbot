@@ -33,7 +33,10 @@ type TelegramUserbotSkillRuntime = {
   createStateRoot(): string;
   parseCredential(value: unknown): TelegramTestCredential;
   restoreCredential(value: unknown, stateRoot: string): RestoredTelegramTestCredential;
-  startApiProxy(): Promise<TelegramTestApiProxy>;
+  startApiProxy(leaseHealth: {
+    assertHealthy(): void;
+    whenUnhealthy: Promise<Error>;
+  }): Promise<TelegramTestApiProxy>;
   userDriverPath: string;
 };
 
@@ -136,8 +139,8 @@ export async function loadTelegramUserbotSkillRuntime(params?: {
         Reflect.apply(restoreCredential, undefined, [value, stateRoot]),
       );
     },
-    async startApiProxy() {
-      const value: unknown = await Reflect.apply(startApiProxy, undefined, []);
+    async startApiProxy(leaseHealth) {
+      const value: unknown = await Reflect.apply(startApiProxy, undefined, [{ leaseHealth }]);
       if (
         !isRecord(value) ||
         typeof value.apiRoot !== "string" ||

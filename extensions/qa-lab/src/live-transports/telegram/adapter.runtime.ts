@@ -150,7 +150,10 @@ export async function createTelegramQaTransportAdapter(
   try {
     stateRoot = skillRuntime.createStateRoot();
     const restored = skillRuntime.restoreCredential(credentialLease.payload, stateRoot);
-    apiProxy = await skillRuntime.startApiProxy();
+    apiProxy = await skillRuntime.startApiProxy({
+      assertHealthy: () => heartbeat.throwIfFailed(),
+      whenUnhealthy: heartbeat.whenFailed,
+    });
     await apiProxy.drainUpdates(restored.sutToken);
     userbot = await TelegramUserbotDriver.start({
       chatId: restored.groupId,

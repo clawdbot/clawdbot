@@ -28,6 +28,7 @@ vi.mock("../shared/credential-lease.runtime.js", () => ({
   startQaCredentialLeaseHeartbeat: () => ({
     stop: mocks.heartbeatStop,
     throwIfFailed: mocks.heartbeatThrowIfFailed,
+    whenFailed: new Promise<Error>(() => undefined),
   }),
 }));
 
@@ -111,6 +112,10 @@ describe("Telegram QA transport adapter", () => {
       expect.objectContaining({ kind: "telegram-test-userbot", source: "convex", role: "ci" }),
     );
     expect(mocks.proxyDrainUpdates).toHaveBeenCalledWith("sut-token");
+    expect(mocks.startApiProxy).toHaveBeenCalledWith({
+      assertHealthy: expect.any(Function),
+      whenUnhealthy: expect.any(Promise),
+    });
     expect(adapter.createGatewayConfig?.({ baseUrl: "http://127.0.0.1:1234" })).toMatchObject({
       channels: {
         telegram: {
@@ -128,6 +133,23 @@ describe("Telegram QA transport adapter", () => {
         },
       },
     });
+
+    await adapter.cleanup?.();
+    await adapter.cleanupAfterGatewayStop?.();
+  });
+
+  it("passes terminal heartbeat state to the Bot API proxy", async () => {
+    const adapter = await createTelegramQaTransportAdapter({
+      adapterOptions: {},
+      messages: {},
+    } as never);
+    const leaseHealth = mocks.startApiProxy.mock.calls[0]?.[0];
+    mocks.heartbeatThrowIfFailed.mockImplementationOnce(() => {
+      throw new Error("lease revoked");
+    });
+
+    expect(() => leaseHealth.assertHealthy()).toThrow("lease revoked");
+    expect(mocks.proxyDrainUpdates).toHaveBeenCalledTimes(1);
 
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();

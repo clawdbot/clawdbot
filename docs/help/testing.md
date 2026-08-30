@@ -432,15 +432,11 @@ gh workflow run package-acceptance.yml --ref main \
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
     [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
-  - Runs the Telegram live QA lane against a real private group using the
-    driver and SUT bot tokens from env.
-  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
-    `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and
-    `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric
-    Telegram chat id.
-  - Supports `--credential-source convex` for shared pooled credentials.
-    Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`
-    to opt into pooled leases.
+  - Runs the Telegram live QA lane on Telegram's Test Server with one
+    Convex-leased SUT bot and one independent TDLib user session.
+  - Uses `--credential-source convex` by default and rejects `env`. Provide
+    `OPENCLAW_QA_CONVEX_SITE_URL` and the secret for the selected
+    `--credential-role`.
   - Defaults cover canary, mention gating, command addressing, `/status`,
     bot-to-bot mentioned replies, and core native command replies.
     `mock-openai` defaults also cover deterministic reply-chain and
@@ -448,11 +444,8 @@ gh workflow run package-acceptance.yml --ref main \
     for optional probes such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
-  - Requires two distinct bots in the same private group, with the SUT bot
-    exposing a Telegram username.
-  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode
-    in `@BotFather` for both bots and ensure the driver bot can observe
-    group bot traffic.
+  - The leased user drives and observes the shared Test Server group. No
+    production Telegram account or bot-to-bot observer is used.
   - Writes a Telegram QA report, summary, and `qa-evidence.json` under
     `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send
     request to observed SUT reply.
@@ -467,8 +460,9 @@ drift; the per-lane coverage matrix lives in
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`)
 is enabled for live transport QA, QA lab acquires an exclusive lease from a
 Convex-backed pool, heartbeats that lease while the lane is running, and
-releases the lease on shutdown. The section name predates Buzz, Discord, Slack,
-and WhatsApp support; the lease contract is shared across kinds.
+releases the lease on shutdown. Telegram always uses this source. The section
+name predates Buzz, Discord, Slack, and WhatsApp support; the lease contract is
+shared across kinds.
 
 Reference Convex project scaffold: `qa/convex-credential-broker/`
 
