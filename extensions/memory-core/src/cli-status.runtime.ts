@@ -362,11 +362,6 @@ export async function runMemoryStatus(
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
       lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
       lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
-    } else if (status.lastSyncError) {
-      lines.push(`${label("Last sync error")} ${warn(status.lastSyncError)}`);
-      lines.push(
-        `${label("Fix")} ${muted(`Run: openclaw memory status --index --agent ${agentId}`)}`,
-      );
     }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));

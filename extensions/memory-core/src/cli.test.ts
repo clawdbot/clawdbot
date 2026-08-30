@@ -814,25 +814,6 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("prints the latest automatic sync failure", async () => {
-    const close = vi.fn(async () => {});
-    mockManager({
-      status: () =>
-        makeMemoryStatus({
-          dirty: true,
-          lastSyncError: "embedding request timed out",
-        }),
-      close,
-    });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status"]);
-
-    expectLogged(log, "Last sync error: embedding request timed out");
-    expectLogged(log, "Fix: Run: openclaw memory status --index --agent main");
-    expect(close).toHaveBeenCalled();
-  });
-
   it("keeps plain status from probing vector or embeddings", async () => {
     const close = vi.fn(async () => {});
     const probeVectorAvailability = vi.fn(async () => {

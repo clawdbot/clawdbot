@@ -148,7 +148,7 @@ export type MemoryProviderStatus = {
   files?: number;
   chunks?: number;
   dirty?: boolean;
-  /** Redacted failure from the newest admitted sync without a newer successful sync. */
+  /** Process-local failure from the newest admitted sync without a newer successful sync. */
   lastSyncError?: string;
   workspaceDir?: string;
   dbPath?: string;

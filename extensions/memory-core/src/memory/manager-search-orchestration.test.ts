@@ -756,10 +756,14 @@ describe("memory index", () => {
     }
   });
 
-  it("clears a recorded sync failure after the next successful sync", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
-    );
+  it("keeps sync failures process-local and clears them after a successful sync", async () => {
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      onSearch: true,
+      hybrid: { enabled: true },
+    });
+    const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "baseline" });
     const fields = manager as unknown as {
       syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
@@ -772,6 +776,8 @@ describe("memory index", () => {
 
     await expect(manager.sync({ reason: "failure" })).rejects.toThrow("sync failed");
     expect(manager.status().lastSyncError).toBe("sync failed");
+    const statusManager = await getFreshManager(cfg, "status");
+    expect(statusManager.status().lastSyncError).toBeUndefined();
 
     syncSpy.mockImplementation(syncMemoryFiles);
     await manager.sync({ reason: "recovery" });

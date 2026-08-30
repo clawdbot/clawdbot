@@ -23,7 +23,7 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   }
   if (!manager) {
     params.restoreDirtyGeneration(dirtyGeneration);
-    return;
+    return undefined;
   }
 
   let maintenanceError: Error | undefined;
