@@ -543,11 +543,14 @@ export async function installPluginFromManagedNpmRoot(
         manifest: packageManifestResult.manifest,
       })
     ) {
+      const resolvedName = params.npmResolution.name?.trim() || "unknown";
+      const resolvedVersion = params.npmResolution.version?.trim() || "unknown";
+      const resolvedSpec = params.npmResolution.resolvedSpec?.trim() || "unknown";
       const payloadName = packageManifestResult.manifest?.name?.trim() || "unknown";
       const payloadVersion = packageManifestResult.manifest?.version?.trim() || "unknown";
       return {
         ok: false,
-        error: `npm install staged package identity mismatch for ${params.packageName}: expected ${params.npmResolution.resolvedSpec ?? params.packageName}, got ${payloadName}@${payloadVersion}`,
+        error: `npm install staged package identity mismatch: expected package ${params.packageName}; metadata resolved ${resolvedName}@${resolvedVersion} with spec ${resolvedSpec}; payload is ${payloadName}@${payloadVersion}`,
       };
     }
 
