@@ -1078,8 +1078,10 @@ describe("googlechat monitor inbound space classification", () => {
             if (typeof declaredDurable !== "function") {
               throw new Error("Expected a Google Chat durable delivery resolver");
             }
-            const durable = async (...args: Parameters<typeof declaredDurable>): Promise<false> => {
-              observedDurableOptions(await declaredDurable(...args));
+            const durable = async (
+              ...durableArgs: Parameters<typeof declaredDurable>
+            ): Promise<false> => {
+              observedDurableOptions(await declaredDurable(...durableArgs));
               return false;
             };
             return {
@@ -1374,3 +1376,4 @@ describe("googlechat monitor direct messages", () => {
     expect(runArg?.adapter?.ingest?.().timestamp).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- Thread-delivery lifecycle coverage shares this monitor harness. */
