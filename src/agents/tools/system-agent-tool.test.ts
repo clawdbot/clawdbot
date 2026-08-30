@@ -80,6 +80,19 @@ describe("openclaw tool", () => {
     );
   });
 
+  it("lists installed plugins through the canonical read operation", async () => {
+    const tool = createSystemAgentTool({ surface: "cli" });
+
+    const result = await tool.execute("plugins-list", { action: "plugin_list" });
+
+    expect(toolText(result)).toContain("op-output");
+    expect(mocks.executeSystemAgentOperation).toHaveBeenCalledWith(
+      { kind: "plugin-list" },
+      expect.anything(),
+      expect.objectContaining({ approved: false }),
+    );
+  });
+
   it("refuses mutating actions without the approved assertion", async () => {
     const proposalRef: { current?: string } = {};
     const tool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
