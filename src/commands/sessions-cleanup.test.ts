@@ -1,4 +1,6 @@
 // Sessions cleanup tests cover stale session cleanup and runtime output.
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
@@ -560,6 +562,34 @@ describe("sessionsCleanupCommand", () => {
       (line) => line.includes("stale") && line.includes("prune-stale"),
     );
     expect(stalePruneLines.length).toBeGreaterThan(0);
+  });
+
+  it("finishes a large distinct-label preview with the normal CLI process stack", () => {
+    // A worker's larger stack can hide the argument limit in label-width spreads.
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--experimental-test-module-mocks",
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        fileURLToPath(new URL("./sessions-cleanup.large-labels.test-support.ts", import.meta.url)),
+      ],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      serviceCalls: 1,
+      gridPrinted: true,
+      summaryPrinted: true,
+      labelRows: 150_000,
+      total: "Total: 150000 kept, 0 pruned",
+    });
   });
 
   it("renders a dry-run summary grouped by session label", async () => {

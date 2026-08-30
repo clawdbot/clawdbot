@@ -130,7 +130,10 @@ function renderLabelSummaries(params: {
   if (summaries.length === 0) {
     return;
   }
-  const labelPad = Math.max(...summaries.map((summary) => visibleWidth(summary.label)));
+  const labelPad = summaries.reduce(
+    (max, summary) => Math.max(max, visibleWidth(summary.label)),
+    0,
+  );
   const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
   const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
   params.runtime.log("");
