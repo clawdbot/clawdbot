@@ -1,7 +1,7 @@
 // Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { mockSystemAccountHome } from "../../test-utils/vitest-spies.js";
 import {
   expectRestartError,
   requireMockCallArg,

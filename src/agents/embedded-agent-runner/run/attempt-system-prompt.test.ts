@@ -62,10 +62,10 @@ async function preparePermissionPrompt(isRawModelRun = false) {
     attempt,
     activeContextEngine: undefined,
     bootstrap: {
-      ...buildBootstrapBudgetState({ bootstrapFiles: [], injectedFiles: [] }),
+      ...buildBootstrapBudgetState({ files: [] }),
       bootstrapMode: "full",
       contextFiles: [],
-      hookAdjustedBootstrapFiles: [],
+      bootstrapInjectionStats: [],
       shouldRecordCompletedBootstrapTurn: false,
       workspaceNotes: [],
     },

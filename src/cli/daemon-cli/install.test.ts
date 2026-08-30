@@ -1,8 +1,8 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
-import { mockSystemAccountHome } from "../../test-utils/vitest-spies.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { createDaemonInstallActionContext } from "./shared.js";
 

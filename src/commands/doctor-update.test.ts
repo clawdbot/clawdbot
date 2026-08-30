@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { mockSystemAccountHome } from "../test-utils/vitest-spies.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 

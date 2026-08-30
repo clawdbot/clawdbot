@@ -87,7 +87,7 @@ export function buildTurnStartParams(
     ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
     : undefined;
   if (params.permissionChange?.notice) {
-    // Application context is a developer message in Codex 0.150.1 and also
+    // Application context is a developer message in Codex 0.151.0 and also
     // reaches native-preserved threads without overriding their turn settings.
     additionalContext = {
       ...additionalContext,

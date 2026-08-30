@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
-import { mockProcessPlatform, mockSystemAccountHome } from "../test-utils/vitest-spies.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { GatewayService } from "./service.js";
 import {
   describeGatewayServiceRestart,
@@ -14,7 +14,7 @@ import {
   resolveGatewayService,
   startGatewayService,
 } from "./service.js";
-import { createMockGatewayService } from "./service.test-helpers.js";
+import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
 
 beforeEach(() => {
   mockSystemAccountHome();

@@ -12,10 +12,10 @@ import type {
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
+  mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { mockSystemAccountHome } from "../../test-utils/vitest-spies.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =

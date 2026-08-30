@@ -103,6 +103,7 @@ describe("embedded run session permissions", () => {
   ] as const)(
     "continues $before → $after only after fresh permissions are installed",
     async ({ before, after, execMode }) => {
+      const pluginHarnessRunParams = createPluginHarnessRunParams(state);
       let applied: Promise<boolean> | undefined;
       const acknowledged = vi.fn();
       let owner: object | undefined;
@@ -161,7 +162,7 @@ describe("embedded run session permissions", () => {
     });
 
     await runEmbeddedAgent({
-      ...pluginHarnessRunParams,
+      ...createPluginHarnessRunParams(state),
       permissionMode: "workspace",
       runId: "run-coalesced-permissions",
     });
@@ -181,7 +182,7 @@ describe("embedded run session permissions", () => {
 
     await expect(
       runEmbeddedAgent({
-        ...pluginHarnessRunParams,
+        ...createPluginHarnessRunParams(state),
         permissionMode: "workspace",
         runId: "run-failed-permission-restart",
       }),
@@ -210,7 +211,7 @@ describe("embedded run session permissions", () => {
     });
 
     await runEmbeddedAgent({
-      ...pluginHarnessRunParams,
+      ...createPluginHarnessRunParams(state),
       permissionMode: "workspace",
       runId: "run-unauthorized-permission-change",
     });
