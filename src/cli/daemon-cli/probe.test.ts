@@ -24,6 +24,7 @@ function createDaemonStatus(rpc: NonNullable<DaemonStatus["rpc"]>): DaemonStatus
   return {
     service: {
       label: "test service",
+      installed: true,
       loaded: true,
       loadState: { status: "loaded" },
       loadedText: "loaded",

@@ -394,7 +394,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   const serviceInspectionDetail =
-    service.loadState.status === "unknown" ? service.loadState.detail : undefined;
+    service.loadState.status === "unknown" ? service.loadState.detail : service.definitionError;
   if (serviceInspectionDetail) {
     defaultRuntime.error(errorText(`Service inspection failed: ${serviceInspectionDetail}`));
     defaultRuntime.error(errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`));

@@ -9,6 +9,7 @@ import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../infra/file-lock.j
 import { readJsonFile } from "../infra/json-files.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationPlan } from "../plugins/types.js";
+import { assertOpenClawStateDatabaseCompatible } from "../state/openclaw-state-db-readonly.js";
 import { resolveUserPath } from "../utils.js";
 import { canonicalizeSetupMigrationValue } from "./setup.migration-canonical.js";
 
@@ -340,6 +341,9 @@ export async function withSetupMigrationTargetLock<T>(
     }
     return await fn();
   }
+  await assertOpenClawStateDatabaseCompatible({
+    env: { ...process.env, OPENCLAW_STATE_DIR: resolvedStateDir },
+  });
   const migrationDir = path.join(resolvedStateDir, "migration");
   await fs.mkdir(migrationDir, { recursive: true, mode: 0o700 });
   const lockTarget = path.join(migrationDir, "onboarding.lock-target");

@@ -1,8 +1,14 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
+import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
+import {
+  snapshotStateFixtureFiles,
+  writeStateSchemaFixture,
+} from "../test-utils/state-schema-fixture.js";
 import {
   createEnabledWebSearchConfig,
   createWizardTestRuntime as createRuntime,
@@ -55,6 +61,24 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     setupWizardTestDefaults();
+  });
+
+  it("refuses newer state before guided configuration reads or prompts", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await writeStateSchemaFixture(stateDir);
+      const before = await snapshotStateFixtureFiles(stateDir);
+
+      await expect(
+        runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime()),
+      ).rejects.toMatchObject({ name: "SqliteSchemaVersionError" });
+
+      expect(mocks.clackIntro).not.toHaveBeenCalled();
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.maybeInstallDaemon).not.toHaveBeenCalled();
+      expect(await snapshotStateFixtureFiles(stateDir)).toEqual(before);
+    });
   });
 
   it("persists provider-owned web search config changes returned by setupSearch", async () => {

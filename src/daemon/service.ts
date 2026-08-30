@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
@@ -204,16 +206,24 @@ export async function readGatewayServiceState(
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
   const { timeoutMs } = args;
+  let definitionError: string | undefined;
+  const recordDefinitionError = (error: unknown) => {
+    definitionError = truncateUtf16Safe(sanitizeForLog(String(error)), 500);
+    return null;
+  };
   const command = args.requireEffective
     ? await service.readCommand(baseEnv, { timeoutMs, requireEffective: true })
-    : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
+    : await service.readCommand(baseEnv, { timeoutMs }).catch(recordDefinitionError);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
   const [installed, loadState, runtime, definitionMutationCapability] = await Promise.all([
     command !== null
       ? true
-      : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
+      : (service
+          .hasInstalledDefinition?.({ env, timeoutMs })
+          .catch(recordDefinitionError)
+          .then(Boolean) ?? false),
     readGatewayServiceLoadState(service, { env, timeoutMs }),
     service
       .readRuntime(env, { timeoutMs })
@@ -226,7 +236,8 @@ export async function readGatewayServiceState(
       : undefined,
   ]);
   return {
-    installed,
+    installed: installed || loadState.status === "loaded",
+    ...(definitionError ? { definitionError } : {}),
     loadState,
     running: runtime?.status === "running",
     env,

@@ -25,6 +25,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { assertOpenClawStateDatabaseCompatible } from "../state/openclaw-state-db-readonly.js";
 import { shortenHomePath } from "../utils.js";
 
 type ConfigIO = {
@@ -140,6 +141,7 @@ export async function setupCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps: SetupCommandDeps = {},
 ) {
+  await assertOpenClawStateDatabaseCompatible();
   const desiredWorkspace =
     typeof opts?.workspace === "string" && opts.workspace.trim()
       ? opts.workspace.trim()

@@ -1,12 +1,34 @@
-import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  snapshotStateFixtureFiles,
+  writeStateSchemaFixture,
+} from "../test-utils/state-schema-fixture.js";
 import { withSetupMigrationTargetLock } from "./setup.migration-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("setup migration target lock", () => {
+  it("refuses the selected future state before creating a lock or running setup", async () => {
+    const stateDir = await fs.realpath(tempDirs.make("openclaw-setup-future-state-"));
+    await writeStateSchemaFixture(stateDir);
+    const before = await snapshotStateFixtureFiles(stateDir);
+    const setup = vi.fn(async () => {});
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(stateDir, "other") }, async () => {
+      await expect(withSetupMigrationTargetLock(stateDir, setup)).rejects.toMatchObject({
+        name: "SqliteSchemaVersionError",
+      });
+    });
+
+    expect(setup).not.toHaveBeenCalled();
+    expect(await snapshotStateFixtureFiles(stateDir)).toEqual(before);
+  });
+
   it("rejects a concurrent profile operation with the active holder", async () => {
     await withEnvAsync({ OPENCLAW_PROFILE: "lock-test" }, async () => {
       const stateDir = tempDirs.make("openclaw-setup-target-lock-");

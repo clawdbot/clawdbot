@@ -315,6 +315,21 @@ describe("readGatewayServiceState", () => {
     });
   });
 
+  it.each(["command", "definition"])(
+    "retains %s inspection failures without claiming absence",
+    async (operation) => {
+      const failure = vi.fn(async () => {
+        throw new Error("service definition access denied");
+      });
+      const service = createService(
+        operation === "command" ? { readCommand: failure } : { hasInstalledDefinition: failure },
+      );
+      const state = await readGatewayServiceState(service);
+      expect(state.definitionError).toContain("service definition access denied");
+      expect(state.loadState.status).toBe("not-loaded");
+    },
+  );
+
   it("normalizes localized runtime probe failures at the service boundary", async () => {
     const readCommand = vi.fn(async () => null);
     const service = createService({

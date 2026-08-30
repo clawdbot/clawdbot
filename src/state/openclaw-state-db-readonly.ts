@@ -54,6 +54,29 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
   }
 }
 
+/** Refuse newer state before setup or service recovery can mutate its files. */
+export async function assertOpenClawStateDatabaseCompatible(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<void> {
+  const pathname = existingPathOrUndefined(resolveReadOnlyPath(options));
+  if (pathname === undefined) {
+    return;
+  }
+  const prepared = prepareSqliteReadOnlyLocationSync(pathname);
+  try {
+    // Admission checks the committed version only. Doctor still owns repair of
+    // quarantined state; opening the runtime store here would prevent that repair.
+    const database = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+    try {
+      assertSupportedSchemaVersion(database, pathname);
+    } finally {
+      database.close();
+    }
+  } finally {
+    prepared.cleanup();
+  }
+}
+
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,

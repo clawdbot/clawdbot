@@ -7,6 +7,10 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { createConfigIO } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  snapshotStateFixtureFiles,
+  writeStateSchemaFixture,
+} from "../test-utils/state-schema-fixture.js";
 import { setupCommand } from "./setup.js";
 
 function createSetupDeps(home: string) {
@@ -58,6 +62,25 @@ function requireFirstWorkspaceParams(
 }
 
 describe("setupCommand", () => {
+  it("refuses newer shared state before config or workspace initialization", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await writeStateSchemaFixture(stateDir);
+      const before = await snapshotStateFixtureFiles(stateDir);
+      const deps = createSetupDeps(home);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      await expect(setupCommand(undefined, runtime, deps)).rejects.toMatchObject({
+        name: "SqliteSchemaVersionError",
+      });
+
+      expect(deps.replaceConfigFile).not.toHaveBeenCalled();
+      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(deps.mkdir).not.toHaveBeenCalled();
+      expect(await snapshotStateFixtureFiles(stateDir)).toEqual(before);
+    });
+  });
+
   it("writes gateway.mode=local on first run", async () => {
     await withTempHome(async (home) => {
       const runtime = {

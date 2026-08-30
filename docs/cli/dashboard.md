@@ -24,6 +24,24 @@ openclaw dashboard --yes
 - `--json`: print one machine-readable connection object without opening a browser, using the clipboard, prompting, or starting the Gateway.
 - `--yes`: start/install the Gateway without prompting when needed.
 
+## Gateway readiness
+
+The OpenClaw CLI and the background Gateway service are separate. The dashboard
+needs a running Gateway; a Gateway already running in a terminal can serve it.
+Opening a reachable Gateway does not run local state migrations.
+
+For the configured local Gateway, the interactive command offers to install a
+missing background service or start an installed, stopped service. Failed service
+inspection produces diagnostic guidance instead of an installation offer. Remote
+or externally managed targets must be started through their owning environment.
+
+Before offering local recovery, OpenClaw checks whether this build can read the
+existing state database. If the data uses a newer schema, recovery stops with the
+database path, supported schema, and refusing build. Use a compatible build with
+that state, or use a separate profile for a fresh setup. Installing the background
+service cannot resolve a database version mismatch. See
+[database compatibility](/reference/database-schemas#troubleshooting).
+
 ## Machine-readable output
 
 Use `--json` for desktop integrations and scripts that need the resolved Control UI URL:

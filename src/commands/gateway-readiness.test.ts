@@ -1,10 +1,16 @@
 // Gateway readiness tests cover readiness checks, status details, and failure messages.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
-  service?: Omit<DaemonStatus["service"], "loaded">;
+  service?: Omit<DaemonStatus["service"], "loaded" | "installed"> & { installed?: boolean };
 };
 
 function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
@@ -20,6 +26,9 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
   return {
     service: {
       ...serviceStatus,
+      installed:
+        service?.installed ??
+        Boolean(serviceStatus.command || serviceStatus.loadState.status === "loaded"),
       loaded:
         serviceStatus.loadState.status === "unknown"
           ? null
@@ -93,13 +102,101 @@ describe("ensureGatewayReadyForOperation", () => {
 
     expect(result.ready).toBe(false);
     expect(confirm).toHaveBeenCalledWith(
-      "Gateway is not installed. Install and start it now so OpenClaw can open the dashboard?",
+      "Install and start the background Gateway service to open the dashboard?",
       true,
     );
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
       "Gateway is not running.",
     );
   });
+
+  it.each(["load", "runtime", "definition"])(
+    "does not offer recovery after %s inspection fails",
+    async (failure) => {
+      const status = createStatus();
+      if (failure === "load") {
+        status.service.loadState = { status: "unknown", detail: "service manager unavailable" };
+        status.service.loaded = null;
+      } else if (failure === "definition") {
+        status.service.definitionError = "Service definition access denied";
+      } else {
+        status.service.runtime = {
+          status: "unknown",
+          inspectionFailure: { code: "service-runtime-inspection-failed", detail: "access denied" },
+        };
+      }
+      const confirm = vi.fn();
+      const installGateway = vi.fn();
+      const startGateway = vi.fn();
+      const result = await ensureGatewayReadyForOperation({
+        runtime,
+        operation: "open the dashboard",
+        yes: true,
+        deps: { gatherStatus: async () => status, confirm, installGateway, startGateway },
+      });
+      expect(result).toMatchObject({ ready: false, recoverable: false });
+      expect(runtime.log).toHaveBeenCalledWith("Could not check the background Gateway service.");
+      expect(confirm).not.toHaveBeenCalled();
+      expect(installGateway).not.toHaveBeenCalled();
+      expect(startGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["install", "start", "reachable", "external"])(
+    "preserves newer local state during %s readiness",
+    async (scenario) => {
+      const stateDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-readiness-")),
+      );
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(databasePath);
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      database.close();
+      const before = await fs.readFile(databasePath);
+      const status = createStatus();
+      if (scenario === "start") {
+        status.service.command = { programArguments: ["openclaw", "gateway", "run"] };
+        status.service.installed = true;
+      } else if (scenario === "reachable") {
+        status.rpc = { ok: true };
+      } else if (scenario === "external") {
+        status.service.targetRole = "diagnostic-only";
+      }
+      const confirm = vi.fn();
+      const installGateway = vi.fn();
+      const startGateway = vi.fn();
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          const result = await ensureGatewayReadyForOperation({
+            runtime,
+            operation: "open the dashboard",
+            yes: true,
+            deps: { gatherStatus: async () => status, confirm, installGateway, startGateway },
+          });
+          expect(result.ready).toBe(scenario === "reachable");
+          if (scenario === "install" || scenario === "start") {
+            expect(result).toMatchObject({
+              recoverable: false,
+              reason: expect.stringContaining(
+                "This OpenClaw build cannot open your existing data.",
+              ),
+            });
+          } else {
+            expect(runtime.error).not.toHaveBeenCalled();
+          }
+          expect(confirm).not.toHaveBeenCalled();
+          expect(installGateway).not.toHaveBeenCalled();
+          expect(startGateway).not.toHaveBeenCalled();
+          expect(await fs.readFile(databasePath)).toEqual(before);
+          expect(await fs.readdir(path.dirname(databasePath))).toEqual(["openclaw.sqlite"]);
+        });
+      } finally {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("installs a missing service and waits for the gateway before returning ready", async () => {
     const stopped = createStatus();

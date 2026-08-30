@@ -1,4 +1,7 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { LegacyConfigIssue } from "../config/types.js";
@@ -7,6 +10,10 @@ import {
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
+import {
+  snapshotStateFixtureFiles,
+  writeStateSchemaFixture,
+} from "../test-utils/state-schema-fixture.js";
 import {
   getMaybeRepairPluginOpenClawHostLinksMock,
   makeStartupConvergenceResult,
@@ -298,6 +305,49 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     collectCronCodexRuntimePolicyTargetsReadOnly.mockReset();
     collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValue({ targets: [], warnings: [] });
+  });
+
+  it.each([false, true])(
+    "refuses newer state before migration discovery (explicit recovery=%s)",
+    async (recoverCorruptTargetStore) => {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await writeStateSchemaFixture(stateDir);
+        await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
+        const before = await snapshotStateFixtureFiles(stateDir);
+
+        await expect(
+          runDoctorConfigPreflight({ ...stateCheckpointOptions, recoverCorruptTargetStore }),
+        ).rejects.toMatchObject({ name: "SqliteSchemaVersionError" });
+
+        expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
+        expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+        expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+        expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
+        expect(note).not.toHaveBeenCalled();
+        expect(await snapshotStateFixtureFiles(stateDir)).toEqual(before);
+      });
+    },
+  );
+
+  it("keeps config-only inspection available with newer local state", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await writeStateSchemaFixture(stateDir);
+      const before = await snapshotStateFixtureFiles(stateDir);
+
+      await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+      });
+
+      expect(readConfigFileSnapshot).toHaveBeenCalled();
+      expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+      expect(await snapshotStateFixtureFiles(stateDir)).toEqual(before);
+    });
   });
 
   it("forwards config snapshot phase measurement", async () => {

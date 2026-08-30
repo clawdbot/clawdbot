@@ -27,7 +27,7 @@ const quietRuntime: RuntimeEnv = {
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 async function resolveDashboardTarget() {
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(
       `OpenClaw config is invalid: ${snapshot.path}. Run \`openclaw doctor --fix\` or \`openclaw config validate\`.`,
