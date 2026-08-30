@@ -15,6 +15,8 @@ import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
+type PromptActiveSession = Parameters<typeof submitEmbeddedAttemptPrompt>[0]["promptActiveSession"];
+type PromptOptions = Parameters<PromptActiveSession>[1];
 
 function createSession() {
   const state = {
@@ -85,7 +87,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
         target: async () => undefined,
       });
       recorder.markRuntimePersisted(persistedUser);
-      const promptActiveSession = vi.fn(async () => undefined);
+      const promptActiveSession = vi.fn(
+        async (_prompt: string, _options?: PromptOptions) => undefined,
+      );
 
       await submitEmbeddedAttemptPrompt({
         ...input,
