@@ -77,7 +77,8 @@ function transcriptPage(
   const end = Math.min(items.length, Math.max(0, cursor?.end ?? items.length));
   const start = Math.max(0, end - limit);
   return {
-    items: items.slice(start, end),
+    // Uploads are chronological; catalog pages expose newest items first.
+    items: items.slice(start, end).reverse(),
     ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
   };
 }

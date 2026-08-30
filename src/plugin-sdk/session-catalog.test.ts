@@ -7,6 +7,7 @@ import {
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogFamilyOptions,
   type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
 } from "./session-catalog.js";
 
 const messages = {
@@ -52,6 +53,47 @@ describe("session catalog SDK", () => {
         { threadIdMaxLength: 32, threadIdPattern: /^(?!-)[a-z0-9-]+$/u, messages },
       ),
     ).toThrow("bad thread");
+  });
+
+  it.each([
+    { name: "missing", timestamps: [] },
+    {
+      name: "equal",
+      timestamps: Array.from({ length: 5 }, () => "2026-08-30T12:00:00Z"),
+    },
+    {
+      name: "non-monotonic",
+      timestamps: [
+        "2026-08-30T12:00:04Z",
+        "2026-08-30T12:00:01Z",
+        "2026-08-30T12:00:03Z",
+        "2026-08-30T12:00:00Z",
+        "2026-08-30T12:00:02Z",
+      ],
+    },
+  ])("pages newest-first by source order with $name timestamps", ({ timestamps }) => {
+    const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({
+      id,
+      type: "agentMessage",
+      text: id,
+      ...(timestamps[index] ? { timestamp: timestamps[index] } : {}),
+    }));
+    const latest = sessionCatalogPaging.boundTranscriptPage(items, 2, 0);
+    expect(latest.items.map((item) => item.id)).toEqual(["1", "a"]);
+    const older = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(latest.nextCursor),
+    );
+    expect(older.items.map((item) => item.id)).toEqual(["10", "2"]);
+    const oldest = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(older.nextCursor),
+    );
+    expect(oldest.items.map((item) => item.id)).toEqual(["z"]);
+    expect(oldest.nextCursor).toBeUndefined();
+    expect(items.map((item) => item.id)).toEqual(["z", "2", "10", "a", "1"]);
   });
 
   function createFamilyFixture() {

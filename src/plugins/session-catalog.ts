@@ -179,6 +179,7 @@ export type SessionCatalogProvider = {
     params: SessionCatalogCreateParams,
   ) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
+  /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,

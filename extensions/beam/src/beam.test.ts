@@ -391,7 +391,14 @@ describe("Beam session catalog", () => {
   it("lists newest sessions and reads paginated transcript items without mutation capabilities", async () => {
     const store = memoryStore();
     await store.put({
-      ...sampleUpload({ truncated: true }),
+      ...sampleUpload({
+        truncated: true,
+        items: [
+          ...sampleUpload().items,
+          { type: "userMessage", text: "Did the upload keep the conversation order?" },
+          { type: "agentMessage", text: "Yes, the question still precedes its answer." },
+        ],
+      }),
       createdAt: 100,
       receivedAt: 200,
     });
@@ -426,10 +433,19 @@ describe("Beam session catalog", () => {
       agentId: "main",
       hostId: "gateway",
       threadId: "0123456789abcdef0123456789abcdef",
-      limit: 1,
+      limit: 2,
     });
     expect(transcript.items).toEqual([
-      expect.objectContaining({ type: "agentMessage", text: "Implemented and tested." }),
+      expect.objectContaining({
+        id: "0123456789abcdef0123456789abcdef:3",
+        type: "agentMessage",
+        text: "Yes, the question still precedes its answer.",
+      }),
+      expect.objectContaining({
+        id: "0123456789abcdef0123456789abcdef:2",
+        type: "userMessage",
+        text: "Did the upload keep the conversation order?",
+      }),
     ]);
     expect(transcript.items[0]).not.toHaveProperty("truncated");
     expect(transcript.nextCursor).toEqual(expect.any(String));
@@ -438,10 +454,11 @@ describe("Beam session catalog", () => {
       agentId: "main",
       hostId: "gateway",
       threadId: "0123456789abcdef0123456789abcdef",
-      limit: 1,
+      limit: 2,
       cursor: transcript.nextCursor,
     });
     expect(older.items).toEqual([
+      expect.objectContaining({ type: "agentMessage", text: "Implemented and tested." }),
       expect.objectContaining({ type: "userMessage", text: "Please fix the upload flow." }),
     ]);
     expect(older.nextCursor).toBeUndefined();
@@ -450,6 +467,7 @@ describe("Beam session catalog", () => {
     if (!current) {
       throw new Error("Beam test store lost the current session");
     }
+    expect(current.items.slice(0, 2)).toEqual(sampleUpload().items);
     await store.put({
       ...current,
       items: [

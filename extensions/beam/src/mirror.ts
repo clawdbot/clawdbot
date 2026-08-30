@@ -163,7 +163,7 @@ function droppedSummary(counts: Map<string, number>): string | undefined {
 }
 
 /**
- * Reduce catalog transcript items to the Beam wire shape. Only user/agent
+ * Reduce newest-first catalog items to chronological Beam uploads. Only user/agent
  * message text crosses the wire; reasoning, tool calls, tool results, and raw
  * payloads collapse into compact counts, matching the beam skill's redaction
  * contract so the mirror never widens what a manual publish would share.
@@ -194,7 +194,7 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
         return "other entries";
     }
   };
-  for (const item of items) {
+  for (const item of items.toReversed()) {
     const text = item.text?.trim();
     if ((item.type === "userMessage" || item.type === "agentMessage") && text) {
       flush();
