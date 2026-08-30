@@ -4458,7 +4458,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         channelId: "C0AGENTS",
         messageTs: "1.000",
         source: "message",
-        reason: "mention-detection-unavailable",
+        reason: params.mentionPatterns ? "missing-mention" : "mention-detection-unavailable",
       },
       "Slack inbound event rejected during preparation",
     );
