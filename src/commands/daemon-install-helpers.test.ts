@@ -1002,6 +1002,39 @@ describe("buildGatewayInstallPlan", () => {
     expect(passEnvWarnings).toHaveLength(0);
   });
 
+  it("keeps the blocked warning when a Windows-only passEnv name is populated on a non-Windows host", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: { OPENCLAW_PORT: "3000" },
+    });
+
+    const warn = vi.fn();
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({ WINDIR: "C:/Windows" }),
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      warn,
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: ["WINDIR"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.WINDIR).toBeUndefined();
+    const passEnvWarnings = warn.mock.calls.filter((call) =>
+      String(call[0]).includes("blocked by host-env security policy"),
+    );
+    expect(passEnvWarnings).toHaveLength(1);
+  });
+
   it("includes passEnv values for plugin-managed exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

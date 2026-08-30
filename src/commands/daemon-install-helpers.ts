@@ -341,6 +341,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
   configContainsSecretRef: boolean;
   authStore?: AuthProfileStore;
   durableEnvironment: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
   if (!params.config) {
@@ -411,21 +412,23 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     if (!execProvider) {
       continue;
     }
+    console.log("RIG_DEBUG execProvider:", JSON.stringify(execProvider));
     for (const rawKey of execProvider.passEnv ?? []) {
-      // Windows-only service environment names are inert on non-Windows hosts;
-      // evaluating them here would only produce false-positive security warnings.
-      if (
-        process.platform !== "win32" &&
-        WINDOWS_ONLY_PASS_ENV_KEYS.has(rawKey.trim().toUpperCase())
-      ) {
-        continue;
-      }
       const key = normalizeEnvVarKey(rawKey, { portable: true });
       if (!key) {
         params.warn?.(
           `Exec SecretRef passEnv id "${rawKey}" is not portable and was not added to the service environment`,
           warningTitle,
         );
+        continue;
+      }
+      // Windows-only service environment names are inert on non-Windows hosts
+      // when absent; a populated value still goes through the security policy.
+      if (
+        params.platform !== "win32" &&
+        WINDOWS_ONLY_PASS_ENV_KEYS.has(key.toUpperCase()) &&
+        !params.env[key]?.trim()
+      ) {
         continue;
       }
       if (isBlockedExecSecretRefPassEnvKey(key)) {
@@ -721,6 +724,7 @@ async function buildGatewayInstallEnvironment(params: {
     configContainsSecretRef: containsConfigSecretRef,
     authStore,
     durableEnvironment,
+    platform: params.platform,
     warn: params.warn,
   });
   const authProfileEnvironment = collectAuthProfileServiceEnvVars({
