@@ -1294,6 +1294,51 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(path.join(retainedPackageDir, "dist", "run-attempt-v2.js"))).toBe(true);
   });
 
+  it("removes a fresh retained generation when npm precommit rejects the artifact", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/codex";
+    const legacyPackageDir = resolveTestPluginPackageDir(npmRoot, packageName);
+    const rejectedGenerationRoot = resolveTestPluginGenerationProjectDir({
+      npmRoot,
+      packageName,
+      version: "2.0.0",
+      integrity: "sha512-codex-v2",
+      shasum: "codexv2sha",
+    });
+    fs.mkdirSync(legacyPackageDir, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir: legacyPackageDir,
+      pluginId: "codex",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-precommit-rollback",
+    });
+    mockNpmViewAndInstall({
+      spec: `${packageName}@2.0.0`,
+      packageName,
+      version: "2.0.0",
+      pluginId: "codex",
+      npmRoot,
+      integrity: "sha512-codex-v2",
+      shasum: "codexv2sha",
+      expectedDependencySpec: "2.0.0",
+    });
+
+    await expect(
+      installPluginFromNpmSpec({
+        spec: `${packageName}@2.0.0`,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+        onBeforeNpmPluginArtifactCommit: async () => {
+          throw new Error("reject staged cohort");
+        },
+      }),
+    ).rejects.toThrow("reject staged cohort");
+
+    expect(fs.existsSync(rejectedGenerationRoot)).toBe(false);
+    expect(fs.existsSync(legacyPackageDir)).toBe(true);
+    expect(hasRetainedManagedNpmInstallMarker(legacyPackageDir)).toBe(true);
+  });
+
   it("installs into a fresh generation when the legacy npm target is retained", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
