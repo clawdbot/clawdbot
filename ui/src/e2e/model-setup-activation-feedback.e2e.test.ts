@@ -1,9 +1,14 @@
 // Real browser flow with a mocked Gateway; no Ollama server or model is used.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -26,6 +31,106 @@ async function viewportIntersection(target: Locator): Promise<number> {
 }
 
 suite.define(() => {
+  it("bootstraps chat after leaving direct Model Setup despite unavailable auth status", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "openclaw.setup.detect"],
+          heldMethods: ["openclaw.setup.detect"],
+          historyMessages: [
+            { role: "assistant", content: [{ type: "text", text: "The existing chat is ready." }] },
+          ],
+          methodResponses: {
+            "openclaw.setup.detect": {
+              candidates: [],
+              manualProviders: [],
+              workspace: "/tmp/openclaw-e2e",
+              setupComplete: false,
+            },
+            "models.authStatus": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Model authentication status is unavailable.",
+                retryable: false,
+              },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        await gateway.waitForRequest("openclaw.setup.detect");
+        await page.locator(".model-setup__loading").waitFor();
+        await page.waitForFunction(() => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: ApplicationRuntime;
+          };
+          return app.runtime.context.gateway.snapshot.client?.recoveryScopeReady;
+        });
+        const connectionOwner = await page.evaluateHandle(() => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: ApplicationRuntime;
+          };
+          const client = app.runtime.context.gateway.snapshot.client!;
+          return { client, recoveryScope: client.recoveryScope };
+        });
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+        await page.getByRole("button", { name: "Back to app" }).click();
+        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("models.authStatus");
+        await page.getByText("The existing chat is ready.", { exact: true }).waitFor();
+
+        // Revisit before the old detection replies: this visit must own a fresh
+        // request rather than inherit the abandoned route loader's pending work.
+        await page.goBack();
+        await gateway.waitForRequest("openclaw.setup.detect", { after: 1 });
+        await gateway.resolveDeferred("openclaw.setup.detect");
+        await page
+          .locator(".model-setup__intro")
+          .getByRole("button", { name: "Check again" })
+          .waitFor();
+        expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(2);
+        await page.getByRole("button", { name: "Back to app" }).click();
+        await page.getByText("The existing chat is ready.", { exact: true }).waitFor();
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await composer.fill("Continue after setup.");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        const params = asOptionalRecord(sent.params);
+        expect(params).toMatchObject({
+          message: "Continue after setup.",
+          idempotencyKey: expect.any(String),
+        });
+        await gateway.emitChatFinal({
+          runId: String(params?.idempotencyKey),
+          text: "Chat remains usable.",
+        });
+        await page.getByRole("paragraph").filter({ hasText: "Chat remains usable." }).waitFor();
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(
+          await connectionOwner.evaluate(({ client, recoveryScope }) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: ApplicationRuntime;
+            };
+            return {
+              sameClient: app.runtime.context.gateway.snapshot.client === client,
+              recoveryReady: client.recoveryScopeReady,
+              sameRecoveryScope: client.recoveryScope === recoveryScope,
+            };
+          }),
+        ).toEqual({ sameClient: true, recoveryReady: true, sameRecoveryScope: true });
+        await connectionOwner.dispose();
+        expect(pageErrors).toEqual([]);
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({ path: path.join(artifactDir, "setup-back-to-chat.png") });
+        }
+      },
+    );
+  });
+
   it.each([
     { entry: "manual", width: 1080 },
     { entry: "candidate", width: 1280 },
