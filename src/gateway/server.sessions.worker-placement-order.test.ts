@@ -11,10 +11,13 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
-import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+const unexpectedPlacementOperation = async (): Promise<never> => {
+  throw new Error("Unexpected placement operation in lifecycle ordering test");
+};
 
 test.each(["delete", "archive", "recover"] as const)(
   "%s lets an earlier move acquire its session fence before reclaim",
@@ -93,6 +96,11 @@ test.each(["delete", "archive", "recover"] as const)(
       revokeSessionAuthority: () => {},
     });
     const service = coordinateWorkerPlacementDispatch({
+      dispatch: unexpectedPlacementOperation,
+      forceDestroyEnvironment: unexpectedPlacementOperation,
+      reconcile: unexpectedPlacementOperation,
+      reconcileActive: unexpectedPlacementOperation,
+      resumeProvisioning: unexpectedPlacementOperation,
       move: async () => {
         await moveBarrier({
           sessionId,
@@ -108,7 +116,7 @@ test.each(["delete", "archive", "recover"] as const)(
       },
       reclaim: async (_request, authorize, beforeDrain, serialize) => {
         reclaimEntered.resolve();
-        serializedReclaim = serialize!(async () => {
+        const reclaim = serialize!(async () => {
           authorize?.();
           beforeDrain?.();
           placement = {
@@ -118,9 +126,10 @@ test.each(["delete", "archive", "recover"] as const)(
           } as WorkerSessionPlacementRecord;
           return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
         });
-        return await Promise.race([serializedReclaim, cleanupBlockedReclaim.promise]);
+        serializedReclaim = reclaim;
+        return await Promise.race([reclaim, cleanupBlockedReclaim.promise]);
       },
-    } as WorkerPlacementDispatchService);
+    });
     const moving = service
       .move({
         sessionId,
