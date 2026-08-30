@@ -756,8 +756,10 @@ describe("doctor-contract-registry module loader", () => {
 
   it("loads a plugin doctor contract when scoped by a contributed provider alias", () => {
     const pluginRoot = makeTempDir();
+    const unrelatedRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-    mocks.createJiti.mockImplementation(() => () => ({
+    fs.writeFileSync(path.join(unrelatedRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
       normalizeCompatibilityConfig: ({
         cfg,
       }: {
@@ -776,7 +778,11 @@ describe("doctor-contract-registry module loader", () => {
             },
           },
         },
-        changes: ["normalized ollama cloud provider endpoint"],
+        changes: [
+          modulePath.startsWith(unrelatedRoot)
+            ? "wrong unrelated provider contract"
+            : "normalized ollama cloud provider endpoint",
+        ],
       }),
     }));
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -785,8 +791,15 @@ describe("doctor-contract-registry module loader", () => {
           id: "ollama",
           rootDir: pluginRoot,
           channels: [],
-          providers: ["ollama"],
-          providerAuthAliases: { "ollama-cloud": "ollama" },
+          providers: ["OlLaMa"],
+          providerAuthAliases: { "Ollama-Cloud": "OLLAMA" },
+        },
+        {
+          id: "unrelated",
+          rootDir: unrelatedRoot,
+          channels: [],
+          providers: ["unrelated"],
+          providerAuthAliases: { "ollama-cloud": "missing" },
         },
       ],
       diagnostics: [],
@@ -813,6 +826,7 @@ describe("doctor-contract-registry module loader", () => {
       baseUrl: "https://ollama.com",
       models: [],
     });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
   it("loads a provider doctor contract when a media preference is its only activation", () => {
