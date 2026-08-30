@@ -2290,6 +2290,50 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(delivery.to).toBe("telegram:123");
   });
 
+  it("keeps valid legacy schedule-kind variants active after SQLite migration", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "legacy-cron-kind",
+        jobId: undefined,
+        enabled: true,
+        schedule: { kind: " CRON ", cron: "0 7 * * *", tz: "UTC" },
+      }),
+      createLegacyCronJob({
+        id: "legacy-every-kind",
+        jobId: undefined,
+        enabled: true,
+        schedule: { kind: "Every", everyMs: 60_000 },
+      }),
+      createLegacyCronJob({
+        id: "legacy-stream-kind",
+        jobId: undefined,
+        enabled: true,
+        schedule: { kind: " Stream ", command: ["node", "events.mjs"], mode: "line" },
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    expect(
+      jobs.map((job) => ({
+        id: job.id,
+        enabled: job.enabled,
+        kind: requireRecord(job.schedule, "cron schedule").kind,
+      })),
+    ).toEqual([
+      { id: "legacy-cron-kind", enabled: true, kind: "cron" },
+      { id: "legacy-every-kind", enabled: true, kind: "every" },
+      { id: "legacy-stream-kind", enabled: true, kind: "stream" },
+    ]);
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+  });
+
   it("quarantines invalid legacy rows before saving the repaired store", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

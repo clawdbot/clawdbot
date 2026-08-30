@@ -437,7 +437,18 @@ export function normalizeStoredCronJobs(
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
       const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
-      if (!kind && ("at" in sched || "atMs" in sched)) {
+      const canonicalKind =
+        kind === "at" ||
+        kind === "every" ||
+        kind === "cron" ||
+        kind === "on-exit" ||
+        kind === "stream"
+          ? kind
+          : undefined;
+      if (canonicalKind && sched.kind !== canonicalKind) {
+        sched.kind = canonicalKind;
+        mutated = true;
+      } else if (!kind && ("at" in sched || "atMs" in sched)) {
         sched.kind = "at";
         mutated = true;
       }
