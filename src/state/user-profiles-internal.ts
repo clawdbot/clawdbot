@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql, type SelectQueryBuilder } from "kysely";
+import { expressionBuilder, type SelectQueryBuilder } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
@@ -18,9 +18,11 @@ import {
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 
 // Selection metadata is immutable and carries no database handle or profile state.
-export const userProfileAvatarPresence = sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as(
-  "has_avatar",
-);
+export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase, "user_profiles">()(
+  "avatar",
+  "is not",
+  null,
+).as("has_avatar");
 type UserProfileAvatar = {
   bytes: Uint8Array;
   mime: UserProfileAvatarMime;
