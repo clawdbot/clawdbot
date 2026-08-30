@@ -28,6 +28,7 @@ const MIN_COMMAND_CHARS_FOR_TITLE = 12;
 const MIN_GENERIC_INPUT_CHARS_FOR_TITLE = 120;
 
 const TOOL_TITLES_CHANGED_EVENT = "openclaw:tool-titles-changed";
+const DEFAULT_HISTORY_OWNER = {};
 
 export function subscribeToolTitleChanges(listener: () => void): () => void {
   globalThis.addEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
@@ -61,6 +62,7 @@ type PendingItem = {
 type SaturatedSession = {
   expiresAt: number;
   resumeAfterKey: string | null;
+  cursorMissingHistoryOwner: object | null;
   cursorMissingHistoryVersion: number | null;
 };
 type ToolTitlesResult = { titles?: Record<string, string>; disabled?: boolean };
@@ -74,6 +76,7 @@ let activeClient: GatewayBrowserClient | null = null;
 let activeSessionKey: string | null = null;
 let activeAgentId: string | null = null;
 let activeSchedulingEnabled = true;
+let activeHistoryOwner = DEFAULT_HISTORY_OWNER;
 let activeHistoryVersion = 0;
 let fetcherGeneration = 0;
 let activeFlush: object | null = null;
@@ -163,6 +166,7 @@ function saturateSession(ownerKey: string, resumeAfterKey: string | null): void 
     {
       expiresAt: Date.now() + SATURATED_SESSION_RETRY_MS,
       resumeAfterKey,
+      cursorMissingHistoryOwner: null,
       cursorMissingHistoryVersion: null,
     },
     MAX_SATURATED_SESSIONS,
@@ -192,10 +196,14 @@ function resolveTranscriptStartIndex(
     return cursorIndex + 1;
   }
   if (saturation.cursorMissingHistoryVersion === null) {
+    saturation.cursorMissingHistoryOwner = activeHistoryOwner;
     saturation.cursorMissingHistoryVersion = activeHistoryVersion;
     return null;
   }
-  if (saturation.cursorMissingHistoryVersion === activeHistoryVersion) {
+  if (
+    saturation.cursorMissingHistoryOwner === activeHistoryOwner &&
+    saturation.cursorMissingHistoryVersion === activeHistoryVersion
+  ) {
     return null;
   }
   // The prior complete projection did not contain the cursor, so retention or
@@ -346,6 +354,7 @@ export function configureToolTitleFetcher(params: {
   /** Only the active presented pane schedules work; sibling panes read the shared cache. */
   schedulingEnabled?: boolean;
   /** History owner revision; duplicate renders of one request retain the same value. */
+  historyOwner?: object;
   historyVersion?: number;
 }): void {
   if (params.client !== activeClient) {
@@ -357,6 +366,7 @@ export function configureToolTitleFetcher(params: {
   activeSessionKey = params.sessionKey;
   activeAgentId = params.agentId ?? null;
   activeSchedulingEnabled = params.schedulingEnabled !== false;
+  activeHistoryOwner = params.historyOwner ?? DEFAULT_HISTORY_OWNER;
   activeHistoryVersion = params.historyVersion ?? 0;
 }
 

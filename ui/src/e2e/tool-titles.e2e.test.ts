@@ -525,18 +525,7 @@ suite.define(() => {
       await expect.poll(() => rows.count()).toBe(119);
       await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
 
-      const secondHistoryCount = (await gateway.getRequests("chat.history")).length;
-      await gateway.emitGatewayEvent("sessions.changed", {
-        key: sessionKey,
-        phase: "message",
-        sessionId: "control-ui-e2e-session",
-        updatedAt: initialTime.getTime() + 5 * 60_000 + 2,
-      });
-      await gateway.waitForRequest("chat.history", { after: secondHistoryCount });
-      if ((await allRows.count()) === 0) {
-        await summaries.nth(0).click();
-      }
-      await expect.poll(() => allRows.count()).toBe(238);
+      await panes.nth(1).click({ position: { x: 20, y: 80 } });
       await waitForRequests(gateway, "chat.toolTitles", 4);
       await expectRequestCountStable(gateway, "chat.toolTitles", 4, 500);
     } finally {

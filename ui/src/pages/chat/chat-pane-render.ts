@@ -152,6 +152,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       sessionKey: catalogKey ? null : state.sessionKey || null,
       agentId: currentAgentId || null,
       schedulingEnabled: this.active && this.presented,
+      historyOwner: state,
       historyVersion: getChatHistoryVersion(state),
     });
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(

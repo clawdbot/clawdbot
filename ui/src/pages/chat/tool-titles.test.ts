@@ -177,49 +177,66 @@ describe("title fetch batching", () => {
     expect(requestedIds.size).toBe(commands.length);
   });
 
-  it("resumes when transcript retention removes the saturation cursor", async () => {
-    vi.useFakeTimers();
-    const requestedIds = new Set<string>();
-    const request = vi.fn(async (_method: string, params: unknown) => {
-      const items = (params as { items: Array<{ id: string; input: string }> }).items;
-      for (const item of items) {
-        requestedIds.add(item.id);
-      }
-      return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const commands = Array.from({ length: 120 }, (_, index) => `printf 'retained-title-${index}'`);
-    let historyVersion = 0;
-    const renderTranscript = (visibleCommands: string[], version = ++historyVersion) => {
-      configureToolTitleFetcher({
-        client,
-        sessionKey: "main",
-        historyVersion: version,
+  it.each(["new-version", "new-owner"] as const)(
+    "resumes when transcript retention removes the saturation cursor on %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const requestedIds = new Set<string>();
+      const request = vi.fn(async (_method: string, params: unknown) => {
+        const items = (params as { items: Array<{ id: string; input: string }> }).items;
+        for (const item of items) {
+          requestedIds.add(item.id);
+        }
+        return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
       });
-      scheduleToolTitlesForTranscript(
-        visibleCommands.map((command) => ({ name: "bash", args: { command } })),
+      const client = { request } as unknown as GatewayBrowserClient;
+      const commands = Array.from(
+        { length: 120 },
+        (_, index) => `printf 'retained-title-${index}'`,
       );
-    };
+      const firstHistoryOwner = {};
+      const secondHistoryOwner = {};
+      let historyVersion = 0;
+      const renderTranscript = (
+        visibleCommands: string[],
+        owner = firstHistoryOwner,
+        version = ++historyVersion,
+      ) => {
+        configureToolTitleFetcher({
+          client,
+          sessionKey: "main",
+          historyOwner: owner,
+          historyVersion: version,
+        });
+        scheduleToolTitlesForTranscript(
+          visibleCommands.map((command) => ({ name: "bash", args: { command } })),
+        );
+      };
 
-    renderTranscript(commands);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
+      renderTranscript(commands);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(48);
 
-    const retainedCommands = commands.filter((_, index) => index !== 47);
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    const retainedHistoryVersion = ++historyVersion;
-    renderTranscript(retainedCommands, retainedHistoryVersion);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
+      const retainedCommands = commands.filter((_, index) => index !== 47);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      const retainedHistoryVersion = ++historyVersion;
+      renderTranscript(retainedCommands, firstHistoryOwner, retainedHistoryVersion);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(48);
 
-    renderTranscript(retainedCommands, retainedHistoryVersion);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
+      renderTranscript(retainedCommands, firstHistoryOwner, retainedHistoryVersion);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(48);
 
-    renderTranscript(retainedCommands);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(96);
-  });
+      renderTranscript(
+        retainedCommands,
+        transition === "new-owner" ? secondHistoryOwner : firstHistoryOwner,
+        transition === "new-owner" ? retainedHistoryVersion : ++historyVersion,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(96);
+    },
+  );
 
   it("evicts least-recently-used failures once retention is full", async () => {
     vi.useFakeTimers();
