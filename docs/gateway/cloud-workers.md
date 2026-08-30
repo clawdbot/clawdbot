@@ -432,6 +432,8 @@ The enrolled node starts CUA inside that same XFCE session. A vision-capable age
 
 The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.password` locally, probes the authenticated loopback RFB server, and redeems a single-use Gateway broker ticket over the node's already-connected origin. TLS deployments pin the same Gateway certificate used by the node connection. The Gateway revalidates the durable environment, lease, node, owner epoch, desktop descriptor, connection, and pairing both before dispatch and after attach; drain, replacement, or teardown aborts the stream and any pending app launch. The shared desktop session owner performs RFB preauthentication, view-only input filtering, and single-controller arbitration.
 
+The Gateway sends WebSocket keepalives on desktop observer and node desktop or portal streams while idle, so an unchanged screen or quiet preview does not go silent behind a proxy. Backpressure may delay pong replies without revoking the stream; the owning session and control connection still govern teardown.
+
 ## Security model
 
 - **Closed worker ingress.** In worker-turn mode, the enrolled node launches the worker child, which dials the Gateway's authenticated public worker route and speaks a dedicated protocol with a closed method allowlist — a worker cannot call operator RPCs.

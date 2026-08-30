@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Cloud computer control:** bind OpenClaw and Codex computer tools to the session's web VNC desktop, keep Codex screenshots as direct image results, prepare native control before advertising it, and close captured executions when their worker connection or turn ends. (#132374)
+- **Cloud computer control:** bind OpenClaw and Codex computer tools to the session's web VNC desktop, keep Codex screenshots as direct image results, prepare native control before advertising it, keep idle desktop and portal streams connected, and close captured executions when their worker connection or turn ends. (#132374)
 - **Session memory:** capture the departing conversation before manual, daily, or idle resets close its transcript window, preserving recent messages and their trust provenance in memory artifacts.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.

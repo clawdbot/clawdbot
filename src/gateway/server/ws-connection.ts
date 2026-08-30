@@ -34,6 +34,7 @@ import {
   GATEWAY_STALE_INSTALL_CLOSE_REASON,
 } from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
@@ -288,9 +289,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let stopKeepalive: (() => void) | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
-    let awaitingPong = false;
     let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
@@ -320,7 +320,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      clearInterval(pingTimer);
+      stopKeepalive?.();
       cleanupWorkerConnection?.();
       releasePreauthBudget();
       try {
@@ -410,7 +410,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     socket.on("pong", () => {
-      awaitingPong = false;
       if (client?.presenceKey) {
         touchPresence(client.presenceKey);
       }
@@ -623,23 +622,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         next.personPresence = { onlineSince: Date.now() };
         refreshClientPresence(clients, next);
       }
-      pingTimer = setInterval(() => {
-        // A half-open TCP connection can remain OPEN indefinitely. Terminate
-        // after one missed pong so the normal close handler releases node state.
-        if (awaitingPong) {
-          setCloseCause("heartbeat-timeout");
-          try {
-            socket.terminate();
-          } catch {
-            close();
-          }
-          return;
-        }
-        awaitingPong = true;
+      stopKeepalive = startWebSocketKeepalive(socket, () => {
+        // A half-open control connection must release its node and worker owners.
+        setCloseCause("heartbeat-timeout");
         try {
-          socket.ping();
-        } catch {}
-      }, 25_000);
+          socket.terminate();
+        } catch {
+          close();
+        }
+      });
       return true;
     };
 
