@@ -19,7 +19,7 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("guides a pending microphone request and clears guidance when voice connects", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -55,7 +55,8 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await captureMicrophoneLossProof(page, "microphone-access-pending.png");
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
+      await captureMicrophoneLossProof(page, "prepared-input-pending.png");
       const guidance = page.locator('.agent-chat__talk-status[role="status"]');
       await expect
         .poll(() => guidance.allTextContents())
@@ -74,7 +75,8 @@ suite.define(() => {
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
       await expect.poll(() => guidance.count()).toBe(0);
-      await captureMicrophoneLossProof(page, "microphone-access-ready.png");
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(1);
+      await captureMicrophoneLossProof(page, "prepared-input-ready.png");
       await page.getByRole("button", { name: "Stop voice input" }).click();
     });
   });

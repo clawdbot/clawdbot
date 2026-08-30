@@ -61,6 +61,10 @@ and allow access if prompted. The browser can keep an unanswered permission
 request pending. In Talk, **Stop voice input** cancels startup and releases any
 microphone stream granted after cancellation.
 
+Browser Talk acquires the microphone before creating the provider session, so
+time spent granting permission does not consume a short-lived connection token.
+If session creation fails, Talk releases the microphone before reporting the error.
+
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore
 permission if needed, and start Talk again. An unexpected GPT-Live connection

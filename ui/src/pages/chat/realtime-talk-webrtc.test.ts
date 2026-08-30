@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
@@ -103,11 +104,11 @@ function createPendingSdpResponse(signal: AbortSignal | undefined): Response {
   );
 }
 
-function createOpenAiTransport(
+async function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
   inputDeviceId?: string,
-): WebRtcSdpRealtimeTalkTransport {
+): Promise<WebRtcSdpRealtimeTalkTransport> {
   return new WebRtcSdpRealtimeTalkTransport(
     {
       provider: "openai",
@@ -116,10 +117,10 @@ function createOpenAiTransport(
       offerResponseMaxBytes: 256 * 1024,
     },
     {
+      input: await prepareRealtimeTalkTestInput(inputDeviceId),
       client: client as never,
       sessionKey: "main",
       callbacks: callbacks as never,
-      inputDeviceId,
     },
   );
 }
@@ -164,7 +165,7 @@ async function startActiveConsult(
   request: ReturnType<typeof vi.fn>,
   options: { responseAlreadyActive?: boolean } = {},
 ): Promise<{ transport: WebRtcSdpRealtimeTalkTransport; peer: FakePeerConnection | undefined }> {
-  const transport = createOpenAiTransport({
+  const transport = await createOpenAiTransport({
     addEventListener: vi.fn(() => () => undefined),
     request,
   });
@@ -208,6 +209,7 @@ function expectSpokenStatusMessage(events: SentRealtimeEvent[], message: string)
 
 describe("WebRtcSdpRealtimeTalkTransport", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -251,7 +253,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     }
     vi.stubGlobal("AudioContext", MockAudioContext);
     const onInputLevel = vi.fn();
-    const transport = createOpenAiTransport({}, { onInputLevel });
+    const transport = await createOpenAiTransport({}, { onInputLevel });
 
     await transport.start();
     transport.stop();
@@ -285,7 +287,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         transport.stop();
       }
     });
-    const transport = createOpenAiTransport({}, { onInputLevel });
+    const transport = await createOpenAiTransport({}, { onInputLevel });
 
     await expect(transport.start()).resolves.toBe("cancelled");
     transport.stop();
@@ -297,56 +299,19 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("does not continue WebRTC setup when stopped while microphone access is pending", async () => {
-    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const stopTrack = vi.fn();
-    const track = Object.assign(new EventTarget(), {
-      stop: stopTrack,
-    }) as unknown as MediaStreamTrack;
-    const stream = {
-      getAudioTracks: () => [track],
-      getTracks: () => [track],
-    } as unknown as MediaStream;
-    let resolveMedia: (stream: MediaStream) => void = () => undefined;
-    Object.defineProperty(globalThis.navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: vi.fn(
-          () =>
-            new Promise<MediaStream>((resolve) => {
-              resolveMedia = resolve;
-            }),
-        ),
-      },
-    });
-    const transport = createOpenAiTransport();
-
-    const startPromise = transport.start();
-    const peer = FakePeerConnection.instances[0];
-    transport.stop();
-    resolveMedia(stream);
-
-    await expect(startPromise).resolves.toBe("cancelled");
-    expect(peer?.addTrack).not.toHaveBeenCalled();
-    expect(stopTrack).toHaveBeenCalledTimes(1);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("suppresses pending setup errors after stop", async () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     let rejectOffer: (error: Error) => void = () => undefined;
-    const transport = createOpenAiTransport();
+    const transport = await createOpenAiTransport();
 
-    const startPromise = transport.start();
-    const peer = requirePeer();
-    const createOfferSpy = vi.spyOn(peer, "createOffer").mockImplementation(
+    const createOfferSpy = vi.spyOn(FakePeerConnection.prototype, "createOffer").mockImplementation(
       () =>
         new Promise<RTCSessionDescriptionInit>((_, reject) => {
           rejectOffer = reject;
         }),
     );
+    const startPromise = transport.start();
     await waitForFast(() => expect(createOfferSpy).toHaveBeenCalled());
     transport.stop();
     rejectOffer(new Error("closed peer rejected offer creation"));
@@ -370,6 +335,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         },
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: {},
@@ -402,7 +368,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       return response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const transport = createOpenAiTransport();
+    const transport = await createOpenAiTransport();
 
     const startResult = transport.start().then(
       () => undefined,
@@ -431,7 +397,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       return response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const transport = createOpenAiTransport();
+    const transport = await createOpenAiTransport();
 
     const startResult = transport.start();
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -448,7 +414,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     stubAnswerSdpFetch();
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
-    const transport = createOpenAiTransport({}, { onStatus, onTalkEvent });
+    const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent });
     const start = transport.start();
     const peer = requirePeer();
     let finishRemoteDescription: (() => void) | undefined;
@@ -474,7 +440,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   it("releases an active peer when the terminal status callback throws", async () => {
     stubAnswerSdpFetch();
     const onStatus = vi.fn();
-    const transport = createOpenAiTransport({}, { onStatus });
+    const transport = await createOpenAiTransport({}, { onStatus });
     await expect(transport.start()).resolves.toBe("ready");
     onStatus.mockImplementation(() => {
       throw new Error("consumer failed");
@@ -494,7 +460,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const onTalkEvent = vi.fn(() => {
       throw new Error("consumer failed");
     });
-    const transport = createOpenAiTransport({}, { onTalkEvent });
+    const transport = await createOpenAiTransport({}, { onTalkEvent });
     await expect(transport.start()).resolves.toBe("ready");
     const peer = requirePeer();
 
@@ -514,7 +480,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         return new Response("answer-sdp");
       }) as unknown as typeof fetch,
     );
-    const transport = createOpenAiTransport();
+    const transport = await createOpenAiTransport();
 
     await transport.start();
     await vi.runAllTimersAsync();
@@ -536,6 +502,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         clientSecret: "client-secret-123",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onStatus },
@@ -571,6 +538,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         clientSecret: "client-secret-123",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onStatus, onTalkEvent },
@@ -613,7 +581,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     stubAnswerSdpFetch();
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
-    const transport = createOpenAiTransport({}, { onStatus, onTalkEvent });
+    const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent });
     await transport.start();
     const peer = FakePeerConnection.instances[0];
     const response = {
@@ -662,6 +630,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         clientSecret: "client-secret-123",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onTranscript, onTalkEvent },
@@ -717,7 +686,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     stubAnswerSdpFetch();
     const onTalkEvent = vi.fn();
     const onTranscript = vi.fn(() => transport.stop());
-    const transport = createOpenAiTransport({}, { onTranscript, onTalkEvent });
+    const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent });
 
     await transport.start();
     dispatchTranscription(FakePeerConnection.instances[0], "overflow");
@@ -739,6 +708,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         clientSecret: "client-secret-123",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onTalkEvent },
@@ -803,6 +773,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
           clientSecret: "client-secret-123",
         },
         {
+          input: await prepareRealtimeTalkTestInput(),
           client: {} as never,
           sessionKey: "main",
           callbacks: { onTranscript, onTalkEvent },
@@ -867,6 +838,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         clientSecret: "client-secret-123",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {
           addEventListener: vi.fn(
             (listener: (event: { event: string; payload?: unknown }) => void) => {
@@ -1069,6 +1041,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         clientSecret: "client-secret-123",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {
           addEventListener: vi.fn(() => () => undefined),
           request,

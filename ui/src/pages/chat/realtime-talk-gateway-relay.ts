@@ -11,7 +11,6 @@ import {
   type RealtimeTalkAudioFrame,
 } from "./realtime-talk-audio.ts";
 import type { DelayedToolResult, GatewayRelayEvent } from "./realtime-talk-gateway-relay-types.ts";
-import { RealtimeTalkInputController } from "./realtime-talk-input.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -44,10 +43,7 @@ function estimateRelayEventBytes(event: GatewayRelayEvent): number {
 }
 
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
-  private readonly input = new RealtimeTalkInputController(
-    (detail) => this.failAudioAppend(detail),
-    (detail) => this.ctx.callbacks.onStatus?.("connecting", detail),
-  );
+  private readonly input = this.ctx.input;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
@@ -79,9 +75,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   ) {}
 
   async start(): Promise<RealtimeTalkTransportStartResult> {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Realtime Talk requires browser microphone access");
-    }
     if (
       this.session.audio.inputEncoding !== "pcm16" ||
       this.session.audio.outputEncoding !== "pcm16"
@@ -99,19 +92,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       }
       this.handleIncomingRelayEvent(evt.payload as GatewayRelayEvent);
     });
-    let media: MediaStream;
-    try {
-      media = await this.input.open(this.ctx.inputDeviceId);
-    } catch (error) {
-      const startupError = this.currentStartupError();
-      if (startupError) {
-        throw startupError;
-      }
-      if (this.closed) {
-        return "cancelled";
-      }
-      throw error;
-    }
+    const media = this.input.adopt((detail) => this.failAudioAppend(detail));
     const startupError = this.currentStartupError();
     if (startupError) {
       this.input.stop();
@@ -133,6 +114,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   activate(): void {
+    if (this.startupError) {
+      throw this.startupError;
+    }
     if (this.closed || this.activated) {
       return;
     }

@@ -266,12 +266,27 @@ export class RealtimeTalkInputController {
   private media: MediaStream | null = null;
 
   constructor(
-    private readonly onEnded: (detail: string) => void,
+    private onEnded: (detail: string) => void,
     private readonly onConnecting?: (detail?: string) => void,
   ) {}
 
   get stream(): MediaStream | null {
     return this.media;
+  }
+
+  requireStream(): MediaStream {
+    const media = this.media;
+    if (!media) {
+      throw new Error(t("chat.composer.microphoneStopped"));
+    }
+    return media;
+  }
+
+  adopt(onEnded: (detail: string) => void): MediaStream {
+    const media = this.requireStream();
+    // Keep the same stream and listener across the candidate-to-transport handoff.
+    this.onEnded = onEnded;
+    return media;
   }
 
   async open(inputDeviceId: string | undefined): Promise<MediaStream> {

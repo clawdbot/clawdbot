@@ -19,7 +19,7 @@ import {
   GoogleLiveToolOwner,
   type GoogleLiveFunctionCall,
 } from "./realtime-talk-google-live-tools.ts";
-import { openRealtimeTalkCamera, RealtimeTalkInputController } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera } from "./realtime-talk-input.ts";
 import {
   type RealtimeTalkJsonPcmWebSocketSessionResult,
   createRealtimeTalkEventEmitter,
@@ -81,15 +81,7 @@ function isGemini31LiveModel(model: string | undefined): boolean {
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private readonly input = new RealtimeTalkInputController(
-    (detail) => {
-      const ws = this.ws;
-      if (ws) {
-        this.failConnection(ws, detail);
-      }
-    },
-    (detail) => this.ctx.callbacks.onStatus?.("connecting", detail),
-  );
+  private readonly input = this.ctx.input;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
@@ -158,7 +150,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   async start(): Promise<RealtimeTalkTransportStartResult> {
-    if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === "undefined") {
+    if (typeof WebSocket === "undefined") {
       throw new Error("Realtime Talk requires browser WebSocket and microphone access");
     }
     if (this.session.protocol !== "google-live-bidi") {
@@ -167,17 +159,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
     this.cameraPublished = false;
-    try {
-      await this.input.open(this.ctx.inputDeviceId);
-    } catch (error) {
-      if (this.closed) {
-        return "cancelled";
+    this.input.adopt((detail) => {
+      const ws = this.ws;
+      if (ws) {
+        this.failConnection(ws, detail);
       }
-      throw error;
-    }
-    if (this.closed) {
-      return "cancelled";
-    }
+    });
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     const ws = new WebSocket(wsUrl);

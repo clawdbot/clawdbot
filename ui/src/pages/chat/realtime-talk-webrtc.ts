@@ -4,7 +4,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/des
 import { formatUiError } from "../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
-import { openRealtimeTalkCamera, RealtimeTalkInputController } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera } from "./realtime-talk-input.ts";
 import {
   type RealtimeTalkWebRtcSdpSessionResult,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -44,10 +44,7 @@ const cancelledSetup = Symbol("cancelledSetup");
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
-  private readonly input = new RealtimeTalkInputController(
-    (detail) => this.failConnection(detail),
-    (detail) => this.ctx.callbacks.onStatus?.("connecting", detail),
-  );
+  private readonly input = this.ctx.input;
   private audio: HTMLAudioElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
@@ -80,7 +77,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   async start(): Promise<RealtimeTalkTransportStartResult> {
-    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
+    if (typeof RTCPeerConnection === "undefined") {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
@@ -118,10 +115,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         event.track.addEventListener("unmute", () => play(true), { once: true });
       }
     });
-    const media = await this.awaitSetupStep(peer, this.input.open(this.ctx.inputDeviceId));
-    if (media === cancelledSetup || !this.isCurrentPeer(peer)) {
-      return this.cancelledStart();
-    }
+    const media = this.input.adopt((detail) => this.failConnection(detail));
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(media);
