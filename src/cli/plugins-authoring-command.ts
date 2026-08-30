@@ -501,7 +501,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
       typebox: "^1.1.38",
     },
     devDependencies: {
-      openclaw: "latest",
+      openclaw: VERSION,
       typescript: "^5.9.0",
       vitest: "^3.2.0",
     },
@@ -597,8 +597,8 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
       },
     },
     devDependencies: {
-      clawhub: "latest",
-      openclaw: "latest",
+      clawhub: VERSION,
+      openclaw: VERSION,
       typescript: "^5.9.0",
       vitest: "^3.2.0",
     },
