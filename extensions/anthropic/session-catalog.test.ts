@@ -431,7 +431,7 @@ async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
 function message(
   sessionId: string,
   type: "user" | "assistant",
-  text: string,
+  text: string | Record<string, unknown>[],
   index: number,
 ): Record<string, unknown> {
   return {
@@ -442,7 +442,7 @@ function message(
     isSidechain: false,
     message: {
       role: type,
-      content: [{ type: "text", text }],
+      content: typeof text === "string" ? [{ type: "text", text }] : text,
       ...(type === "assistant" ? { model: "claude-opus-4-8" } : {}),
     },
   };
@@ -2390,7 +2390,7 @@ describe("Claude session catalog", () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("reads newest transcript messages first by page while returning each page chronologically", async () => {
+  it("reads newest-first transcript pages without overlapping older history", async () => {
     const home = await createHome();
     const sessionId = "transcript-session";
     const oldUser = await writeLongPagedTranscript({ home, sessionId });
@@ -2405,18 +2405,87 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
-    await expect(
-      readLocalClaudeTranscriptPage(
-        { threadId: sessionId, limit: 1, cursor: ` ${latest.nextCursor} ` },
-        home,
-      ),
-    ).rejects.toThrow("transcript cursor is invalid");
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
-    ).rejects.toThrow("transcript cursor is invalid");
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: null, limit: 1 }, home),
-    ).rejects.toThrow("transcript cursor is invalid");
+    for (const cursor of [` ${latest.nextCursor} `, " ", null]) {
+      await expect(
+        readLocalClaudeTranscriptPage({ threadId: sessionId, cursor, limit: 1 }, home),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
+  });
+
+  it("keeps mixed transcript blocks typed and ordered across native row cursors", async () => {
+    const home = await createHome();
+    process.env.CLAUDE_CONFIG_DIR = path.join(home, ".claude");
+    const sessionId = "mixed-block-session";
+    await writeProject({
+      home,
+      entries: [{ sessionId, summary: "Mixed blocks", isSidechain: false }],
+      transcripts: {
+        [sessionId]: [
+          sdkCliMessage(sessionId, "Original request"),
+          message(
+            sessionId,
+            "user",
+            [
+              { type: "tool_result", tool_use_id: "call-1", content: "Private tool output" },
+              { type: "text", text: "Continue the task" },
+            ],
+            2,
+          ),
+          message(
+            sessionId,
+            "assistant",
+            [
+              { type: "text", text: "I will check" },
+              { type: "thinking", thinking: "Private reasoning" },
+              { type: "tool_use", id: "call-2", name: "read", input: { file: "private.txt" } },
+            ],
+            3,
+          ),
+          message(
+            sessionId,
+            "assistant",
+            [
+              { type: "text", text: "Public continuation" },
+              { type: "thinking", thinking: "x".repeat(2 * 1024 * 1024) },
+            ],
+            4,
+          ),
+        ],
+      },
+    });
+    const provider = captureCatalogProvider(createPluginRuntimeMock());
+    const request = { hostId: "gateway:local", threadId: sessionId, limit: 1 };
+    const oversized = await provider.read(request);
+    expect(oversized.items.map(({ type, truncated }) => ({ type, truncated }))).toEqual([
+      { type: "other", truncated: true },
+    ]);
+    expect(oversized.items[0]?.raw).toBeUndefined();
+    expect(oversized.nextCursor).toEqual(expect.any(String));
+    const latest = await provider.read({ ...request, cursor: oversized.nextCursor });
+    expect(latest.items.map((item) => item.type)).toEqual([
+      "toolCall",
+      "reasoning",
+      "agentMessage",
+    ]);
+    expect(latest.items.map((item) => item.text)).toEqual([
+      expect.stringContaining("private.txt"),
+      "Private reasoning",
+      "I will check",
+    ]);
+    expect(new Set(latest.items.map((item) => item.id)).size).toBe(latest.items.length);
+    expect(latest.nextCursor).toEqual(expect.any(String));
+
+    const previous = await provider.read({ ...request, cursor: latest.nextCursor });
+    expect(previous.items.map((item) => [item.type, item.text])).toEqual([
+      ["userMessage", "Continue the task"],
+      ["toolResult", "Private tool output"],
+    ]);
+    expect(previous.nextCursor).toEqual(expect.any(String));
+    const oldest = await provider.read({ ...request, cursor: previous.nextCursor });
+    expect(oldest.items.map((item) => [item.type, item.text])).toEqual([
+      ["userMessage", "Original request"],
+    ]);
+    expect(oldest.nextCursor).toBeUndefined();
   });
 
   it("rejects malformed provider read cursors before paired-node I/O", async () => {

@@ -17,11 +17,6 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-function firstHeader(req: IncomingMessage, name: string): string | undefined {
-  const value = req.headers[name];
-  return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
-}
-
 type BeamRequestClient = {
   clientIp: string;
   scopes: readonly string[];
@@ -78,11 +73,6 @@ export function createBeamRequestHandler(params: {
     }
 
     try {
-      const contentLength = Number(firstHeader(req, "content-length"));
-      if (Number.isFinite(contentLength) && contentLength > BEAM_MAX_BODY_BYTES) {
-        sendJson(res, 413, { ok: false, error: "Payload Too Large" });
-        return true;
-      }
       const body = await readJsonWebhookBodyOrReject({
         req,
         res,

@@ -4,6 +4,7 @@ import type {
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BeamStore } from "./store.js";
 import { BEAM_HOST_ID, BEAM_SESSION_SHARE_ROUTE, type BeamStoredSession } from "./types.js";
 
@@ -52,16 +53,14 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
     if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as TranscriptCursor).revision === "string" &&
-      /^[A-Za-z0-9_-]{43}$/.test((parsed as TranscriptCursor).revision) &&
-      typeof (parsed as TranscriptCursor).end === "number" &&
-      Number.isSafeInteger((parsed as TranscriptCursor).end) &&
-      (parsed as TranscriptCursor).end >= 0
+      isRecord(parsed) &&
+      typeof parsed.revision === "string" &&
+      /^[A-Za-z0-9_-]{43}$/.test(parsed.revision) &&
+      typeof parsed.end === "number" &&
+      Number.isSafeInteger(parsed.end) &&
+      parsed.end >= 0
     ) {
-      return parsed as TranscriptCursor;
+      return { revision: parsed.revision, end: parsed.end };
     }
   } catch {
     // Reject malformed cursors below.

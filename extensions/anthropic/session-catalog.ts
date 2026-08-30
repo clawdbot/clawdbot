@@ -5,6 +5,7 @@ import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { continueClaudeSession } from "./session-catalog-continue.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
@@ -22,7 +23,7 @@ import {
   gatewayClaudeScanOptions,
 } from "./session-catalog-scan.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
-import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
+import { collectTranscriptText, type ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 import type { ClaudeSessionCatalogHost } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
@@ -32,29 +33,73 @@ export {
   readLocalClaudeTranscriptPage,
 } from "./session-catalog-listing.js";
 
-function toGenericClaudeItem(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem {
-  const allowed = new Set<SessionCatalogTranscriptItem["type"]>([
-    "userMessage",
-    "agentMessage",
-    "reasoning",
-    "toolCall",
-    "toolResult",
-    "other",
-  ]);
-  const type = allowed.has(item.type as SessionCatalogTranscriptItem["type"])
-    ? (item.type as SessionCatalogTranscriptItem["type"])
-    : "other";
-  return {
-    ...(item.uuid ? { id: item.uuid } : {}),
-    type,
-    ...(item.text ? { text: item.text } : {}),
+const CLAUDE_TRANSCRIPT_TYPES = new Map<string, SessionCatalogTranscriptItem["type"]>([
+  ["userMessage", "userMessage"],
+  ["agentMessage", "agentMessage"],
+  ["reasoning", "reasoning"],
+  ["toolCall", "toolCall"],
+  ["toolResult", "toolResult"],
+]);
+const CLAUDE_BLOCK_TYPES = new Map<unknown, SessionCatalogTranscriptItem["type"]>([
+  ["thinking", "reasoning"],
+  ["tool_use", "toolCall"],
+  ["tool_result", "toolResult"],
+]);
+
+function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem[] {
+  const common = {
     ...(item.timestamp ? { timestamp: item.timestamp } : {}),
     ...(item.model ? { model: item.model } : {}),
     ...(item.truncated ? { truncated: true } : {}),
-    ...(item.content !== undefined
-      ? { raw: item.content as SessionCatalogTranscriptItem["raw"] }
-      : {}),
   };
+  if (!Array.isArray(item.content)) {
+    return [
+      {
+        ...common,
+        ...(item.uuid ? { id: item.uuid } : {}),
+        // Oversized rows lose their native blocks; their flattened text can contain
+        // reasoning or tools, so consumers must not treat it as ordinary prose.
+        type: item.truncated ? "other" : (CLAUDE_TRANSCRIPT_TYPES.get(item.type) ?? "other"),
+        ...(item.text ? { text: item.text } : {}),
+        ...(item.content !== undefined
+          ? { raw: item.content as SessionCatalogTranscriptItem["raw"] }
+          : {}),
+      },
+    ];
+  }
+  // Native cursors own complete rows. Keep every block, newest first, rather than
+  // letting mixed tools/reasoning inherit the row's user or assistant label.
+  return item.content
+    .flatMap((block, index): SessionCatalogTranscriptItem[] => {
+      if (!isRecord(block)) {
+        return [];
+      }
+      const messageType = item.type === "userMessage" ? "userMessage" : "agentMessage";
+      const type =
+        block.type === "text" ? messageType : (CLAUDE_BLOCK_TYPES.get(block.type) ?? "other");
+      const fragments: string[] = [];
+      if (block.type === "tool_use") {
+        fragments.push(typeof block.name === "string" ? block.name : "tool");
+        if (block.input !== undefined) {
+          fragments.push(JSON.stringify(block.input));
+        }
+      } else {
+        const content =
+          block.type === "text" ? (typeof block.text === "string" ? block.text : "") : block;
+        collectTranscriptText(content, fragments);
+      }
+      const text = fragments.join("\n\n");
+      return [
+        {
+          ...common,
+          ...(item.uuid ? { id: `${item.uuid}:${index}` } : {}),
+          type,
+          ...(text ? { text } : {}),
+          raw: block as SessionCatalogTranscriptItem["raw"],
+        },
+      ];
+    })
+    .toReversed();
 }
 
 function toGenericClaudeHost(
@@ -152,7 +197,7 @@ export function createClaudeSessionCatalogRuntime(
         limit: catalogRequest.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
         allowProcessHomeFallback,
       });
-      return { ...page, items: page.items.map(toGenericClaudeItem) };
+      return { ...page, items: page.items.flatMap(toGenericClaudeItems) };
     },
     continueSession: async (request) => {
       assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
