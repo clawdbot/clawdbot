@@ -562,6 +562,7 @@ function mergeQaRuntimeEnvPatches(
 }
 
 export type QaSuiteSummaryJsonParams = {
+  status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
   finishedAt: Date;
@@ -622,6 +623,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.evidence ? { evidence: params.evidence } : {}),
     run: {
+      status: params.status ?? "completed",
       startedAt: params.startedAt.toISOString(),
       finishedAt: params.finishedAt.toISOString(),
       providerMode: params.providerMode,
@@ -877,6 +879,7 @@ async function runQaRuntimeParitySuite(params: {
 }
 
 async function writeQaSuiteArtifacts(params: {
+  status?: QaSuiteSummaryJson["run"]["status"];
   outputDir: string;
   startedAt: Date;
   finishedAt: Date;
@@ -1267,6 +1270,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         .then(async () => {
           const partialFinishedAt = new Date();
           const { report, reportPath } = await writeQaSuiteArtifacts({
+            status: "running",
             outputDir,
             startedAt,
             finishedAt: partialFinishedAt,
