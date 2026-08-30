@@ -196,6 +196,7 @@ async function repairMissingPluginInstallsWithLease(
   ) => {
     if (
       await versionBoundRuntimeNpmArtifactMatchesReleaseCohort({
+        pluginId: artifact.pluginId,
         npmResolution: artifact.npmResolution,
         stagedArtifactDir: artifact.stagedArtifactDir,
         env,
@@ -218,6 +219,7 @@ async function repairMissingPluginInstallsWithLease(
   }): Promise<{ record: PluginInstallRecord } | { error: string }> => {
     if (
       !(await versionBoundRuntimeInstallRecordMatchesReleaseCohort({
+        pluginId: input.pluginId,
         record: input.repairedRecord,
         env,
         currentVersion: compatibilityHostVersion,

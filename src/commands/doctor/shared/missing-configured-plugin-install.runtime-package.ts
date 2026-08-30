@@ -9,6 +9,7 @@ import {
   resolveOpenClawReleaseCohortVersion,
 } from "../../../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
+import { npmPackageIdentityMatchesResolution } from "../../../plugins/install-npm-resolution.js";
 import { safeRealpathSync } from "../../../plugins/path-safety.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -121,10 +122,10 @@ export function describeVersionBoundRuntimeReleaseCohort(params: {
   return currentBase ? `${currentBase} beta` : currentCohortVersion;
 }
 
-async function readRuntimePackageVersion(params: {
+async function readRuntimePackageIdentity(params: {
   installPath: string | undefined;
   env: NodeJS.ProcessEnv;
-}): Promise<string | undefined> {
+}): Promise<{ name?: unknown; version?: unknown } | undefined> {
   const installPath = params.installPath?.trim();
   if (!installPath) {
     return undefined;
@@ -133,30 +134,43 @@ async function readRuntimePackageVersion(params: {
     const parsed: unknown = JSON.parse(
       await readFile(path.join(resolveUserPath(installPath, params.env), "package.json"), "utf8"),
     );
-    if (typeof parsed !== "object" || parsed === null || !("version" in parsed)) {
-      return undefined;
-    }
-    const version = parsed.version;
-    return typeof version === "string" && version.trim() ? version.trim() : undefined;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as { name?: unknown; version?: unknown })
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
+function resolveVersionBoundRuntimeNpmPackageName(pluginId: string): string | undefined {
+  const candidate = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
+  return candidate?.versionBoundToOpenClaw && candidate.npmSpec
+    ? parseRegistryNpmSpec(candidate.npmSpec)?.name
+    : undefined;
+}
+
 export async function versionBoundRuntimeNpmArtifactMatchesReleaseCohort(params: {
+  pluginId: string;
   npmResolution: NpmSpecResolution;
   stagedArtifactDir: string;
   env: NodeJS.ProcessEnv;
   currentVersion: string;
   updateChannel: UpdateChannel;
 }): Promise<boolean> {
-  const payloadVersion = await readRuntimePackageVersion({
+  const expectedPackageName = resolveVersionBoundRuntimeNpmPackageName(params.pluginId);
+  const payloadIdentity = await readRuntimePackageIdentity({
     installPath: params.stagedArtifactDir,
     env: params.env,
   });
-  return [params.npmResolution.version, payloadVersion].every((version) =>
+  return Boolean(
+    expectedPackageName &&
+    npmPackageIdentityMatchesResolution({
+      expectedPackageName,
+      resolution: params.npmResolution,
+      manifest: payloadIdentity,
+    }) &&
     versionBoundRuntimePackageVersionMatchesReleaseCohort({
-      version,
+      version: params.npmResolution.version,
       currentVersion: params.currentVersion,
       updateChannel: params.updateChannel,
     }),
@@ -164,22 +178,37 @@ export async function versionBoundRuntimeNpmArtifactMatchesReleaseCohort(params:
 }
 
 export async function versionBoundRuntimeInstallRecordMatchesReleaseCohort(params: {
+  pluginId: string;
   record: PluginInstallRecord | undefined;
   env: NodeJS.ProcessEnv;
   currentVersion: string;
   updateChannel: UpdateChannel;
 }): Promise<boolean> {
-  const payloadVersion = await readRuntimePackageVersion({
-    installPath: params.record?.source === "npm" ? params.record.installPath?.trim() : undefined,
+  const record = params.record;
+  const expectedPackageName = resolveVersionBoundRuntimeNpmPackageName(params.pluginId);
+  const recordSpec = record?.spec ? parseRegistryNpmSpec(record.spec) : null;
+  if (
+    record?.source !== "npm" ||
+    !expectedPackageName ||
+    recordSpec?.name !== expectedPackageName ||
+    normalizeOptionalLowercaseString(record.version) !==
+      normalizeOptionalLowercaseString(record.resolvedVersion) ||
+    !record.installPath
+  ) {
+    return false;
+  }
+  return await versionBoundRuntimeNpmArtifactMatchesReleaseCohort({
+    pluginId: params.pluginId,
+    npmResolution: {
+      name: record.resolvedName,
+      version: record.resolvedVersion,
+      resolvedSpec: record.resolvedSpec,
+    },
+    stagedArtifactDir: record.installPath,
     env: params.env,
+    currentVersion: params.currentVersion,
+    updateChannel: params.updateChannel,
   });
-  return [params.record?.version, params.record?.resolvedVersion, payloadVersion].every((version) =>
-    versionBoundRuntimePackageVersionMatchesReleaseCohort({
-      version,
-      currentVersion: params.currentVersion,
-      updateChannel: params.updateChannel,
-    }),
-  );
 }
 
 export function preserveExactVersionBoundRuntimeSelector(params: {

@@ -42,7 +42,10 @@ import {
   type ManagedNpmRootDependencySpecPreparation,
   type ManagedNpmRootPreparedDependency,
 } from "./install-managed-npm-state.js";
-import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
+import {
+  npmPackageIdentityMatchesResolution,
+  verifyInstalledNpmResolution,
+} from "./install-npm-resolution.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import {
   preflightPluginNpmInstallPolicy,
@@ -378,6 +381,20 @@ export async function installPluginFromManagedNpmRoot(
     });
     if (!packageManifestResult.ok) {
       return packageManifestResult;
+    }
+    if (
+      !npmPackageIdentityMatchesResolution({
+        expectedPackageName: params.packageName,
+        resolution: params.npmResolution,
+        manifest: packageManifestResult.manifest,
+      })
+    ) {
+      const payloadName = packageManifestResult.manifest?.name?.trim() || "unknown";
+      const payloadVersion = packageManifestResult.manifest?.version?.trim() || "unknown";
+      return {
+        ok: false,
+        error: `npm install staged package identity mismatch for ${params.packageName}: expected ${params.npmResolution.resolvedSpec ?? params.packageName}, got ${payloadName}@${payloadVersion}`,
+      };
     }
     const requiredPlatformPackageNames = resolveRequiredPlatformPackageNames(
       packageManifestResult.manifest
