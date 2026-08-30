@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
 import chokidar, { type FSWatcher } from "chokidar";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -75,8 +75,8 @@ const workspaceWatchOwnerDirs = new Map<string, string>();
 // filesystem changes require a fresh root scan.
 const workspaceWatchTargetCache = new Map<string, WatchTargetCacheEntry>();
 const workspaceWatchLastEnsuredAt = new Map<string, number>();
-// Session turns re-ensure their workspace; entries older than this are treated
-// as abandoned subscriptions and evicted by the next ensure call.
+// Session turns re-ensure their workspace; idle and cardinality eviction share
+// disposal so every unwatched interval invalidates the stable workspace version.
 const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
 
 setSkillsChangeListenerErrorHandler((err) => {
@@ -701,6 +701,10 @@ export function ensureSkillsWatcher(params: {
     return;
   }
 
+  if (!workspaceWatchLastEnsuredAt.delete(watcherKey) && workspaceWatchLastEnsuredAt.size >= 128) {
+    const oldestKey = expectDefined(workspaceWatchLastEnsuredAt.keys().next().value, "watcher");
+    disposeWorkspaceWatchState(oldestKey);
+  }
   workspaceWatchLastEnsuredAt.set(watcherKey, now);
   const watchTargets = resolveWatchTargets(
     workspaceDir,

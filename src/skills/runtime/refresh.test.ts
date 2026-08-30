@@ -34,6 +34,7 @@ function createMockWatcher() {
 }
 
 const createdWatchers: Array<ReturnType<typeof createMockWatcher>> = [];
+const SKILLS_WORKSPACE_WATCH_MAX_ENTRIES = 128;
 const watchMock = vi.fn(() => {
   const watcher = createMockWatcher();
   createdWatchers.push(watcher);
@@ -1047,5 +1048,74 @@ describe("ensureSkillsWatcher", () => {
     });
 
     expect(createdWatchers[activeSkillsIndex]?.close).not.toHaveBeenCalled();
+  });
+
+  it("bounds execution-root watcher generations by least-recently ensured ownership", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const workspaceDir = "/tmp/workspace-execution-churn";
+    const executionDir = (index: number) => `/tmp/execution-cap-${index}/skills`;
+
+    for (let index = 0; index < SKILLS_WORKSPACE_WATCH_MAX_ENTRIES; index += 1) {
+      refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir: executionDir(index) });
+      vi.advanceTimersByTime(1);
+    }
+    refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir: executionDir(0) });
+    vi.advanceTimersByTime(1);
+
+    const watcherIndexFor = (index: number) =>
+      (watchMock.mock.calls as unknown as Array<[string]>).findIndex(
+        ([target]) => target === executionDir(index),
+      );
+    const oldestWatcherIndex = watcherIndexFor(1);
+    const refreshedWatcherIndex = watcherIndexFor(0);
+    const versionBeforeEviction = getSkillsSnapshotVersion(workspaceDir);
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      executionSkillsDir: executionDir(SKILLS_WORKSPACE_WATCH_MAX_ENTRIES),
+    });
+
+    expect(createdWatchers[oldestWatcherIndex]?.close).toHaveBeenCalledTimes(1);
+    expect(createdWatchers[refreshedWatcherIndex]?.close).not.toHaveBeenCalled();
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBeforeEviction);
+
+    for (
+      let index = SKILLS_WORKSPACE_WATCH_MAX_ENTRIES + 1;
+      index < SKILLS_WORKSPACE_WATCH_MAX_ENTRIES * 10;
+      index += 1
+    ) {
+      vi.advanceTimersByTime(1);
+      refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir: executionDir(index) });
+    }
+    const liveExecutionWatchers = () =>
+      (watchMock.mock.calls as unknown as Array<[string]>).filter(
+        ([target], index) =>
+          /^\/tmp\/execution-cap-\d+\/skills$/u.test(target) &&
+          createdWatchers[index]?.close.mock.calls.length === 0,
+      );
+    expect(liveExecutionWatchers()).toHaveLength(SKILLS_WORKSPACE_WATCH_MAX_ENTRIES);
+    const sharedWorkspaceWatcherIndexes = (
+      watchMock.mock.calls as unknown as Array<[string]>
+    ).flatMap(([target], index) => (target === path.join(workspaceDir, "skills") ? [index] : []));
+    expect(sharedWorkspaceWatcherIndexes).toHaveLength(1);
+    const sharedWorkspaceWatcherIndex = sharedWorkspaceWatcherIndexes[0];
+    if (sharedWorkspaceWatcherIndex === undefined) {
+      throw new Error("expected a shared workspace watcher");
+    }
+    expect(createdWatchers[sharedWorkspaceWatcherIndex]?.close).not.toHaveBeenCalled();
+
+    const callsBeforeRebuild = watchMock.mock.calls.length;
+    const versionBeforeRebuild = getSkillsSnapshotVersion(workspaceDir);
+    refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir: executionDir(1) });
+    const rebuildCalls = watchMock.mock.calls.slice(callsBeforeRebuild) as unknown as Array<
+      [string]
+    >;
+    expect(rebuildCalls.some(([target]) => target === executionDir(1))).toBe(true);
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBeforeRebuild);
+    expect(liveExecutionWatchers()).toHaveLength(SKILLS_WORKSPACE_WATCH_MAX_ENTRIES);
+
+    await refreshModule.closeSkillsWatchers();
+    expect(createdWatchers.every((watcher) => watcher.close.mock.calls.length > 0)).toBe(true);
   });
 });
