@@ -231,11 +231,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin: 0;
   padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--chat-composer-hairline) 60%, transparent);
   color: var(--text);
+}
+
+.agent-chat__input:has(.agent-chat__goal-mode) {
+  overflow: hidden;
 }
 
 .agent-chat__goal-mode-label {

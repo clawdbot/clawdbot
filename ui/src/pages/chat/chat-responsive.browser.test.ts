@@ -1856,6 +1856,46 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("renders Goal mode as an internal composer row", async () => {
+    const page = await openBrowserPage(800, 300);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="agent-chat__composer-shell">
+          <div class="agent-chat__input">
+            <div class="agent-chat__composer-lede">
+              <div class="agent-chat__goal-mode">Goal — Enter your objective.</div>
+            </div>
+            <div class="agent-chat__composer-input-row">What should this goal accomplish?</div>
+          </div>
+        </div>
+      </body></html>`);
+      const styles = await page.evaluate(() => {
+        const composer = getComputedStyle(
+          document.querySelector<HTMLElement>(".agent-chat__input")!,
+        );
+        const goal = getComputedStyle(
+          document.querySelector<HTMLElement>(".agent-chat__goal-mode")!,
+        );
+        return {
+          composerOverflow: composer.overflow,
+          goalBorderBottomStyle: goal.borderBottomStyle,
+          goalBorderLeftStyle: goal.borderLeftStyle,
+          goalBorderRadius: goal.borderRadius,
+          goalMarginBottom: goal.marginBottom,
+        };
+      });
+      expect(styles).toEqual({
+        composerOverflow: "hidden",
+        goalBorderBottomStyle: "solid",
+        goalBorderLeftStyle: "none",
+        goalBorderRadius: "0px",
+        goalMarginBottom: "0px",
+      });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps the desktop model picker label-to-chevron gap at 4px", async () => {
     const page = await openBrowserPage(800, 800);
     try {
