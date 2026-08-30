@@ -178,7 +178,11 @@ vi.mock("./send.js", () => ({
   replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
 
-const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
+const {
+  buildLineMessageContextMock,
+  buildLinePostbackContextMock,
+  resolveLineQuestionPostbackMock,
+} = vi.hoisted(() => ({
   buildLineMessageContextMock: vi.fn(async () => ({
     ctxPayload: { From: "line:group:group-1" },
     replyToken: "reply-token",
@@ -187,6 +191,13 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
     accountId: "default",
   })),
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
+  resolveLineQuestionPostbackMock: vi.fn(async () => ({ status: "answered" as const })),
+}));
+
+vi.mock("./question-postback.js", async (importOriginal) => ({
+  // Parsing stays real so the routing decision is the one production makes.
+  ...(await importOriginal<typeof import("./question-postback.js")>()),
+  resolveLineQuestionPostback: resolveLineQuestionPostbackMock,
 }));
 
 vi.mock("./bot-message-context.js", () => ({
@@ -929,6 +940,64 @@ describe("handleLineWebhookEvents", () => {
         ],
       }),
     );
+  });
+
+  it("answers a pending question instead of starting a turn when an option is tapped", async () => {
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-question",
+          deliveryContext: { isRedelivery: false },
+          postback: {
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+          },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineQuestionPostbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callback: { questionId: "ask_3d8dbe55be452a9a39add7c909beb119", optionIndex: 1 },
+        senderId: "user-one",
+      }),
+    );
+    // A tap answers the question the agent is already waiting on; it is not a new turn.
+    expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("still routes an ordinary postback to the agent", async () => {
+    resolveLineQuestionPostbackMock.mockClear();
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-plain-postback",
+          deliveryContext: { isRedelivery: false },
+          postback: { data: "line.action=play&line.device=tv" },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
+    expect(buildLinePostbackContextMock).toHaveBeenCalled();
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {

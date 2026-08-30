@@ -113,6 +113,58 @@ describe("LINE rich-message boundaries", () => {
     });
   });
 
+  it("turns an ask_user question into tappable LINE options", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input:\n\nWhich environment?\n1. Staging\n2. Production",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: ["Staging", "Production"],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Staging",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as {
+      flexMessage?: {
+        contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
+      };
+    };
+    // The Gateway owns option order, so the tap carries an index, never the label.
+    expect(
+      line.flexMessage?.contents?.footer?.contents?.map((button) => button.action?.data),
+    ).toEqual([
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+    ]);
+  });
+
   it("keeps fallback text when only quick replies render", () => {
     const prepared = prepareLineReplyPayload({
       text: "Agent needs input:\n1. Alpha",

@@ -11,6 +11,10 @@ import {
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveAskUserQuestionOptionIndex,
+  resolveAskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   isRecord,
@@ -27,6 +31,7 @@ import {
   createMediaPlayerCard,
 } from "./flex-templates/media-control-cards.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
+import { buildLineQuestionPostbackData } from "./question-postback.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
@@ -129,9 +134,29 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-function toLineAction(button: MessagePresentationButton): Action | undefined {
+function toLineAction(
+  button: MessagePresentationButton,
+  questionOptionIndices?: ReturnType<typeof resolveAskUserQuestionOptionIndices>,
+): Action | undefined {
   const normalized = resolveMessagePresentationButtonAction(button);
   const { label } = button;
+  if (normalized?.type === "question") {
+    // The Gateway owns option order, so a tap must carry its index, never the label.
+    const data = buildLineQuestionPostbackData(
+      "intent" in normalized
+        ? { questionId: normalized.questionId, customInput: true }
+        : {
+            questionId: normalized.questionId,
+            optionIndex:
+              resolveAskUserQuestionOptionIndex({
+                questionOptionIndices,
+                questionId: normalized.questionId,
+                optionValue: normalized.optionValue,
+              }) ?? -1,
+          },
+    );
+    return data ? { type: "postback", label, data, displayText: label } : undefined;
+  }
   if (normalized?.type === "command") {
     return { type: "message", label, text: normalized.command };
   }
@@ -154,7 +179,8 @@ export function renderLinePresentation(
   const buttons = presentation.blocks.flatMap((block) =>
     block.type === "buttons" ? block.buttons : [],
   );
-  const buttonActions = buttons.map(toLineAction);
+  const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
+  const buttonActions = buttons.map((button) => toLineAction(button, questionOptionIndices));
   const options = presentation.blocks.flatMap((block) =>
     block.type === "select" ? block.options : [],
   );

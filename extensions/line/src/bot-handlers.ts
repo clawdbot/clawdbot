@@ -52,6 +52,7 @@ import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
+import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -565,6 +566,46 @@ async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext)
   logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
+/** Tell the tapper when their choice could not be recorded; success speaks for itself. */
+async function sendLineQuestionPostbackNotice(params: {
+  event: PostbackEvent;
+  context: LineHandlerContext;
+  status: "already-terminal" | "failed";
+}): Promise<void> {
+  const { context } = params;
+  const text =
+    params.status === "already-terminal"
+      ? "That question was already answered."
+      : "Could not record that answer. Reply with the option text instead.";
+  const sendOptions = {
+    cfg: context.cfg,
+    accountId: context.account.accountId,
+    channelAccessToken: context.account.channelAccessToken,
+  };
+  const replyToken = params.event.replyToken;
+  try {
+    if (replyToken) {
+      await replyMessageLine(replyToken, [{ type: "text", text }], sendOptions);
+      return;
+    }
+  } catch (err) {
+    logVerbose(`line: question notice reply failed: ${String(err)}`);
+    if (isChannelPartialDeliveryError(err)) {
+      return;
+    }
+  }
+  const { userId, groupId, roomId } = getLineSourceInfo(params.event.source);
+  const target = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
+  if (!target) {
+    return;
+  }
+  try {
+    await pushMessageLine(target, text, sendOptions);
+  } catch (err) {
+    logVerbose(`line: question notice push failed: ${String(err)}`);
+  }
+}
+
 async function handlePostbackEvent(
   event: PostbackEvent,
   context: LineHandlerContext,
@@ -574,6 +615,22 @@ async function handlePostbackEvent(
 
   const decision = await shouldProcessLineEvent(event, context);
   if (!decision) {
+    return;
+  }
+
+  const question = parseLineQuestionPostbackData(data ?? "");
+  if (question) {
+    // An ask_user tap answers the pending question; it is not a new turn.
+    const { userId } = getLineSourceInfo(event.source);
+    const outcome = await resolveLineQuestionPostback({
+      cfg: context.cfg,
+      callback: question,
+      accountId: context.account.accountId,
+      ...(userId ? { senderId: userId } : {}),
+    });
+    if (outcome.status !== "answered" && outcome.status !== "custom-input") {
+      await sendLineQuestionPostbackNotice({ event, context, status: outcome.status });
+    }
     return;
   }
 
