@@ -9,11 +9,13 @@ import {
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
+  type MessagePresentationAction,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveAskUserQuestionOptionIndex,
   resolveAskUserQuestionOptionIndices,
+  type AskUserQuestionOptionIndices,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -31,7 +33,7 @@ import {
   createMediaPlayerCard,
 } from "./flex-templates/media-control-cards.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
-import { buildLineQuestionPostbackData } from "./question-postback.js";
+import { buildLineQuestionPostbackData, type LineQuestionPostback } from "./question-postback.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
@@ -134,27 +136,35 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
+/**
+ * Reads the choice one question button carries. The Gateway owns option order, so a
+ * tap sends the index it published, never the rendered label; a choice it no longer
+ * lists renders no button at all rather than a tap that answers the wrong option.
+ */
+function toLineQuestionChoice(
+  action: Extract<MessagePresentationAction, { type: "question" }>,
+  questionOptionIndices: AskUserQuestionOptionIndices | undefined,
+): LineQuestionPostback | undefined {
+  if ("intent" in action) {
+    return { questionId: action.questionId, customInput: true };
+  }
+  const optionIndex = resolveAskUserQuestionOptionIndex({
+    questionOptionIndices,
+    questionId: action.questionId,
+    optionValue: action.optionValue,
+  });
+  return optionIndex === undefined ? undefined : { questionId: action.questionId, optionIndex };
+}
+
 function toLineAction(
   button: MessagePresentationButton,
-  questionOptionIndices?: ReturnType<typeof resolveAskUserQuestionOptionIndices>,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
 ): Action | undefined {
   const normalized = resolveMessagePresentationButtonAction(button);
   const { label } = button;
   if (normalized?.type === "question") {
-    // The Gateway owns option order, so a tap must carry its index, never the label.
-    const data = buildLineQuestionPostbackData(
-      "intent" in normalized
-        ? { questionId: normalized.questionId, customInput: true }
-        : {
-            questionId: normalized.questionId,
-            optionIndex:
-              resolveAskUserQuestionOptionIndex({
-                questionOptionIndices,
-                questionId: normalized.questionId,
-                optionValue: normalized.optionValue,
-              }) ?? -1,
-          },
-    );
+    const choice = toLineQuestionChoice(normalized, questionOptionIndices);
+    const data = choice && buildLineQuestionPostbackData(choice);
     return data ? { type: "postback", label, data, displayText: label } : undefined;
   }
   if (normalized?.type === "command") {
