@@ -1019,7 +1019,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../memory-search.js", () => ({
-    resolveMemorySearchConfig: resolveMemorySearchConfigMock,
+    resolveMemorySearchIndexConfig: resolveMemorySearchConfigMock,
   }));
 
   vi.doMock("../runtime-plan/build.js", () => ({

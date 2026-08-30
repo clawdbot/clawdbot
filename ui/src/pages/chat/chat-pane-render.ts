@@ -25,7 +25,10 @@ import {
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
@@ -55,6 +58,7 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
   openSessionWorkspaceFile,
@@ -442,7 +446,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
-        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
+        : this.composerCapabilities.props(
+            this.context,
+            state,
+            selectedSession,
+            currentAgentId,
+            getChatComposerState(this.presentationId).capabilityMenuView.startsWith("tools:"),
+          ),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -652,6 +662,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       onOpenImage: state.handleOpenImage,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
+      senderAgentAvatars: state.senderAgentAvatars,
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+      }),
       userId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : null,
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,

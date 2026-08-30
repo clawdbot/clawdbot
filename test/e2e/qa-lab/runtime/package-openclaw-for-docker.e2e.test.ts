@@ -513,6 +513,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/optional-bundled-clusters.mjs",
       "scripts/lib/output-root-guard.mjs",
       "scripts/lib/record-shared.mjs",
+      "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-cmd-helpers-runtime.mts",
       "scripts/lib/windows-taskkill.mjs",

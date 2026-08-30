@@ -12,6 +12,7 @@ export type CommandLaneTaskMarker = Readonly<{
 export type QueuePriority = -1 | 0 | 1;
 
 export type QueueEntry = {
+  queued?: true;
   task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -121,6 +122,7 @@ export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
     ring.length +
     (entry.priority <= 0 ? queue.foreground.length : 0) +
     (entry.priority < 0 ? queue.normal.length : 0);
+  entry.queued = true;
   appendQueueRing(ring, entry);
   queue.length += 1;
   return queuedAhead;
@@ -140,6 +142,7 @@ export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
     dequeueQueueRing(queue.normal) ??
     dequeueQueueRing(queue.background);
   if (entry) {
+    delete entry.queued;
     queue.length -= 1;
   }
   return entry;

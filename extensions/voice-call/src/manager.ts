@@ -89,6 +89,7 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+  private autoResponseOwners = new WeakMap<CallRecord, symbol>();
 
   /**
    * Carrier-side stream session issuer. Wired by the runtime when realtime is
@@ -362,6 +363,7 @@ export class CallManager {
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
+      onCallerSpeech: (call) => this.invalidateAutoResponse(call),
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
@@ -374,6 +376,28 @@ export class CallManager {
    */
   processEvent(event: NormalizedEvent): ProcessEventResult {
     return processManagerEvent(this.getContext(), event);
+  }
+
+  createAutoResponseGuard(call: CallRecord): { isCurrent: () => boolean; release: () => void } {
+    // Call identity fences restored/replaced records; generation identity fences
+    // newer speech without cancelling agent work that was already accepted.
+    const owner = Symbol("automatic response");
+    this.autoResponseOwners.set(call, owner);
+    return {
+      isCurrent: () =>
+        this.activeCalls.get(call.callId) === call &&
+        !TerminalStates.has(call.state) &&
+        this.autoResponseOwners.get(call) === owner,
+      release: () => {
+        if (this.autoResponseOwners.get(call) === owner) {
+          this.autoResponseOwners.delete(call);
+        }
+      },
+    };
+  }
+
+  invalidateAutoResponse(call: CallRecord): void {
+    this.autoResponseOwners.delete(call);
   }
 
   private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {

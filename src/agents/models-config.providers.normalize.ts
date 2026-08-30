@@ -2,6 +2,7 @@
  * Normalizes configured provider model rows for runtime/discovery use.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { mergeModelCost } from "../config/model-cost.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -61,18 +62,8 @@ function mergeNormalizedProviderModel(
   existing: ProviderModelConfig,
   incoming: ProviderModelConfig,
 ): ProviderModelConfig {
-  return {
-    ...incoming,
-    ...existing,
-    ...(existing.cost || incoming.cost
-      ? {
-          cost: {
-            ...incoming.cost,
-            ...existing.cost,
-          },
-        }
-      : undefined),
-  };
+  const cost = mergeModelCost(incoming.cost, existing.cost);
+  return { ...incoming, ...existing, ...(cost ? { cost } : {}) };
 }
 
 function normalizeProviderModelsForConfig(

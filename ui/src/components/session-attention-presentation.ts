@@ -41,12 +41,15 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionRunSpinner(showTitle = true) {
+export function renderSessionRunSpinner(showTitle = true, queued = false) {
+  const label = t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   return html`<span
-    class="session-run-spinner sidebar-recent-session__state"
+    class="session-run-spinner sidebar-recent-session__state${queued
+      ? " session-run-spinner--queued"
+      : ""}"
     role="img"
-    aria-label=${t("sessionsView.activeRun")}
-    title=${showTitle ? t("sessionsView.activeRun") : nothing}
+    aria-label=${label}
+    title=${showTitle ? label : nothing}
   ></span>`;
 }
 
@@ -55,18 +58,8 @@ export function sessionHasRunningWork(session: SidebarRecentSession): boolean {
 }
 
 export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
-  if (session.hasActiveRun && session.status === "queued") {
-    const label = t("sessionsView.statusQueued");
-    return html`<span
-      class="sidebar-child-session__status sidebar-child-session__status--queued"
-      role="img"
-      aria-label=${label}
-      title=${showTitle ? label : nothing}
-      >${icons.hourglass}</span
-    >`;
-  }
   if (sessionHasRunningWork(session)) {
-    return renderSessionRunSpinner(showTitle);
+    return renderSessionRunSpinner(showTitle, session.hasActiveRun && session.status === "queued");
   }
   if (!session.isChild) {
     return session.unread

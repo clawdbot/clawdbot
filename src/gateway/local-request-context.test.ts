@@ -59,6 +59,12 @@ describe("local gateway request context", () => {
     expect(response.payload).toMatchObject({ agentId: "main" });
   });
 
+  it("does not claim Gateway application readiness without a running Gateway", () => {
+    withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => ({}) }, () =>
+      expect(getPluginRuntimeGatewayRequestScope()?.context?.isConfigReloadSettled()).toBe(false),
+    );
+  });
+
   it("binds typed agent turns to the embedded context", async () => {
     await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => ({}) },

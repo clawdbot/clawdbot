@@ -1,6 +1,6 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -87,7 +87,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
-  const costUsd = estimateUsageCost({
+  const costUsd = estimateAggregateUsageCost({
     usage: usageMeta.usage,
     cost: resolveModelCostConfig({
       provider: reportedModelRef.provider,

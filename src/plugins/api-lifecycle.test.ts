@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
+import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -146,5 +147,25 @@ describe("plugin api lifecycle", () => {
 
     expect(result).toBeUndefined();
     expect(registerSessionExtension).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, boolean]>([
+    ["clearRunContext", true],
+    ["emitAgentEvent", true],
+    ["enqueueNextTurnInjection", true],
+    ["getRunContext", true],
+    ["sendSessionAttachment", true],
+    ["scheduleSessionTurn", true],
+    ["setRunContext", true],
+    ["unscheduleSessionTurnsByTag", true],
+    ["registerTool", false],
+    ["registerSessionExtension", false],
+    ["unknown", false],
+    ["", false],
+    ["constructor", false],
+    ["toString", false],
+    ["__proto__", false],
+  ])("classifies late-call eligibility for %j as %s", (methodName, expected) => {
+    expect(isLateCallablePluginApiMethod(methodName)).toBe(expected);
   });
 });

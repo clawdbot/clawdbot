@@ -229,6 +229,7 @@ export async function prepareQueuedChatPayload(
   const connectionIsCurrent = captureChatConnectionOwner(host);
   const ownerIsCurrent = captureOutboxPayloadOwner(host);
   const original = queued;
+  const sessionKey = original.sessionKey ?? queuedSessionKey;
   const payload = await prepareOutboxPayload(host, original);
   const current = readQueuedMessageById(host, id);
   if (
@@ -242,47 +243,32 @@ export async function prepareQueuedChatPayload(
     isQueuedMessageBeingEdited(host, id)
   ) {
     if (payload.status === "ready" && !original.attachmentPayload) {
-      retireOutboxPayload(payload.item);
+      retireOutboxPayload(payload.update);
     }
     return "pending";
   }
   if (payload.status === "failed") {
     const failed = failOutboxPayload(current, payload.reason);
-    updateQueuedMessageForSession(host, original.sessionKey ?? queuedSessionKey, id, () => failed);
-    surfaceChatDeliveryFailure(
-      host,
-      original.sessionKey ?? queuedSessionKey,
-      original.agentId,
-      failed.sendError,
-    );
+    updateQueuedMessageForSession(host, sessionKey, id, () => failed);
+    surfaceChatDeliveryFailure(host, sessionKey, original.agentId, failed.sendError);
     return "failed";
   }
-  const hydrated = payload.item;
+  const hydrated = { ...original, ...payload.update };
   if (
     hydrated.attachmentPayload?.key !== original.attachmentPayload?.key &&
     hydrated.sendState === "unconfirmed"
   ) {
-    updateQueuedMessageForSession(
-      host,
-      original.sessionKey ?? queuedSessionKey,
-      id,
-      () => payload.item,
-    );
+    updateQueuedMessageForSession(host, sessionKey, id, () => hydrated);
     return "pending";
   }
   if (
     (!original.attachmentPayload || original.attachmentStorageError) &&
-    !updateQueuedMessageForSession(
-      host,
-      original.sessionKey ?? queuedSessionKey,
-      id,
-      () => payload.item,
-    )
+    !updateQueuedMessageForSession(host, sessionKey, id, () => hydrated)
   ) {
     if (!original.attachmentPayload) {
-      retireOutboxPayload(payload.item);
+      retireOutboxPayload(payload.update);
     }
     return "pending";
   }
-  return payload.item;
+  return hydrated;
 }

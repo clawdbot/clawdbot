@@ -35,6 +35,7 @@ type GatewayRequestContextParams = {
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  isConfigReloadSettled: GatewayRequestContext["isConfigReloadSettled"];
   getGatewayMethodRegistry: NonNullable<GatewayRequestContext["getGatewayMethodRegistry"]>;
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
@@ -183,6 +184,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    isConfigReloadSettled: params.isConfigReloadSettled,
     getGatewayMethodRegistry: params.getGatewayMethodRegistry,
     gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,

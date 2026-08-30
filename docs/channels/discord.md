@@ -793,11 +793,10 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     Commands:
 
-    - `/focus <target>` bind current/new thread to a subagent/session target
-    - `/unfocus` remove current thread binding
+    - `/session unbind` remove the current thread binding without closing its agent session
     - `/agents` show active runs and binding state
-    - `/session idle <duration|off>` inspect/update inactivity auto-unfocus for focused bindings
-    - `/session max-age <duration|off>` inspect/update hard max age for focused bindings
+    - `/session idle <duration|off>` inspect/update inactivity expiry for the current binding
+    - `/session max-age <duration|off>` inspect/update hard max age for the current binding
 
     Config:
 
@@ -821,7 +820,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
     - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
-    - If thread bindings are disabled, `/focus` and related operations are unavailable.
+    - If thread bindings are disabled, thread-bound spawns are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
 

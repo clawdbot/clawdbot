@@ -7,12 +7,156 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  requireString,
+  waitForRequests,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const artifacts = ".artifacts/mock-session-owner/outbox-recovery";
 
 suite.define(() => {
+  it.each(["retry", "discard", "exact authoritative history proof"] as const)(
+    "parks an ACK-lost send for review until %s",
+    async (action) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+      }
+      await suite.withPage(
+        {
+          locale: "en-US",
+          ...(artifactDir
+            ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+            : {}),
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+        },
+        async ({ page }) => {
+          const captureProof = async (name: string) => {
+            if (artifactDir) {
+              await page.screenshot({ path: `${artifactDir}/${name}.png`, fullPage: true });
+            }
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "chat.history": {
+                messages: [],
+                sessionId: "session:agent:main:main",
+                sessionInfo: { hasActiveRun: false, status: "done" },
+                thinkingLevel: null,
+              },
+            },
+          });
+
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await gateway.deferNext("chat.send");
+
+          const prompt =
+            action === "exact authoritative history proof"
+              ? "already accepted after the reconnect"
+              : "retry with the same key";
+          await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+          await page.getByRole("button", { name: "Send message" }).click();
+
+          const firstRequest = await gateway.waitForRequest("chat.send");
+          const firstParams = requireRecord(firstRequest.params);
+          const runId = requireString(firstParams.idempotencyKey, "first idempotency key");
+
+          await gateway.closeLatest(1006, "lost ack");
+
+          const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+          await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+          expect(await page.locator(".chat-queue").count()).toBe(0);
+          const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
+          await userBubble.waitFor();
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+          if (action === "exact authoritative history proof") {
+            await captureProof("01-delivery-uncertain");
+
+            await gateway.setHistoryMessages([
+              {
+                content: "different delivered turn",
+                idempotencyKey: "different-run:user",
+                role: "user",
+                timestamp: Date.now(),
+              },
+            ]);
+            await gateway.emitGatewayEvent("session.message", {
+              hasActiveRun: false,
+              messageId: "different-history-turn",
+              messageSeq: 1,
+              sessionKey: "main",
+              status: "done",
+            });
+            await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+            await captureProof("02-different-key-still-uncertain");
+
+            await gateway.setHistoryMessages([
+              {
+                content: prompt,
+                idempotencyKey: `${runId}:user`,
+                role: "user",
+                timestamp: Date.now(),
+              },
+            ]);
+            await gateway.emitGatewayEvent("session.message", {
+              clientRunId: runId,
+              hasActiveRun: true,
+              messageId: "accepted-history-turn",
+              messageSeq: 2,
+              sessionKey: "main",
+              status: "running",
+            });
+
+            await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+            await userBubble.waitFor({ timeout: 10_000 });
+            expect(await userBubble.count()).toBe(1);
+            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+            await captureProof("03-delivery-proven");
+            return;
+          }
+
+          if (action === "discard") {
+            await page
+              .locator(".agent-chat__composer-combobox textarea")
+              .fill("send the next message");
+            await page.getByRole("button", { name: "Send message" }).click();
+            await page
+              .locator(".chat-queue")
+              .getByText("send the next message", { exact: true })
+              .waitFor();
+            await expectRequestCountStable(gateway, "chat.send", 1);
+            await captureProof("discard-before");
+            await deliveryStatus.getByRole("button", { name: "Discard", exact: true }).click();
+          } else {
+            await deliveryStatus.getByRole("button", { name: "Retry queued message" }).click();
+          }
+
+          const sends = await waitForRequests(gateway, "chat.send", 2);
+          const secondParams = requireRecord(sends[1]?.params);
+          expect(secondParams.sessionKey).toBe(firstParams.sessionKey);
+          if (action === "discard") {
+            expect(secondParams.idempotencyKey).not.toBe(runId);
+            expect(secondParams.message).toBe("send the next message");
+            await userBubble.waitFor({ state: "detached" });
+            expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+            expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
+          } else {
+            expect(secondParams.idempotencyKey).toBe(runId);
+            expect(secondParams.message).toBe(prompt);
+          }
+          await expectRequestCountStable(gateway, "chat.send", 2);
+          await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+          if (action === "discard") {
+            await captureProof("discard-after");
+          }
+        },
+      );
+    },
+  );
+
   it("keeps a legacy uncertain send unsent until destination confirmation and explicit Retry", async () => {
     await mkdir(artifacts, { recursive: true });
     const context = await suite.newBrowserContext({

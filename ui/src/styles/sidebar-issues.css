@@ -82,7 +82,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 12px;
   background: var(--secondary);
 }
 
@@ -182,6 +182,10 @@
 /* Hub-tab strip (shared hub-tabs.css owns the tab look); this block only
    places it in the popover: the track hairline doubles as the header/list
    separator, so it must span the full panel width. */
+:root[data-theme-mode="dark"] .sidebar-issues-panel__tabs.hub-tabs {
+  --track-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
+}
+
 .sidebar-issues-panel__tabs {
   display: block;
   flex: none;
@@ -213,7 +217,7 @@
 .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
   /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
      the page-hub sub tabs. */
-  padding-block: 6px 9px;
+  padding-block: 8px 11px;
 }
 
 .sidebar-issues-panel__list-wrap {

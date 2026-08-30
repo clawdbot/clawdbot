@@ -402,7 +402,6 @@ export async function handleSendChat(
           const queued = enqueueChatMessage(
             host,
             message,
-            undefined,
             isChatResetCommand(message),
             {
               args: parsed.args,
@@ -598,7 +597,7 @@ export async function handleSendChat(
           (currentEdit === inlineEdit && currentEdit.revision === submittedInlineEditRevision));
       if (!stillOwnsSubmission) {
         if (payload.status === "ready") {
-          retireOutboxPayload(payload.item);
+          retireOutboxPayload(payload.update);
         }
         return;
       }
@@ -606,7 +605,7 @@ export async function handleSendChat(
         setChatError(host, outboxPayloadError(payload.reason));
         return;
       }
-      queued = payload.item;
+      queued = { ...queued, ...payload.update };
       const hold = chatSendHoldReason(host, submittedSessionKey);
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);

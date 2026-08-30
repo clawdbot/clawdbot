@@ -183,6 +183,11 @@ const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = CODEX_HARNESS_RESTART_STRESS ? 3_600_000 : 900_000;
 const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
+// Request-local tool observation requires a negotiated capability, even for admin clients.
+const CODEX_HARNESS_CLIENT_CAPS = [
+  GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+  ...(CODEX_HARNESS_MULTI_SESSION_PROBE ? [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] : []),
+];
 const CODEX_HARNESS_REASONING_EFFORTS = [
   "minimal",
   "low",
@@ -2146,10 +2151,7 @@ describeLive("gateway live (Codex harness)", () => {
           timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
           requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           clientDisplayName: "vitest-codex-harness-live",
-          // Approval events require an explicit renderer capability even for admin clients.
-          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-            ? { caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] }
-            : {}),
+          caps: CODEX_HARNESS_CLIENT_CAPS,
           onEvent: captureGatewayEvent,
         });
         activeApprovalClient = client;
@@ -2465,6 +2467,7 @@ describeLive("gateway live (Codex harness)", () => {
               timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
               requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
               clientDisplayName: `vitest-codex-resume-stress-${restart}`,
+              caps: CODEX_HARNESS_CLIENT_CAPS,
               onEvent: captureGatewayEvent,
             });
             activeApprovalClient = client;

@@ -130,7 +130,7 @@ async function writePackageDistInventoryFile(
     entries.filter((relativePath) => relativePath !== PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
   );
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  await writeJson(inventoryPath, inventory, { trailingNewline: true });
+  await writeJson(inventoryPath, inventory, { mode: 0o644, trailingNewline: true });
   return inventory;
 }
 

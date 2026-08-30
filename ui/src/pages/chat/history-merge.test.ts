@@ -88,6 +88,7 @@ function createAuthoritativeInitialMessage(sequence = 1) {
     __openclaw: {
       id: "persisted-initial-user",
       idempotencyKey: "initial-run:user",
+      runId: "initial-execution",
       seq: sequence,
       media: [{ path: "/persisted.png", contentType: "image/png" }],
     },

@@ -21,6 +21,8 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { SessionManager } from "./sessions/session-manager.js";
+import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 const retryingCompactionEnd = () =>
@@ -363,12 +365,13 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("does not double-count usage when done and message_end carry the same snapshot", () => {
+  it("does not double-count usage or cost when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
       input: 100,
       output: 20,
       totalTokens: 120,
+      cost: { total: 0.125, totalOrigin: "provider-billed" },
     };
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -397,12 +400,171 @@ describe("subscribeEmbeddedAgentSession", () => {
       cacheRead: undefined,
       cacheWrite: undefined,
       total: 120,
+      cost: { total: 0.125 },
     });
     expect(subscription.getLastAssistantUsage()).toEqual({
       input: 100,
       output: 20,
       total: 120,
+      cost: { total: 0.125, totalOrigin: "provider-billed" },
     });
+  });
+
+  it.each([
+    { costTotal: 0, source: "done" },
+    { costTotal: 0.125, source: "done" },
+    { costTotal: undefined, source: "done" },
+    { costTotal: 0, source: "text_end" },
+    { costTotal: 0.125, source: "text_end" },
+    { costTotal: undefined, source: "text_end" },
+  ])(
+    "preserves pending streamed cost $costTotal from $source when terminal usage is zeroed",
+    ({ costTotal, source }) => {
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-pending-cost" });
+      const usage = {
+        input: 100,
+        output: 20,
+        cacheWrite: 40,
+        cacheWrite1h: 30,
+        totalTokens: 160,
+        ...(costTotal !== undefined
+          ? { cost: { total: costTotal, totalOrigin: "provider-billed" as const } }
+          : {}),
+      };
+      const message = { role: "assistant", usage: makeZeroUsageSnapshot() };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: source, usage },
+      });
+      emit({ type: "message_end", message });
+
+      expect(subscription.getUsageTotals()?.cost).toEqual(
+        costTotal !== undefined ? { total: costTotal } : undefined,
+      );
+      expect(subscription.getLastAssistantUsage()).toMatchObject({
+        input: 100,
+        output: 20,
+        cacheWrite: 40,
+        cacheWrite1h: 30,
+      });
+      if (costTotal !== undefined) {
+        expect(message.usage.cost).toMatchObject({
+          total: costTotal,
+          totalOrigin: "provider-billed",
+        });
+      }
+      subscription.unsubscribe();
+    },
+  );
+
+  it.each([
+    { costTotal: 0, priorCall: false },
+    { costTotal: 0.125, priorCall: false },
+    { costTotal: 0, priorCall: true },
+    { costTotal: 0.125, priorCall: true },
+  ])(
+    "retains billed cost-only $costTotal with prior call $priorCall",
+    ({ costTotal, priorCall }) => {
+      const { emit, session, subscription } = createSubscribedSessionHarness({
+        runId: "run-cost-only",
+        sessionExtras: { sessionManager: SessionManager.inMemory() },
+      });
+      const previousUsage = { input: 100, output: 20, totalTokens: 120, cost: { total: 0.25 } };
+      if (priorCall) {
+        emit({ type: "message_start", message: { role: "assistant" } });
+        emit({ type: "message_end", message: { role: "assistant", usage: previousUsage } });
+      }
+      const lastCallUsage = subscription.getLastAssistantUsage();
+      const usage = makeZeroUsageSnapshot();
+      usage.cost.total = costTotal;
+      usage.cost.totalOrigin = "provider-billed";
+      const message = { role: "assistant", usage: makeZeroUsageSnapshot() };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "done", usage },
+      });
+      emit({ type: "message_end", message });
+
+      const priorCost = priorCall ? 0.25 : 0;
+      expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
+      expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
+      expect(message.usage.cost).toMatchObject({
+        total: costTotal,
+        totalOrigin: "provider-billed",
+      });
+      recordSessionModelUsage(session.sessionManager, usage);
+      expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal * 2 });
+      expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
+      subscription.unsubscribe();
+    },
+  );
+
+  it.each([
+    { costTotal: 0, terminalTokens: false },
+    { costTotal: 0.125, terminalTokens: false },
+    { costTotal: 0, terminalTokens: true },
+    { costTotal: 0.125, terminalTokens: true },
+  ])(
+    "merges cost-only billing $costTotal with terminal tokens $terminalTokens",
+    ({ costTotal, terminalTokens }) => {
+      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-late-billing" });
+      const tokens = { input: 100, output: 20 };
+      const message = {
+        role: "assistant",
+        usage: { ...makeZeroUsageSnapshot(), ...(terminalTokens ? tokens : {}) },
+      };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_end", usage: tokens },
+      });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "done",
+          usage: { cost: { total: costTotal, totalOrigin: "provider-billed" } },
+        },
+      });
+      emit({ type: "message_end", message });
+
+      expect(subscription.getUsageTotals()).toMatchObject({
+        ...tokens,
+        cost: { total: costTotal },
+      });
+      expect(subscription.getLastAssistantUsage()).toMatchObject(tokens);
+      expect(message.usage.cost).toMatchObject({
+        total: costTotal,
+        totalOrigin: "provider-billed",
+      });
+      subscription.unsubscribe();
+    },
+  );
+
+  it("sums per-call prices without selecting a tier from the tool-loop token total", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-loop-cost" });
+    for (const total of [0.125, 0.5]) {
+      const message = {
+        role: "assistant",
+        usage: { input: 150_000, output: 100, totalTokens: 0, cost: { total } },
+      };
+      emit({ type: "message_start", message });
+      emit({ type: "message_end", message });
+    }
+
+    expect(subscription.getUsageTotals()).toMatchObject({
+      input: 300_000,
+      output: 200,
+      total: 300_200,
+      cost: { total: 0.625 },
+    });
+    expect(subscription.getLastAssistantUsage()?.cost).toEqual({ total: 0.5 });
+    subscription.unsubscribe();
   });
 
   it("retains the last nonzero call when a later aborted message reports zero usage", () => {

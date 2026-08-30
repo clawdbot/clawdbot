@@ -518,6 +518,7 @@ export class ChatComposerCapabilityHost {
     state: ChatPageHost,
     session: GatewaySessionRow | undefined,
     agentId: string,
+    toolAccessOpen = false,
   ): CapabilityMenuProps {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
@@ -535,6 +536,11 @@ export class ChatComposerCapabilityHost {
     const gatewayAvailable = state.connected && Boolean(state.client);
     const effectiveToolsAvailable =
       isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
+    // Start before projecting loading state; a notification during Lit render
+    // cannot schedule the second render that the old menu callback relied on.
+    if (effectiveToolsAvailable && toolAccessOpen) {
+      this.loadEffectiveTools(context, state, agentId);
+    }
     const effectiveToolsKey = effectiveToolsAvailable
       ? this.effectiveToolsKeys(context, state, agentId).cacheKey
       : null;
@@ -601,7 +607,6 @@ export class ChatComposerCapabilityHost {
       },
       ...(effectiveToolsAvailable
         ? {
-            onEnsureToolAccess: () => this.loadEffectiveTools(context, state, agentId),
             onOpenToolAccess: () => this.loadEffectiveTools(context, state, agentId, true),
           }
         : {}),

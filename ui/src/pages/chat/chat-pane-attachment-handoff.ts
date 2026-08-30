@@ -1,7 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
-  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -17,20 +17,6 @@ function handoffKey(paneId: string, state: ChatPageHost, owner: ChatAttachmentGa
     paneId,
     scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, state.sessionKey)),
   };
-}
-
-function releaseAttachments(
-  attachments: readonly ChatAttachment[],
-  retainedIds = new Set<string>(),
-  releasedIds = new Set<string>(),
-): void {
-  for (const attachment of attachments) {
-    if (retainedIds.has(attachment.id) || releasedIds.has(attachment.id)) {
-      continue;
-    }
-    releasedIds.add(attachment.id);
-    releaseChatAttachmentPayload(attachment.id);
-  }
 }
 
 export function restorePaneStagedAttachments(
@@ -79,10 +65,9 @@ export function discardStateStagedAttachments(state: ChatPageHost | undefined): 
   if (!state) {
     return;
   }
-  const releasedIds = new Set<string>();
-  releaseAttachments(state.chatAttachments, new Set(), releasedIds);
+  releaseChatAttachmentPayloads(state.chatAttachments);
   for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
-    releaseAttachments(fallback.attachments, new Set(), releasedIds);
+    releaseChatAttachmentPayloads(fallback.attachments);
     fallback.attachments = [];
   }
   state.chatAttachments = [];
@@ -103,7 +88,9 @@ export function replacePaneStagedAttachmentGatewayOwner(
   // reconnect or plugin-install rotation must not silently discard them.
   if (state) {
     const dropAnnotations = (attachments: readonly ChatAttachment[]) => {
-      releaseAttachments(attachments.filter((attachment) => attachment.browserAnnotation));
+      releaseChatAttachmentPayloads(
+        attachments.filter((attachment) => attachment.browserAnnotation),
+      );
       return attachments.filter((attachment) => !attachment.browserAnnotation);
     };
     state.chatAttachments = dropAnnotations(state.chatAttachments);

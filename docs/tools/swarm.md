@@ -324,6 +324,24 @@ Collector results remain waitable until their group is archived. After every
 member reaches its retention deadline, OpenClaw archives the group's children
 as a batch so completed swarms do not remain in the live session tree.
 
+## Stop a Swarm
+
+Use **Stop** in the parent chat to cancel a running swarm. A Stop targeting a
+specific parent run also cancels its associated collector children and their
+nested descendants. Collector mode changes result delivery, not cancellation
+scope. Successful cancellation prevents selected queued children from starting
+as running siblings stop; it does not cancel work from unrelated parent turns.
+
+If Stop reports incomplete descendant cancellation, inspect the remaining work
+on the [Tasks page](/automation/tasks#control-ui) and retry cancellation for
+those children. A stopped parent alone does not confirm that every child stopped,
+and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+
+Already-accepted children remain independent when the parent completes normally,
+yields, or times out. If the parent is no longer active, cancel the child tasks
+directly. See [Sub-agent stopping](/tools/subagents#stopping) for exact-run and
+session-wide Stop scopes.
+
 ## Use Swarm from other harnesses
 
 You can use Swarm without OpenClaw Code Mode. Its core tools are

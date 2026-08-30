@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -156,6 +158,32 @@ describe("worker desktop tunnels", () => {
     await manager.stopAll();
   });
 
+  it("expires an unattached acquisition and disposes its SSH identity directory", async ({
+    onTestFinished,
+  }) => {
+    vi.useFakeTimers();
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner, lingerMs: 50 });
+    onTestFinished(() => manager.stopAll());
+    const starting = acquire(manager);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]!.process.becomeReady();
+    const result = await starting;
+    if (result.attachment.kind !== "unix-socket") {
+      throw new Error("expected an SSH desktop socket");
+    }
+    const identityDirectory = path.dirname(result.attachment.socketPath);
+    await access(identityDirectory);
+    await vi.advanceTimersByTimeAsync(49);
+    await expect(acquire(manager)).resolves.toEqual(result);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(fake.starts[0]!.process.stopCount).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.starts[0]!.process.stopCount).toBe(1);
+    await manager.stopAll();
+    await expect(access(identityDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("fences an older epoch before starting its replacement", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
@@ -253,6 +281,7 @@ describe("worker desktop tunnels", () => {
     fake.starts[0]?.process.exit();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
     replacement?.release();
+    await manager.stopAll();
   });
 
   it("refuses observer tokens minted against a replaced owner epoch", async () => {
@@ -417,5 +446,6 @@ describe("worker desktop tunnels", () => {
     });
     expect(observer).toBeDefined();
     observer?.release();
+    await manager.stopAll();
   });
 });

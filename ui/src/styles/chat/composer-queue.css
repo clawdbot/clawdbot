@@ -11,7 +11,6 @@
 .chat-queue {
   --chat-queue-underlap: 18px;
   --chat-queue-row-height: 42px;
-  --chat-queue-hairline: color-mix(in srgb, var(--text-strong) 16%, transparent);
 
   position: relative;
   z-index: 0;
@@ -22,7 +21,7 @@
   margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-queue-underlap));
   padding-bottom: 0;
   overflow: hidden;
-  border: 1px solid var(--chat-queue-hairline);
+  border: 1px solid var(--chat-composer-hairline);
   border-bottom: 0;
   border-radius: calc(20px * var(--openclaw-corner-radius-scale))
     calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
@@ -63,6 +62,10 @@
   font-size: 10px;
   font-weight: 500;
   line-height: 1.4;
+}
+
+.chat-queue__global-state[data-chat-queue-global-state="warn"] {
+  color: var(--warn);
 }
 
 .chat-queue__scroll[data-scrollable="true"] {
@@ -107,16 +110,22 @@
   background: color-mix(in srgb, var(--muted) 34%, transparent);
 }
 
-:root[data-theme-mode="dark"] .chat-queue {
-  --chat-queue-hairline: color-mix(in srgb, var(--text-strong) 9%, transparent);
-}
-
 :root[data-theme-mode="light"] .chat-queue {
   border-color: transparent;
   box-shadow:
-    0 0 0 1px rgb(0 0 0 / 6%),
-    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 0 0 1px var(--chat-composer-light-outline),
+    0 1px 2px -1px var(--chat-composer-light-outline),
     0 2px 4px rgb(0 0 0 / 4%);
+}
+
+/* Connected rows share one outline contract. An opaque Goal border or a
+   side-only shadow makes its edge read independently from the queue above. */
+:root[data-theme-mode="light"]
+  :is(.chat-queue, .agent-chat__progress-float)
+  + .agent-chat__goal-float
+  .agent-chat__goal--active {
+  border-color: transparent;
+  box-shadow: 0 0 0 1px var(--chat-composer-light-outline);
 }
 
 .chat-queue__item {

@@ -1065,6 +1065,7 @@ jobs:
             command: pnpm test:ui:e2e --shard=4/4
           - name: Agent plugin Gateway
             command: pnpm test:e2e:agent-plugin-gateway
+            target_script: test:e2e:agent-plugin-gateway
     env:
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
@@ -1099,7 +1100,21 @@ jobs:
         env:
           OPENCLAW_E2E_WORKERS: "2"
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
-        run: ${{ matrix.command }}
+          TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$TARGET_REQUIRED_SCRIPT" ]] && ! node -e '
+            const packageJson = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
+            if (typeof packageJson.scripts?.[process.argv[1]] !== "string") process.exit(1);
+          ' "$TARGET_REQUIRED_SCRIPT"; then
+            if [[ "$OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" != "1" ]]; then
+              echo "::error::Selected target does not provide required repo E2E capability: $TARGET_REQUIRED_SCRIPT."
+              exit 1
+            fi
+            echo "::notice::Skipping $TARGET_REQUIRED_SCRIPT: selected target does not provide this newer repo E2E capability."
+            exit 0
+          fi
+          ${{ matrix.command }}
 
   validate_special_e2e:
     needs: validate_selected_ref

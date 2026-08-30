@@ -35,7 +35,13 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
+import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  abortControlledSubagents,
+  abortQueuedCollectorSession,
+  descendantAbortError,
+} from "./chat-abort-runtime.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -126,7 +132,15 @@ function resolveScopedAbortKey(params: {
 }
 
 export const sessionAbortHandlers: GatewayRequestHandlers = {
-  "sessions.abort": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+  "sessions.abort": async ({
+    req,
+    params,
+    respond,
+    context,
+    client,
+    isWebchatConnect,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
     }
@@ -310,12 +324,26 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const abortAgentId = requestedGlobalAgentId ?? activeRunAgentId;
     // Controller-backed runs must keep the requester checks and lifecycle cleanup below.
     if (embeddedRun && !activeRun) {
-      const aborted = embeddedRun.abort();
-      respond(true, {
-        ok: true,
-        abortedRunId: aborted ? embeddedRun.runId : null,
-        status: aborted ? "aborted" : "no-active-run",
+      let aborted = false;
+      const descendants = await abortControlledSubagents({
+        cfg,
+        sessionKey: embeddedRun.sessionKey ?? canonicalKey,
+        agentId: targetAgentId,
+        requesterTurnRunId: embeddedRun.runId,
+        // A captured handle may decline Stop. Hold its children before signaling,
+        // but authorize their cancellation only when this exact parent accepts.
+        beforeKill: () => (aborted = embeddedRun.abort()),
       });
+      const error = descendantAbortError(descendants, "Parent run");
+      if (error) {
+        respond(false, undefined, error);
+      } else {
+        respond(true, {
+          ok: true,
+          abortedRunId: aborted ? embeddedRun.runId : null,
+          status: aborted ? "aborted" : "no-active-run",
+        });
+      }
       if (aborted) {
         emitSessionsChanged(context, {
           sessionKey: canonicalKey,
@@ -363,6 +391,39 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             return embeddedAborted || queueCleared;
           }
         : undefined;
+    const queuedAbort = abortQueuedCollectorSession({
+      context,
+      sessionKey: canonicalKey,
+      sessionKeyAliases: [key, ...(requestedKeyAliases ?? [])],
+      agentId: targetAgentId,
+      sessionId: persistedSessionId,
+      session: loadedSession ? { ok: true, value: loadedSession } : undefined,
+      defaultAgentId: stableTargetOwner,
+      runId: requestedRunId,
+      abortOrigin: "rpc",
+      stopReason: "rpc",
+      requester: resolveChatAbortRequester(client),
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      onAuthorizedAfterQueuedAbort,
+    });
+    if (queuedAbort) {
+      const result = await queuedAbort;
+      if (!result.ok) {
+        respond(false, undefined, result.error);
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            abortedRunId: result.value.runIds[0] ?? null,
+            status: result.value.aborted ? "aborted" : "no-active-run",
+          },
+          undefined,
+          undefined,
+        );
+      }
+      return;
+    }
     await handleChatAbortRequestWithLifecycle(
       {
         req,

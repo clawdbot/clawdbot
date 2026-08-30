@@ -1,5 +1,6 @@
 // Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -225,6 +226,11 @@ export async function monitorLineProvider(
               ctxPayload,
               record: ctx.turn.record,
               replyPipeline: {},
+              // Block replies are paced by the agent's own humanDelay; nothing else
+              // reads it, so a turn that never forwards it silently paces at zero.
+              dispatcherOptions: {
+                humanDelay: resolveHumanDelayConfig(turnConfig, route.agentId),
+              },
               ...(replyOptions ? { replyOptions } : {}),
               delivery: {
                 // Core renders presentations inside the outbound send pipeline only,

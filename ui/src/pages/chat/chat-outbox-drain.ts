@@ -1,5 +1,6 @@
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -26,7 +27,6 @@ import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
-  sameQueuedDeliveryVersion,
   syncVisibleChatQueueProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
@@ -94,23 +94,15 @@ type StoredChatOutboxDrainLane = {
   rerun: boolean;
 };
 
-type StoredChatOutboxClientState = {
-  lanes: Map<string, StoredChatOutboxDrainLane>;
-};
 export const UNCONFIRMED_CHAT_SEND_ERROR =
   "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
 
-const storedChatOutboxClients = new WeakMap<GatewayBrowserClient, StoredChatOutboxClientState>();
-
-function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredChatOutboxClientState {
-  const state = storedChatOutboxClients.get(client) ?? {
-    lanes: new Map(),
-  };
-  storedChatOutboxClients.set(client, state);
-  return state;
-}
+const storedChatOutboxLanes = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, StoredChatOutboxDrainLane>
+>();
 
 export function scheduleStoredChatOutboxRetry(
   host: ChatHost,
@@ -630,7 +622,8 @@ export async function scheduleStoredChatOutboxDrain(
     return undefined;
   }
   const key = storedChatOutboxScopeKey(scope);
-  const { lanes } = getStoredChatOutboxClientState(client);
+  const lanes = storedChatOutboxLanes.get(client) ?? new Map<string, StoredChatOutboxDrainLane>();
+  storedChatOutboxLanes.set(client, lanes);
   const candidateOwnsScope = visibleSessionMatches(host, scope.sessionKey, scope.agentId);
   if (consumeChatOutboxRetry(host, key, candidateOwnsScope, itemId)) {
     return undefined;

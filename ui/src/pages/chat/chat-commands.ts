@@ -466,7 +466,6 @@ export async function dispatchChatSlashCommand(
       host,
       `/${name} ${args}`.trim(),
       host.chatRunId,
-      undefined,
       resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
     );
   }
