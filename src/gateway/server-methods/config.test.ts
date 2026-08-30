@@ -236,15 +236,22 @@ describe("config application settlement", () => {
     );
   });
 
-  it.each(["config.patch", "config.apply"] as const)(
-    "reports %s post-commit recovery without claiming the active config was unapplied",
-    async (method) => {
+  it.each(
+    (["config.patch", "config.apply"] as const).flatMap((method) =>
+      (["applied-restart-required", "restart-pending"] as const).map((outcome) => ({
+        method,
+        outcome,
+      })),
+    ),
+  )(
+    "reports $method $outcome without misrepresenting active config",
+    async ({ method, outcome }) => {
       const queueFollowUp = vi.fn();
       configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
         path: "/tmp/openclaw.json",
         config: { hooks: { enabled: true } },
-        hash: "recovery-hash",
-        application: Promise.resolve("applied-restart-required"),
+        hash: "restart-hash",
+        application: Promise.resolve(outcome),
         queueFollowUp,
       });
 
@@ -254,15 +261,21 @@ describe("config application settlement", () => {
       });
       await operation;
 
+      const expectedMessage =
+        outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
       expect(harness.respond).toHaveBeenCalledWith(
         false,
         undefined,
         expect.objectContaining({
           code: "UNAVAILABLE",
-          message: expect.stringContaining("updated the active Gateway"),
+          message: expect.stringContaining(expectedMessage),
         }),
       );
-      for (const excluded of ["was not applied", "reapply"]) {
+      const excludedMessages =
+        outcome === "restart-pending"
+          ? ["updated the active Gateway", "recovery restart", "reapply"]
+          : ["was not applied", "reapply"];
+      for (const excluded of excludedMessages) {
         expect(harness.respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -276,6 +289,7 @@ describe("config application settlement", () => {
           message: expect.stringContaining("wait for the Gateway to restart"),
         }),
       );
+      expect(harness.respond).toHaveBeenCalledOnce();
       expect(queueFollowUp).toHaveBeenCalledOnce();
     },
   );

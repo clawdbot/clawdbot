@@ -58,7 +58,9 @@ async function drainTelegramTestUpdates(apiRoot, token) {
     });
     const payload = await response.json();
     if (!response.ok || payload?.ok !== true || !Array.isArray(payload.result)) {
-      throw new Error("Telegram Test Bot API getUpdates failed while draining stale updates.");
+      throw new Error(
+        `Telegram Test Bot API getUpdates failed while draining stale updates (HTTP ${response.status}).`,
+      );
     }
     if (payload.result.length === 0) return;
     const updateId = payload.result.at(-1)?.update_id;

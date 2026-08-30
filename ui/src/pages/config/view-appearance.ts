@@ -85,6 +85,11 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     labelKey: "configView.themes.phosphor.label",
     descriptionKey: "configView.themes.phosphor.description",
   },
+  {
+    id: "crt",
+    labelKey: "configView.themes.crt.label",
+    descriptionKey: "configView.themes.crt.description",
+  },
 ];
 
 const ACCENT_PRESETS = [

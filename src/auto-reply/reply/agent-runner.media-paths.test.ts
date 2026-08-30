@@ -255,9 +255,12 @@ vi.mock("./agent-runner-payloads.js", () => ({
   },
 }));
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: async () => undefined,
-  persistRunSessionUsage: async () => undefined,
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: async () => undefined,
+}));
+
+vi.mock("./session-usage.js", () => ({
+  persistSessionUsageUpdate: async () => undefined,
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({

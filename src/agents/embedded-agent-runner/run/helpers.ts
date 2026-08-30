@@ -227,7 +227,7 @@ export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   latestUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
-}): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
+}): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
   const latestUsage = normalizeUsage(params.latestUsage as never);
   const lastCallUsage = hasNonzeroUsage(latestUsage)
@@ -242,6 +242,7 @@ export function buildUsageAgentMetaFields(params: {
     usage,
     lastCallUsage,
     promptTokens,
+    ...(usage?.cost ? { costUsd: usage.cost.total } : {}),
   };
 }
 
@@ -278,6 +279,7 @@ export function buildErrorAgentMeta(params: {
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
+    ...(usageMeta.costUsd !== undefined ? { costUsd: usageMeta.costUsd } : {}),
   };
 }
 

@@ -479,6 +479,34 @@ describe("executeAgentTurn: authentication failures", () => {
     }
   });
 
+  it("renders bounded recovery when the selected auth profile is unavailable", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError('Codex app-server auth profile "openai:private" was not found', {
+        reason: "auth",
+        provider: "openai",
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+        authProfileFailure: { allInCooldown: false },
+        cause: new Error("arbitrary plugin detail for openai:private"),
+      }),
+    );
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "The selected auth profile is unavailable in this agent's OpenClaw credential store. Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.",
+      );
+      expect(result.payload.text).not.toContain("openai:private");
+      expect(result.payload.text).not.toContain("arbitrary plugin detail");
+      expect(result.payload.text).not.toContain("/login codex");
+      expect(result.payload.presentation).toBeUndefined();
+    }
+  });
+
   it("does not suggest re-authentication for typed format failures", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new FailoverError("Format failover exhausted for provider openai", {

@@ -320,6 +320,9 @@ editable draft without becoming part of the final answer. This keeps
 multi-step tool turns visually alive instead of silent between the first
 thinking preview and the final answer.
 
+Responses commentary keeps each message item's identity through tool handoffs.
+Later tool updates do not replay earlier commentary as an extra combined preamble.
+
 Long-running tools may emit typed progress before they return. For example,
 `web_fetch` arms a five-second timer when it starts: if the fetch is still
 pending, the preview shows `Fetching page content...`; if the fetch finishes or
@@ -432,7 +435,7 @@ the same policy under `streaming.progress`:
 
 ## Related
 
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
+- [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure

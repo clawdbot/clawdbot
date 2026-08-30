@@ -197,7 +197,6 @@ async function requestTrajectoryExportApproval(
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
       env: request.env,
-      security: "allowlist",
       ask: "always",
       background: true,
       timeoutSeconds: timeoutSec,

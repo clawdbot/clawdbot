@@ -1,3 +1,4 @@
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 // Bash tool helper tests cover conversion from model-facing timeout seconds to
 // timer-safe millisecond values.
@@ -60,6 +61,40 @@ describe("bash tool timeout helpers", () => {
 });
 
 describe("bash tool output lifecycle", () => {
+  it("reports a long final line's tail and size after its newline", async () => {
+    const text = `${"x".repeat(250_000)}END-MARKER\n`;
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, { onData }) => {
+        onData(Buffer.from(text), "stdout");
+        return { exitCode: 0 };
+      },
+    };
+    const result = await createBashTool(process.cwd(), { operations }).execute("long-line", {
+      command: "ignored",
+    });
+    const details = result.details;
+    if (
+      !details ||
+      typeof details !== "object" ||
+      !("fullOutputPath" in details) ||
+      typeof details.fullOutputPath !== "string"
+    ) {
+      throw new Error("Expected a full output path for truncated Bash output");
+    }
+    const fullOutputPath = details.fullOutputPath;
+    try {
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(
+          "END-MARKER\n\n[Showing last 50.0KB of line 1 (line is 244.2KB).",
+        ),
+      });
+      expect(await readFile(fullOutputPath, "utf8")).toBe(text);
+    } finally {
+      await rm(fullOutputPath, { force: true });
+    }
+  });
+
   it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
     "settles real Bash output for %s",
     async (scenario) => {

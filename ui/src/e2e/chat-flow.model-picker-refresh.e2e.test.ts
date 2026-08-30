@@ -33,7 +33,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const session = {
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       updatedAt: 1,
       sessionId: "model-pin-proof",
@@ -42,7 +42,7 @@ suite.define(() => {
       modelOverrideSource: "user",
     };
     const gateway = await installMockGateway(page, {
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionInfo: session,
       models: [{ id: "gpt-5.5", name: "Proof Model", provider: "openai" }],
       methodResponses: {
@@ -65,7 +65,7 @@ suite.define(() => {
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");
-      expect(request.params).toMatchObject({ key: "main", model: null });
+      expect(request.params).toMatchObject({ key: "agent:main:main", model: null });
       await expect
         .poll(() =>
           picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
@@ -92,7 +92,7 @@ suite.define(() => {
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
         { id: "fable-5", name: "Claude Fable 5", provider: "anthropic" },
       ],
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
 
     try {
@@ -126,7 +126,7 @@ suite.define(() => {
         ],
       });
       const metadataRequest = await gateway.waitForRequest("chat.metadata");
-      expect(metadataRequest.params).toEqual({ agentId: "main", sessionKey: "main" });
+      expect(metadataRequest.params).toEqual({ agentId: "main", sessionKey: "agent:main:main" });
       expect(
         await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible(),
       ).toBe(true);

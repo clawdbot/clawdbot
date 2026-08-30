@@ -3086,11 +3086,23 @@ bounded_probe_output() {
     pid="$!"
 
     (
-        sleep "$timeout_seconds"
+        local sleeper
+        # Builtin wait lets TERM interrupt the watchdog; a foreground sleep
+        # would outlive it and hold the caller's command-substitution pipe open.
+        trap 'exit' TERM
+        trap '
+            for sleeper in $(jobs -p); do
+                kill "$sleeper" 2>/dev/null || true
+                wait "$sleeper" 2>/dev/null || true
+            done
+        ' EXIT
+        sleep "$timeout_seconds" &
+        wait "$!"
         if kill -0 "$pid" 2>/dev/null; then
             printf '1' >"$timeout_file"
             kill "$pid" 2>/dev/null || true
-            sleep 0.1
+            sleep 0.1 &
+            wait "$!"
             kill -9 "$pid" 2>/dev/null || true
             printf 'timeout' >"$status_file"
         fi

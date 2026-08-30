@@ -149,6 +149,16 @@ openclaw health
 ### Common footguns
 
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
+- **Wrong developer CLI:** When `PATH` includes `node_modules/.bin`, `codex` can
+  resolve to the workspace-pinned CLI instead of your standalone installation.
+  For developer workers, use the intended executable's absolute path for both
+  `--version` and `exec`, and confirm the worker's startup version. A package
+  manifest or a version check in another shell does not identify a running worker.
+  OpenClaw's [managed Codex app-server](/plugins/codex-harness-reference#app-server-transport)
+  has a separate pinned-version contract; do not change that pin or your model/auth
+  settings to fix developer CLI selection. If the installed workspace package and
+  native executable disagree with the lockfile, repair the install with `pnpm install`
+  rather than editing `node_modules`.
 - **Where state lives:**
   - Channel/provider state: `~/.openclaw/credentials/`
   - Model auth profiles: SQLite auth stores (shared: `~/.openclaw/state/openclaw.sqlite`; agent-local: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`)

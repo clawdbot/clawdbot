@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { collectSqliteQueryPlanEvidence } from "./lib/sqlite-query-plan-evidence.js";
 
 type JsonObject = { [key: string]: JsonValue };
@@ -62,14 +63,6 @@ function hasControlCharacters(value: string): boolean {
   return false;
 }
 
-function readOptionValue(argv: string[], index: number, optionName: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
   const options: Record<"baselineSourceDir" | "sourceDir" | "output", string | null> = {
     baselineSourceDir: null,
@@ -79,7 +72,7 @@ export function parseArgs(argv: string[]) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     const readValue = () => {
-      const value = readOptionValue(argv, index, arg);
+      const value = requireOptionArgument(argv, index, arg);
       index += 1;
       return value;
     };

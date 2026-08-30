@@ -311,8 +311,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       return { mode: runtime.mode, sandboxed: runtime.sandboxed };
     })(),
     systemPrompt: attemptSystemPrompt.systemPrompt,
-    bootstrapFiles: params.bootstrap.hookAdjustedBootstrapFiles,
-    injectedFiles: params.bootstrap.contextFiles,
+    injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
     skillsPrompt: params.skillsPrompt,
     tools: params.effectiveTools,
   });

@@ -52,6 +52,7 @@ describe("profile-bound appearance preferences", () => {
       tide: true,
       beacon: true,
       phosphor: true,
+      crt: true,
       custom: false,
     };
     for (const [theme, storable] of Object.entries(profileStorable)) {

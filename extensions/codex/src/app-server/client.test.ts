@@ -500,8 +500,8 @@ describe("CodexAppServerClient", () => {
 
   it.each([
     ["0.149.0", 0],
-    ["0.151.0-alpha.4", 1],
-    ["0.151.0", 1],
+    ["0.152.0-alpha.4", 1],
+    ["0.152.0", 1],
     ["1.0.0", 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);

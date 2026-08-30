@@ -426,6 +426,10 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
   it.each([
     "packages/normalization-core/src/record-coerce.ts",
     "packages/plugin-package-contract/src/schema.ts",
+    "scripts/lib/bounded-command.mjs",
+    "scripts/lib/bounded-command.mts",
+    "scripts/lib/managed-child-process.mts",
+    "scripts/lib/tsx-cli-shim.mjs",
     "scripts/lib/plugin-publication-candidates.ts",
     "scripts/lib/plugin-publication-collector.ts",
   ])("selects all publishable plugins when %s changes", (changedPath) => {
@@ -1698,14 +1702,20 @@ describe("plugin-clawhub-publish.sh", () => {
     expect(localIdentityIndex).toBeLessThan(clawHubDryRunIndex);
   });
 
-  it("probes GNU timeout capabilities and leaves pack-only mode portable", () => {
+  it("prefers GNU timeout and keeps a portable bounded fallback", () => {
     const source = readFileSync("scripts/plugin-clawhub-publish.sh", "utf8");
     const packExitIndex = source.indexOf('if [[ "${mode}" == "--pack" ]]');
     const timeoutProbeIndex = source.indexOf("for timeout_candidate in timeout gtimeout");
 
     expect(timeoutProbeIndex).toBeGreaterThan(packExitIndex);
     expect(source).toContain("--signal=TERM --kill-after=1s 1s true");
-    expect(source).toContain("with --signal and --kill-after support is required");
+    expect(source).toContain('"${repo_root}/scripts/lib/bounded-command.mjs"');
+    expect(readFileSync("scripts/lib/bounded-command.mts", "utf8")).toContain(
+      "timeoutKillGraceMs: 10_000",
+    );
+    expect(readFileSync("scripts/lib/bounded-command.mjs", "utf8")).toContain(
+      "forceKillDelayMs: 15_000",
+    );
   });
 
   it("prints help before package or ClawHub checks", () => {

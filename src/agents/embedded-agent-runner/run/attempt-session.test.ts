@@ -126,7 +126,7 @@ function createInput(options?: {
     replaySafeTools: new Set(allCustomTools),
   };
   let onDeliveredSourceReply: (() => void) | undefined;
-  let onReconciliationCandidate: (() => void) | undefined;
+  let onReconciliationCandidate: ((parentToolCallId: string) => void) | undefined;
 
   hoisted.createPreparedEmbeddedAgentSettingsManager.mockReturnValue(settingsManager);
   hoisted.resolveEffectiveCompactionMode.mockReturnValue("safeguard");
@@ -153,7 +153,7 @@ function createInput(options?: {
     },
   );
   hoisted.installCodeModeOutcomeHook.mockImplementation(
-    (input: { onReconciliationCandidate?: () => void }) => {
+    (input: { onReconciliationCandidate?: (parentToolCallId: string) => void }) => {
       onReconciliationCandidate = input.onReconciliationCandidate;
       events.push("install-code-mode-outcome");
     },
@@ -189,8 +189,9 @@ function createInput(options?: {
       sessionAgentId: "agent-1",
       transcriptLifecycle: transcriptLifecycle as never,
       sessionManager: sessionManager as never,
+      nestedToolActivities: [],
     },
-    markCodeModeReconciliationCandidate: () => onReconciliationCandidate?.(),
+    markCodeModeReconciliationCandidate: () => onReconciliationCandidate?.("code-mode-call"),
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
     resourceLoader,
     setActiveToolsByName,
@@ -246,10 +247,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
-    expect(result.getCodeModeReconciliationCandidate()).toBe(false);
+    expect(result.getCodeModeRecoveryCandidate()).toBeUndefined();
     result.setCodeModeReconciliationReadAuthorized(true);
     fixture.markCodeModeReconciliationCandidate();
-    expect(result.getCodeModeReconciliationCandidate()).toBe(true);
+    expect(result.getCodeModeRecoveryCandidate()).toEqual({});
   });
 
   it("does not install Code Mode outcome handling when the run kept direct tools", async () => {
@@ -275,7 +276,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
     result.setCodeModeReconciliationReadAuthorized(finalReadAllowed);
     fixture.markCodeModeReconciliationCandidate();
-    expect(result.getCodeModeReconciliationCandidate()).toBe(false);
+    expect(result.getCodeModeRecoveryCandidate()).toBeUndefined();
   });
 
   it("leaves overflow recovery with the session when no model budget was resolved", async () => {

@@ -580,7 +580,16 @@ describe("package Telegram live Docker E2E", () => {
       });
       const config = {
         agents: {
-          defaults: { workspace: "/tmp/qa" },
+          defaults: {
+            workspace: "/tmp/qa",
+            models: {
+              "openai/gpt-5.6-luna": {
+                alias: "qa",
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+            modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+          },
           entries: {
             qa: {
               default: true,
@@ -601,7 +610,15 @@ describe("package Telegram live Docker E2E", () => {
 
       expect(mutateConfig?.(config)).toEqual({
         agents: {
-          defaults: { workspace: "/tmp/qa" },
+          defaults: {
+            workspace: "/tmp/qa",
+            models: {
+              "openai/gpt-5.6-luna": {
+                alias: "qa",
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+          },
           list: [
             {
               default: true,
@@ -649,6 +666,7 @@ describe("package Telegram live Docker E2E", () => {
             image: "mock-openai/image",
             audio: "mock-openai/audio",
           },
+          modelPolicy: { allow: ["mock-openai/qa"] },
           workspace: "/tmp/qa",
         },
         entries: {

@@ -58,8 +58,7 @@ These commands work on channels with persistent thread bindings. See
 [Thread supporting channels](#thread-supporting-channels) below.
 
 ```text
-/focus <subagent-label|session-key|session-id|session-label>
-/unfocus
+/session unbind
 /agents
 /session idle <duration|off>
 /session max-age <duration|off>
@@ -275,7 +274,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `group`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or results the user may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd` inherits the same-agent parent's live managed repository and creates a separate worktree. Other spawns use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree, while the main session can reach every same-agent session unless `self` or the sandbox spawned-only clamp applies. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
+With `visible: true`, `group`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or results the user may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd` inherits the same-agent parent's live managed repository and creates a separate worktree. Other spawns use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `agent` scope covers all same-agent sessions for unsandboxed callers. Set `tree` explicitly for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
 
 If a call fails with `Parameters require visible=true`, omit the named group or worktree options to keep the hidden or ACP runtime. To create a visible session instead, use `visible: true` with `runtime: "subagent"` and omit `mode`, `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`, swarm options, and the ACP-only `streamTo` and `resumeSessionId`. Worktree names and base refs also require `worktree: true`. Adding `visible: true` alone does not make an ACP call compatible.
 
@@ -398,11 +397,11 @@ enablement, timeouts, and `spawnSessions`.
     Replies and follow-up messages in that thread route to the bound session.
   </Step>
   <Step title="Inspect timeouts">
-    Use `/session idle` to inspect/update inactivity auto-unfocus and
+    Use `/session idle` to inspect/update inactivity expiry and
     `/session max-age` to control the hard cap.
   </Step>
   <Step title="Detach">
-    Use `/unfocus` to detach manually.
+    Use `/session unbind` to detach without closing the agent session.
   </Step>
 </Steps>
 
@@ -410,11 +409,10 @@ enablement, timeouts, and `spawnSessions`.
 
 | Command            | Effect                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------- |
-| `/focus <target>`  | Bind the current thread (or create one) to a sub-agent/session target                     |
-| `/unfocus`         | Remove the binding for the current bound thread                                           |
+| `/session unbind`  | Remove the current conversation binding without closing the agent session                 |
 | `/agents`          | List active runs and binding state (`binding:<id>`, `unbound`, or `bindings unavailable`) |
-| `/session idle`    | Inspect/update idle auto-unfocus (focused bound threads only)                             |
-| `/session max-age` | Inspect/update hard cap (focused bound threads only)                                      |
+| `/session idle`    | Inspect/update inactivity expiry for the current binding                                  |
+| `/session max-age` | Inspect/update the maximum age of the current binding                                     |
 
 ### Config switches
 
@@ -537,10 +535,9 @@ from a single orchestrator.
 
 ### Cascade stop
 
-Stopping a depth-1 orchestrator automatically stops all its depth-2
-children:
-
-- `/stop` in the main chat stops all depth-1 agents and cascades to their depth-2 children.
+Explicit cancellation of a depth-1 orchestrator cascades to its depth-2
+children. `/stop` in the main chat applies to that requester's child tree.
+See [Stopping](/tools/subagents#stopping) for scope and incomplete-cancellation behavior.
 
 ## Authentication
 
@@ -736,7 +733,31 @@ still need normal device approval for scope upgrades.
 
 ## Stopping
 
-- Sending `/stop` in the requester chat aborts the requester session and stops any active sub-agent runs spawned from it, cascading to nested children.
+An explicit Stop targeting a parent run cancels the children associated with that
+run and their descendants, including ordinary sub-agents and [Swarm](/tools/swarm)
+collectors. Successful cancellation keeps selected queued collectors from
+starting while running children stop. Exact-run cancellation does not cancel
+unrelated turns or clear unrelated session-wide queues.
+
+For Gateway callers, `chat.abort` with a `runId` uses this exact-parent scope.
+`sessions.abort` with a `runId` also targets that run. When it resolves a recovered
+native run without a chat controller, it cancels children only if the captured
+active parent accepts Stop; a declined or no-active-run result, including an
+already-finalizing parent, leaves those children alone.
+
+Sending `/stop` in the requester chat has broader scope: it aborts requester
+session work, clears its queues, and cancels its active child tree. Session-wide
+`sessions.abort` also requests descendant cancellation; clearing queued follow-ups
+requires `clearQueued: true`. Ordinary `chat.abort` without a `runId` does not
+cascade to children. These operations retain their normal authorization checks.
+
+Incomplete cancellation is reported as an error, not a clean success. `/stop`
+reports actual stopped and failed child counts. Inspect the remaining
+[background tasks](/automation/tasks#control-ui) and retry their cancellation;
+request acknowledgment does not mean all runtime cleanup is instantaneous.
+
+Accepted children remain independent after ordinary parent completion, yield, or
+timeout. Those events do not automatically cancel them.
 
 ## Limitations
 

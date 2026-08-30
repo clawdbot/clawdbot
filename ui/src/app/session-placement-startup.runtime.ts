@@ -197,7 +197,7 @@ export default function createApplicationPlacementStartupRuntime(
       client: entry.scope.client,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
-      cleanupOnCancellation: !entry.persistRecovery,
+      cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
       recovering,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
@@ -388,6 +388,26 @@ export default function createApplicationPlacementStartupRuntime(
       };
     },
     start,
+    pause(sessionKey, error) {
+      const entry = findEntry(sessionKey)?.entry;
+      if (!entry || !isCurrent(entry)) {
+        return;
+      }
+      const recovery = pauseSessionPlacementRecovery(
+        entry.work.recovery,
+        error,
+        entry.persistRecovery,
+      );
+      // Replace the owner before Stop leaves the browser; late active dispatch replies lose send authority.
+      entry.work = { kind: "paused", recovery };
+      retireEntry(entry, false);
+      start({
+        recovery,
+        persistRecovery: entry.persistRecovery,
+        recovering: true,
+        createdAt: entry.createdAt,
+      });
+    },
     retry(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
       if (!entry || entry.work.kind !== "paused" || !isCurrent(entry)) {

@@ -119,6 +119,6 @@ export function resolveBoundAcpDispatchSessionKey(params: {
   if (isPluginOwnedSessionBindingRecord(binding)) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId);
+  getSessionBindingService().touch(binding.bindingId, undefined, binding.conversation);
   return targetSessionKey;
 }

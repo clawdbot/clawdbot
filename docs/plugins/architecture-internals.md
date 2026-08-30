@@ -273,7 +273,7 @@ listed here.
 | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
 | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
 | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
-| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
+| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the owning plugin                                                                         |
 | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
 | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Providers expose their own env-marker API-key resolution hooks                                                                                |
 | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
@@ -312,13 +312,25 @@ listed here.
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
-`normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
-matched provider plugin, then fall through other hook-capable provider plugins
-until one actually changes the model id or transport/config. That keeps
-alias/compat provider shims working without requiring the caller to know which
-bundled plugin owns the rewrite. If no provider hook rewrites a supported
-Google-family config entry, the bundled Google config normalizer still applies
-that compatibility cleanup.
+Normalization dispatch is hook-specific:
+
+- `normalizeModelId` uses the matched provider hook's non-empty result. If none
+  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
+  not try other providers' normalization hooks.
+- `normalizeTransport` tries the matched provider first. Only if that does not
+  change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
+  does it try other transport hooks, stopping at the first change.
+- `normalizeConfig` uses the owning bundled provider's lightweight policy surface
+  first. If that surface has no `normalizeConfig` hook, OpenClaw may call the
+  matched runtime owner, provided runtime loading is allowed and, when a config
+  is supplied, that owner has explicit plugin activation. It never scans other
+  providers' hooks or falls through after the owning hook returns no change.
+  Config assembly passes `allowRuntimePluginLoad: false`, so it uses bundled
+  policy without loading provider runtime.
+
+Google-family config cleanup is implemented by the Google plugin's own
+`normalizeConfig` hook, shared with its lightweight policy surface. It is not a
+separate core compatibility backstop.
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior

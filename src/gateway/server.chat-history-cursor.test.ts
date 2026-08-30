@@ -21,6 +21,8 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as userProfiles from "../state/user-profiles.js";
+import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -368,6 +370,65 @@ describe("chat.history cursor catch-up", () => {
     expect(
       composed.map((message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id),
     ).toEqual(["cached", "exec", "first", "second", "wait", "later"]);
+  });
+
+  test("reuses sender display reads within each delta and refreshes the next request", async () => {
+    const { context, storePath } = await createCursorSession();
+    const profile = userProfiles.ensureProfileForEmail("cursor-profile@example.test");
+    const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
+    expect(cached.ok).toBe(true);
+    expect(cached.payload?.deltaCursor).toEqual(expect.any(String));
+    let parentId = "cached";
+    for (let index = 0; index < 3; index += 1) {
+      const eventId = `profile-message-${index}`;
+      await appendTranscriptMessage(currentScope(storePath), {
+        eventId,
+        parentId,
+        message: {
+          role: "user",
+          content: `question ${index}`,
+          __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
+        },
+      });
+      parentId = eventId;
+    }
+    const lookup = vi.spyOn(userProfiles, "getUserProfileDisplay");
+    try {
+      const avatarUrls: string[] = [];
+      for (const byte of [1, 2]) {
+        expect(userProfiles.setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(
+          true,
+        );
+        const { avatarRevision } = userProfiles.getUserProfileDisplay(profile.id);
+        const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
+        avatarUrls.push(avatarUrl);
+        lookup.mockClear();
+        const delta = await callChat<{ kind: string; messages: unknown[] }>(
+          context,
+          "chat.history",
+          {
+            cursor: cached.payload?.deltaCursor,
+          },
+        );
+        expect(delta.ok).toBe(true);
+        expect(delta.payload?.kind).toBe("delta");
+        expect(lookup.mock.calls).toEqual([[profile.id]]);
+        expect(delta.payload?.messages).toHaveLength(3);
+        for (const envelope of delta.payload?.messages ?? []) {
+          expect(envelope).toMatchObject({
+            message: {
+              __openclaw: {
+                senderIdentity: { type: "profile", id: profile.id },
+                senderProfileAvatarUrl: avatarUrl,
+              },
+            },
+          });
+        }
+      }
+      expect(avatarUrls[1]).not.toBe(avatarUrls[0]);
+    } finally {
+      lookup.mockRestore();
+    }
   });
 
   test("returns an empty delta at the cached head", async () => {

@@ -22,6 +22,7 @@ type MockRegistryToolEntry = {
 
 const loadOpenClawPluginsMock = vi.fn();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
+const getLoadedRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadContextMocks = vi.hoisted(() => ({
   actualResolve: undefined as
@@ -40,6 +41,22 @@ vi.mock("./loader.js", () => ({
     resolveCompatibleRuntimePluginRegistryMock(params),
 }));
 
+// resolveCompatibleRuntimePluginRegistry now lives in this module, so the
+// ./loader.js seam no longer observes the intra-module call that tool resolution
+// triggers. Count the boundary tools.ts actually crosses, keeping real behavior.
+vi.mock("./active-runtime-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./active-runtime-registry.js")>();
+  return {
+    ...actual,
+    getLoadedRuntimePluginRegistry: (
+      params?: Parameters<typeof actual.getLoadedRuntimePluginRegistry>[0],
+    ) => {
+      getLoadedRuntimePluginRegistryMock(params);
+      return actual.getLoadedRuntimePluginRegistry(params);
+    },
+  };
+});
+
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: unknown) => applyPluginAutoEnableMock(params),
 }));
@@ -55,8 +72,8 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
-let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
-let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
+let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
+let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
 let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -541,12 +558,8 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({
-      buildPluginToolMetadataKey,
-      ensureStandalonePluginToolRegistryLoaded,
-      getPluginToolMeta,
-      resolvePluginTools,
-    } = await import("./tools.js"));
+    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -559,6 +572,7 @@ describe("resolvePluginTools optional tools", () => {
 
   beforeEach(() => {
     loadOpenClawPluginsMock.mockReset();
+    getLoadedRuntimePluginRegistryMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockImplementation(() =>
       getActivePluginRegistry?.(),
@@ -3097,7 +3111,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledOnce();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -3137,7 +3151,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(heavyFactory).not.toHaveBeenCalled();
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledOnce();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -3197,7 +3211,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledOnce();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -3313,7 +3327,7 @@ describe("resolvePluginTools optional tools", () => {
       toolAllowlist: ["*", "tavily"],
       allowGatewaySubagentBinding: true,
     });
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledOnce();
     const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
       onlyPluginIds?: string[];
       toolDiscovery?: unknown;
@@ -3408,7 +3422,7 @@ describe("resolvePluginTools optional tools", () => {
 
 describe("buildPluginToolMetadataKey", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey } = await import("./tool-metadata.js"));
   });
 
   it("does not collide when ids or names contain separator-like characters", () => {

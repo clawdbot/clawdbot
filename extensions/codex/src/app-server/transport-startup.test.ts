@@ -124,13 +124,13 @@ child.on("exit", (code, signal) => {
         inspected = resolve;
       });
       vi.spyOn(processSnapshot, "readCodexAppServerProcessCommand").mockImplementation(
-        async (pid, deadline) => {
-          if (pid !== wrapper?.pid) {
-            return readCommand(pid, deadline);
+        async (observed, deadline) => {
+          if (observed.pid !== wrapper?.pid) {
+            return readCommand(observed, deadline);
           }
           await expect.poll(() => fs.readFile(readyPath, "utf8").catch(() => "")).not.toBe("");
           nativePid = Number(await fs.readFile(readyPath, "utf8"));
-          const command = await readCommand(pid, deadline);
+          const command = await readCommand(observed, deadline);
           expect(command).toBeDefined();
           if (failure === "commit") {
             for (let index = 0; index < 512; index++) {
@@ -138,7 +138,10 @@ child.on("exit", (code, signal) => {
             }
           }
           inspected();
-          return failure === "inspection" ? undefined : command;
+          if (failure === "inspection") {
+            throw new processSnapshot.ProcessInspectionError("unavailable");
+          }
+          return command;
         },
       );
       const started = CodexAppServerClient.start({
@@ -174,9 +177,7 @@ child.on("exit", (code, signal) => {
         expect(error).toBeInstanceOf(Error);
         expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
         expect((error as Error).message).toContain(
-          failure === "inspection"
-            ? "Cannot register the Codex child process command"
-            : "512-row limit",
+          failure === "inspection" ? "Cannot inspect Codex processes" : "512-row limit",
         );
         expect((error as Error).message).toContain("launcher startup diagnostic");
         expect(

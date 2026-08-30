@@ -63,6 +63,34 @@ describe("session transcript inbound context", () => {
     ]);
   });
 
+  it("restores marked Cron delivery context when no live chat window survives", async () => {
+    readRecent.mockImplementation(async (params) =>
+      params.includeCronDirectDeliveryContext
+        ? [{ id: "cron-1", role: "assistant", text: "scheduled payload", timestamp: 2_000 }]
+        : [],
+    );
+    const ctx = context({
+      SessionTranscriptContext: { chatWindow: true, historyLimit: 3 },
+    });
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      expect.objectContaining({
+        source: "session",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [expect.objectContaining({ body: "scheduled payload" })],
+        }),
+      }),
+    ]);
+  });
+
   it("dedupes the canonical turn against the live window and merges chronologically", async () => {
     readRecent.mockResolvedValue([
       { id: "u1", role: "user", text: "cached user turn", timestamp: 1_000 },
@@ -136,6 +164,7 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
+    expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeCronDirectDeliveryContext");
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {

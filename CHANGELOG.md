@@ -70,10 +70,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
+- Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
+- **Chat attachments:** protect prepared message-tool media from premature cleanup, attach it before publication, and complete interrupted attachment promotion on retries without duplicating the original reply.
+- **Upgrade state metadata:** record the current application version after repairing older databases with an unset version marker, allowing CLI commands to use the running Gateway without attempting another schema repair.
+- **Device workers:** preserve offline-runner classification and reconnect guidance when desktop preparation detects a disconnected device, without treating the disconnect as a model failure.
+- **Control UI global sessions:** preserve the selected agent's session in the composer so usage, goals, progress, and thinking options survive agent switches without reusing another agent's stale row.
 - **Image analysis startup:** prepare selected model providers and keep configuration reads independent of full runtime loading, avoiding unrelated discovery and redundant model resolution while preserving credentials and runtime cleanup.
 - **Browser extension relay:** route Runtime binding callbacks only to registered clients and preserve shared bindings during client cleanup, preventing raw callback payloads from reaching unrelated Playwright sessions.
 - **Control UI media playback:** restore inline audio and video rendition loading so readiness checks reach the Gateway instead of silently falling back to download cards. (#132832)
 - **Gateway cancellation:** route the first `chat.abort` directly to its cancellation handler without loading unrelated chat history and send workflows.
+- **Agent transcript repair:** persist repaired orphan-turn cursors and finish their projection before continuing the attempt, avoiding stale transcript failures while preserving cancellation and writer ownership checks.
 - **Persisted agent runtimes:** prepare the trusted harness and provider selected by an existing session before Gateway, channel, and cron execution, while keeping plugin generations isolated and closed leases unusable.
 
 - **Grok web search startup:** avoid loading the full agent runtime before the first search, while preserving agent-scoped credentials and OAuth fallback behavior.

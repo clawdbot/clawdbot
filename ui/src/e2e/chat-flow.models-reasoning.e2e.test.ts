@@ -3,6 +3,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   waitForRequests,
@@ -52,7 +53,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const picker = pane.locator(".chat-controls__model-picker");
       await picker.locator('[data-chat-model-select="true"]').click();
@@ -106,7 +107,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
@@ -480,7 +481,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       const openModelSelect = async () => {
@@ -595,7 +596,7 @@ suite.define(() => {
               },
             ],
           },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:ops:session-a",
           thinkingLevel: null,
         },
         "sessions.list": sessionsList,
@@ -608,7 +609,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:ops:session-a"));
       const main = page.getByRole("main");
       const modelSelect = main.locator('[data-chat-model-select="true"]').first();
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
@@ -689,6 +690,7 @@ suite.define(() => {
       sessions: [
         {
           key: "agent:main:session-default",
+          sessionId: "control-ui-profile-default-proof",
           kind: "direct",
           label: "Default Sol",
           updatedAt: 2,
@@ -724,7 +726,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-default"));
       const main = page.getByRole("main");
       const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
       const modelSelect = activePane.locator('[data-chat-model-select="true"]');
@@ -820,7 +822,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       await main.locator(setting.trigger).click();
@@ -888,7 +890,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
       const main = page.getByRole("main");
       const modelPicker = main.locator('[data-chat-model-select="true"]').first();

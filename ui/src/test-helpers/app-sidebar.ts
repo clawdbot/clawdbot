@@ -537,6 +537,7 @@ export function createContext(
   return {
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
     agents: {
       state: {
         client: gateway.snapshot.client,

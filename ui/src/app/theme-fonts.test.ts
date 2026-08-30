@@ -31,6 +31,7 @@ describe("typeface presentation", () => {
     ["tide", ["ibm-plex-sans", "ibm-plex-sans"]],
     ["beacon", ["atkinson-hyperlegible", "atkinson-hyperlegible"]],
     ["phosphor", ["jetbrains-mono", "jetbrains-mono"]],
+    ["crt", ["jetbrains-mono", "jetbrains-mono"]],
     ["custom", ["system", "system"]],
   ] as const)("loads %s's default faces plus the shared mono face", (theme, [ui, chat]) => {
     const faces = resolveTypefaces(theme);

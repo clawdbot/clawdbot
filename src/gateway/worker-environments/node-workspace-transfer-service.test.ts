@@ -174,7 +174,7 @@ describe("node workspace transfer service", () => {
     }
   });
 
-  it("streams a plain workspace to the node and accepts only its changed result blobs", async () => {
+  it("streams workspace and changed results beyond worker credential expiry", async () => {
     const root = tempDirs.make("node-workspace-transfer-service-");
     const localPath = path.join(root, "gateway-workspace");
     await fs.mkdir(localPath);
@@ -191,7 +191,7 @@ describe("node workspace transfer service", () => {
     const credential = {
       credentialHash: "a".repeat(43),
       ownerEpoch: 3,
-      expiresAtMs: nowMs + 10 * 60_000,
+      expiresAtMs: nowMs + 60_000,
       sessionId: "session-1",
     };
     const service = createNodeWorkspaceTransferService({
@@ -225,12 +225,7 @@ describe("node workspace transfer service", () => {
         headers: { authorization: `Bearer ${uploadTokenForGet}` },
       });
       service.revoke("environment-1", uploadTokenForGet);
-      nowMs += 10 * 60_000;
-      const expired = await fetch(`${httpOrigin}${manifestPath}`, {
-        headers: { authorization: `Bearer ${prepared.token}` },
-      });
-      nowMs -= 10 * 60_000;
-      for (const response of [crossEnvironment, wrongDirection, expired]) {
+      for (const response of [crossEnvironment, wrongDirection]) {
         expect(response.status).toBe(404);
         expect(response.headers.get("cache-control")).toBe("no-store");
         await expect(response.json()).resolves.toEqual({ error: "not_found" });
@@ -265,6 +260,19 @@ describe("node workspace transfer service", () => {
       await expect(
         fs.readFile(path.join(downloaded.workspaceDir, "nested", "input.txt"), "utf8"),
       ).resolves.toBe("nested input\n");
+      nowMs += 2 * 60_000;
+      const afterWorkerExpiry = await fetch(`${httpOrigin}${manifestPath}`, {
+        headers: { authorization: `Bearer ${prepared.token}` },
+      });
+      expect(afterWorkerExpiry.status).toBe(200);
+      await afterWorkerExpiry.arrayBuffer();
+      nowMs += 8 * 60_000;
+      const expired = await fetch(`${httpOrigin}${manifestPath}`, {
+        headers: { authorization: `Bearer ${prepared.token}` },
+      });
+      expect(expired.status).toBe(404);
+      expect(expired.headers.get("cache-control")).toBe("no-store");
+      await expect(expired.json()).resolves.toEqual({ error: "not_found" });
       await fs.writeFile(path.join(downloaded.workspaceDir, "result.txt"), "node result\n");
       const attachmentsRoot = path.join(root, "attachments");
       const inputDirectory = stagedInputDirectory("a".repeat(64));

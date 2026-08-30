@@ -5,6 +5,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import * as sessionArchiveStore from "../config/sessions/session-accessor.sqlite-archive-store.js";
+import * as sessionArchive from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -18,48 +20,23 @@ import {
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-const sessionArchiveMaterializationHook = vi.hoisted(() => {
-  const hooks: { afterMaterialize?: () => void; afterPublish?: () => void } = {};
-  return hooks;
-});
-
-vi.mock("../config/sessions/session-accessor.sqlite-archive.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-archive.js")>();
-  return {
-    ...actual,
-    materializeSessionStateDeletePlans: async (
-      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
-    ) => {
-      const result = await actual.materializeSessionStateDeletePlans(...args);
-      sessionArchiveMaterializationHook.afterMaterialize?.();
+function afterSessionStateMaterialization(after: () => void) {
+  const materialize = sessionArchive.materializeSessionStateDeletePlans;
+  // Earlier files can load the owner in this non-isolated shard. Observe its
+  // real export instead of replacing a module after that owner has captured it.
+  vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementation(
+    async (...args) => {
+      const result = await materialize(...args);
+      after();
       return result;
     },
-  };
-});
-
-vi.mock("../config/sessions/session-accessor.sqlite-archive-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../config/sessions/session-accessor.sqlite-archive-store.js")
-    >();
-  return {
-    ...actual,
-    publishSessionStateArchives: async (
-      ...args: Parameters<typeof actual.publishSessionStateArchives>
-    ) => {
-      const result = await actual.publishSessionStateArchives(...args);
-      sessionArchiveMaterializationHook.afterPublish?.();
-      return result;
-    },
-  };
-});
+  );
+}
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
-  sessionArchiveMaterializationHook.afterMaterialize = undefined;
-  sessionArchiveMaterializationHook.afterPublish = undefined;
+  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -159,7 +136,7 @@ test("sessions.delete reports an exact-entry replacement during transcript mater
     },
   });
   await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
-  sessionArchiveMaterializationHook.afterMaterialize = () => {
+  afterSessionStateMaterialization(() => {
     replaceSessionEntrySync(
       { sessionKey, storePath },
       sessionStoreEntry(sessionId, {
@@ -168,7 +145,7 @@ test("sessions.delete reports an exact-entry replacement during transcript mater
         updatedAt,
       }),
     );
-  };
+  });
 
   const changed = await directSessionReq("sessions.delete", {
     key: sessionKey,
@@ -203,13 +180,13 @@ test.each(["authorization", "placement"] as const)(
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
-    sessionArchiveMaterializationHook.afterMaterialize = () => {
+    afterSessionStateMaterialization(() => {
       if (change === "authorization") {
         authorized = false;
       } else {
         placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
       }
-    };
+    });
     await expect(
       directSessionReq(
         "sessions.delete",
@@ -252,16 +229,21 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   });
   placementStore.releaseTurn(claim);
   let retired = false;
-  sessionArchiveMaterializationHook.afterPublish = () => {
-    if (!loadSessionEntry({ sessionKey }) && !retired) {
-      placementStore.retireSessionPlacement({
-        sessionId,
-        expectedState: "local",
-        expectedGeneration: claim.placementGeneration,
-      });
-      retired = true;
-    }
-  };
+  const publish = sessionArchiveStore.publishSessionStateArchives;
+  vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
+    async (...args) => {
+      const result = await publish(...args);
+      if (!loadSessionEntry({ sessionKey }) && !retired) {
+        placementStore.retireSessionPlacement({
+          sessionId,
+          expectedState: "local",
+          expectedGeneration: claim.placementGeneration,
+        });
+        retired = true;
+      }
+      return result;
+    },
+  );
   const deleted = await directSessionReq(
     "sessions.delete",
     { key: sessionKey },

@@ -49,7 +49,6 @@ import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
   collectMemoryStatusAggregate,
   resolveInitialMemoryDirty,
-  resolveMemoryManagerSyncStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 import {
@@ -297,18 +296,21 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    await runMemorySearchMaintenance({
-      reason: params.reason,
-      takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
-      restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
-      acquireManager: async () =>
-        await MemoryIndexManager.get({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          purpose: "maintenance",
-          acquireLocalService: this.acquireLocalService,
+    await this.syncOutcomes.track(
+      async () =>
+        await runMemorySearchMaintenance({
+          reason: params.reason,
+          takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
+          restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+          acquireManager: async () =>
+            await MemoryIndexManager.get({
+              cfg: this.cfg,
+              agentId: this.agentId,
+              purpose: "maintenance",
+              acquireLocalService: this.acquireLocalService,
+            }),
         }),
-    });
+    );
   }
 
   protected async syncAdmitted(
@@ -348,7 +350,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw err;
       }
     }
-    this.syncing = (async () => {
+    const run = async () => {
       const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
       let forceFtsOnly =
         this.embeddingBootstrapFailure !== undefined &&
@@ -414,7 +416,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       ) {
         this.clearEmbeddingBootstrapFailureAfterRecovery();
       }
-    })().finally(() => {
+    };
+    this.syncing = this.syncOutcomes.track(run, true).finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
@@ -496,20 +499,16 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
-    const syncStatus = resolveMemoryManagerSyncStatus({
-      syncing: this.syncing !== null,
-      memoryDirty: this.dirty,
-      sessionsDirty: this.sessionsDirty,
-      indexIdentityDirty: this.indexIdentityDirty,
-      backgroundMaintenance: this.activeBackgroundSearchSyncs.size > 0,
-      sources: this.sources,
-    });
-
     return {
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
-      ...syncStatus,
+      dirty:
+        this.dirty ||
+        this.sessionsDirty ||
+        this.indexIdentityDirty ||
+        this.activeBackgroundSearchSyncs.size > 0,
+      lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,

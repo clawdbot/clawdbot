@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -108,7 +109,7 @@ async function showSplitDashboard(page: import("playwright").Page, sessionKey: s
     },
     { key: sessionKey, settingsKey: storageKey },
   );
-  await page.goto(`${suite.server.baseUrl}dashboard`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
   await page.locator('.side-panel [data-panel-slot="chat"] .chat-thread').waitFor();
 }
 

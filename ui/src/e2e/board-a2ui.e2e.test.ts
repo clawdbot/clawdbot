@@ -12,6 +12,7 @@ import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -48,7 +49,7 @@ async function openDashboard(page: Page): Promise<void> {
     },
     { key: sessionKey, storageKey: settingsKey },
   );
-  await page.goto(`${controlUi.baseUrl}dashboard`);
+  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
   await page.locator(".board-session-surface").waitFor();
 }
 
