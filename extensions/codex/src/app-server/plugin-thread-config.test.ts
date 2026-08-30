@@ -6,7 +6,10 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import {
+  resolveOwnedAppReadOnlyToolConfigKeys,
+  resolveRecoverableCodexPluginConfigKeys,
+} from "./plugin-inventory.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
@@ -23,6 +26,34 @@ import type { CodexAppServerRequestParams, JsonObject, v2 } from "./protocol.js"
 describe("Codex plugin thread config", () => {
   beforeEach(() => {
     defaultCodexAppInventoryCache.clear();
+  });
+
+  it("does not classify keys shared with writable tools as read-only", () => {
+    const app: v2.AppInfo = {
+      ...appInfo("linear", true),
+      toolSummaries: [
+        {
+          name: "fetch",
+          title: "Fetch",
+          description: "Fetch a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: true,
+        },
+        {
+          name: "linear_fetch",
+          title: "Save issue",
+          description: "Create or update a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: false,
+        },
+      ],
+    };
+
+    expect(resolveOwnedAppReadOnlyToolConfigKeys(app)).toStrictEqual({
+      readOnlyToolConfigKeys: ["Fetch", "fetch"],
+    });
   });
 
   it("defaults destructive app access on for accessible migrated plugin apps", async () => {

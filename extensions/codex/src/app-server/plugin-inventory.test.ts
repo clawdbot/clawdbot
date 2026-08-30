@@ -6,11 +6,7 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import {
-  findCodexMarketplacePluginSummary,
-  readCodexPluginInventory,
-  resolveOwnedAppReadOnlyToolConfigKeys,
-} from "./plugin-inventory.js";
+import { findCodexMarketplacePluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -24,34 +20,6 @@ import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin inventory", () => {
-  it("does not classify keys shared with writable tools as read-only", () => {
-    const app: v2.AppInfo = {
-      ...appInfo("linear", true),
-      toolSummaries: [
-        {
-          name: "fetch",
-          title: "Fetch",
-          description: "Fetch a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: true,
-        },
-        {
-          name: "linear_fetch",
-          title: "Save issue",
-          description: "Create or update a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: false,
-        },
-      ],
-    };
-
-    expect(resolveOwnedAppReadOnlyToolConfigKeys(app)).toStrictEqual({
-      readOnlyToolConfigKeys: ["Fetch", "fetch"],
-    });
-  });
-
   it("returns enabled migrated curated plugins with stable owned app ids", async () => {
     const appCache = await cachedApps(appInfo("google-calendar-app", true));
     const calls: string[] = [];
