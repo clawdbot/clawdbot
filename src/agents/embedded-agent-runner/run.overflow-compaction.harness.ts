@@ -19,6 +19,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -447,15 +448,17 @@ const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 // the mocked codex harness does not claim: such runs select the built-in openclaw
 // host harness and pay its one-time source-compile cost. Suites proving plugin
 // harness behavior must pin provider "openai" (see run.session-permissions.test.ts).
-export const overflowBaseRunParams = {
-  agentId: "main",
-  sessionId: "test-session",
-  sessionKey: "agent:main:test-key",
-  workspaceDir: "/tmp/workspace",
-  prompt: "hello",
-  timeoutMs: 30000,
-  runId: "run-1",
-} as const;
+export function createOverflowRunParams(state: Pick<OpenClawTestState, "workspaceDir">) {
+  return {
+    agentId: "main",
+    sessionId: "test-session",
+    sessionKey: "agent:main:test-key",
+    workspaceDir: state.workspaceDir,
+    prompt: "hello",
+    timeoutMs: 30000,
+    runId: "run-1",
+  } as const;
+}
 
 function resetMockAgentHarness(): void {
   clearAgentHarnesses();
@@ -463,7 +466,7 @@ function resetMockAgentHarness(): void {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" || ctx.provider === "openai" || ctx.provider === "openai"
+      ctx.provider === "codex" || ctx.provider === "openai"
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
@@ -483,7 +486,8 @@ function resetMockAgentHarness(): void {
 
 /** Reset every mocked runner dependency to the default successful no-op state. */
 function resetRunOverflowCompactionHarnessMocks(): void {
-  vi.unstubAllEnvs();
+  // Loading and warmup can run inside an already-owned environment. Only the
+  // per-test reset restores stubbed env, before the next fixture applies it.
   resetCommandQueueStateForTest();
   resetMockAgentHarness();
   mockedGlobalHookRunner.hasHooks.mockReset();
@@ -1149,6 +1153,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 /** Move one-time runner compilation out of individual behavior timings. */
 export async function warmRunOverflowCompactionHarness(
   runEmbeddedAgent: TestRunEmbeddedAgent,
+  state: Pick<OpenClawTestState, "workspaceDir">,
   params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
 ): Promise<void> {
   resetRunOverflowCompactionHarnessMocks();
@@ -1156,7 +1161,7 @@ export async function warmRunOverflowCompactionHarness(
   mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "warmup" }]);
   mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["warmup"] }));
   await runEmbeddedAgent({
-    ...overflowBaseRunParams,
+    ...createOverflowRunParams(state),
     ...params,
     runId: params?.runId ?? "run-overflow-compaction-harness-warmup",
   });

@@ -1,12 +1,15 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
   mockedGetApiKeyForModel,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
 } from "./run.overflow-compaction.harness.js";
+
+let state: OpenClawTestState;
 
 describe("prepared plugin harness credentials", () => {
   let runEmbeddedAgent: Awaited<
@@ -29,7 +32,9 @@ describe("prepared plugin harness credentials", () => {
       actual.shouldPreferExplicitConfigApiKeyAuth,
     );
   });
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.prepared-harness-credentials" });
     registerPreparedAgentHarness({
       id: "test-byok",
       label: "Test BYOK",
@@ -48,11 +53,15 @@ describe("prepared plugin harness credentials", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
   });
 
+  afterEach(async () => {
+    await state?.cleanup();
+  });
+
   it.each([true, false])(
     "forwards a configured direct key with authHeader=%s",
     async (authHeader) => {
       await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         provider: "custom-proof",
         model: "gpt-5.6-luna",
         config: {
@@ -96,7 +105,7 @@ describe("prepared plugin harness credentials", () => {
 
   it("does not discover a credential for an implicit harness auth attempt", async () => {
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "custom-proof",
       model: "gpt-5.6-luna",
     });
