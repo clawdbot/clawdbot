@@ -19,7 +19,12 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { WorkspaceAliasRepointedError } from "../../agents/workspace-state-identity.js";
+import {
+  DEFAULT_AGENT_WORKSPACE_DIR,
+  ensureAgentWorkspace,
+  WorkspaceVanishedError,
+} from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -514,18 +519,35 @@ export async function getReplyFromConfig(
       })
     : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
-          dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-          provisioning: await (
-            await import("../../agents/acp-workspace-provisioning.js")
-          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
-        }),
-  );
+  let workspace: Awaited<ReturnType<typeof ensureAgentWorkspace>>;
+  try {
+    workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+      useFastTestBootstrap
+        ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+        : await ensureAgentWorkspace({
+            dir: workspaceDirRaw,
+            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+            skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+            provisioning: await (
+              await import("../../agents/acp-workspace-provisioning.js")
+            ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
+          }),
+    );
+  } catch (error) {
+    // Workspace state that fails closed cannot heal through ingress retries; a
+    // rethrow here leaves the inbound event stuck at the head of its durable
+    // lane until the 24h dead-letter gate. Turn it into a visible terminal
+    // reply that names the supported repair instead. Heartbeats keep throwing
+    // so their own failure logging stays the recorded outcome.
+    if (
+      opts?.isHeartbeat !== true &&
+      (error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
+    ) {
+      typing.cleanup();
+      return { text: `⚠️ ${error.message}` };
+    }
+    throw error;
+  }
   const workspaceDir = workspace.dir;
 
   if (

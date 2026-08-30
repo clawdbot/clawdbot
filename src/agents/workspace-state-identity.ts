@@ -90,3 +90,27 @@ export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceSt
     canonicalizeWorkspacePath(workspaceDir, normalizeWorkspaceIdentityPath),
   );
 }
+
+export const WORKSPACE_ALIAS_REPOINTED_ERROR_CODE = "WORKSPACE_ALIAS_REPOINTED";
+
+export class WorkspaceAliasRepointedError extends Error {
+  readonly code = WORKSPACE_ALIAS_REPOINTED_ERROR_CODE;
+  readonly aliasPath: string;
+  readonly storedWorkspacePath: string;
+  readonly currentWorkspacePath: string;
+
+  constructor(params: {
+    aliasPath: string;
+    storedWorkspacePath: string;
+    currentWorkspacePath: string;
+  }) {
+    super(
+      `workspace path alias points to a different current target: ${params.aliasPath} now resolves to ${params.currentWorkspacePath}, but its stored workspace state belongs to ${params.storedWorkspacePath}. ` +
+        "Run `openclaw doctor --fix` to rebind or retire the stale alias.",
+    );
+    this.name = "WorkspaceAliasRepointedError";
+    this.aliasPath = params.aliasPath;
+    this.storedWorkspacePath = params.storedWorkspacePath;
+    this.currentWorkspacePath = params.currentWorkspacePath;
+  }
+}

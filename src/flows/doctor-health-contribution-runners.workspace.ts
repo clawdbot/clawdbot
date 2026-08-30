@@ -129,6 +129,12 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
   });
 }
 
+export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairRepointedWorkspaceAliases } =
+    await import("../commands/doctor-workspace-alias.js");
+  await maybeRepairRepointedWorkspaceAliases({ cfg: ctx.cfg, prompter: ctx.prompter });
+}
+
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
   ctx.cfg = await maybeRepairSkillReadiness({

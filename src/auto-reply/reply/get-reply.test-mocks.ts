@@ -28,8 +28,10 @@ vi.mock("../../agents/timeout.js", () => ({
   resolveAgentTimeoutMs: vi.fn(() => 60000),
 }));
 
-vi.mock("../../agents/workspace.js", () => ({
+vi.mock("../../agents/workspace.js", async (importOriginal) => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
+  WorkspaceVanishedError: (await importOriginal<typeof import("../../agents/workspace.js")>())
+    .WorkspaceVanishedError,
   ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
     dir: params?.dir ?? "/tmp/workspace",
   })),
