@@ -441,14 +441,13 @@ describe.skipIf(process.platform === "win32")(
           (event) => event.kind === "transport-after-gateway-stop",
         );
         const rejected = result.events.findIndex((event) => event.kind === "suite-rejected");
+        expect(rejected).toBeGreaterThan(-1);
         if (denyGroupSignals) {
           expect(afterCleanup).toBe(-1);
           expect(result.releases).toEqual([]);
           expect(
-            result.events.some(
-              (event) => event.kind === "lease-heartbeat" && event.at > result.events[rejected]!.at,
-            ),
-          ).toBe(true);
+            result.events.findLastIndex((event) => event.kind === "lease-heartbeat"),
+          ).toBeGreaterThan(rejected);
         } else {
           expect(result.releases.length).toBeGreaterThan(0);
           expect(result.releases.every((release) => !release.groupAlive)).toBe(true);
