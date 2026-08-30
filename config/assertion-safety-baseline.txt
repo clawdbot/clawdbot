@@ -3436,7 +3436,6 @@ src/plugin-state/plugin-store-validation.ts	1
 src/plugin-state/runtime-health-store.ts	1
 src/plugins/agent-tool-result-middleware.ts	1
 src/plugins/api-facades.ts	1
-src/plugins/api-lifecycle.ts	1
 src/plugins/bundle-config-shared.ts	1
 src/plugins/bundle-lsp.ts	1
 src/plugins/bundle-mcp.ts	2
@@ -3500,7 +3499,7 @@ src/plugins/loader-channel-setup.ts	17
 src/plugins/loader-cli-registry.ts	2
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	4
-src/plugins/loader-module-runtime.ts	12
+src/plugins/loader-module-runtime.ts	11
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-runtime-load.ts	2
