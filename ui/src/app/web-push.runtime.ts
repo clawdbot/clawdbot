@@ -61,8 +61,8 @@ function swReady(): Promise<ServiceWorkerRegistration> {
   });
 }
 
-function pushManagerFor(registration: ServiceWorkerRegistration): PushManager | null {
-  const manager = registration.pushManager;
+function pushManagerFor(registration: ServiceWorkerRegistration | undefined): PushManager | null {
+  const manager = registration?.pushManager;
   return manager && typeof manager.getSubscription === "function" ? manager : null;
 }
 
@@ -91,7 +91,8 @@ export async function getExistingSubscription(): Promise<PushSubscription | null
   if (!("serviceWorker" in navigator)) {
     return null;
   }
-  const registration = await swReady();
+  // Passive reads must settle even when no worker is installed or activation is blocked.
+  const registration = await navigator.serviceWorker.getRegistration();
   return (await pushManagerFor(registration)?.getSubscription()) ?? null;
 }
 
@@ -318,8 +319,7 @@ export async function subscribeToWebPush(
 }
 
 export async function unsubscribeFromWebPush(client: GatewayBrowserClient): Promise<void> {
-  const registration = await swReady();
-  const subscription = (await pushManagerFor(registration)?.getSubscription()) ?? null;
+  const subscription = await getExistingSubscription();
   if (!subscription) {
     return;
   }

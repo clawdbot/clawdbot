@@ -2,7 +2,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { getExistingSubscription, subscribeToWebPush } from "./web-push.runtime.ts";
+import {
+  getExistingSubscription,
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+} from "./web-push.runtime.ts";
 
 const originalServiceWorkerDescriptor = Object.getOwnPropertyDescriptor(
   Navigator.prototype,
@@ -12,7 +16,7 @@ const originalServiceWorkerDescriptor = Object.getOwnPropertyDescriptor(
 function installServiceWorkerReady(ready: Promise<ServiceWorkerRegistration>): void {
   Object.defineProperty(navigator, "serviceWorker", {
     configurable: true,
-    value: { ready },
+    value: { ready, getRegistration: () => ready },
   });
 }
 
@@ -58,6 +62,27 @@ afterEach(() => {
 });
 
 describe("web push service worker readiness", () => {
+  it.each([false, true])(
+    "reads an existing subscription without waiting for activation (registration: %s)",
+    async (registered) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const subscription = existingSubscription([4, 1, 2, 3]);
+      Object.defineProperty(navigator, "serviceWorker", {
+        configurable: true,
+        value: {
+          ready: new Promise<ServiceWorkerRegistration>(() => {}),
+          getRegistration: async () =>
+            registered ? { pushManager: { getSubscription: async () => subscription } } : undefined,
+        },
+      });
+
+      const result = expect(getExistingSubscription()).resolves.toBe(
+        registered ? subscription : null,
+      );
+      await Promise.all([result, vi.advanceTimersByTimeAsync(10_000)]);
+    },
+  );
+
   it("treats a registration without PushManager as unsupported instead of throwing", async () => {
     installServiceWorkerReady(Promise.resolve({} as ServiceWorkerRegistration));
     await expect(getExistingSubscription()).resolves.toBeNull();
@@ -65,15 +90,19 @@ describe("web push service worker readiness", () => {
 
   it("clears the readiness timeout when the service worker is already ready", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const subscription = existingSubscription([4, 1, 2, 3]);
     const registration = {
       pushManager: {
-        getSubscription: vi.fn().mockResolvedValue(null),
+        getSubscription: vi.fn().mockResolvedValue(subscription),
+        subscribe: vi.fn(),
       },
     } as unknown as ServiceWorkerRegistration;
     installServiceWorkerReady(Promise.resolve(registration));
+    vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
+    const { client } = gatewayClient([4, 1, 2, 3]);
 
     for (let i = 0; i < 3; i += 1) {
-      await expect(getExistingSubscription()).resolves.toBeNull();
+      await expect(subscribeToWebPush(client)).resolves.toEqual({ state: "registered" });
       expect(vi.getTimerCount()).toBe(0);
     }
   });
@@ -81,13 +110,36 @@ describe("web push service worker readiness", () => {
   it("still rejects when service worker readiness times out", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     installServiceWorkerReady(new Promise<ServiceWorkerRegistration>(() => {}));
+    vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
 
-    const subscription = getExistingSubscription();
+    const subscription = subscribeToWebPush(gatewayClient([4, 1, 2, 3]).client);
     const rejection = expect(subscription).rejects.toThrow("Service worker not ready (timed out)");
     await vi.advanceTimersByTimeAsync(10_000);
 
     await rejection;
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("unsubscribes an existing registration without waiting for activation", async () => {
+    const subscription = existingSubscription([4, 1, 2, 3]);
+    subscription.unsubscribe = vi.fn().mockResolvedValue(true);
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        ready: new Promise<ServiceWorkerRegistration>(() => {}),
+        getRegistration: async () => ({
+          pushManager: { getSubscription: async () => subscription },
+        }),
+      },
+    });
+    const { client, request } = gatewayClient([4, 1, 2, 3]);
+
+    await unsubscribeFromWebPush(client);
+
+    expect(request).toHaveBeenCalledWith("push.web.unsubscribe", {
+      endpoint: subscription.endpoint,
+    });
+    expect(subscription.unsubscribe).toHaveBeenCalledOnce();
   });
 });
 

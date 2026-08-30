@@ -132,12 +132,14 @@ function gatewayClient(vapidPublicKey: Promise<string>) {
 describe("web push Gateway reconciliation", () => {
   beforeEach(() => {
     const subscription = existingSubscription([4, 1, 2, 3]);
+    const registration = {
+      pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) },
+    };
     Object.defineProperty(navigator, "serviceWorker", {
       configurable: true,
       value: {
-        ready: Promise.resolve({
-          pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) },
-        }),
+        ready: Promise.resolve(registration),
+        getRegistration: async () => registration,
       },
     });
     vi.stubGlobal("PushManager", vi.fn());
@@ -555,15 +557,17 @@ describe("web push Gateway reconciliation", () => {
         currentSubscription = existingSubscription([4, 9, 8, 7]);
         return currentSubscription;
       });
+      const registration = {
+        pushManager: {
+          getSubscription: async () => currentSubscription,
+          subscribe,
+        },
+      };
       Object.defineProperty(navigator, "serviceWorker", {
         configurable: true,
         value: {
-          ready: Promise.resolve({
-            pushManager: {
-              getSubscription: async () => currentSubscription,
-              subscribe,
-            },
-          }),
+          ready: Promise.resolve(registration),
+          getRegistration: async () => registration,
         },
       });
       vi.stubGlobal("Notification", {
