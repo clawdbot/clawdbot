@@ -2287,7 +2287,8 @@ describe("plugin sdk alias helpers", () => {
   it.each(["dist", "dist-runtime"])(
     "keeps compiled %s plugin SDK aliases on the built module graph in test mode",
     (outputDir) => {
-      const { fixture, distChannelRuntimePath } = createPluginSdkAliasTargetFixture();
+      const { fixture, distRootAlias, distChannelRuntimePath } =
+        createPluginSdkAliasTargetFixture();
       const pluginEntry = writePluginEntry(
         fixture.root,
         path.join(outputDir, "extensions", "demo", "index.js"),
@@ -2295,7 +2296,10 @@ describe("plugin sdk alias helpers", () => {
 
       const aliases = withEnv({ NODE_ENV: "test" }, () => buildPluginLoaderAliasMap(pluginEntry));
 
-      expectPluginSdkAliasTargets(aliases, { channelRuntimePath: distChannelRuntimePath });
+      expectPluginSdkAliasTargets(aliases, {
+        rootAliasPath: distRootAlias,
+        channelRuntimePath: distChannelRuntimePath,
+      });
     },
   );
 

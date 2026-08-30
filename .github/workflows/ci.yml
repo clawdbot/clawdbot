@@ -1542,6 +1542,7 @@ jobs:
           install-bun: "false"
 
       - name: Checkout ClawHub docs source
+        if: needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
 
@@ -1584,9 +1585,14 @@ jobs:
           exit 1
 
       - name: Check docs
-        env:
-          OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
-        run: pnpm check:docs
+        run: |
+          if [[ "${{ needs.preflight.outputs.compatibility_target }}" == "true" ]]; then
+            # A frozen release must validate against its own docs graph, not
+            # today's ClawHub links to features that are intentionally absent.
+            pnpm check:docs
+          else
+            OPENCLAW_DOCS_SYNC_CLAWHUB_REPO="${{ github.workspace }}/clawhub-source" pnpm check:docs
+          fi
 
   skills-python:
     permissions:

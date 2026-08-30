@@ -200,10 +200,12 @@ describe("gateway usage helpers", () => {
     ["sessions.usage", { endDate: "2026-02-01" }],
   ] as const)("%s rejects an incomplete explicit date range", async (method, params) => {
     const respond = vi.fn();
-    await expectDefined(
-      usageHandlers[method],
-      "usageHandlers[method] test invariant",
-    )({
+    const handler = usageHandlers[method];
+    expect(handler).toBeDefined();
+    if (!handler) {
+      throw new Error("usageHandlers[method] test invariant");
+    }
+    await handler({
       respond,
       params,
       context: { getRuntimeConfig: vi.fn(() => ({})) },

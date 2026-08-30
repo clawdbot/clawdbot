@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.test.json",
   "compilerOptions": {
+    // Release-tool tests import retained plain-Node helpers from the pinned tooling snapshot.
+    "allowJs": true,
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test.tsbuildinfo"
   },
   "include": [

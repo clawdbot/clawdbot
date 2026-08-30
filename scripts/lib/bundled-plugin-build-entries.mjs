@@ -8,12 +8,18 @@ import {
   bundledPluginFile,
 } from "./bundled-plugin-paths.mjs";
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
+import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
+
+export { collectRootPackageExcludedExtensionDirs };
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
-export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
+/** @internal Shared repository-script contract. */
+export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
 const toPosixPath = (value) => value.replaceAll("\\", "/");
@@ -29,6 +35,28 @@ function parseBundledPluginBuildIdFilter(env = process.env) {
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0),
   );
+}
+
+export function parseDockerSelectedPluginBuildIdFilter(env = process.env) {
+  const raw = env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return null;
+  }
+  const ids = new Set(
+    raw
+      .split(/[\s,]+/u)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+  const invalidIds = [...ids].filter((id) => !PLUGIN_ID_RE.test(id));
+  if (invalidIds.length > 0) {
+    throw new Error(
+      `${DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV} contains invalid plugin id(s): ${invalidIds
+        .toSorted((left, right) => left.localeCompare(right))
+        .join(", ")}`,
+    );
+  }
+  return ids;
 }
 
 function readBundledPluginPackageJson(packageJsonPath, options = {}) {
@@ -61,7 +89,7 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   const normalizedName = fileName.toLowerCase();
   return (
     normalizedName.endsWith(".d.ts") ||
-    /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+    /^config(?:-doctor)?-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
     TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
     normalizedName.includes(".fixture.") ||
     normalizedName.includes(".snap")
@@ -143,10 +171,12 @@ function collectTrackedBundledPluginFiles(cwd) {
   if (result.status !== 0) {
     return null;
   }
-
   const filesByPlugin = new Map();
   for (const rawLine of result.stdout.split("\n")) {
     const line = toPosixPath(rawLine.trim());
+    if (!fs.existsSync(path.join(cwd, line))) {
+      continue;
+    }
     const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
     if (!match) {
       continue;
@@ -184,7 +214,8 @@ function collectBundledPluginCandidates(cwd, extensionsRoot) {
         relativeFiles: null,
         topLevelPublicSurfaceEntries: collectTopLevelPublicSurfaceEntries(pluginDir),
       };
-    });
+    })
+    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
 
 /** Collect all bundled plugin build entries for the current checkout. */
@@ -192,9 +223,11 @@ export function collectBundledPluginBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const env = params.env ?? process.env;
   const extensionsRoot = path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR);
+  const dockerSelectedBuildIds = parseDockerSelectedPluginBuildIdFilter(env);
+  const candidates = collectBundledPluginCandidates(cwd, extensionsRoot);
   const entries = [];
 
-  for (const candidate of collectBundledPluginCandidates(cwd, extensionsRoot)) {
+  for (const candidate of candidates) {
     const { dirName, pluginDir, relativeFiles, topLevelPublicSurfaceEntries } = candidate;
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     const hasManifest =
@@ -216,7 +249,7 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledCluster(dirName, env, { packageJson })) {
       continue;
     }
-    if (!shouldBuildBundledDistEntry(packageJson)) {
+    if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
       continue;
     }
     if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {
@@ -237,6 +270,18 @@ export function collectBundledPluginBuildEntries(params = {}) {
     });
   }
 
+  if (dockerSelectedBuildIds) {
+    const knownIds = new Set(candidates.map((candidate) => candidate.dirName));
+    const unknownIds = [...dockerSelectedBuildIds].filter((id) => !knownIds.has(id));
+    if (unknownIds.length > 0) {
+      throw new Error(
+        `${DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV} references unknown plugin id(s): ${unknownIds
+          .toSorted((left, right) => left.localeCompare(right))
+          .join(", ")}`,
+      );
+    }
+  }
+
   const filteredBuildIds = parseBundledPluginBuildIdFilter(env);
   if (!filteredBuildIds) {
     return entries;
@@ -253,7 +298,40 @@ export function collectBundledPluginBuildEntries(params = {}) {
   return entries.filter((entry) => filteredBuildIds.has(entry.id));
 }
 
-/** Return buildable bundled plugin entries with optional CLI filtering applied. */
+/** Retain channel config migrations with core schemas, independently of plugin installation. */
+export function collectChannelConfigDoctorBuildEntries(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const entries = {};
+  for (const { pluginDir } of collectBundledPluginCandidates(
+    cwd,
+    path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR),
+  )) {
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    if (!fs.existsSync(manifestPath)) {
+      continue;
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (manifest.doctorContract?.configRepair !== true || !manifest.channels?.length) {
+      continue;
+    }
+    const source = path.join(pluginDir, "config-doctor-api.ts");
+    if (!fs.existsSync(source)) {
+      throw new Error(`Missing config-only doctor entrypoint: ${source}`);
+    }
+    for (const channelId of manifest.channels) {
+      if (!PLUGIN_ID_RE.test(channelId) || entries[channelId]) {
+        throw new Error(`Invalid or duplicate config doctor channel: ${channelId}`);
+      }
+      entries[channelId] = toPosixPath(path.relative(cwd, source));
+    }
+  }
+  return entries;
+}
+
+/**
+ * Return buildable bundled plugin entries with optional CLI filtering applied.
+ * @internal Directly tested script implementation detail.
+ */
 export function listBundledPluginBuildEntries(params = {}) {
   return Object.fromEntries(
     collectBundledPluginBuildEntries(params).flatMap(({ id, sourceEntries }) =>
@@ -266,29 +344,10 @@ export function listBundledPluginBuildEntries(params = {}) {
   );
 }
 
-/** Collect bundled extension dirs that root package builds should exclude. */
-export function collectRootPackageExcludedExtensionDirs(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  const packageJsonPath = path.join(cwd, "package.json");
-  const excluded = new Set();
-  if (!fs.existsSync(packageJsonPath)) {
-    return excluded;
-  }
-
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  for (const entry of packageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
-}
-
-/** List package artifact files generated for bundled plugins. */
+/**
+ * List package artifact files generated for bundled plugins.
+ * @internal Shared repository-script contract.
+ */
 export function listBundledPluginPackArtifacts(params = {}) {
   const excludedPackageDirs =
     params.includeRootPackageExcludedDirs === true

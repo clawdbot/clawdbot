@@ -45,7 +45,7 @@ function shouldCopyBundledPluginMetadata(
   return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 }
 
-function rewritePackageExtensions(entries: unknown): string[] | undefined {
+export function rewritePackageExtensions(entries: unknown): string[] | undefined {
   if (!Array.isArray(entries)) {
     return undefined;
   }

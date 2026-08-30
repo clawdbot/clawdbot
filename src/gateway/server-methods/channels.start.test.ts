@@ -285,10 +285,12 @@ describe("channelsHandlers channels.logout", () => {
       },
     });
 
-    await expectDefined(
-      channelsHandlers["channels.logout"],
-      'channelsHandlers["channels.logout"] test invariant',
-    )(
+    const logoutHandler = channelsHandlers["channels.logout"];
+    expect(logoutHandler).toBeDefined();
+    if (!logoutHandler) {
+      throw new Error('channelsHandlers["channels.logout"] test invariant');
+    }
+    await logoutHandler(
       createOptions(
         { channel: "whatsapp" },
         {
