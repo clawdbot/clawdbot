@@ -2,13 +2,21 @@ import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
   listStoredChatOutboxes,
+  updateStoredChatComposerQueueItem,
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
   type StoredChatOutboxScope as Scope,
 } from "./composer-persistence.ts";
+import {
+  captureOutboxPayloadOwner,
+  failOutboxPayload,
+  observeOutboxRecoveryOwner,
+  prepareOutboxPayload,
+} from "./outbox-payloads.ts";
 type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string; requestUpdate?(): void };
 type HostProjection = {
   byScope: Map<string, ChatQueueItem[]>;
@@ -33,6 +41,7 @@ class ChatOutboxGatewayOwner {
   private readonly hosts = new Map<Host, HostProjection>();
   private readonly panes = new Set<Host>();
   private readonly live = new Map<string, Map<string, LiveProjection>>();
+  private readonly hydrating = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   constructor(readonly ownerGatewayKey: string) {}
   private state(host: Host): HostProjection {
@@ -44,7 +53,14 @@ class ChatOutboxGatewayOwner {
     const durableSeen = new Set(this.outbox(host, scope)?.queue.map((item) => item.id));
     const created: HostProjection = { byScope: new Map(), durableSeen, retryable: new Set() };
     if (host.chatQueue.length) {
-      created.byScope.set(storedChatOutboxScopeKey(scope), host.chatQueue);
+      created.byScope.set(
+        storedChatOutboxScopeKey(scope),
+        host.chatQueue.filter(
+          (item) =>
+            !item.attachmentPayload ||
+            item.attachmentPayload.recoveryScope === host.client?.recoveryScope,
+        ),
+      );
     }
     this.hosts.set(host, created);
     return created;
@@ -106,7 +122,73 @@ class ChatOutboxGatewayOwner {
     return visible.toSorted(compareChatQueueOrder);
   }
   syncHost(host: Host, options: { requestUpdate?: boolean } = {}): void {
+    if (this.ownerGatewayKey !== outboxOwnerKey(host)) {
+      chatOutboxOwner(host).syncHost(host, options);
+      return;
+    }
+    observeOutboxRecoveryOwner(host);
     host.chatQueue = this.snapshot(host, resolveStoredChatOutboxScope(host, host.sessionKey));
+    for (const item of host.chatQueue) {
+      const key = item.attachmentPayload?.key;
+      if (
+        !key ||
+        item.attachmentStorageError ||
+        this.hydrating.has(key) ||
+        item.attachments?.every((attachment) => getChatAttachmentDataUrl(attachment))
+      ) {
+        continue;
+      }
+      this.hydrating.add(key);
+      const isCurrent = captureOutboxPayloadOwner(host);
+      void prepareOutboxPayload(host, item)
+        .then((result) => {
+          if (!isCurrent()) {
+            return;
+          }
+          const outbox = this.durable(host, item.id);
+          const current = outbox?.queue.find((row) => row.id === item.id);
+          if (!outbox || current?.attachmentPayload?.key !== key) {
+            return;
+          }
+          if (result.status === "ready") {
+            if (result.item.attachmentPayload?.key !== key) {
+              // Copy adoption must not overwrite a retry that replaced the captured row.
+              if (
+                !updateStoredChatComposerQueueItem(
+                  host,
+                  outbox.sessionKey,
+                  item,
+                  result.item,
+                  outbox.agentId,
+                )
+              ) {
+                return;
+              }
+            }
+            this.keep(host, outbox, {
+              ...current,
+              attachments: result.item.attachments,
+              ...(result.item.attachmentPayload?.key !== key
+                ? {
+                    attachmentPayload: result.item.attachmentPayload,
+                    sendState: result.item.sendState,
+                    sendError: result.item.sendError,
+                  }
+                : {}),
+            });
+          } else {
+            updateStoredChatComposerQueueItem(
+              host,
+              outbox.sessionKey,
+              current,
+              failOutboxPayload(current, result.reason),
+              outbox.agentId,
+            );
+          }
+          this.publish(host);
+        })
+        .finally(() => this.hydrating.delete(key));
+    }
     if (options.requestUpdate !== false) {
       host.requestUpdate?.();
     }
@@ -124,18 +206,59 @@ class ChatOutboxGatewayOwner {
       }
     }
   }
-  subscribe(host: Host): () => void {
+  adoptSubscriptions(host: Composer): void {
+    const previous = subscriptions.get(host)?.owner;
+    if (!previous || previous === this) {
+      return;
+    }
+    // A shared client's credentials change before pane callbacks run. Move peers
+    // together so the first reconnect drain still observes every pane's edit hold.
+    for (const pane of previous.panes) {
+      if (outboxOwnerKey(pane) !== this.ownerGatewayKey) {
+        continue;
+      }
+      subscriptions.get(pane)!.owner = this;
+      previous.hosts.delete(pane);
+      for (const [key, live] of previous.live) {
+        for (const [id, projection] of live) {
+          if (projection.owner === pane) {
+            live.delete(id);
+          }
+        }
+        if (!live.size) {
+          previous.live.delete(key);
+        }
+      }
+      // Stored rows remain authoritative; old credential-local overlays do not.
+      pane.chatQueue = [];
+      previous.detach(pane);
+      this.attach(pane);
+    }
+  }
+  private attach(host: Host): void {
     this.panes.add(host);
     this.unsubscribe ??= subscribeStoredChatOutboxChanges(() => this.publish(undefined, true));
+  }
+  private detach(host: Host): void {
+    this.panes.delete(host);
+    if (!this.panes.size) {
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+    }
+    this.prune(host);
+  }
+  subscribe(host: Host): () => void {
+    const subscription = { owner: this };
+    subscriptions.set(host, subscription);
+    this.attach(host);
     this.reconcile(host, this.state(host));
     this.syncHost(host, { requestUpdate: false });
     return () => {
-      this.panes.delete(host);
-      if (!this.panes.size) {
-        this.unsubscribe?.();
-        this.unsubscribe = null;
+      if (subscriptions.get(host) !== subscription) {
+        return;
       }
-      this.prune(host);
+      subscriptions.delete(host);
+      subscription.owner.detach(host);
     };
   }
   private reconcile(host: Host, state: HostProjection): void {
@@ -288,7 +411,12 @@ class ChatOutboxGatewayOwner {
     if (!this.unsubscribe && !this.live.size && !this.hosts.size) {
       // Defer eviction until a synchronous send transition can add its live overlay.
       queueMicrotask(() => {
-        if (!this.unsubscribe && !this.live.size && !this.hosts.size) {
+        if (
+          !this.unsubscribe &&
+          !this.live.size &&
+          !this.hosts.size &&
+          owners.get(this.ownerGatewayKey) === this
+        ) {
           owners.delete(this.ownerGatewayKey);
         }
       });
@@ -296,13 +424,19 @@ class ChatOutboxGatewayOwner {
   }
 }
 const owners = new Map<string, ChatOutboxGatewayOwner>();
-export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
+const subscriptions = new WeakMap<Composer, { owner: ChatOutboxGatewayOwner }>();
+function outboxOwnerKey(host: Composer): string {
   const storage = getSafeSessionStorage();
   if (storage && !storageIds.has(storage)) {
     storageIds.set(storage, ++nextStorageId);
   }
-  const key = `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}`;
+  const key = `${storage ? storageIds.get(storage) : 0}\u0000${host.settings?.gatewayUrl?.trim() || "default"}\u0000${host.client?.recoveryScope ?? ""}`;
+  return key;
+}
+export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
+  const key = outboxOwnerKey(host);
   const owner = owners.get(key) ?? new ChatOutboxGatewayOwner(key);
   owners.set(key, owner);
+  owner.adoptSubscriptions(host);
   return owner;
 }

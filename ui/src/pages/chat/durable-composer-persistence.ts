@@ -6,8 +6,9 @@ import type {
 import {
   generateAttachmentId,
   getChatAttachmentBlob,
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
-  restoreChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
 
 export type DurableChatComposerSnapshot = {
@@ -80,12 +81,67 @@ export function chatAttachmentDraftSignature(
   ]);
 }
 
+function blobFromDataUrl(dataUrl: string): Blob | null {
+  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const metadata = match[1] ?? "";
+  const payload = match[2] ?? "";
+  try {
+    if (metadata.toLowerCase().includes(";base64")) {
+      const binary = atob(payload.replace(/\s+/gu, ""));
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
+    }
+    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
+      type: metadata.split(";", 1)[0],
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Blob read failed")), {
+      once: true,
+    });
+    reader.addEventListener(
+      "load",
+      () =>
+        typeof reader.result === "string"
+          ? resolve(reader.result)
+          : reject(new Error("Blob read returned no data")),
+      { once: true },
+    );
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function restoreChatAttachmentPayload(params: {
+  attachment: ChatAttachment;
+  blob: Blob;
+}): Promise<ChatAttachment> {
+  const blob =
+    params.blob.type === params.attachment.mimeType
+      ? params.blob
+      : params.blob.slice(0, params.blob.size, params.attachment.mimeType);
+  const dataUrl = await readBlobAsDataUrl(blob);
+  const file = new File([blob], params.attachment.fileName ?? "attachment", {
+    type: params.attachment.mimeType,
+  });
+  return registerChatAttachmentPayload({ attachment: params.attachment, dataUrl, file });
+}
+
 export function captureDurableChatAttachments(
   attachments: readonly ChatAttachment[],
 ): DurableComposerDraftAttachment[] | null {
   const stored: DurableComposerDraftAttachment[] = [];
   for (const attachment of attachments) {
-    const blob = getChatAttachmentBlob(attachment);
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    const blob = getChatAttachmentBlob(attachment) ?? (dataUrl ? blobFromDataUrl(dataUrl) : null);
     if (!blob) {
       return null;
     }

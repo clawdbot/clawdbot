@@ -5339,6 +5339,14 @@ export const en: TranslationMap = {
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
     sendErrors: {
+      outboxPayloadCopied:
+        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
+      outboxPayloadCapacity:
+        "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
+      outboxPayloadUnavailable:
+        "Browser attachment storage is unavailable. Use HTTPS or localhost, allow browser storage, and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+      outboxPayloadMissing:
+        "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
     waitingForApproval: "Waiting for approval…",

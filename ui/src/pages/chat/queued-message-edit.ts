@@ -2,7 +2,10 @@
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import {
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import {
   anyChatOutboxPaneMatches,
   isDurableQueuedMessage,
@@ -119,6 +122,8 @@ export function beginQueuedMessageEdit(
   if (
     !item ||
     !isMovableChatQueueItem(item) ||
+    Boolean(item.attachmentStorageError) ||
+    Boolean(item.attachments?.some((attachment) => !getChatAttachmentDataUrl(attachment))) ||
     item.localCommandName ||
     activeQueuedMessageEdit(host) ||
     isQueuedMessageBeingEdited(host, id)

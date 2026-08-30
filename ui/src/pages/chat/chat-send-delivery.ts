@@ -35,6 +35,7 @@ import {
   finishChatDeliveryAdmission,
   finishScopedChatSending,
   reconnectSafeQueuedSendState,
+  prepareQueuedChatPayload,
   setChatError,
   updateQueuedSendItem,
 } from "./chat-send-queue-state.ts";
@@ -144,10 +145,20 @@ async function sendQueuedChatMessage(
   queuedSessionKey = host.sessionKey,
 ): Promise<QueuedChatSendResult> {
   const storageMode = options?.storageMode ?? "durable";
-  const queued = readQueuedMessageById(host, id);
+  let queued = readQueuedMessageById(host, id);
   const approvedReset = queued?.localCommandName === "reset" && Boolean(options?.target);
   if (!queued || queued.pendingRunId || (queued.localCommandName && !approvedReset)) {
     return "failed";
+  }
+  if (
+    storageMode === "durable" &&
+    (queued.attachments?.length || queued.attachmentPayload || queued.attachmentStorageError)
+  ) {
+    const prepared = await prepareQueuedChatPayload(host, queued, queuedSessionKey);
+    if (typeof prepared === "string") {
+      return prepared;
+    }
+    queued = prepared;
   }
   const queueSessionKey = queued.sessionKey ?? queuedSessionKey;
   const consumedSettings = new Set<Promise<boolean>>();
@@ -189,6 +200,9 @@ async function sendQueuedChatMessage(
     }
   }
   prepared = finishChatDeliveryAdmission(host, prepared, storageMode, queueSessionKey, options);
+  if (typeof prepared !== "string" && queued.attachmentPayload) {
+    prepared = { ...prepared, attachments: queued.attachments };
+  }
   if (typeof prepared === "string") {
     return prepared;
   }
@@ -216,7 +230,7 @@ async function sendQueuedChatMessage(
     };
   }
   const message = prepared.intent ? prepared.text : prepared.text.trim();
-  const attachments = prepared.attachments ?? [];
+  const attachments = (queued.attachmentPayload ? queued.attachments : prepared.attachments) ?? [];
   if (!message && attachments.length === 0) {
     removeQueuedMessageWithoutReleasing(host, id, prepared.sessionKey ?? host.sessionKey);
     return "sent";

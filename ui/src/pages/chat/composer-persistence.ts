@@ -129,13 +129,24 @@ function serializeChatAttachment(attachment: ChatAttachment): ChatAttachment | n
 function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (
     !item.id?.trim() ||
-    (!item.text?.trim() && !item.attachments?.length) ||
+    (!item.text?.trim() &&
+      !item.attachments?.length &&
+      !item.attachmentPayload &&
+      !item.attachmentStorageError) ||
     item.pendingRunId ||
     (item.sendState === "sending" && !item.sendRunId)
   ) {
     return null;
   }
-  const attachments = item.attachments?.map(serializeChatAttachment) ?? [];
+  const attachments = (item.attachments ?? []).map((attachment) => {
+    const { dataUrl: _dataUrl, previewUrl: _previewUrl, ...metadata } = attachment;
+    // A failed migration owns no Blob yet: retain its inline bytes across reload.
+    // Only a payload reference permits removing bytes from the stored queue row.
+    if (item.attachmentPayload) {
+      return metadata;
+    }
+    return serializeChatAttachment(attachment) ?? (item.attachmentStorageError ? metadata : null);
+  });
   if (item.attachments?.length && attachments.some((attachment) => attachment === null)) {
     return null;
   }
@@ -187,7 +198,8 @@ function queueItemVersionMatches(
     stored.sendState === canonicalExpected.sendState &&
     stored.agentId === canonicalExpected.agentId &&
     stored.sessionKey === canonicalExpected.sessionKey &&
-    stored.orderKey === canonicalExpected.orderKey,
+    stored.orderKey === canonicalExpected.orderKey &&
+    stored.attachmentPayload?.key === canonicalExpected.attachmentPayload?.key,
   );
 }
 
@@ -291,7 +303,7 @@ export function loadChatComposerCommittedDraftRevision(
 export function loadChatComposerSnapshot(
   state: Pick<
     ChatComposerPersistenceState,
-    "settings" | "assistantAgentId" | "agentsList" | "hello"
+    "settings" | "assistantAgentId" | "agentsList" | "hello" | "client"
   >,
   sessionKey: string,
   agentIdOverride?: string,
@@ -359,6 +371,11 @@ export function loadChatComposerSnapshot(
       draft,
       ...(session.goalMode ? { goalMode: session.goalMode } : {}),
       queue: (session.queue ?? [])
+        .filter(
+          (item) =>
+            !item.attachmentPayload ||
+            item.attachmentPayload.recoveryScope === state.client?.recoveryScope,
+        )
         .map((item) => serializeQueueItemForScope(item, scope))
         .filter((item): item is ChatQueueItem => item !== null)
         .map((item) => Object.assign(item, { sessionKey })),
@@ -1101,10 +1118,18 @@ export class ChatComposerPersistence {
     if (!scope) {
       return;
     }
+    const previousOwner = this.durableOwner;
+    // Draft writes notify panes synchronously. Publish the new owner before
+    // clearing the old draft so reentrant persistence cannot repeat this transition.
+    this.durableOwner = {
+      client: state.client,
+      gatewayOwner: scope.gatewayOwner,
+      recoveryScope: scope.recoveryScope,
+    };
     if (
-      this.durableOwner &&
-      (this.durableOwner.gatewayOwner !== scope.gatewayOwner ||
-        this.durableOwner.recoveryScope !== scope.recoveryScope)
+      previousOwner &&
+      (previousOwner.gatewayOwner !== scope.gatewayOwner ||
+        previousOwner.recoveryScope !== scope.recoveryScope)
     ) {
       releaseChatAttachmentPayloads(state.chatAttachments);
       state.chatMessage = "";
@@ -1124,13 +1149,7 @@ export class ChatComposerPersistence {
       this.durableRestoreProtected = false;
       this.forceDurableOwnerRestore = true;
       this.durablePersistence.resetRestoreScope();
-      state.requestUpdate?.();
     }
-    this.durableOwner = {
-      client: state.client,
-      gatewayOwner: scope.gatewayOwner,
-      recoveryScope: scope.recoveryScope,
-    };
     if (this.durableRestoreProtected) {
       this.durableRestoreProtected = false;
       const snapshot = this.snapshot(

@@ -102,6 +102,11 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
               sessionKey: scope.conversationKey,
               ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
               queue: session.queue
+                .filter(
+                  (item) =>
+                    !item.attachmentPayload ||
+                    item.attachmentPayload.recoveryScope === state.client?.recoveryScope,
+                )
                 .map((item) => applyStoredChatOutboxScope(item, scope))
                 .toSorted(compareChatQueueOrder),
             },

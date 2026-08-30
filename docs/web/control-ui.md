@@ -664,6 +664,27 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
+Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
+metadata and payload references in session storage. All attachments must be stored before the
+message is admitted, and all must be readable before sending. Failed admission leaves the draft
+unsent. Missing or unreadable queued payloads leave a visible row with recovery guidance; the
+browser never sends just the remaining attachments.
+
+The outbox retains up to 25 MiB of attachments per message and 250 MiB across this browser origin,
+subject to the browser's own quota. Queued payloads have no age-based expiry. Delivery or discard
+releases them; closing a tab or interrupting a tab copy or cleanup can leave orphaned payloads
+within that bound. If capacity remains
+full after sending or discarding your queues, save any needed drafts before clearing this site's
+browser storage. That also clears browser-local drafts and sign-in state. Outbox queues belong to
+the browser tab; they are distinct from restart-recoverable composer drafts. Incognito sessions
+keep their existing tab-only inline outbox and its smaller browser storage limit; they never
+store queued attachment Blobs in IndexedDB.
+
+Duplicating a tab copies the same submission IDs. Once opened, the duplicate claims its own
+payload copies and marks those submissions **Delivery unconfirmed**. Check the conversation
+before retrying. A duplicate first opened after the source discarded or delivered a message may
+instead report missing attachments. Independent tabs do not share newly authored outbox messages.
+
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;

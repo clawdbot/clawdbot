@@ -9,7 +9,8 @@ import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { cancelChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
-  enqueuePendingSendMessage,
+  createPendingSendMessage,
+  publishPendingSendMessage,
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
@@ -25,7 +26,7 @@ export function createResetSlashCommandSender(
   deliverChatQueueItem: DeliverChatQueueItem,
 ): ChatOutboxDrainDependencies["sendResetSlashCommand"] {
   return async (host: ChatHost, message: string, options: ChatCommandResetOptions) => {
-    const item = enqueuePendingSendMessage(
+    const item = createPendingSendMessage(
       host,
       message,
       undefined,
@@ -33,6 +34,9 @@ export function createResetSlashCommandSender(
       undefined,
       reconnectSafeQueuedSendState(host),
     );
+    if (item) {
+      publishPendingSendMessage(host, item);
+    }
     if (!item || !admitQueuedMessageForSession(host, host.sessionKey, item)) {
       if (item) {
         cancelChatDelivery(host, item, { previousDraft: options.previousDraft });

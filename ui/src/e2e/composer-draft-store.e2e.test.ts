@@ -23,7 +23,7 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
           });
         });
       const database = await requestResult(
-        indexedDB.open("openclaw-control-ui", 1),
+        indexedDB.open("openclaw-control-ui"),
         "IndexedDB open failed",
       );
       const transaction = database.transaction(
@@ -683,7 +683,7 @@ suite.define(() => {
           );
           resetLineagePersistence.activateRoute(resetLineageScope.scopeKey);
           await waitFor(async () => resetLineageState.message === "cached predecessor");
-          const databaseRequest = indexedDB.open("openclaw-control-ui", 1);
+          const databaseRequest = indexedDB.open("openclaw-control-ui");
           const database = await new Promise<IDBDatabase>((resolve, reject) => {
             databaseRequest.addEventListener("success", () => resolve(databaseRequest.result), {
               once: true,

@@ -17,12 +17,14 @@ import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./cha
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 beforeEach(() => {
+  installOutboxBrowserStorage();
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
@@ -549,7 +551,7 @@ describe("handleSendChat browser annotation context", () => {
     });
 
     const send = handleSendChat(host);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
     expect(host.chatQueue[0]?.text).toBe("Stable browser context\n\nUse the marked area");
 
     host.chatMessage = "New draft";

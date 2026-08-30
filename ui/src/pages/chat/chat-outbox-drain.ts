@@ -7,7 +7,6 @@ import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
   captureChatCommandTarget,
   confirmConversationResetForCurrentSession,
@@ -25,9 +24,9 @@ import {
 } from "./chat-outbox-retry.ts";
 import {
   anyChatOutboxPaneMatches,
-  excludeComposerAttachments,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
+  sameQueuedDeliveryVersion,
   syncVisibleChatQueueProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
@@ -36,7 +35,7 @@ import {
   chatMessagesContainQueuedSend,
   chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
-  preserveQueuedUserTurn,
+  retireDeliveredQueuedUserTurn,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import {
@@ -139,17 +138,6 @@ function readStoredChatOutbox(
   );
 }
 
-function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
-  return (
-    left.id === right.id &&
-    left.sendRunId === right.sendRunId &&
-    left.sendAttempts === right.sendAttempts &&
-    left.sendState === right.sendState &&
-    left.agentId === right.agentId &&
-    left.sessionKey === right.sessionKey
-  );
-}
-
 function sessionRunProvesQueuedDelivery(
   sessionInfo: ChatHistoryResult["sessionInfo"],
   item: ChatQueueItem,
@@ -235,13 +223,15 @@ async function readCurrentStoredChatHistory(
     chatMessagesContainQueuedSend(history.messages, item) ||
     sessionRunProvesQueuedDelivery(history.sessionInfo, item)
   ) {
-    // Materialize server history locally before removing the queue bubble.
-    preserveQueuedUserTurn(host, item);
-    const removed = removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey);
-    if (!removed) {
+    const retirement = await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox);
+    if (
+      retirement !== "retired" ||
+      host.client !== client ||
+      host.connectionEpoch !== connectionEpoch ||
+      !host.connected
+    ) {
       return "blocked";
     }
-    releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
     if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
       void loadChatHistory(host);
     }
@@ -262,6 +252,7 @@ async function reconcileStoredChatOutboxHead(
   outbox: StoredChatOutbox,
   item: ChatQueueItem,
   dependencies: ChatOutboxDrainDependencies,
+  retryUnconfirmed = false,
 ): Promise<"blocked" | "continue" | "send"> {
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
@@ -276,7 +267,7 @@ async function reconcileStoredChatOutboxHead(
   // bubbles even mid-run; missing transcript and run proof falls through conservatively.
   const neverAttempted =
     (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
-  if (neverAttempted && item.queueMode) {
+  if (neverAttempted && item.queueMode && item.sendState !== "unconfirmed") {
     return "send";
   }
   if (neverAttempted) {
@@ -292,8 +283,13 @@ async function reconcileStoredChatOutboxHead(
   }
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
-  // Keyed unknown sends reach history only for exact proof; absence stays blocked.
-  if (history === "blocked" || history === "continue" || item.sendState === "unconfirmed") {
+  // Passive unknown sends need positive delivery proof; only an explicit retry
+  // may continue through idle reconciliation to the same idempotency key.
+  if (
+    history === "blocked" ||
+    history === "continue" ||
+    (item.sendState === "unconfirmed" && !retryUnconfirmed)
+  ) {
     return history === "continue" ? "continue" : "blocked";
   }
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
@@ -315,6 +311,9 @@ async function reconcileStoredChatOutboxHead(
     if (liveSendCurrent) {
       // Elapsed time cannot turn a current-connection send into reconnect uncertainty.
       return "blocked";
+    }
+    if (retryUnconfirmed) {
+      return "send";
     }
     const parked = updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
       ...entry,
@@ -569,8 +568,15 @@ async function drainStoredChatOutbox(
     // Consume provenance before await; restored/deferred rows reconcile history.
     const freshAdmission = lane.freshAdmissions.delete(item.id);
     const pendingOptions = lane.pendingOptions.get(item.id);
-    if (!freshAdmission) {
-      const reconciled = await reconcileStoredChatOutboxHead(host, outbox, item, dependencies);
+    const retryUnconfirmed = freshAdmission && item.sendState === "unconfirmed";
+    if (!freshAdmission || retryUnconfirmed) {
+      const reconciled = await reconcileStoredChatOutboxHead(
+        host,
+        outbox,
+        item,
+        dependencies,
+        retryUnconfirmed,
+      );
       if (reconciled === "blocked") {
         return "blocked";
       }
@@ -682,6 +688,9 @@ export async function resumeStoredChatOutboxes(
   if (!host.connected || !host.client) {
     return;
   }
+  // Recovery can change credentials on the same client. Refresh the visible
+  // owner even when the new principal has no outboxes to drain.
+  syncVisibleChatQueueProjection(host);
   await Promise.allSettled(
     listStoredChatOutboxes(host).map((outbox) =>
       scheduleStoredChatOutboxDrain(host, outbox, dependencies),
