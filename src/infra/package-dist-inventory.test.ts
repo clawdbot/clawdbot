@@ -23,6 +23,12 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
       ]);
+      if (process.platform !== "win32") {
+        expect(
+          (await fs.stat(path.join(packageRoot, "dist", "postinstall-inventory.json"))).mode &
+            0o777,
+        ).toBe(0o644);
+      }
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
         "dist/current-BR6xv1a1.js",
       ]);

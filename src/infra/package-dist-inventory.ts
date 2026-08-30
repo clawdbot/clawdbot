@@ -487,7 +487,7 @@ export async function writePackageDistInventory(packageRoot: string): Promise<st
   await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
   const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  await writeJson(inventoryPath, inventory, { trailingNewline: true });
+  await writeJson(inventoryPath, inventory, { trailingNewline: true, mode: 0o644 });
   return inventory;
 }
 
