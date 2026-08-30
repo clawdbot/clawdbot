@@ -21,6 +21,7 @@ import {
   SAFETY_MARGIN,
   sanitizeCompactionMessages,
   SUMMARIZATION_OVERHEAD_TOKENS,
+  type StageSplitPlan,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
@@ -93,9 +94,7 @@ type CompactionSummaryParams = {
   usageSink?: SessionModelUsageSink;
 };
 
-type SummaryFitPlan =
-  | { mode: "whole-first"; originalMaxChunkTokens: number; serializedHistory: string }
-  | { mode: "staged"; maxChunkTokens: number };
+type SummaryFitPlan = { mode: "whole-first"; serializedHistory: string } | { mode: "staged" };
 
 type SummaryAttemptMode = "planned" | "whole-first";
 
@@ -129,13 +128,17 @@ function serializeCompactionHistory(messages: AgentMessage[]): string {
   return serializeConversation(convertToLlm(sanitizeCompactionMessages(messages)));
 }
 
+function serializeProviderVisibleChunks(chunks: AgentMessage[][]): string[] {
+  return chunks
+    .map((chunk) => serializeCompactionHistory(chunk))
+    .filter((serializedChunk) => serializedChunk.length > 0);
+}
+
 function hasProviderVisibleRecoveryProgress(params: {
   chunks: AgentMessage[][];
   wholeSerializedHistory: string;
 }): boolean {
-  const serializedVisibleChunks = params.chunks
-    .map((chunk) => serializeCompactionHistory(chunk))
-    .filter((serializedChunk) => serializedChunk.length > 0);
+  const serializedVisibleChunks = serializeProviderVisibleChunks(params.chunks);
   return (
     serializedVisibleChunks.length > 1 &&
     serializedVisibleChunks.every(
@@ -145,13 +148,21 @@ function hasProviderVisibleRecoveryProgress(params: {
 }
 
 /**
- * Allows one optimistic whole-request attempt only when the complete summary
- * request has conservative room for its serialized input and output budget.
- * The original adaptive cap remains available for staged recovery when the
- * provider's tokenizer rejects that optimistic request.
+ * Allows one optimistic whole-request attempt only when the baseline plan has
+ * multiple provider-visible chunks and the complete summary request has
+ * conservative room. The adaptive cap remains for overflow recovery.
  */
-function resolveSummaryFitPlan(params: CompactionSummaryParams): SummaryFitPlan {
+function resolveSummaryFitPlan(
+  params: CompactionSummaryParams,
+  baselinePlan: StageSplitPlan,
+): SummaryFitPlan {
+  if (baselinePlan.mode === "single") {
+    return { mode: "staged" };
+  }
   const serializedHistory = serializeCompactionHistory(params.messages);
+  if (serializeProviderVisibleChunks(baselinePlan.chunks).length <= 1) {
+    return { mode: "staged" };
+  }
   const effectiveInstructions = buildCompactionSummarizationInstructions(
     params.customInstructions,
     params.summarizationInstructions,
@@ -167,8 +178,8 @@ function resolveSummaryFitPlan(params: CompactionSummaryParams): SummaryFitPlan 
     SUMMARIZATION_OVERHEAD_TOKENS +
     Math.max(0, Math.ceil(params.reserveTokens));
   return requestTokens <= params.contextWindow && params.maxChunkTokensSource === "adaptive"
-    ? { mode: "whole-first", originalMaxChunkTokens: params.maxChunkTokens, serializedHistory }
-    : { mode: "staged", maxChunkTokens: params.maxChunkTokens };
+    ? { mode: "whole-first", serializedHistory }
+    : { mode: "staged" };
 }
 
 function isContextOverflowFailure(err: unknown): boolean {
@@ -390,7 +401,14 @@ export async function summarizeInStages(
   }
 
   params.signal.throwIfAborted();
-  const fitPlan = resolveSummaryFitPlan(params);
+  const stagePlanParams = {
+    maxChunkTokens: params.maxChunkTokens,
+    parts: params.parts,
+    minMessagesForSplit: params.minMessagesForSplit,
+    signal: params.signal,
+  };
+  let plan = await buildStageSplitPlanWithWorker({ messages, ...stagePlanParams });
+  const fitPlan = resolveSummaryFitPlan(params, plan);
   let wholeRequestOverflow: { error: unknown; serializedHistory: string } | undefined;
   if (fitPlan.mode === "whole-first") {
     try {
@@ -402,29 +420,24 @@ export async function summarizeInStages(
       wholeRequestOverflow = { error: err, serializedHistory: fitPlan.serializedHistory };
       log.warn("Whole-request summarization exceeded provider context; using staged plan", {
         err,
-        maxChunkTokens: fitPlan.originalMaxChunkTokens,
+        maxChunkTokens: params.maxChunkTokens,
       });
     }
   }
 
-  const maxChunkTokens =
-    fitPlan.mode === "whole-first" ? fitPlan.originalMaxChunkTokens : fitPlan.maxChunkTokens;
   const sanitizedMessages = sanitizeCompactionMessages(messages);
-  const planningMessages = wholeRequestOverflow ? sanitizedMessages : messages;
-
-  const plan = await buildStageSplitPlanWithWorker({
-    messages: planningMessages,
-    maxChunkTokens,
-    parts: params.parts,
-    minMessagesForSplit: params.minMessagesForSplit,
-    signal: params.signal,
-  });
+  if (wholeRequestOverflow) {
+    plan = await buildStageSplitPlanWithWorker({
+      messages: sanitizedMessages,
+      ...stagePlanParams,
+    });
+  }
 
   if (plan.mode === "single") {
     if (wholeRequestOverflow) {
       const fallbackChunks = await buildSummaryChunksWithWorker({
         messages: sanitizedMessages,
-        maxChunkTokens,
+        maxChunkTokens: params.maxChunkTokens,
         signal: params.signal,
       });
       if (
@@ -438,10 +451,9 @@ export async function summarizeInStages(
       return await summarizeWithFallback({
         ...params,
         messages: sanitizedMessages,
-        maxChunkTokens,
       });
     }
-    return await summarizeWithFallback({ ...params, maxChunkTokens });
+    return await summarizeWithFallback(params);
   }
 
   if (

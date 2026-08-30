@@ -168,6 +168,7 @@ describe("compaction fit planning", () => {
 
   it("does not contact the provider when an adaptive fit is already aborted", async () => {
     const model = makeSummaryModel(64_000);
+    const key = model.id;
     const requests: SummaryRequest[] = [];
     const controller = new AbortController();
     const abortReason = new Error("compaction cancelled before planning");
@@ -176,7 +177,7 @@ describe("compaction fit planning", () => {
     const result = await summarizeInStages({
       messages: [makeMessage(1, "history")],
       model,
-      apiKey: model.id,
+      apiKey: key,
       signal: controller.signal,
       reserveTokens: 8_192,
       maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
@@ -281,17 +282,56 @@ describe("compaction fit planning", () => {
     ).toBe(true);
   }, 45_000);
 
-  it("does not resend a rejected whole request when staged planning cannot split it", async () => {
-    const model = makeSummaryModel(64_000);
-    const messages = [makeMessage(1, `history-${"a1".repeat(75_000)}`)];
-    const requests: SummaryRequest[] = [];
-    const providerOverflow = new Error("maximum context length: synthetic provider limit");
+  it.each([
+    { label: "single-stage history", includeHiddenTail: false, includeThinkingTail: false },
+    {
+      label: "history split only by hidden context",
+      includeHiddenTail: true,
+      includeThinkingTail: false,
+    },
+    {
+      label: "history split only by thinking",
+      includeHiddenTail: false,
+      includeThinkingTail: true,
+    },
+  ])(
+    "preserves the oversized fallback for a fitting $label",
+    async ({ includeHiddenTail, includeThinkingTail }) => {
+      const model = makeSummaryModel(64_000);
+      const key = model.id;
+      const toolCallId = "call_oversized";
+      const displacedUserText = "retain this displaced user message";
+      // The active tool pair keeps the visible messages atomic; an optional
+      // provider-invisible tail must not make that plan splittable.
+      const messages: AgentMessage[] = [
+        makeAgentAssistantMessage({
+          content: [
+            { type: "text", text: `large-${"a1".repeat(60_000)}` },
+            { type: "toolCall", id: toolCallId, name: "test_tool", arguments: {} },
+          ],
+          model: key,
+          stopReason: "toolUse",
+          timestamp: 1,
+        }),
+        makeMessage(2, displacedUserText),
+        {
+          role: "toolResult",
+          toolCallId,
+          toolName: "test_tool",
+          content: [{ type: "text", text: "small result" }],
+          isError: false,
+          timestamp: 3,
+        },
+        ...(includeHiddenTail ? [makeRuntimeContextMessage(4)] : []),
+        ...(includeThinkingTail ? [makeThinkingMessage(4, `thinking-${"t".repeat(27_000)}`)] : []),
+      ];
+      const requests: SummaryRequest[] = [];
+      const providerOverflow = new Error("maximum context length: synthetic provider limit");
 
-    await expect(
-      summarizeInStages({
+      const summary = await summarizeInStages({
         messages,
         model,
-        apiKey: model.id,
+        apiKey: key,
         signal: AbortSignal.timeout(45_000),
         reserveTokens: 8_192,
         maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
@@ -302,117 +342,35 @@ describe("compaction fit planning", () => {
           model.contextWindow,
           providerOverflow,
         ),
-      }),
-    ).rejects.toBe(providerOverflow);
+      });
 
-    expect(requests).toHaveLength(1);
-    expect(requests[0]!.inputTokens + requests[0]!.outputTokens).toBeGreaterThan(
-      model.contextWindow,
-    );
-  }, 45_000);
-
-  it("does not treat sanitized-away context as overflow-recovery progress", async () => {
-    const model = makeSummaryModel(64_000);
-    const messages: AgentMessage[] = [
-      makeMessage(1, `history-${"a1".repeat(75_000)}`),
-      ...Array.from({ length: 3 }, (_, index) => makeRuntimeContextMessage(index + 2)),
-    ];
-    const requests: SummaryRequest[] = [];
-    const providerOverflow = new Error("maximum context length: hidden-context provider limit");
-
-    await expect(
-      summarizeInStages({
-        messages,
-        model,
-        apiKey: model.id,
-        signal: AbortSignal.timeout(45_000),
-        reserveTokens: 8_192,
-        maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
-        maxChunkTokensSource: "adaptive",
-        contextWindow: model.contextWindow,
-        streamFn: createProviderLimitedSummaryStream(
-          requests,
-          model.contextWindow,
-          providerOverflow,
-        ),
-      }),
-    ).rejects.toBe(providerOverflow);
-
-    expect(requests).toHaveLength(1);
-  }, 45_000);
-
-  it("does not treat thinking-only high-level chunks as overflow-recovery progress", async () => {
-    const model = makeSummaryModel(64_000);
-    const messages = [
-      ...Array.from({ length: 3 }, (_, index) =>
-        makeThinkingMessage(index + 1, `thinking-${"t".repeat(27_000)}`),
-      ),
-      makeMessage(4, `history-${"a1".repeat(60_000)}`),
-    ];
-    const requests: SummaryRequest[] = [];
-    const providerOverflow = new Error("maximum context length: thinking-split provider limit");
-
-    const result = await summarizeInStages({
-      messages,
-      model,
-      apiKey: model.id,
-      signal: AbortSignal.timeout(45_000),
-      reserveTokens: 8_192,
-      maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
-      maxChunkTokensSource: "adaptive",
-      contextWindow: model.contextWindow,
-      streamFn: createProviderLimitedSummaryStream(requests, model.contextWindow, providerOverflow),
-    }).catch((error: unknown) => error);
-
-    const wholeRequestText = requests[0]!.requestText;
-    expect({
-      totalRequests: requests.length,
-      repeatedWholePayloads: requests
-        .slice(1)
-        .filter((request) => request.requestText === wholeRequestText).length,
-      preservedOriginalError: result === providerOverflow,
-    }).toEqual({ totalRequests: 1, repeatedWholePayloads: 0, preservedOriginalError: true });
-    expect(result).toBe(providerOverflow);
-  }, 45_000);
-
-  it("does not treat thinking-only capped chunks as short-history recovery progress", async () => {
-    const model = makeSummaryModel(64_000);
-    const messages = [
-      makeThinkingMessage(1, `thinking-${"t".repeat(27_000)}`),
-      makeMessage(2, `history-${"a1".repeat(60_000)}`),
-    ];
-    const requests: SummaryRequest[] = [];
-    const providerOverflow = new Error("maximum context length: thinking-fallback provider limit");
-
-    const result = await summarizeInStages({
-      messages,
-      model,
-      apiKey: model.id,
-      signal: AbortSignal.timeout(45_000),
-      reserveTokens: 8_192,
-      maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
-      maxChunkTokensSource: "adaptive",
-      contextWindow: model.contextWindow,
-      streamFn: createProviderLimitedSummaryStream(requests, model.contextWindow, providerOverflow),
-    }).catch((error: unknown) => error);
-
-    const wholeRequestText = requests[0]!.requestText;
-    expect({
-      totalRequests: requests.length,
-      repeatedWholePayloads: requests
-        .slice(1)
-        .filter((request) => request.requestText === wholeRequestText).length,
-      preservedOriginalError: result === providerOverflow,
-    }).toEqual({ totalRequests: 1, repeatedWholePayloads: 0, preservedOriginalError: true });
-    expect(result).toBe(providerOverflow);
-  }, 45_000);
+      expect(summary).toContain("Compact summary.");
+      expect(requests.length).toBeGreaterThan(1);
+      expect(requests[0]!.inputTokens + requests[0]!.outputTokens).toBeGreaterThan(
+        model.contextWindow,
+      );
+      const fallbackRequest = requests.find(
+        (request) =>
+          request.requestText?.includes(displacedUserText) === true &&
+          !request.requestText.includes("large-a1a1a1a1"),
+      )!;
+      expect(fallbackRequest.inputTokens + fallbackRequest.outputTokens).toBeLessThanOrEqual(
+        model.contextWindow,
+      );
+      expect(fallbackRequest.requestText).toContain(displacedUserText);
+      expect(fallbackRequest.requestText).not.toContain("large-a1a1a1a1");
+    },
+    45_000,
+  );
 
   it("recovers through multiple visible chunks alongside a thinking-only chunk", async () => {
     const model = makeSummaryModel(64_000);
+    const key = model.id;
     const messages = [
-      makeThinkingMessage(1, `thinking-${"t".repeat(27_000)}`),
-      makeMessage(2, `visible-a-${"a1".repeat(30_000)}`),
+      makeMessage(1, `visible-a-${"a1".repeat(30_000)}`),
+      makeThinkingMessage(2, `thinking-${"t".repeat(10_000)}`),
       makeMessage(3, `visible-b-${"b2".repeat(30_000)}`),
+      makeMessage(4, "visible-tail"),
     ];
     const requests: SummaryRequest[] = [];
     const providerOverflow = new Error("maximum context length: mixed-progress provider limit");
@@ -420,7 +378,7 @@ describe("compaction fit planning", () => {
     const summary = await summarizeInStages({
       messages,
       model,
-      apiKey: model.id,
+      apiKey: key,
       signal: AbortSignal.timeout(45_000),
       reserveTokens: 8_192,
       maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
@@ -451,6 +409,7 @@ describe("compaction fit planning", () => {
     "preserves raw staged planning for a $label caller with hidden runtime context",
     async ({ source }) => {
       const model = makeSummaryModel(64_000);
+      const key = model.id;
       const messages = [
         makeMessage(1, `history-${"a1".repeat(50_000)}`),
         ...Array.from({ length: 3 }, (_, index) => makeRuntimeContextMessage(index + 2)),
@@ -460,7 +419,7 @@ describe("compaction fit planning", () => {
       const summary = await summarizeInStages({
         messages,
         model,
-        apiKey: model.id,
+        apiKey: key,
         signal: AbortSignal.timeout(45_000),
         reserveTokens: 8_192,
         maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
@@ -475,8 +434,9 @@ describe("compaction fit planning", () => {
     45_000,
   );
 
-  it("keeps capped fallback chunks for a short provider-rejected history", async () => {
+  it("uses capped staged chunks for a short adaptive history", async () => {
     const model = makeSummaryModel(64_000);
+    const key = model.id;
     const messages = [
       makeMessage(1, `first-${"a1".repeat(35_000)}`),
       makeMessage(2, `second-${"b2".repeat(35_000)}`),
@@ -487,7 +447,7 @@ describe("compaction fit planning", () => {
     const summary = await summarizeInStages({
       messages,
       model,
-      apiKey: model.id,
+      apiKey: key,
       signal: AbortSignal.timeout(45_000),
       reserveTokens: 8_192,
       maxChunkTokens: Math.floor(model.contextWindow * 0.4) - 4_096,
@@ -497,16 +457,11 @@ describe("compaction fit planning", () => {
     });
 
     expect(summary).toBe("Compact summary.");
-    expect(requests).toHaveLength(3);
-    expect(requests[0]!.inputTokens + requests[0]!.outputTokens).toBeGreaterThan(
-      model.contextWindow,
-    );
+    expect(requests).toHaveLength(2);
     expect(
-      requests
-        .slice(1)
-        .every(
-          ({ inputTokens, outputTokens }) => inputTokens + outputTokens <= model.contextWindow,
-        ),
+      requests.every(
+        ({ inputTokens, outputTokens }) => inputTokens + outputTokens <= model.contextWindow,
+      ),
     ).toBe(true);
   }, 45_000);
 
