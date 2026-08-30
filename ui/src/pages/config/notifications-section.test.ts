@@ -96,9 +96,16 @@ describe("Web Push preference saves", () => {
       container,
     );
 
-    const preferences = container.querySelector<HTMLElement>(".settings-page .settings-page");
+    const preferences = container.querySelector<HTMLElement>(".settings-page > .settings-stack");
     const preferenceGroup = expectDefined(preferences, "notification preferences group");
-    expect(preferenceGroup.querySelector("input, select")).not.toBeNull();
+    expect(preferenceGroup.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(7);
+    expect(preferenceGroup.querySelectorAll("select.settings-select")).toHaveLength(9);
+    expect(preferenceGroup.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(
+      [...preferenceGroup.querySelectorAll("select.settings-select")].every((select) =>
+        select.hasAttribute("aria-label"),
+      ),
+    ).toBe(true);
     expect(preferenceGroup.hasAttribute("inert")).toBe(true);
   });
 });

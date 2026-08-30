@@ -12,6 +12,7 @@ import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -84,25 +85,24 @@ function renderUserNotificationPreferences(
       </div>
       <div class="settings-group">
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
-          renderSettingsRow({
+          renderSettingsToggleRow({
             title: label(),
-            control: html`<input
-              type="checkbox"
-              .checked=${preferences.categories[key]}
-              @change=${(event: Event) =>
-                patch({
-                  categories: {
-                    ...preferences.categories,
-                    [key]: inputTarget(event).checked,
-                  },
-                })}
-            />`,
+            checked: preferences.categories[key],
+            onChange: (checked) =>
+              patch({
+                categories: {
+                  ...preferences.categories,
+                  [key]: checked,
+                },
+              }),
           }),
         )}
         ${renderSettingsRow({
           title: t("configView.notifications.lockScreenDetail"),
           description: t("configView.notifications.lockScreenDetailHint"),
           control: html`<select
+            class="settings-select"
+            aria-label=${t("configView.notifications.lockScreenDetail")}
             .value=${preferences.detailLevel}
             @change=${(event: Event) =>
               patch({
@@ -114,19 +114,16 @@ function renderUserNotificationPreferences(
             <option value="detailed">${t("configView.notifications.detailed")}</option>
           </select>`,
         })}
-        ${renderSettingsRow({
+        ${renderSettingsToggleRow({
           title: t("configView.notifications.quietHours"),
-          control: html`<input
-            type="checkbox"
-            .checked=${preferences.quietHours.enabled}
-            @change=${(event: Event) =>
-              patch({
-                quietHours: {
-                  ...preferences.quietHours,
-                  enabled: inputTarget(event).checked,
-                },
-              })}
-          />`,
+          checked: preferences.quietHours.enabled,
+          onChange: (checked) =>
+            patch({
+              quietHours: {
+                ...preferences.quietHours,
+                enabled: checked,
+              },
+            }),
         })}
         ${preferences.quietHours.enabled
           ? html`
@@ -211,13 +208,10 @@ function renderDeviceNotificationPreferences(
         <h2 class="settings-section__heading">${t("configView.notifications.installedApp")}</h2>
       </div>
       <div class="settings-group">
-        ${renderSettingsRow({
+        ${renderSettingsToggleRow({
           title: t("configView.notifications.deliverDevice"),
-          control: html`<input
-            type="checkbox"
-            .checked=${preferences.enabled}
-            @change=${(event: Event) => patch({ enabled: inputTarget(event).checked })}
-          />`,
+          checked: preferences.enabled,
+          onChange: (enabled) => patch({ enabled }),
         })}
         ${renderSettingsRow({
           title: t("configView.notifications.notificationLabel"),
@@ -231,6 +225,8 @@ function renderDeviceNotificationPreferences(
         ${renderSettingsRow({
           title: t("configView.notifications.lockScreenDetail"),
           control: html`<select
+            class="settings-select"
+            aria-label=${t("configView.notifications.lockScreenDetail")}
             .value=${preferences.detailLevel ?? "inherit"}
             @change=${(event: Event) => {
               const value = selectTarget(event).value;
@@ -248,6 +244,8 @@ function renderDeviceNotificationPreferences(
         ${renderSettingsRow({
           title: t("configView.notifications.quietHours"),
           control: html`<select
+            class="settings-select"
+            aria-label=${t("configView.notifications.quietHours")}
             .value=${preferences.quietHours === undefined
               ? "inherit"
               : preferences.quietHours.enabled
@@ -328,6 +326,8 @@ function renderDeviceNotificationPreferences(
         ${renderSettingsRow({
           title: t("configView.notifications.onlyAgents"),
           control: html`<select
+            class="settings-select"
+            aria-label=${t("configView.notifications.onlyAgents")}
             .value=${preferences.agentIds === undefined ? "inherit" : "override"}
             @change=${(event: Event) => {
               const value = selectTarget(event).value;
@@ -358,6 +358,8 @@ function renderDeviceNotificationPreferences(
           renderSettingsRow({
             title: label(),
             control: html`<select
+              class="settings-select"
+              aria-label=${label()}
               .value=${preferences.categories?.[key] === undefined
                 ? "inherit"
                 : preferences.categories[key]
@@ -654,7 +656,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
         </div>
       </section>
       ${registered && push.preferences
-        ? html`<div class="settings-page" ?inert=${push.loading}>
+        ? html`<div class="settings-stack" ?inert=${push.loading}>
             ${push.preferences.durableIdentity
               ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
                   props.onWebPushSetUserPreferences?.(preferences),
