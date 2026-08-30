@@ -1559,6 +1559,44 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "version-drift-plugin"))).toBe(false);
   });
 
+  it("reports the canonical package when npm metadata identity drifts", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const requestedPackageName = "identity-diagnostic-plugin";
+    const resolvedPackageName = "evil-identity-plugin";
+    const version = "1.0.0";
+    mockNpmViewAndInstallMany([
+      {
+        spec: `${requestedPackageName}@latest`,
+        packageName: resolvedPackageName,
+        version,
+        npmRoot,
+      },
+      {
+        packageName: requestedPackageName,
+        version,
+        pluginId: requestedPackageName,
+        npmRoot,
+        expectedDependencySpec: version,
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${requestedPackageName}@latest`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(`expected package ${requestedPackageName}`);
+    expect(result.error).toContain(
+      `metadata resolved ${resolvedPackageName}@${version} with spec ${resolvedPackageName}@${version}`,
+    );
+    expect(result.error).toContain(`payload is ${requestedPackageName}@${version}`);
+  });
+
   it("quarantines incomplete integrity metadata and rebuilds the managed project once", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "missing-integrity-plugin";
