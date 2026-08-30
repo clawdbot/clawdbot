@@ -155,6 +155,7 @@ describePosix("native hosted merge handoff", () => {
   );
 
   it("dispatches once with the exact prepared head and ordinary server enforcement", () => {
+    const before = f.events().length;
     const result = f.run("merge-run");
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const mergeCalls = f
@@ -176,5 +177,17 @@ describePosix("native hosted merge handoff", () => {
     expect(
       JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
     ).toMatchObject({ head: f.head, route: "immediate", phase: "complete" });
+    expect(
+      f
+        .events()
+        .slice(before)
+        .some(
+          (event) =>
+            event.kind === "gh" &&
+            event.args?.some(
+              (arg) => arg.includes("/collaborators/") && arg.endsWith("/permission"),
+            ),
+        ),
+    ).toBe(false);
   });
 });

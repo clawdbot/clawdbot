@@ -216,6 +216,7 @@ export function createMainRefreshFixture(directory: string) {
   const eventsFile = join(root, "events.jsonl");
   const control = {
     metadata,
+    authorPermission: "write",
     failFetch: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
@@ -398,6 +399,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
     }
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
+  } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
+    if (control.authorPermission === 'error') process.exit(1);
+    value = { permission: control.authorPermission };
   } else if (endpoint === 'repos/fixture/repo/issues/42/comments' && args.includes('POST')) {
     value = { html_url: 'https://example.invalid/pr/42#completion' };
   } else if (endpoint === 'repos/fixture/repo/pulls/42') {

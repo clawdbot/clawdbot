@@ -433,6 +433,28 @@ merge_run() {
       ;;
   esac
 
+  if [ "$merge_method" = "squash" ]; then
+    case "${PREP_REPLACED_HOSTED_ANCESTRY:-}" in
+      true | false) ;;
+      *)
+        echo "Missing or invalid squash ancestry provenance; re-run scripts/pr prepare-run $pr."
+        return 1
+        ;;
+    esac
+    case "${PREP_AUTHOR_ACCESS:-}" in
+      maintainer | external | unknown) ;;
+      *)
+        echo "Missing or invalid PR author access provenance; re-run scripts/pr prepare-run $pr."
+        return 1
+        ;;
+    esac
+    if [ "$PREP_REPLACED_HOSTED_ANCESTRY" = "true" ] && [ "$PREP_AUTHOR_ACCESS" != "maintainer" ]; then
+      echo "Refusing to squash a contributor-owned PR after maintainer ancestry replacement."
+      echo "Create a maintainer-owned replacement PR, link the original, and preserve public noreply co-author credit."
+      return 1
+    fi
+  fi
+
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ] && [ "$merge_method" != "squash" ]; then
     echo "Crabbox infrastructure bypass requires the pinned squash merge method."
     exit 2

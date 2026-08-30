@@ -88,7 +88,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
   mkdirSync(join(worktree, ".local"));
   writeFileSync(
     join(worktree, ".local/prep.env"),
-    `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\n`,
+    `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=external\n`,
   );
   writeFileSync(join(worktree, ".local/gates.env"), "GATES_MODE=full\n");
   for (const name of ["review.md", "review.json", "pr-meta.env", "pr-meta.json", "prep.md"]) {
@@ -370,6 +370,19 @@ merge_run 123 "\${1:-false}" "\${2:-}"
       .filter((name) => /^merge-output(?:\..+)?\.log$/.test(name))
       .sort()
       .map((name) => [name, readFileSync(join(worktree, ".local", name), "utf8")] as const);
+  const setPrivacyProvenance = (rewrite: string | null, access: string | null) => {
+    const path = join(worktree, ".local/prep.env");
+    let contents = readFileSync(path, "utf8");
+    contents = contents.replace(
+      /^PREP_REPLACED_HOSTED_ANCESTRY=.*\n/mu,
+      rewrite === null ? "" : `PREP_REPLACED_HOSTED_ANCESTRY=${rewrite}\n`,
+    );
+    contents = contents.replace(
+      /^PREP_AUTHOR_ACCESS=.*\n/mu,
+      access === null ? "" : `PREP_AUTHOR_ACCESS=${access}\n`,
+    );
+    writeFileSync(path, contents);
+  };
   return {
     root,
     repo,
@@ -388,11 +401,126 @@ merge_run 123 "\${1:-false}" "\${2:-}"
     advance,
     record,
     captures,
+    setPrivacyProvenance,
     ordinaryRead,
   };
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each([
+    {
+      route: "immediate",
+      access: "external",
+      auto: false,
+      admin: false,
+      queue: false,
+      mergeStateStatus: "CLEAN",
+    },
+    {
+      route: "auto",
+      access: "unknown",
+      auto: true,
+      admin: false,
+      queue: false,
+      mergeStateStatus: "BEHIND",
+    },
+    {
+      route: "queue",
+      access: "external",
+      auto: false,
+      admin: false,
+      queue: true,
+      mergeStateStatus: "CLEAN",
+    },
+    {
+      route: "admin",
+      access: "unknown",
+      auto: false,
+      admin: true,
+      queue: false,
+      mergeStateStatus: "BLOCKED",
+    },
+  ])(
+    "blocks rewritten $access squash before $route intent",
+    ({ access, auto, admin, queue, mergeStateStatus }) => {
+      const f = fixture();
+      f.setPrivacyProvenance("true", access);
+      f.save({
+        ...f.state(),
+        admin,
+        gates: admin ? "fail" : "pass",
+        pr: { ...f.state().pr, isMergeQueueEnabled: queue, mergeStateStatus },
+      });
+
+      const run = f.run(auto);
+
+      expect(run.status, run.output).toBe(1);
+      expect(run.output).toContain("maintainer-owned replacement PR");
+      expect(f.state().mutations).toBe(0);
+      expect(f.captures()).toEqual([]);
+      expect(() => f.record()).toThrow();
+    },
+  );
+
+  it.each([
+    { rewrite: "true", access: "maintainer" },
+    { rewrite: "false", access: "unknown" },
+  ])("allows squash with valid privacy provenance: %j", ({ rewrite, access }) => {
+    const f = fixture();
+    f.setPrivacyProvenance(rewrite, access);
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record().phase).toBe("complete");
+  });
+
+  it.each([
+    ["missing", "PREP_REPLACED_HOSTED_ANCESTRY=false\n"],
+    [
+      "malformed rewrite",
+      "PREP_REPLACED_HOSTED_ANCESTRY=false",
+      "PREP_REPLACED_HOSTED_ANCESTRY=yes",
+    ],
+    ["malformed access", "PREP_AUTHOR_ACCESS=external", "PREP_AUTHOR_ACCESS=write"],
+  ])("requires prepare rerun for %s squash provenance", (_label, from, to = "") => {
+    const f = fixture();
+    const prepPath = join(f.worktree, ".local/prep.env");
+    writeFileSync(prepPath, readFileSync(prepPath, "utf8").replace(from, to));
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("scripts/pr prepare-run");
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
+  it.each(["merge", "rebase"])("leaves %s mechanics independent of squash provenance", (method) => {
+    const f = fixture();
+    f.setPrivacyProvenance(null, null);
+
+    const run = f.run(false, f.repo, method);
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+  });
+
+  it("reconciles a prior outcome before reading squash privacy provenance", () => {
+    const f = fixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run().status).toBe(1);
+    f.recover();
+    f.setPrivacyProvenance(null, null);
+
+    const retry = f.run();
+
+    expect(retry.status, retry.output).toBe(1);
+    expect(retry.output).not.toContain("scripts/pr prepare-run");
+    expect(f.state().mutations).toBe(1);
+  });
+
   it("operator recovery preserves prior evidence and consumes one exact attempt", () => {
     const f = fixture();
     f.save({ ...f.state(), mode: "unapplied" });
