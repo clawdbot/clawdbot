@@ -8,7 +8,7 @@ import type { MsgContext } from "../templating.js";
 import type { HistoryEntry } from "./history.types.js";
 
 const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
-const RECENT_HISTORY_IMAGE_LIMIT = 4;
+export const RECENT_HISTORY_IMAGE_LIMIT = 4;
 
 export type RecentInboundHistoryImage = {
   path: string;

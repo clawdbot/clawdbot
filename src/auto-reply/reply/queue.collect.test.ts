@@ -2042,6 +2042,68 @@ describe("followup queue collect routing", () => {
     expect(collected?.historyImageNotes).toBe(`${adaNote}\n${graceNote}`);
   });
 
+  it("bounds inherited-image provenance across a collected burst", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-cap-${Date.now()}`,
+    );
+    // Six turns each carrying four retained images would put 24 images and 24
+    // note lines in one prompt; the batch may not outweigh a single turn.
+    for (const turn of [1, 2, 3, 4, 5, 6]) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt: `turn ${turn}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [1, 2, 3, 4].map((n) => ({
+          type: "image" as const,
+          data: `t${turn}-i${n}`,
+          mimeType: "image/png",
+        })),
+        imageOrder: ["inline", "inline", "inline", "inline"],
+        historyImageNotes: [1, 2, 3, 4]
+          .map((n) => `[Recent image ${n} from Ada, message t${turn}-m${n}, attached as media.]`)
+          .join("\n"),
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    const noteLines = collected?.historyImageNotes?.split("\n") ?? [];
+    expect(noteLines).toHaveLength(4);
+    // Images and notes are dropped together, so every delivered image keeps a note.
+    expect(collected?.images).toHaveLength(4);
+    expect(collected?.imageOrder).toHaveLength(4);
+  });
+
+  it("carries a burst's repeated room history only once", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-dedupe-${Date.now()}`,
+    );
+    // Follow-ups seconds apart resolve the same retained room image; sending it
+    // per turn would multiply both the bytes and the note explaining them.
+    const sharedNote = "[Recent image 1 from Ada, message m-kept, attached as media.]";
+    for (const prompt of ["first", "second", "third"]) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
+        currentTurnImagesPrepared: true,
+        images: [{ type: "image" as const, data: "kept", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        historyImageNotes: sharedNote,
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.historyImageNotes).toBe(sharedNote);
+    expect(collected?.images).toEqual([{ type: "image", data: "kept", mimeType: "image/png" }]);
+  });
+
   it("preserves prepared empty image state across collected batches", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-prepared-empty-images-${Date.now()}`,

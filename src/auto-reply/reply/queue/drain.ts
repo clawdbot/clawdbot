@@ -35,6 +35,7 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
+import { RECENT_HISTORY_IMAGE_LIMIT } from "../history-media.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
@@ -442,13 +443,36 @@ function collectQueuedPromptMedia(
   const media: NonNullable<FollowupRun["media"]> = [];
   const mediaImageSlots: MediaImageLayout["slots"] = [];
   const suppressedFactIndexes: number[] = [];
-  // Provenance is ordered with the images it explains, so it is collected in the
-  // same item order the image and media arrays are concatenated in.
+  // Retained-history images and the notes that place them are collected as one
+  // group. A turn only inherits history images when it brought none of its own,
+  // so such an item's images are all retained ones and the pair can be taken or
+  // skipped whole rather than split. The batch reuses the per-turn limit, so a
+  // collected turn never carries more retained images than a single turn could,
+  // and a burst that resolved the same room twice contributes them once.
   const historyImageNoteBlocks: string[] = [];
+  const seenHistoryNotes = new Set<string>();
+  let historyImageBudget = RECENT_HISTORY_IMAGE_LIMIT;
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
     const internalItem = item as InternalFollowupRun;
+    const historyNoteLines = (internalItem.historyImageNotes?.trim() ?? "")
+      .split("\n")
+      .filter((line) => line.trim().length > 0);
+    // Every image on a history-carrying item is a retained one, so its images and
+    // notes are taken or dropped together: a partly seen item would otherwise re-send
+    // bytes whose note was deduplicated away, leaving the prompt unable to place them.
+    const isHistoryItem = historyNoteLines.length > 0;
+    const skipHistoryItem =
+      isHistoryItem &&
+      (historyNoteLines.length > historyImageBudget ||
+        historyNoteLines.some((line) => seenHistoryNotes.has(line)));
+    if (skipHistoryItem) {
+      if (item.media) {
+        media.push(...item.media);
+      }
+      continue;
+    }
     if (item.images) {
       images.push(...item.images);
     }
@@ -474,9 +498,12 @@ function collectQueuedPromptMedia(
     if (item.media) {
       media.push(...item.media);
     }
-    const itemHistoryImageNotes = internalItem.historyImageNotes?.trim();
-    if (itemHistoryImageNotes) {
-      historyImageNoteBlocks.push(itemHistoryImageNotes);
+    if (historyNoteLines.length > 0) {
+      for (const line of historyNoteLines) {
+        seenHistoryNotes.add(line);
+      }
+      historyImageBudget -= historyNoteLines.length;
+      historyImageNoteBlocks.push(historyNoteLines.join("\n"));
     }
   }
   const mediaImageLayout =
