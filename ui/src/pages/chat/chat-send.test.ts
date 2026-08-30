@@ -1027,26 +1027,27 @@ describe("refreshChat", () => {
       status: "done",
     };
     let workListCount = 0;
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "chat.history") {
         expect(params).toMatchObject({ sessionKey: "agent:work:main", agentId: "work" });
         return pendingHistory.promise;
       }
       if (method === "sessions.list") {
-        if (params?.agentId === "work") {
+        const agentId = requireRecord(params, "session list params").agentId;
+        if (agentId === "work") {
           workListCount += 1;
           return sessionListFixture(
             workListCount === 1 ? [initialWork] : workRefresh === "missing" ? [] : [newerWork],
             workListCount,
           );
         }
-        if (params?.agentId === "main") {
+        if (agentId === "main") {
           return sessionListFixture([mainRow], 3);
         }
       }
       throw new Error(`Unexpected RPC ${method}: ${JSON.stringify(params)}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = clientWithRequest(request);
     const harness = createGatewayHarness(client);
     const sessions = createSessionCapability(harness.gateway);
     const { pane, state } = createTestChatPane({ client, sessions });

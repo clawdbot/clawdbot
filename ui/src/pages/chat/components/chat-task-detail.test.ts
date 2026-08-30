@@ -64,8 +64,6 @@ describe("task detail panel", () => {
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
       hello: {
-        type: "hello-ok",
-        protocol: 4,
         snapshot: {
           sessionDefaults: {
             defaultAgentId: "main",

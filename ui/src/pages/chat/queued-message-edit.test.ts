@@ -2,6 +2,7 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { AgentsListResult } from "../../api/types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -521,7 +522,7 @@ describe("queued message edit round-trip", () => {
         mainKey: "main",
         scope: "per-sender",
         agents: [{ id: "main" }],
-      };
+      } satisfies AgentsListResult;
       const send = vi.fn(async () => ({ status: "started" }));
       const { host, unsubscribe } = queueHost([{}], {
         connected: true,
@@ -550,6 +551,7 @@ describe("queued message edit round-trip", () => {
                 editingId: active?.id ?? null,
                 editingText: active?.draftText,
                 source: active?.source,
+                onCancel: () => cancelQueuedMessageEdit(host),
               },
             }),
           ),

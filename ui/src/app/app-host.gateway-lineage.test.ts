@@ -7,6 +7,7 @@ import type {
   GatewayBrowserClientOptions,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import type { AgentsListResult } from "../api/types.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import {
@@ -146,7 +147,7 @@ describe("Control UI Gateway target lineage", () => {
         mainKey: "main",
         scope: "per-sender",
         agents: [{ id: "main" }],
-      };
+      } satisfies AgentsListResult;
       const hello: GatewayHelloOk = {
         ...HELLO,
         auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
@@ -235,6 +236,7 @@ describe("Control UI Gateway target lineage", () => {
                 editingId: active?.id ?? null,
                 editingText: active?.draftText,
                 source: active?.source,
+                onCancel: () => cancelQueuedMessageEdit(state),
               },
             }),
           ),

@@ -20,6 +20,7 @@ describe("optimistic session deletion", () => {
       h.gateway.snapshot.hello = {
         type: "hello-ok",
         protocol: 4,
+        auth: { role: "operator", scopes: [] },
         snapshot: {
           sessionDefaults: {
             defaultAgentId: "main",
