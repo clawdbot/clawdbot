@@ -1,5 +1,6 @@
 // Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
 import type { Dirent } from "node:fs";
+import { closeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -10,6 +11,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveActivatedPluginBackupInventory,
@@ -420,11 +422,21 @@ async function resolveManagedSkillSymlinkTargetCandidates(stateDir: string): Pro
     } catch {
       continue;
     }
-    // Skill loaders only admit directories holding a SKILL.md; anything else
-    // in the managed layout is not a skill worth a declared archive root.
-    if (!(await pathExists(path.join(targetPath, "SKILL.md")))) {
+    // Skill loaders admit a directory only when its metadata opens through the
+    // skill-root boundary; a final SKILL.md symlink that escapes the target
+    // would otherwise satisfy existence and declare a broad external target
+    // whose cross-asset link the archive guard accepts.
+    const opened = openRootFileSync({
+      absolutePath: path.join(targetPath, "SKILL.md"),
+      rootPath: targetPath,
+      rootRealPath: targetPath,
+      boundaryLabel: "skill target",
+      rejectSymlinks: false,
+    });
+    if (!opened.ok) {
       continue;
     }
+    closeSync(opened.fd);
     targets.push(targetPath);
   }
   return targets;

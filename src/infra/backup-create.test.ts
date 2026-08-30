@@ -747,6 +747,48 @@ describe("createBackupArchive", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not declare an external managed-skill target whose SKILL.md escapes into the state asset",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-metadata-escape-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const skillTarget = path.join(await fs.realpath(state.root), "agents-skills", "escaped");
+          await fs.mkdir(skillTarget, { recursive: true });
+          await fs.writeFile(state.statePath("payload.md"), "state payload\n", "utf8");
+          // Final metadata symlink, relative like the `skills` CLI writes: an
+          // existence check that follows it would admit the broad external
+          // target, and the archive guard accepts the cross-asset link because
+          // both ends resolve to declared assets.
+          await fs.symlink(
+            path.relative(skillTarget, state.statePath("payload.md")),
+            path.join(skillTarget, "SKILL.md"),
+            "file",
+          );
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          await fs.symlink(
+            path.join("..", "..", "agents-skills", "escaped"),
+            state.statePath("skills", "escaped"),
+            "dir",
+          );
+
+          // The planner declines the escaping metadata, so the state asset's
+          // external link has no declared target and the write stays fail-closed.
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
   it("includes a configured external agent directory when workspaces are excluded", async () => {
     await withOpenClawTestState(
       {
