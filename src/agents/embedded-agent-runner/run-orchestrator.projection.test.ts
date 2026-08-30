@@ -16,7 +16,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { wrapRunWithTestAdmission } from "../admitted-run-context.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -34,9 +33,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/t
 const tempRoots = createTempDirTracker();
 const runAttempt = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
-let runEmbeddedAgent: ReturnType<
-  typeof wrapRunWithTestAdmission<Parameters<ProductionRun>[0], ReturnType<ProductionRun>>
->;
+let runEmbeddedAgent: ProductionRun;
 
 beforeAll(async () => {
   installEmbeddedRunnerBaseE2eMocks();
@@ -46,7 +43,21 @@ beforeAll(async () => {
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
-  runEmbeddedAgent = wrapRunWithTestAdmission((await import("./run.js")).runEmbeddedAgent);
+  const { runEmbeddedAgent: run } = await import("./run.js");
+  const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+  runEmbeddedAgent = async (params) => {
+    const admission = prepareSystemAgentRunAdmission(
+      params.config ?? {},
+      params.runId,
+      params.agentId ?? "main",
+      "retry-projection-test",
+    );
+    try {
+      return await run({ ...params, preparedRunAdmission: admission });
+    } finally {
+      admission.close();
+    }
+  };
 });
 
 afterEach(() => {

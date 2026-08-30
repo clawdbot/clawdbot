@@ -8,7 +8,6 @@ import {
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesReadOnly,
-  loadSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,

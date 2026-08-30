@@ -9,7 +9,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { wrapRunWithTestAdmission } from "../admitted-run-context.test-support.js";
 import {
   runWithDeferredSessionSuspension,
   suspendSession,
@@ -33,9 +32,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/t
 const tempRoots = createTempDirTracker();
 const runAttempt = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
-let runEmbeddedAgent: ReturnType<
-  typeof wrapRunWithTestAdmission<Parameters<ProductionRun>[0], ReturnType<ProductionRun>>
->;
+let runEmbeddedAgent: ProductionRun;
 let acquireRuntime: typeof import("../prepared-model-runtime.js").acquireAgentRunPreparedModelRuntime;
 let runWithModelFallback: typeof import("../model-fallback-runner.js").runWithModelFallback;
 
@@ -49,7 +46,21 @@ beforeAll(async () => {
   }));
   ({ acquireAgentRunPreparedModelRuntime: acquireRuntime } =
     await import("../prepared-model-runtime.js"));
-  runEmbeddedAgent = wrapRunWithTestAdmission((await import("./run.js")).runEmbeddedAgent);
+  const { runEmbeddedAgent: run } = await import("./run.js");
+  const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+  runEmbeddedAgent = async (params) => {
+    const admission = prepareSystemAgentRunAdmission(
+      params.config ?? {},
+      params.runId,
+      params.agentId ?? "main",
+      "suspension-test",
+    );
+    try {
+      return await run({ ...params, preparedRunAdmission: admission });
+    } finally {
+      admission.close();
+    }
+  };
   ({ runWithModelFallback } = await import("../model-fallback-runner.js"));
 });
 
