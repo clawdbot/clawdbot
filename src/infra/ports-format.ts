@@ -39,6 +39,16 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
   if (/(?:^|[/\\\s])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)) {
     return "non_gateway";
   }
+  // Tailscale / Funnel users often front the gateway with socat on the same
+  // port (different bind address). That is not the gateway and must not look
+  // like an occupied OpenClaw listener.
+  if (
+    command === "socat" ||
+    /(?:^|[/\\])socat(?:\.exe)?$/.test(command) ||
+    /(?:^|[/\\\s"'=])socat(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)
+  ) {
+    return "non_gateway";
+  }
   return "unknown";
 }
 

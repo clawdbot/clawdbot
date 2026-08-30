@@ -43,9 +43,35 @@ describe("ports-format", () => {
     [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ command: "socat" }, "non_gateway"],
+    [
+      {
+        commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789",
+      },
+      "non_gateway",
+    ],
+    [
+      {
+        commandLine: "/opt/homebrew/bin/socat TCP-LISTEN:18789,reuseaddr,fork TCP:127.0.0.1:18789",
+      },
+      "non_gateway",
+    ],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
+  });
+
+  it("does not treat a socat port forward as the gateway", () => {
+    const hints = buildPortHints(
+      [
+        {
+          commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789",
+        },
+      ],
+      18789,
+    );
+    expect(hints).not.toContain(gatewayAlreadyRunningHint);
+    expect(hints).toContain("Another process is listening on this port.");
   });
 
   it("does not emit the SSH tunnel hint for an ssh-named non-tunnel process", () => {
