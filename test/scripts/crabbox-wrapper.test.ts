@@ -1592,6 +1592,51 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).not.toContain("failed fast; reusable leases expire");
   });
 
+  it.each([
+    ["--no-sync"],
+    ["-no-sync=true"],
+    ["--no-sync=false"],
+    ["--id", "tbx_unused", "--no-sync"],
+  ])("rejects unsupported Testbox sync flags before delegation: %j", (...flags) => {
+    const invocationLog = makeInvocationLog();
+    const result = runDefaultWrapper(["run", ...flags, "--", "echo ok"], {
+      configJson: { provider: "blacksmith-testbox" },
+      env: {
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+        OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "99",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=blacksmith-testbox does not support --no-sync");
+    expect(readInvocations(invocationLog).filter(([command]) => command === "run")).toEqual([]);
+  });
+
+  it.each([
+    { provider: "aws", flags: ["--no-sync"], command: ["echo", "ok"] },
+    { provider: "blacksmith-testbox", flags: [], command: ["echo", "--no-sync"] },
+    { provider: "blacksmith-testbox", flags: ["--label", "--no-sync"], command: ["echo", "ok"] },
+  ])(
+    "preserves sync flags outside Testbox run options: $provider $flags $command",
+    ({ provider, flags, command }) => {
+      const { output } = runSuccessfulDefaultWrapper([
+        "run",
+        "--provider",
+        provider,
+        ...flags,
+        "--",
+        ...command,
+      ]);
+
+      if (flags.length > 0) {
+        expect(output.args).toContain("--no-sync");
+      } else {
+        expect(output.args.at(-1)).toContain("echo --no-sync");
+      }
+    },
+  );
+
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
       env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
