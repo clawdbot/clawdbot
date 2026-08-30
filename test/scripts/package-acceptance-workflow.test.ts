@@ -8188,7 +8188,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(androidWorkflow).toContain("--verify-apk");
     expect(androidWorkflow).toContain('expected_source_ref="refs/tags/${RELEASE_TAG}"');
     expect(androidWorkflow).toContain("release_target_sha must be a full lowercase commit SHA");
-    expect(androidWorkflow).toContain("does not match ${RELEASE_TAG} (${tag_sha})");
+    expect(approvalScript).toContain("no longer resolves to approved target");
     expect(androidWorkflow).toContain(
       "must resolve to the same source commit as ${fallback_base_tag}",
     );
@@ -8200,8 +8200,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "OPENCLAW_BUILD_TIMESTAMP: ${{ steps.release_approval.outputs.build_timestamp }}",
     );
     expect(androidWorkflow).toContain("GIT_COMMIT: ${{ inputs.release_target_sha }}");
-    expect(androidWorkflow).toContain("--json tagName,isDraft,isPrerelease,createdAt,assets,url");
-    expect(androidWorkflow).toContain("release_created_at=");
+    expect(approvalScript).toContain("tagName,isPrerelease,createdAt");
+    expect(androidWorkflow).toContain(
+      'build_timestamp="$(node scripts/validate-release-publish-approval.mjs)"',
+    );
     expect(androidWorkflow).toContain(
       "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG}",
     );

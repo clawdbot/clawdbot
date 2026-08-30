@@ -602,8 +602,12 @@ v2 receipt and the live parent identity, including the protected tooling tag or
 main ancestry. Normal Android admission accepts an active or successfully completed
 parent and the exact stable target release, whether draft or public. Failed or
 cancelled parents remain rejected; explicit recovery can separately admit a
-completed failed parent. A dispatched run link is pending publication evidence,
-not an APK download claim. Monitor and approve the linked Android run separately;
+completed failed parent. Before provenance publication and each asset upload,
+Android rechecks the live release tag target and stable classification, protected
+tooling identity, and exact parent attempt/state. These are fresh boundary checks,
+not an atomic GitHub validation-and-write transaction. A dispatched run link is
+pending publication evidence, not an APK download claim. Monitor and approve the
+linked Android run separately;
 if dispatch cannot be confirmed, inspect existing runs before retrying.
 For explicit Android recovery, pass `release_publish_run_attempt`,
 `release_publish_full_ref`, and `release_publish_workflow_sha` from that same
