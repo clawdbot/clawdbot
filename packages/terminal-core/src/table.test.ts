@@ -2,7 +2,7 @@
 import path from "node:path";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi, visibleWidth } from "./ansi.js";
+import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
 import {
   noteToStream,
   resolveNoteColumns,
@@ -513,22 +513,67 @@ describe("renderTable", () => {
     },
   );
 
-  it("respects explicit newlines in cell values", () => {
-    const out = renderTable({
-      width: 48,
-      columns: [
-        { key: "A", header: "A", minWidth: 6 },
-        { key: "B", header: "B", minWidth: 10, flex: true },
-      ],
-      rows: [{ A: "row", B: "line1\nline2" }],
-    });
+  it.each([
+    ["LF", "line1\n東京 line2", "", "", 0],
+    ["CR", "line1\r東京 line2", "", "", 0],
+    ["CRLF", "line1\r\n東京 line2", "", "", 0],
+    ["colored CRLF", "\x1b[31mline1\r\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 0],
+    [
+      "linked CRLF",
+      "\x1b]8;;https://openclaw.ai\x07line1\r\n東京 line2\x1b]8;;\x07",
+      "\x1b]8;;https://openclaw.ai\x07",
+      "\x1b]8;;\x07",
+      0,
+    ],
+    ["CR/SGR/LF", "line1\r\x1b[31m\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 1],
+    [
+      "CR/OSC-8/LF",
+      "line1\r\x1b]8;;https://openclaw.ai\x07\n東京 line2\x1b]8;;\x07",
+      "\x1b]8;;https://openclaw.ai\x07",
+      "\x1b]8;;\x07",
+      1,
+    ],
+    ["CR/CSI-HT/LF", "line1\r\x1b[31\tm\n東京 line2\x1b[39m", "\x1b[31\tm", "\x1b[39m", 1],
+    ["CR/CSI-BEL/LF", "line1\r\x1b[31\x07m\n東京 line2\x1b[39m", "\x1b[31\x07m", "\x1b[39m", 1],
+  ] as const)(
+    "respects explicit %s newlines in cell values",
+    (_name, value, open, close, styledStart) => {
+      const out = renderTable({
+        width: 48,
+        border: "unicode",
+        columns: [
+          { key: "A", header: "A", minWidth: 6 },
+          { key: "B", header: "B", minWidth: 10, flex: true },
+        ],
+        rows: [{ A: "row", B: value }],
+      });
 
-    const lines = out.trimEnd().split("\n");
-    const line1Index = lines.findIndex((line) => line.includes("line1"));
-    const line2Index = lines.findIndex((line) => line.includes("line2"));
-    expect(line1Index).toBeGreaterThan(-1);
-    expect(line2Index).toBe(line1Index + 1);
-  });
+      const lines = out.trimEnd().split("\n");
+      expect(lines).toHaveLength(6);
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBe(48);
+      }
+      const dataLines = lines.slice(3, -1);
+      expect(
+        dataLines.map((line) =>
+          sanitizeForLog(line)
+            .split("│")
+            .slice(1, -1)
+            .map((cell) => cell.trim()),
+        ),
+      ).toEqual([
+        ["row", "line1"],
+        ["", "東京 line2"],
+      ]);
+      if (open) {
+        for (const line of dataLines.slice(styledStart)) {
+          expect(line).toContain(open);
+          expect(line).toContain(close);
+          expect(line.lastIndexOf(close)).toBeLessThan(line.lastIndexOf("│"));
+        }
+      }
+    },
+  );
 
   it("shortens only exact home paths and child paths in table cells", () => {
     const home = path.resolve("test-home", "alice");
