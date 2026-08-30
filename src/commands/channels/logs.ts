@@ -6,9 +6,9 @@ import {
   CHAT_CHANNEL_ORDER,
   normalizeChatChannelId as normalizeBundledChannelId,
 } from "../../channels/registry.js";
+import { levelToMinLevel, tryParseLogLevel } from "../../logging/levels.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
-import { levelToMinLevel, tryParseLogLevel } from "../../logging/levels.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
@@ -98,7 +98,7 @@ function parseLevelOption(value: unknown): ChannelLogLevel | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
-  const level = tryParseLogLevel(normalizeLowercaseStringOrEmpty(String(value)));
+  const level = tryParseLogLevel(normalizeLowercaseStringOrEmpty(value));
   if (!level || level === "silent") {
     throw new Error(`--level must be one of: ${CHANNEL_LOG_LEVELS.join(", ")}.`);
   }
@@ -133,8 +133,7 @@ export async function channelsLogsCommand(
   const tail = await readConfiguredParsedLogTail({
     limit,
     maxBytes: MAX_BYTES,
-    filter: (line) =>
-      matchesChannel(line, filter) && matchesMinimumLevel(line, minimumLevel),
+    filter: (line) => matchesChannel(line, filter) && matchesMinimumLevel(line, minimumLevel),
   });
   const { lines, truncated } = tail;
 
