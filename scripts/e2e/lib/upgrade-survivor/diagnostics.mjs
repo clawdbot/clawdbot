@@ -33,7 +33,7 @@ const logNames = [
   "gateway-restart.log",
 ];
 // Candidate observations select one declared RPC pair, never an arbitrary private path.
-const rpcLogNames = [
+const rpcLogNames = new Set([
   "channels-status-before",
   "wizard-start",
   "wizard-status",
@@ -59,7 +59,7 @@ const rpcLogNames = [
   "target-wizard-replacement-cancel",
   "target-wizard-purged-status",
   "channels-status",
-];
+]);
 const reasons = [
   "missing or unsafe file",
   "input exceeds cap; omitted whole",
@@ -556,7 +556,7 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         : readOwned(artifactRoot, name, name);
   }
   const rpcName = readOwned(artifactRoot, "diagnostics/last-rpc", "last RPC")?.trim();
-  if (rpcLogNames.includes(rpcName)) {
+  if (rpcLogNames.has(rpcName)) {
     report.lastRpc = {
       name: rpcName,
       stdout: readOwned(artifactRoot, `${rpcName}.json`, "RPC stdout"),
@@ -695,7 +695,7 @@ export function publishDiagnostics(artifactRoot, destination, redactSensitiveTex
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
   }
   if (snapshot.lastRpc !== undefined) {
-    if (rpcLogNames.includes(snapshot.lastRpc?.name)) {
+    if (rpcLogNames.has(snapshot.lastRpc?.name)) {
       report.lastRpc = {
         name: snapshot.lastRpc.name,
         stdout: sanitize(snapshot.lastRpc.stdout, "RPC stdout"),
