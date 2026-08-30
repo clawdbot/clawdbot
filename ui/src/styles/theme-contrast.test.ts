@@ -159,6 +159,9 @@ describe("Control UI theme contrast", () => {
       ':root[data-theme="beacon-light"]',
       ':root[data-theme="phosphor-light"]',
       ':root[data-theme="crt-light"]',
+      ':root[data-theme="manuscript-light"]',
+      ':root[data-theme="rose-light"]',
+      ':root[data-theme="miami-light"]',
     ]) {
       const theme = selector ? { ...light, ...readCssVarBlock(baseCss, selector) } : light;
       const muted = requireCssColor(theme, "muted");
