@@ -12,12 +12,6 @@ export type {
   RealtimeTranscriptionSessionCreateRequest,
 } from "../realtime-transcription/provider-types.js";
 export {
-  canonicalizeRealtimeTranscriptionProviderId,
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
-  normalizeRealtimeTranscriptionProviderId,
-} from "../realtime-transcription/provider-registry.js";
-export {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionWebSocketSessionOptions,
   type RealtimeTranscriptionWebSocketTransport,

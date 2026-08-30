@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  createRealtimeTranscriptionWebSocketSession,
+  type RealtimeTranscriptionSessionCallbacks,
+} from "openclaw/plugin-sdk/realtime-transcription";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
@@ -691,6 +695,78 @@ describe("plugin-sdk package contract guardrails", () => {
       );
 
     expect(failures).toStrictEqual([]);
+  });
+
+  it("ships realtime transcription as a typed public SDK subpath", () => {
+    const subpath = "realtime-transcription";
+
+    expect({
+      public: publicPluginSdkEntrypoints.includes(subpath),
+      typed: collectTypedPluginSdkPackageExports().has(subpath),
+      packExcluded: collectPackExcludedPluginSdkDeclarations().has(subpath),
+    }).toEqual({
+      public: true,
+      typed: true,
+      packExcluded: false,
+    });
+  });
+
+  it("keeps the documented realtime transcription consumer type-safe", () => {
+    type AcmeRealtimeEvent = { type: string; text?: string };
+    const parseAcmeRealtimeEvent = (payload: Buffer): AcmeRealtimeEvent => {
+      const value = JSON.parse(payload.toString()) as unknown;
+      if (!value || typeof value !== "object" || !("type" in value)) {
+        throw new Error("Acme realtime event must be an object with a type.");
+      }
+      const { type, text } = value as { type?: unknown; text?: unknown };
+      if (typeof type !== "string" || (text !== undefined && typeof text !== "string")) {
+        throw new Error("Acme realtime event has invalid fields.");
+      }
+      return { type, ...(text === undefined ? {} : { text }) };
+    };
+
+    const createConsumer = (callbacks: RealtimeTranscriptionSessionCallbacks) =>
+      createRealtimeTranscriptionWebSocketSession<AcmeRealtimeEvent>({
+        providerId: "acme-ai",
+        callbacks,
+        url: "wss://api.example.com/v1/realtime-transcription",
+        parseMessage: parseAcmeRealtimeEvent,
+        onMessage: (event, transport) => {
+          if (event.type === "session.created") {
+            transport.markReady();
+            return;
+          }
+          if (event.type === "transcript.final" && typeof event.text === "string") {
+            callbacks.onTranscript?.(event.text);
+          }
+        },
+        sendAudio: () => {},
+      });
+    const docs = fs.readFileSync(
+      resolve(REPO_ROOT, "docs/plugins/sdk-provider-plugins.md"),
+      "utf8",
+    );
+
+    expect(typeof createConsumer).toBe("function");
+    expect(docs).toContain("type AcmeRealtimeEvent =");
+    expect(docs).toContain("parseMessage: parseAcmeRealtimeEvent");
+  });
+
+  it("keeps realtime transcription registry helpers on a private runtime subpath", () => {
+    const publicSource = fs.readFileSync(
+      resolve(REPO_ROOT, "src/plugin-sdk/realtime-transcription.ts"),
+      "utf8",
+    );
+    const registryExports = [
+      "canonicalizeRealtimeTranscriptionProviderId",
+      "getRealtimeTranscriptionProvider",
+      "listRealtimeTranscriptionProviders",
+      "normalizeRealtimeTranscriptionProviderId",
+    ];
+
+    expect(registryExports.filter((name) => publicSource.includes(name))).toStrictEqual([]);
+    expect(privateLocalOnlyPluginSdkEntrypoints).toContain("realtime-transcription-runtime");
+    expect(publicPluginSdkEntrypoints).not.toContain("realtime-transcription-runtime");
   });
 
   it("keeps deprecated public SDK subpaths unused by extension production code", () => {

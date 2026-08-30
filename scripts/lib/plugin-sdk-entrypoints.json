@@ -245,6 +245,7 @@
   "video-generation-runtime",
   "reply-history",
   "realtime-transcription",
+  "realtime-transcription-runtime",
   "realtime-bootstrap-context",
   "realtime-voice-audio-queue",
   "realtime-voice-activation",

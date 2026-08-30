@@ -843,24 +843,41 @@ catalog, API-key auth, and dynamic model resolution.
         only maps upstream events.
 
         ```typescript
+        import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription";
+
+        type AcmeRealtimeEvent = { type: string; text?: string };
+
+        function parseAcmeRealtimeEvent(payload: Buffer): AcmeRealtimeEvent {
+          const value = JSON.parse(payload.toString()) as unknown;
+          if (!value || typeof value !== "object" || !("type" in value)) {
+            throw new Error("Acme realtime event must be an object with a type.");
+          }
+          const { type, text } = value as { type?: unknown; text?: unknown };
+          if (typeof type !== "string" || (text !== undefined && typeof text !== "string")) {
+            throw new Error("Acme realtime event has invalid fields.");
+          }
+          return { type, ...(text === undefined ? {} : { text }) };
+        }
+
         api.registerRealtimeTranscriptionProvider({
           id: "acme-ai",
           label: "Acme Realtime Transcription",
           isConfigured: () => true,
           createSession: (req) => {
             const apiKey = String(req.providerConfig.apiKey ?? "");
-            return createRealtimeTranscriptionWebSocketSession({
+            return createRealtimeTranscriptionWebSocketSession<AcmeRealtimeEvent>({
               providerId: "acme-ai",
               callbacks: req,
               url: "wss://api.example.com/v1/realtime-transcription",
               headers: { Authorization: `Bearer ${apiKey}` },
+              parseMessage: parseAcmeRealtimeEvent,
               onMessage: (event, transport) => {
                 if (event.type === "session.created") {
                   transport.sendJson({ type: "session.update" });
                   transport.markReady();
                   return;
                 }
-                if (event.type === "transcript.final") {
+                if (event.type === "transcript.final" && typeof event.text === "string") {
                   req.onTranscript?.(event.text);
                 }
               },
@@ -877,6 +894,11 @@ catalog, API-key auth, and dynamic model resolution.
           },
         });
         ```
+
+        When the upstream requires WebSocket subprotocol negotiation, pass its
+        protocol name through `protocols` (for example, `protocols: ["binary"]`).
+        Do not set `Sec-WebSocket-Protocol` manually in `headers`; the WebSocket
+        client must negotiate it through the protocol argument.
 
         Batch STT providers that POST multipart audio should use
         `buildAudioTranscriptionFormData(...)` from

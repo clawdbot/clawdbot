@@ -194,12 +194,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: dependency-light channel streaming config readers for doctor closures
       //     (realtime-voice-activation is private-local and not counted here).
       // +1: registry-bound plugin command planning and exact selected execution.
+      // +1: typed realtime transcription provider and WebSocket session contract.
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
       // +1: read-only authoritative conversation-binding inspection for route-owner plugins.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      148,
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -280,6 +281,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: narrow channel agent-run terminal reader and outcome contract.
       // +5: narrow string, record, and error coercion helpers.
       // +1: normalized Gateway public origin resolver for plugin-generated links.
+      // +11: realtime transcription provider types and WebSocket session exports.
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
       // +11: Computer Use schemas/types plus parsers, compiler, and provider registration.
@@ -321,6 +323,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: identifier authentication input type for external channel plugins.
+      // +11: realtime transcription provider types and WebSocket session exports.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
@@ -331,7 +334,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4355,
+      4366,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -397,6 +400,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: narrow channel agent-run terminal reader.
       // +5: narrow string, record, and error coercion helpers.
       // +1: normalized Gateway public origin resolver for plugin-generated links.
+      // +1: realtime transcription WebSocket session helper.
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
       // +4: Computer Use wire parsers, validator compiler, and provider registration.
@@ -428,6 +432,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +2: bounded ask_user owner-order map builder and option resolver.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      // +1: realtime transcription WebSocket session helper.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
@@ -438,7 +443,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2592,
+      2593,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
