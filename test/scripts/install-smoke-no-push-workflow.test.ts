@@ -709,6 +709,10 @@ describe("install smoke no-push root image transport", () => {
     expect(packageCandidate.run).toContain("--output-name candidate.tgz");
     expect(packageCandidate.run).not.toContain("--pack-json");
     expect(packageCandidate.run).toContain("scripts/package-openclaw-for-docker.mts");
+    expect(packageCandidate.run).toContain(
+      "grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts",
+    );
+    expect(packageCandidate.run).not.toContain("[[ -f scripts/package-openclaw-for-docker.mts ]]");
     expect(packageCandidate.run).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(JSON.stringify(job(workflow, "bun_global_install_smoke"))).not.toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG",
