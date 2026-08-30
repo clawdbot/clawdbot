@@ -204,6 +204,7 @@ export async function rollbackManagedNpmPluginInstall(params: {
 }
 
 export type ManagedNpmPluginInstallRollbackSnapshot = {
+  rootExisted: boolean;
   packageJson?: string;
   packageLockJson?: string;
   nodeModulesBackupDir?: string;
@@ -325,9 +326,12 @@ export async function createManagedNpmPluginInstallRollbackSnapshot(params: {
   npmRoot: string;
 }): Promise<ManagedNpmPluginInstallRollbackSnapshot> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-plugin-rollback-"));
+  let rootExisted = false;
   let nodeModulesBackupDir: string | undefined;
   const nodeModulesDir = path.join(params.npmRoot, "node_modules");
   try {
+    await fs.stat(params.npmRoot);
+    rootExisted = true;
     await fs.stat(nodeModulesDir);
     nodeModulesBackupDir = path.join(tempDir, "node_modules");
     await fs.cp(nodeModulesDir, nodeModulesBackupDir, {
@@ -350,6 +354,7 @@ export async function createManagedNpmPluginInstallRollbackSnapshot(params: {
 
   try {
     return {
+      rootExisted,
       packageJson: await readRollbackFileIfPresent(path.join(params.npmRoot, "package.json")),
       packageLockJson: await readRollbackFileIfPresent(
         path.join(params.npmRoot, "package-lock.json"),
@@ -417,6 +422,9 @@ async function restoreManagedNpmPluginInstallRollbackSnapshot(params: {
     path.join(params.npmRoot, "package-lock.json"),
     params.snapshot.packageLockJson,
   );
+  if (!params.snapshot.rootExisted) {
+    await fs.rm(params.npmRoot, { recursive: true, force: true });
+  }
 }
 
 export async function cleanupManagedNpmPluginInstallRollbackSnapshot(params: {
