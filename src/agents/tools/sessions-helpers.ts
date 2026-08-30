@@ -165,7 +165,7 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
-/** Projects the Gateway's authoritative classification into the tool's coarse categories. */
+/** Projects the Gateway's authoritative classification into the tool's coarse kinds. */
 export function classifySessionListKind(params: {
   classification: NonNullable<GatewaySessionListRow["classification"]>;
   peerKind?: GatewaySessionListRow["peerKind"];
