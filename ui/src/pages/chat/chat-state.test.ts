@@ -922,7 +922,6 @@ describe("canonical session message recovery", () => {
       ]);
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith("chat.history", {
-          agentId: "main",
           sessionKey: state.sessionKey,
           limit: 100,
         }),
@@ -2231,7 +2230,6 @@ describe("canonical session message recovery", () => {
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("chat.history", {
-        agentId: "main",
         sessionKey: state.sessionKey,
         limit: 100,
       });

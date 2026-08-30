@@ -8,6 +8,7 @@ import {
   parseSessionKeyParts,
   resolveUiSessionNavigationParentKey,
   uiSessionEventMatches,
+  uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
 
 describe("session archive eligibility", () => {
@@ -128,8 +129,8 @@ describe("UI session identity", () => {
     expect(uiSessionEventMatches(host, "agent:ops:main")).toBe(true);
     expect(canonicalUiSessionKeyForPersistence(host, "main")).toBe("agent:ops:home");
     expect(canonicalUiSessionKeyForPersistence(host, "agent:ops:main")).toBe("agent:ops:home");
-    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:home")).toBe(true);
-    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:main")).toBe(true);
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:home")).toBe(false);
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:main")).toBe(false);
     expect(isUiSelectedGlobalSessionKey(host, "agent:ops:other")).toBe(false);
   });
 
@@ -152,5 +153,46 @@ describe("UI session identity", () => {
     { parentSessionKey: null, spawnedBy: "  ", expected: undefined },
   ])("resolves the first non-empty navigation parent", ({ expected, ...row }) => {
     expect(resolveUiSessionNavigationParentKey(row)).toBe(expected);
+  });
+});
+
+describe("canonical host-scoped event and row matching", () => {
+  const host = {
+    agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+    assistantAgentId: "main",
+    sessionKey: "agent:main:main",
+  };
+  it.each(["event", "row"])("separates global from per-sender main in %s matching", (surface) => {
+    expect(
+      surface === "event"
+        ? uiSessionEventMatches(host, "global", "main")
+        : uiSessionRowMatchesSelectedChat(host, "global", host.sessionKey),
+    ).toBe(false);
+  });
+  it("retains configured-global aliases without joining another global agent", () => {
+    const global = {
+      ...host,
+      agentsList: { ...host.agentsList, scope: "global" },
+      sessionKey: "agent:work:main",
+      assistantAgentId: "main",
+    };
+    expect(uiSessionEventMatches(global, "global", "work")).toBe(true);
+    expect(uiSessionEventMatches(global, "global", "main")).toBe(false);
+    expect(uiSessionEventMatches(global, "agent:main:main")).toBe(false);
+  });
+  it("rejects contradictory agent evidence while preserving deliberately unscoped events", () => {
+    expect(uiSessionEventMatches(host, host.sessionKey, "work")).toBe(false);
+    for (const key of [undefined, null, ""]) {
+      expect(uiSessionEventMatches(host, key, "work")).toBe(true);
+    }
+  });
+  it("matches configured custom main rows and keeps literal global separate", () => {
+    const custom = {
+      ...host,
+      agentsList: { defaultId: "ops", mainKey: "home", scope: "per-sender" },
+      sessionKey: "agent:ops:home",
+    };
+    expect(uiSessionRowMatchesSelectedChat(custom, "main", custom.sessionKey)).toBe(true);
+    expect(uiSessionRowMatchesSelectedChat(custom, "global", custom.sessionKey)).toBe(false);
   });
 });

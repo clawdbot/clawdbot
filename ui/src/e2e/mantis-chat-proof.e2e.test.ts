@@ -106,7 +106,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       expect(sendRequest.params).toMatchObject({
         deliver: false,
         message: prompt,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       const params = sendRequest.params as { idempotencyKey?: string };
       expect(params.idempotencyKey).toEqual(expect.any(String));

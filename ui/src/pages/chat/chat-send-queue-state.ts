@@ -1,7 +1,7 @@
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type {
   QueuedChatSendOptions,
@@ -18,7 +18,11 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import { chatSendHoldReason, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
-import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
+import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "./composer-persistence.ts";
 import { controlUiNowMs } from "./performance.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -69,8 +73,7 @@ export function enqueuePendingSendMessage(
       : {}),
     ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
     sendSubmittedAtMs: submittedAtMs,
-    sessionKey: host.sessionKey,
-    agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...resolveStoredChatOutboxScope(host, host.sessionKey),
     ...(sender ? { sender } : {}),
     ...(replyToId ? { replyToId } : {}),
   };
@@ -139,8 +142,7 @@ export function finishChatDeliveryAdmission(
 ): ChatQueueItem | QueuedChatSendResult {
   const route = options?.routingSessionKey ?? queueSessionKey;
   const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
-  const routeVisible = (agentId = item.agentId) =>
-    host.sessionKey === route && visibleSessionMatches(host, route, agentId);
+  const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   const current = readQueuedMessageById(host, item.id);
   if (!current) {
     return "failed";
@@ -160,7 +162,7 @@ export function finishChatDeliveryAdmission(
     }
     return "pending";
   }
-  return options?.routingSessionKey ? { ...current, sessionKey: route } : current;
+  return current;
 }
 
 export function canSendVolatileQueueItem(
@@ -173,7 +175,6 @@ export function canSendVolatileQueueItem(
     Boolean(host.client) &&
     !isChatBusy(host) &&
     !getPendingChatPickerPatch(host, routingSessionKey, item.agentId) &&
-    host.sessionKey === routingSessionKey &&
     visibleSessionMatches(host, routingSessionKey, item.agentId) &&
     host.chatQueue[0]?.id === item.id
   );

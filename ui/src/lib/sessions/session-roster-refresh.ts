@@ -123,7 +123,7 @@ function preserveCurrentSessionRow(
     return result;
   }
   const matchesCurrent = (row: GatewaySessionRow) =>
-    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey);
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
   const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
   if (
     previousCurrentRow &&

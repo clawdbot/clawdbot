@@ -671,7 +671,10 @@ describe("refreshChat", () => {
     ],
     [
       "agent main alias",
-      { sessionKey: "agent:work:main", agentsList: { defaultId: "main", mainKey: "main" } },
+      {
+        sessionKey: "agent:work:main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
+      },
       { sessionKey: "agent:work:main", agentId: "work", limit: 100 },
     ],
     [
@@ -1010,7 +1013,7 @@ describe("refreshChat", () => {
       },
       overrides: {
         sessionKey: "agent:work:main",
-        agentsList: { defaultId: "main", mainKey: "main" },
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
         sessionsResult: createSessionsResult([
           row("agent:main:main", { hasActiveRun: false, status: "done" }),
         ]),
@@ -1344,7 +1347,7 @@ describe("handleSendChat", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
 
-  it("preserves the visible bare main route for an immediate send", async () => {
+  it("uses the canonical main destination for an immediate send", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": { runId: "bare-main-run", status: "started" },
@@ -1360,7 +1363,7 @@ describe("handleSendChat", () => {
       "chat.send",
       expect.objectContaining({
         message: "stay on the visible route",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       }),
     );
   });
@@ -2597,7 +2600,7 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "chat.send": { status: "started" },
       },
-      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
       assistantAgentId: "work",
       chatMessage: "wait for the global settings",
       pendingSettingsPatches: { global: globalPatch.promise },
@@ -3546,6 +3549,7 @@ describe("handleSendChat", () => {
 
     const refreshCurrentSessionTools = vi.fn();
     const host = makeChatHost({
+      agentsList: { defaultId: "main", mainKey: "main" },
       requestHandlers: {
         "sessions.patch": {
           ok: true,
@@ -3597,6 +3601,7 @@ describe("handleSendChat", () => {
     "forwards semantic model reset commands through chat.send: %s",
     async (command) => {
       const host = makeChatHost({
+        agentsList: { defaultId: "main", mainKey: "main" },
         requestHandlers: {
           "chat.send": { status: "started" },
           "sessions.patch": createResolvedModelPatch("default", "openai"),
@@ -3609,7 +3614,7 @@ describe("handleSendChat", () => {
 
       expect(host.request).toHaveBeenCalledWith(
         "chat.send",
-        expect.objectContaining({ message: command, sessionKey: "main" }),
+        expect.objectContaining({ message: command, sessionKey: "agent:main:main" }),
       );
       expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
     },
@@ -6724,48 +6729,58 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
   });
 
-  it("retries an unconfirmed volatile send with the same run id", async () => {
-    const storage = createStorageMock();
-    vi.spyOn(storage, "setItem").mockImplementation(() => {
-      throw new DOMException("quota exceeded", "QuotaExceededError");
-    });
-    vi.stubGlobal("sessionStorage", storage);
-    const runIds: unknown[] = [];
+  it.each(["agent:main:main", "main", "workspace", "global"])(
+    "retries an unconfirmed volatile send from %s with the same run id",
+    async (sessionKey) => {
+      const storage = createStorageMock();
+      vi.spyOn(storage, "setItem").mockImplementation(() => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      });
+      vi.stubGlobal("sessionStorage", storage);
+      const runIds: unknown[] = [];
+      const targets: unknown[] = [];
 
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "volatile retry payload");
-          runIds.push(payload.idempotencyKey);
-          if (runIds.length === 1) {
-            throw new Error("gateway closed (1006): network lost");
-          }
-          return { runId: payload.idempotencyKey, status: "started" };
+      const host = makeChatHost({
+        sessionKey,
+        agentsList: { defaultId: "main", mainKey: "workspace", scope: "per-sender" },
+        requestHandlers: {
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "volatile retry payload");
+            runIds.push(payload.idempotencyKey);
+            targets.push(payload.sessionKey);
+            if (runIds.length === 1) {
+              throw new Error("gateway closed (1006): network lost");
+            }
+            return { runId: payload.idempotencyKey, status: "started" };
+          },
         },
-      },
-      chatMessage: "retry the oversized turn",
-    });
+        chatMessage: "retry the oversized turn",
+      });
 
-    await handleSendChat(host);
+      await handleSendChat(host);
 
-    const itemId = host.chatQueue[0]?.id ?? "missing-volatile-retry";
-    const originalRunId = host.chatQueue[0]?.sendRunId;
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ sendRunId: originalRunId, sendState: "unconfirmed" }),
-    ]);
+      const itemId = host.chatQueue[0]?.id ?? "missing-volatile-retry";
+      const originalRunId = host.chatQueue[0]?.sendRunId;
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ sendRunId: originalRunId, sendState: "unconfirmed" }),
+      ]);
 
-    await retryReconnectableQueuedChatSends(host);
-    expect(runIds).toEqual([originalRunId]);
+      await retryReconnectableQueuedChatSends(host);
+      expect(runIds).toEqual([originalRunId]);
 
-    await retryQueuedChatMessage(host, itemId);
+      await retryQueuedChatMessage(host, itemId);
 
-    expect(runIds).toEqual([originalRunId, originalRunId]);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe(originalRunId);
-    expect(
-      host.chatMessages.map((message) => requireRecord(message, "retried transcript").role),
-    ).toEqual(["user"]);
-  });
+      expect(runIds).toEqual([originalRunId, originalRunId]);
+      expect(targets).toEqual(
+        Array(2).fill(sessionKey === "global" ? "global" : "agent:main:workspace"),
+      );
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe(originalRunId);
+      expect(
+        host.chatMessages.map((message) => requireRecord(message, "retried transcript").role),
+      ).toEqual(["user"]);
+    },
+  );
 
   it("retries a failed volatile send with a fresh run id", async () => {
     const storage = createStorageMock();
@@ -7377,6 +7392,7 @@ describe("handleSendChat", () => {
     });
     const host = makeChatHost({
       assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
       chatMessage: "survive alias canonicalization",
       client: null,
       connected: false,
@@ -7968,6 +7984,30 @@ describe("handleSendChat", () => {
     ).toEqual([expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" })]);
   });
 
+  it("retires the live canonical send overlay when its connection is lost", async () => {
+    const ack = createDeferred<{ runId: string; status: "ok" }>();
+    const host = makeChatHost({
+      sessionKey: "agent:main:main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+      chatMessage: "possibly delivered",
+      requestHandlers: { "chat.send": () => ack.promise, "chat.history": () => idleChatHistory() },
+    });
+    const sending = handleSendChat(host);
+    await waitForFast(() => expect(host.chatQueue[0]?.sendState).toBe("sending"));
+    host.connected = false;
+    markQueuedChatSendsWaitingForReconnect(host);
+    const projectedState = host.chatQueue[0]?.sendState;
+    ack.resolve({ runId: "old-connection", status: "ok" });
+    await sending;
+    expect(projectedState).toBe("waiting-reconnect");
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      sendAttempts: 1,
+      sendState: "waiting-reconnect",
+    });
+  });
+
   it("marks saved session queued sends waiting after a disconnect", () => {
     const host = makeChatHost({ chatQueue: [] });
     writeChatQueueForScope(host, "agent:a", [
@@ -8218,6 +8258,7 @@ describe("handleSendChat", () => {
 
   it("clears chat state when /clear resets chat history", async () => {
     const host = makeChatHost({
+      agentsList: { defaultId: "main", mainKey: "main" },
       requestHandlers: {
         "sessions.reset": { ok: true },
         "chat.history": {
@@ -8585,7 +8626,7 @@ describe("handleSendChat", () => {
       },
       sessionKey: "agent:work:main",
       assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "alias history" }],
     });
@@ -9150,7 +9191,6 @@ describe("handleAbortChat", () => {
       scope: "per-sender",
       expected: {
         key: "agent:work:main",
-        agentId: "work",
         clearQueued: true,
       },
     },

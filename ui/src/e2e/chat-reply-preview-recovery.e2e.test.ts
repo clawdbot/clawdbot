@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
@@ -58,7 +59,7 @@ suite.define(() => {
 
       let firstCount = 0;
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
         const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
         await reply.waitFor({ state: "visible" });
         expect(await reply.textContent()).toContain("Replying to message");
@@ -180,10 +181,11 @@ suite.define(() => {
           },
         },
         sessionKey: "agent:main:reply-reconnect",
+        sessions: [{ key: "agent:main:reply-reconnect", sessionId: "reply-preview-history" }],
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
         const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
         await preview.waitFor();
         await gateway.waitForRequest("chat.message.get");

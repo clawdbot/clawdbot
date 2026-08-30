@@ -47,6 +47,7 @@ export type ChatGoalDraft = { sessionId?: string } & (
 export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;
   attachments: ChatAttachment[];

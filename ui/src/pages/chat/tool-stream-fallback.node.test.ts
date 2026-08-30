@@ -227,7 +227,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       const host = createHost({
         sessionKey: key,
         assistantAgentId: agentId,
-        agentsList: { defaultId: "main" },
+        agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
         sessions,
       });
       const event = {
@@ -261,7 +261,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         createHost({
           sessionKey: key,
           assistantAgentId: agentId,
-          agentsList: { defaultId: "main" },
+          agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
           sessions,
         }),
         event,
@@ -826,7 +826,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({
       sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main" },
+      agentsList: { defaultId: "main", scope: "global" },
     });
 
     handleAgentEvent(host, {

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -114,7 +115,7 @@ async function showDashboard(page: Page) {
     },
     { key: sessionKey, storageKey: settingsKey },
   );
-  await page.goto(`${controlUi.baseUrl}dashboard`);
+  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
 }
 
 async function expectSidePanelTabs(page: Page, expected: string[]) {

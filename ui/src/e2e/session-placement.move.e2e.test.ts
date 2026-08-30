@@ -5,6 +5,7 @@ import { beforeAll, expect, it } from "vitest";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   requireString,
 } from "./chat-flow.test-support.ts";
@@ -50,6 +51,7 @@ function activeSession(placementMove?: {
 }) {
   return {
     key: "agent:main:placement-move",
+    sessionId: "session-placement-move",
     kind: "direct" as const,
     label: "Move proof",
     updatedAt: 2,
@@ -126,7 +128,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.deferNext("sessions.move");
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByText("Move session…", { exact: true }).click();
@@ -185,7 +187,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.locator(".chat-pane__placement-chip").waitFor();
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       await page.locator(".chat-pane__placement-chip").click();
@@ -314,7 +316,7 @@ suite.define(() => {
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByRole("button", { name: "Device offline" }).waitFor();
         await page.getByRole("button", { name: "Open split view" }).click();
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
@@ -532,11 +534,12 @@ suite.define(() => {
         },
       },
       sessionInfo: available,
+      sessions: [parent, available],
       sessionKey: "agent:main:placement-move",
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       await expect
@@ -679,7 +682,7 @@ suite.define(() => {
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
         await gateway.deferNext("sessions.move");
         await page.getByRole("button", { name: "Runs on Cloud" }).click();
         await page.getByText("Move session…", { exact: true }).click();
@@ -738,7 +741,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await page.getByRole("button", { name: "Move failed" }).click();
       await page.getByText("Destination device is offline.", { exact: true }).waitFor();
       await page.getByText("Move session…", { exact: true }).waitFor();

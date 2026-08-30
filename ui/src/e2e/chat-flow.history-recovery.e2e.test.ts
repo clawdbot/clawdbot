@@ -52,8 +52,8 @@ suite.define(() => {
       ],
     };
     const sessionListResponse = chatSessionListResponse([
-      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 3 },
-      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 2 },
+      { key: sessionA, sessionId: "session-a", kind: "direct", label: "Session A", updatedAt: 3 },
+      { key: sessionB, sessionId: "session-b", kind: "direct", label: "Session B", updatedAt: 2 },
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
@@ -202,6 +202,7 @@ suite.define(() => {
         "sessions.list": chatSessionListResponse([
           {
             key: sessionA,
+            sessionId: "current-session",
             kind: "direct",
             label: "Session A",
             reasoningLevel: "high",
@@ -209,6 +210,7 @@ suite.define(() => {
           },
           {
             key: sessionB,
+            sessionId: "trace-session",
             kind: "direct",
             label: "Session B",
             reasoningLevel: "high",
@@ -220,7 +222,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
 
       const sessionLink = (sessionKey: string) =>
@@ -338,13 +340,28 @@ suite.define(() => {
             },
           ],
         },
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            sessionId: "control-ui-e2e-history-session-a",
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: "agent:main:session-b",
+            sessionId: "control-ui-e2e-history-session-b",
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: "agent:main:session-a",
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
@@ -526,14 +543,16 @@ suite.define(() => {
           ],
         },
         "sessions.list": chatSessionListResponse([
-          ...shortSessions.map(({ key, label, updatedAt }) => ({
+          ...shortSessions.map(({ key, label, updatedAt, sessionId }) => ({
             key,
+            sessionId,
             kind: "direct",
             label,
             updatedAt,
           })),
           {
             key: "agent:main:session-b",
+            sessionId: "retained-history-session",
             kind: "direct",
             label: "Session B",
             updatedAt: 3,
@@ -544,7 +563,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
 
       const sessionB = page.locator(
@@ -684,7 +703,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -737,7 +756,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -833,10 +852,12 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:global",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -886,7 +907,7 @@ suite.define(() => {
         page.evaluate(
           ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
             const storedValues = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v3:"))
               .map(([, value]) => value);
             const stored = storedValues.join("\n");
             let runId: string | null = null;

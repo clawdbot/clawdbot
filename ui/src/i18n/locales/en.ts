@@ -5702,6 +5702,19 @@ export const en: TranslationMap = {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
+    outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryDescription:
+      "An older browser version did not preserve every destination. These drafts and queued messages have not been sent by recovery. Open an empty non-Incognito conversation, then restore an entry here for review. Attachment drafts may appear separately.",
+    outboxRecoveryConfirm:
+      "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
+    outboxRecoveryRestore: "Restore here for review",
+    outboxRecoveryConflict:
+      "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
+    outboxRecoveryStorageFailed:
+      "Browser storage could not complete recovery. The original saved data has been retained. Free browser storage and reload to try again.",
+    outboxRecoveryFull:
+      "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
+    outboxRecoveryMessages: "Queued messages: {count}",
     restartRecoveryTitle: "This session ended during a restart.",
     restartRecoveryDisabled: "Its transcript is safe.",
     resumeInNewSession: "Resume in new session",

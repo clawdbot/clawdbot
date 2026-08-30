@@ -675,6 +675,25 @@ before its transcript row appears. Without proof, an attempted message stays in 
 with an amber **Delivery unconfirmed** footer and **Retry**. Check the conversation and retry only
 if the message did not arrive. Unconfirmed local commands keep their retry/discard queue controls.
 
+Queued messages and drafts keep the conversation and agent selected when they were created.
+Switching agents, opening a split pane, or reloading does not move them to another destination.
+A literal `global` conversation keeps its captured agent; an agent's main conversation stays
+separate unless the Gateway is configured with global session scope.
+
+Older browser state may have combined several destinations into one bucket. The Control UI
+migrates records whose destination is still identifiable. Ambiguous records appear under
+**Saved messages need a destination** and remain unsent. Open the intended non-Incognito conversation with
+an empty composer and queue, expand the notice, and choose **Restore here for review**. Confirm
+the displayed conversation key and agent. Recovered queued messages stay paused: check for
+previous delivery before using **Retry**. Recovered attachment drafts return to the composer
+without sending. Reconnect, a replacement session, or enabling Incognito while confirmation is
+open cancels the transfer; confirm again in the intended conversation. Older attachment drafts
+whose destination is known stay cleared when that destination has a newer clear. Ambiguous saved
+data remains available for review.
+If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
+available rather than overwriting newer input. Do not clear browser site data
+while you still have saved messages or attachment drafts to recover.
+
 First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a
 browser-stored credential. The login gate appears only after the initial connection fails or the

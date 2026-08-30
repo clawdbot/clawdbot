@@ -510,6 +510,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("models.authStatus")).length)
         .toBe(2);
 
+      expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
+        sessionKey: "global",
+        agentId: "main",
+      });
       let popover = await openVisibleQuotaPopover(page);
       expect(
         await page

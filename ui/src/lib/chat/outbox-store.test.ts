@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { readChatOutboxRecovery } from "./outbox-recovery.ts";
 import { listStoredChatOutboxes, summarizeStoredChatOutboxes } from "./outbox-store-projection.ts";
 import {
   readProjectedOutboxStore,
@@ -23,15 +24,16 @@ describe("stored outbox summaries", () => {
   it("normalizes an unchanged projection once and refreshes after an external write", () => {
     const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
-      JSON.stringify({ version: 2, gatewayOwner: gatewayUrl, sessions: {} }),
+      JSON.stringify({ version: 3, recovery: {}, gatewayOwner: gatewayUrl, sessions: {} }),
     );
     const target = {
       gatewayOwner: gatewayUrl,
       key: storageKey,
       legacyKey: "unused",
+      previousKey: "unused-v2",
       legacyOwnerIsUnambiguous: true,
     };
     const first = readProjectedOutboxStore(sessionStorage, target);
@@ -40,7 +42,8 @@ describe("stored outbox summaries", () => {
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: { "main\u0000agent:main": { draft: "new", updatedAt: 1 } },
       }),
@@ -89,9 +92,10 @@ describe("stored outbox summaries", () => {
     const gatewayUrls = ["ws://first.test/control", "ws://second.test/control"];
     for (const gatewayUrl of gatewayUrls) {
       sessionStorage.setItem(
-        `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+        `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
         JSON.stringify({
-          version: 2,
+          version: 3,
+          recovery: {},
           gatewayOwner: gatewayUrl,
           mainAlias: { key: "workspace", agentId: "work" },
           sessions: {
@@ -108,7 +112,7 @@ describe("stored outbox summaries", () => {
           { settings: { gatewayUrl }, agentsList: null, hello: null },
           "workspace",
         ),
-      ).toEqual({ sessionKey: "global", agentId: "work" });
+      ).toEqual({ sessionKey: "workspace" });
     }
 
     sessionStorage.clear();
@@ -131,11 +135,12 @@ describe("stored outbox summaries", () => {
 
   it("keeps the exact aliased scope when sessionStorage retirement fails", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         mainAlias: { key: "workspace", agentId: "work" },
         sessions: {
@@ -152,9 +157,13 @@ describe("stored outbox summaries", () => {
     vi.spyOn(sessionStorage, "setItem").mockImplementationOnce(() => {
       throw new DOMException("quota exceeded", "QuotaExceededError");
     });
-    const retired = retireStoredComposerDrafts({ settings: { gatewayUrl } }, [
-      { key: "workspace", retireBeforeRevision: 20 },
-    ]);
+    const retired = retireStoredComposerDrafts(
+      {
+        settings: { gatewayUrl },
+        agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
+      },
+      [{ key: "workspace", retireBeforeRevision: 20 }],
+    );
     expect(retired).toEqual({
       gatewayOwner: gatewayUrl,
       retirements: [
@@ -171,11 +180,12 @@ describe("stored outbox summaries", () => {
 
   it("retires a batch with one write and notification while preserving newer replacements", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           "older\u0000agent:main": {
@@ -221,9 +231,10 @@ describe("stored outbox summaries", () => {
   it("lists only non-empty drafts under the same scope used by sidebar sessions", () => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           "thread-draft\u0000agent:main": {
@@ -257,7 +268,7 @@ describe("stored outbox summaries", () => {
     expect(addEventListener).toHaveBeenCalledWith("storage", expect.any(Function));
 
     window.dispatchEvent(
-      new StorageEvent("storage", { key: "openclaw.control.chatComposer.v2:gateway" }),
+      new StorageEvent("storage", { key: "openclaw.control.chatComposer.v3:gateway" }),
     );
     expect(firstListener).toHaveBeenCalledTimes(1);
     expect(secondListener).toHaveBeenCalledTimes(1);
@@ -301,100 +312,20 @@ describe("stored outbox summaries", () => {
       agentsList: { defaultId: "work", mainKey: "main" },
     });
 
-    expect(summary.total).toBe(1);
+    expect(summary.total).toBe(0);
     expect(
-      summary.countsByScope.get(
-        storedChatOutboxScopeKey({ sessionKey: "global", agentId: "work" }),
-      ),
-    ).toBe(1);
-    expect(
-      summary.countsByScope.get(
-        storedChatOutboxScopeKey({ sessionKey: "global", agentId: "previous" }),
-      ),
-    ).toBeUndefined();
-  });
-
-  it("refreshes custom-main ownership for a later offline reload", () => {
-    const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
-    sessionStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        version: 2,
-        gatewayOwner: gatewayUrl,
-        mainAlias: { key: "old-main", agentId: "previous" },
-        sessions: {},
-      }),
-    );
-
-    summarizeStoredChatOutboxes({
-      settings: { gatewayUrl },
-      agentsList: { defaultId: "work", mainKey: "workspace" },
-    });
-
-    expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "{}").mainAlias).toEqual({
-      key: "workspace",
-      agentId: "work",
-    });
-    expect(
-      resolveStoredChatOutboxScope(
-        { settings: { gatewayUrl }, agentsList: null, hello: null },
-        "workspace",
-      ),
-    ).toEqual({ sessionKey: "global", agentId: "work" });
-  });
-
-  it("resolves legacy bare-main rows through the persisted alias on an offline reload", () => {
-    const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
-    sessionStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        version: 2,
-        gatewayOwner: gatewayUrl,
-        mainAlias: { key: "main", agentId: "work" },
-        sessions: {
-          "main\u0000agent:previous": {
-            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
-            updatedAt: 1,
-          },
-        },
-      }),
-    );
-
-    // Offline reload: no session defaults available, only the persisted alias.
-    const offlineState = { settings: { gatewayUrl }, agentsList: null, hello: null };
-    const summary = summarizeStoredChatOutboxes(offlineState);
-
-    expect(summary.total).toBe(1);
-    const sidebarScopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(offlineState, "main"),
-    );
-    expect(summary.countsByScope.get(sidebarScopeKey)).toBe(1);
-    expect(listStoredChatOutboxes(offlineState)).toEqual([
-      {
-        sessionKey: "global",
-        agentId: "work",
-        queue: [
-          {
-            id: "queued",
-            text: "queued",
-            createdAt: 1,
-            sessionKey: "global",
-            agentId: "work",
-          },
-        ],
-      },
-    ]);
+      readChatOutboxRecovery({ settings: { gatewayUrl } }).entries[0]?.session.queue?.[0]?.id,
+    ).toBe("queued");
   });
 
   it("rejects a v2 store owned by another gateway", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: "ws://other.test/control",
         sessions: {
           "global\u0000agent:work": {
@@ -416,43 +347,13 @@ describe("stored outbox summaries", () => {
     );
   });
 
-  it("retains custom-main aliases independently for each gateway", () => {
-    for (const [gatewayUrl, key, agentId] of [
-      ["ws://a.test/control", "workspace-a", "alpha"],
-      ["ws://b.test/control", "workspace-b", "beta"],
-    ] as const) {
-      sessionStorage.setItem(
-        `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
-        JSON.stringify({
-          version: 2,
-          gatewayOwner: gatewayUrl,
-          mainAlias: { key, agentId },
-          sessions: {},
-        }),
-      );
-      summarizeStoredChatOutboxes({ settings: { gatewayUrl }, agentsList: null, hello: null });
-    }
-
-    expect(
-      resolveStoredChatOutboxScope(
-        { settings: { gatewayUrl: "ws://a.test/control" }, agentsList: null, hello: null },
-        "workspace-a",
-      ),
-    ).toEqual({ sessionKey: "global", agentId: "alpha" });
-    expect(
-      resolveStoredChatOutboxScope(
-        { settings: { gatewayUrl: "ws://b.test/control" }, agentsList: null, hello: null },
-        "workspace-b",
-      ),
-    ).toEqual({ sessionKey: "global", agentId: "beta" });
-  });
-
   it("deduplicates item ids within a scope, not across scopes", () => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           "thread-a\u0000agent:main": {
@@ -475,7 +376,7 @@ describe("stored outbox summaries", () => {
 
   it("counts only durable operator-review states for session-row attention", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const quietSendStates = [
+    const restoredSendStates = [
       undefined,
       "waiting-idle",
       "executing-command",
@@ -483,14 +384,15 @@ describe("stored outbox summaries", () => {
       "waiting-reconnect",
     ] as const;
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
       JSON.stringify({
-        version: 2,
+        version: 3,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           "thread-a\u0000agent:main": {
             queue: [
-              ...quietSendStates.map((sendState, index) => ({
+              ...restoredSendStates.map((sendState, index) => ({
                 id: `healthy-${index}`,
                 text: `healthy ${index}`,
                 createdAt: index,
@@ -535,7 +437,7 @@ describe("stored outbox summaries", () => {
     expect(summary.total).toBe(8);
     expect(summary.countsByScope.get(threadA)).toBe(7);
     expect(summary.countsByScope.get(threadB)).toBe(1);
-    expect(summary.attentionCountsByScope.get(threadA)).toBe(2);
+    expect(summary.attentionCountsByScope.get(threadA)).toBe(3);
     expect(summary.attentionCountsByScope.get(threadB)).toBe(1);
   });
 

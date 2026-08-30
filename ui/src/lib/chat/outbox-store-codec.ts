@@ -11,11 +11,12 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 // Shipped v1 state could hold one full queue under each of 20 alias keys.
 // Alias consolidation may exceed today's admission cap, but must retain every
 // existing input while the canonical queue drains back below 50.
-export const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
+const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 
 export type StoredComposerSession = {
+  awaitingDefaults?: true;
   draft?: string;
   goalMode?: ChatGoalDraftMode;
   draftRevision?: number;
@@ -123,8 +124,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (entry.sendState === "steering") {
+  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
+  } else if (entry.sendState === "sending") {
+    item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
@@ -176,9 +179,12 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     return null;
   }
   const goalMode = entry.goalMode;
+  // Reject oversize input as a whole; migration keeps its source bytes intact.
+  if (Array.isArray(entry.queue) && entry.queue.length > MAX_RETAINED_QUEUE_ITEMS) {
+    return null;
+  }
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
-        .slice(0, MAX_RETAINED_QUEUE_ITEMS)
         .map(normalizeStoredQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
@@ -206,6 +212,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     return null;
   }
   return {
+    ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),

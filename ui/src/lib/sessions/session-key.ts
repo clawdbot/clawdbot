@@ -32,20 +32,12 @@ export { normalizeAgentId };
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
-    return null;
-  }
-  const parts = raw.split(":").filter(Boolean);
+  const parts = normalizeLowercaseStringOrEmpty(sessionKey).split(":").filter(Boolean);
   if (parts.length < 3 || parts[0] !== "agent") {
     return null;
   }
   const agentId = normalizeOptionalString(parts[1]);
-  const rest = parts.slice(2).join(":");
-  if (!agentId || !rest) {
-    return null;
-  }
-  return { agentId, rest };
+  return agentId ? { agentId, rest: parts.slice(2).join(":") } : null;
 }
 
 export function parseSessionKeyParts(
@@ -156,40 +148,17 @@ export function resolveUiSelectedGlobalAgentId(
 export function resolveUiGlobalAliasAgentId(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   sessionKey: string | undefined | null,
-  opts?: { rowKind?: string | null; requireGlobalRowForMainAlias?: boolean },
 ): string | null {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw || isUiGlobalSessionKey(raw)) {
     return null;
   }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  if (rest === "global") {
-    return normalizeAgentId(parsed.agentId);
-  }
-  if (rest !== DEFAULT_MAIN_KEY && rest !== resolveUiConfiguredMainKey(host)) {
-    return null;
-  }
-  if (opts?.requireGlobalRowForMainAlias && opts.rowKind !== "global") {
-    return null;
-  }
-  return normalizeAgentId(parsed.agentId);
+  const identity = resolveUiConversationIdentity(host, raw);
+  return identity.sessionKey === "global" ? (identity.agentId ?? null) : null;
 }
 
 export function isUiGlobalSessionKey(sessionKey: string | undefined | null): boolean {
   return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
-}
-
-function resolveUiMainAliasAgentId(
-  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
-  sessionKey: string | undefined | null,
-): string | null {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return null;
-  }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  const mainKey = resolveUiConfiguredMainKey(host);
-  return rest === DEFAULT_MAIN_KEY || rest === mainKey ? normalizeAgentId(parsed.agentId) : null;
 }
 
 /** True when the configured main session routes to the global stream (session.scope="global"). */
@@ -200,69 +169,77 @@ export function isUiGlobalScopeConfigured(
   if (scope) {
     return scope === "global";
   }
-  return isUiGlobalSessionKey(resolveUiCanonicalMainSessionKey(host));
+  return isUiGlobalSessionKey(readSessionDefaults(host)?.mainSessionKey);
 }
 
-export function resolveUiCanonicalMainSessionKey(
-  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
-): string {
-  const defaults = readSessionDefaults(host);
-  const advertised = normalizeOptionalString(defaults?.mainSessionKey);
-  if (advertised) {
-    return advertised;
-  }
-  // Global scope routes main to the "global" sentinel even when the gateway
-  // has not advertised a main session key yet (e.g. pre-hello snapshots).
-  if (normalizeOptionalLowercaseString(host.agentsList?.scope) === "global") {
-    return "global";
-  }
-  return buildAgentMainSessionKey({
-    agentId: resolveUiDefaultAgentId(host),
-    mainKey: resolveUiConfiguredMainKey(host),
-  });
-}
-
-function normalizeUiSessionEventKey(
-  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
-  sessionKey: string | undefined | null,
-): string | null {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return null;
-  }
+/** Admission identity shared by browser outboxes and visible conversation matching. */
+export function resolveUiConversationIdentity(
+  host: UiSessionDefaultsHost,
+  sessionKey: string,
+  agentIdOverride?: string,
+): { sessionKey: string; agentId?: string } {
+  const raw = sessionKey.trim();
+  const parsed = parseAgentSessionKey(raw);
+  const knownDefaults = hasUiSessionDefaults(host);
   const mainKey = resolveUiConfiguredMainKey(host);
-  const defaultAgentId = resolveUiDefaultAgentId(host);
-  const canonicalMain = resolveUiCanonicalMainSessionKey(host);
-  const aliases = new Set(
-    [
-      DEFAULT_MAIN_KEY,
-      mainKey,
-      canonicalMain,
-      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey: DEFAULT_MAIN_KEY }),
-      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
-    ]
-      .filter((value): value is string => Boolean(value))
-      .map(normalizeSessionKeyForUiComparison),
-  );
-  const normalized = normalizeSessionKeyForUiComparison(raw);
-  return aliases.has(normalized) ? normalizeSessionKeyForUiComparison(canonicalMain) : normalized;
+  const mainCandidate = parsed?.rest ?? raw.toLowerCase();
+  const isMain = mainCandidate === DEFAULT_MAIN_KEY || (knownDefaults && mainCandidate === mainKey);
+  if (isUiGlobalSessionKey(raw)) {
+    const agentId = agentIdOverride?.trim()
+      ? normalizeAgentId(agentIdOverride)
+      : resolveUiKnownSelectedGlobalAgentId(host);
+    return { sessionKey: "global", ...(agentId ? { agentId } : {}) };
+  }
+  if (!parsed && (!isMain || !knownDefaults)) {
+    return { sessionKey: raw };
+  }
+  const agentId = parsed ? normalizeAgentId(parsed.agentId) : resolveUiDefaultAgentId(host);
+  return {
+    sessionKey:
+      isMain && knownDefaults
+        ? isUiGlobalScopeConfigured(host)
+          ? "global"
+          : buildAgentMainSessionKey({ agentId, mainKey })
+        : normalizeSessionKeyForUiComparison(raw),
+    agentId,
+  };
+}
+
+export function hasUiSessionDefaults(host: UiSessionDefaultsHost): boolean {
+  return host.agentsList != null || readSessionDefaults(host) !== undefined;
 }
 
 export function canonicalUiSessionKeyForPersistence(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   sessionKey: string | undefined | null,
 ): string {
-  return normalizeUiSessionEventKey(host, sessionKey) ?? "";
+  const raw = normalizeOptionalString(sessionKey);
+  return raw ? resolveUiConversationIdentity(host, raw).sessionKey : "";
 }
 
-function areUiSessionKeysEquivalentForHost(
-  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
-  left: string | undefined | null,
-  right: string | undefined | null,
+/** Compare selected conversation ownership, rejecting contradictory captured agent facts. */
+export function uiConversationMatches(
+  host: UiSessionDefaultsHost,
+  selectedKey: string | undefined | null,
+  candidateKey: string | undefined | null,
+  candidateAgentId?: string | null,
 ): boolean {
-  const normalizedLeft = normalizeUiSessionEventKey(host, left);
-  const normalizedRight = normalizeUiSessionEventKey(host, right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+  const selected = normalizeOptionalString(selectedKey);
+  const candidate = normalizeOptionalString(candidateKey);
+  if (!selected || !candidate) {
+    return false;
+  }
+  const current = resolveUiConversationIdentity(host, selected);
+  const explicitAgent = normalizeOptionalString(candidateAgentId);
+  const defaultAgent = resolveUiDefaultAgentId(host);
+  const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
+  const currentAgent = current.agentId ?? defaultAgent;
+  const otherAgent = other.agentId ?? defaultAgent;
+  return (
+    (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
+    current.sessionKey === other.sessionKey &&
+    currentAgent === otherAgent
+  );
 }
 
 export function uiSessionEventMatches(
@@ -270,37 +247,18 @@ export function uiSessionEventMatches(
   eventSessionKey: string | undefined | null,
   eventAgentId?: string | null,
 ): boolean {
-  const eventKey = normalizeOptionalString(eventSessionKey);
-  if (!eventKey) {
-    return true;
-  }
-  const keysMatch = areUiSessionKeysEquivalentForHost(host, eventKey, host.sessionKey);
-  const selectedAliasAgentId = resolveUiMainAliasAgentId(host, host.sessionKey);
-  const globalAliasMatches =
-    selectedAliasAgentId !== null &&
-    isUiGlobalSessionKey(eventKey) &&
-    selectedAliasAgentId === normalizeAgentId(eventAgentId ?? resolveUiDefaultAgentId(host));
-  if (!keysMatch && !globalAliasMatches) {
-    return false;
-  }
-  if (!isUiGlobalSessionKey(host.sessionKey) || !isUiGlobalSessionKey(eventKey)) {
-    return true;
-  }
-  const selectedAgentId = resolveUiSelectedGlobalAgentId(host);
-  const normalizedEventAgentId = normalizeOptionalString(eventAgentId);
-  return normalizedEventAgentId
-    ? normalizeAgentId(normalizedEventAgentId) === selectedAgentId
-    : selectedAgentId === resolveUiDefaultAgentId(host);
+  // Some broadcasts intentionally omit a target; their caller owns run/session fencing.
+  return (
+    !normalizeOptionalString(eventSessionKey) ||
+    uiConversationMatches(host, host.sessionKey, eventSessionKey, eventAgentId)
+  );
 }
 
 export function isUiSelectedGlobalSessionKey(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   sessionKey: string | undefined | null,
 ): boolean {
-  if (isUiGlobalSessionKey(sessionKey)) {
-    return true;
-  }
-  return resolveUiMainAliasAgentId(host, sessionKey) !== null;
+  return canonicalUiSessionKeyForPersistence(host, sessionKey) === "global";
 }
 
 export function resolveUiSelectedSessionAgentId(
@@ -309,23 +267,24 @@ export function resolveUiSelectedSessionAgentId(
   },
   sessionKey: string | undefined | null = host.sessionKey,
 ): string | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  return resolveUiKnownSelectedGlobalAgentId(host);
+  return resolveUiConversationIdentity(host, sessionKey ?? "").agentId;
 }
 
 export function uiSessionRowMatchesSelectedChat(
-  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  host: UiSessionDefaultsHost,
   rowKey: string | undefined | null,
   selectedSessionKey: string | undefined | null,
+  rowAgentId?: string | null,
 ): boolean {
-  if (areUiSessionKeysEquivalent(rowKey, selectedSessionKey)) {
-    return true;
-  }
-  return Boolean(
-    isUiGlobalSessionKey(rowKey) && resolveUiGlobalAliasAgentId(host, selectedSessionKey),
+  // Rows without an explicit agent are already scoped by their owning list.
+  const selected = selectedSessionKey
+    ? resolveUiConversationIdentity(host, selectedSessionKey)
+    : null;
+  return uiConversationMatches(
+    host,
+    selectedSessionKey,
+    rowKey,
+    rowAgentId ?? (isUiGlobalSessionKey(rowKey) ? selected?.agentId : undefined),
   );
 }
 
