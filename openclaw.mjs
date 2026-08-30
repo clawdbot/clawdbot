@@ -457,37 +457,29 @@ const resolvePrecomputedCommandHelpByName = (commandName) => {
 
 const resolvePrecomputedCommandHelp = (argv) => {
   const args = argv.slice(2);
-  let commandHelp = null;
-  let sawHelp = false;
-
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg || arg === "--") {
       return null;
     }
-    if (!commandHelp) {
-      const consumed = consumeLauncherRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        return null;
-      }
-      commandHelp = resolvePrecomputedCommandHelpByName(arg);
-      if (!commandHelp) {
-        return null;
-      }
+    // The runtime entry owns profile validation and config projection before cached help.
+    if (arg === "--dev" || arg === "--profile" || arg.startsWith("--profile=")) {
+      return null;
+    }
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
       continue;
     }
-    if (LAUNCHER_HELP_FLAGS.has(arg)) {
-      sawHelp = true;
-      continue;
-    }
-    return null;
+    const commandHelp = resolvePrecomputedCommandHelpByName(arg);
+    const helpFlags = args.slice(index + 1);
+    return commandHelp &&
+      helpFlags.length > 0 &&
+      helpFlags.every((flag) => LAUNCHER_HELP_FLAGS.has(flag))
+      ? commandHelp
+      : null;
   }
-
-  return commandHelp && sawHelp ? commandHelp : null;
+  return null;
 };
 
 const isHelpFastPathDisabled = () =>

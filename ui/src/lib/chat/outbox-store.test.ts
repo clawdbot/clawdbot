@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { readChatOutboxRecovery } from "./outbox-recovery.ts";
 import { listStoredChatOutboxes, summarizeStoredChatOutboxes } from "./outbox-store-projection.ts";
+import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
 import {
   readProjectedOutboxStore,
+  readStoredOutboxStore,
   resolveStoredChatOutboxScope,
-  retireStoredComposerDrafts,
   storedChatOutboxScopeKey,
+  storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
+  writeStoredOutboxStore,
 } from "./outbox-store.ts";
 
 beforeEach(() => {
@@ -24,16 +27,17 @@ describe("stored outbox summaries", () => {
   it("normalizes an unchanged projection once and refreshes after an external write", () => {
     const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
-      JSON.stringify({ version: 3, recovery: {}, gatewayOwner: gatewayUrl, sessions: {} }),
+      JSON.stringify({ version: 4, recovery: {}, gatewayOwner: gatewayUrl, sessions: {} }),
     );
     const target = {
       gatewayOwner: gatewayUrl,
       key: storageKey,
       legacyKey: "unused",
       previousKey: "unused-v2",
+      blobKey: "unused-v3",
       legacyOwnerIsUnambiguous: true,
     };
     const first = readProjectedOutboxStore(sessionStorage, target);
@@ -42,7 +46,7 @@ describe("stored outbox summaries", () => {
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: { "main\u0000agent:main": { draft: "new", updatedAt: 1 } },
@@ -55,13 +59,14 @@ describe("stored outbox summaries", () => {
     unsubscribe();
   });
 
-  it("refreshes a retained legacy projection after an external write", () => {
+  it.each([1, 2])("refreshes a retained v%i projection after an external write", (version) => {
     const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
     const gatewayUrl = "ws://gateway.test/control";
-    const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+    const legacyKey = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
     const stored = (ids: string[]) =>
       JSON.stringify({
-        version: 1,
+        version,
+        ...(version === 2 ? { gatewayOwner: gatewayUrl } : {}),
         sessions: {
           "thread\u0000agent:main": {
             queue: ids.map((id, createdAt) => ({ id, text: id, createdAt })),
@@ -70,8 +75,12 @@ describe("stored outbox summaries", () => {
         },
       });
     sessionStorage.setItem(legacyKey, stored(["first"]));
-    vi.spyOn(sessionStorage, "setItem").mockImplementationOnce(() => {
-      throw new DOMException("quota exceeded", "QuotaExceededError");
+    const write = sessionStorage.setItem.bind(sessionStorage);
+    vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+      if (key !== legacyKey) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      write(key, value);
     });
     const state = { settings: { gatewayUrl } };
     expect(summarizeStoredChatOutboxes(state).total).toBe(1);
@@ -86,18 +95,51 @@ describe("stored outbox summaries", () => {
     expect(refreshedTotal).toBe(2);
   });
 
+  it.each([1, 2, 3])(
+    "retains the last v%i source when quota blocks verified retirement",
+    (version) => {
+      const target = storageTargetForGateway("ws://gateway.test/control");
+      const sourceKey =
+        version === 1 ? target.legacyKey : version === 2 ? target.previousKey : target.blobKey;
+      const scopeKey = storedChatOutboxScopeKey({ sessionKey: "thread", agentId: "main" });
+      sessionStorage.setItem(
+        sourceKey,
+        JSON.stringify({
+          version,
+          ...(version !== 1 ? { gatewayOwner: target.gatewayOwner } : {}),
+          sessions: {
+            [scopeKey]: {
+              queue: [{ id: "queued", text: "retire me", createdAt: 1 }],
+              updatedAt: 1,
+            },
+          },
+        }),
+      );
+      vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      });
+      const store = readStoredOutboxStore(sessionStorage, target);
+      expect(store.sessions[scopeKey]?.queue).toHaveLength(1);
+      store.sessions = {};
+      expect(() => writeStoredOutboxStore(sessionStorage, target, store)).toThrow("quota exceeded");
+      expect(readStoredOutboxStore(sessionStorage, target).sessions[scopeKey]?.queue).toEqual([
+        { id: "queued", text: "retire me", createdAt: 1, sessionKey: "thread" },
+      ]);
+      expect(sessionStorage.getItem(sourceKey)).toContain("retire me");
+    },
+  );
+
   it("clears every retained projection after an external storage clear", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeStoredChatOutboxChanges(listener);
     const gatewayUrls = ["ws://first.test/control", "ws://second.test/control"];
     for (const gatewayUrl of gatewayUrls) {
       sessionStorage.setItem(
-        `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
+        `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
         JSON.stringify({
-          version: 3,
+          version: 4,
           recovery: {},
           gatewayOwner: gatewayUrl,
-          mainAlias: { key: "workspace", agentId: "work" },
           sessions: {
             "thread\u0000agent:main": {
               queue: [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }],
@@ -133,16 +175,37 @@ describe("stored outbox summaries", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
-  it("keeps the exact aliased scope when sessionStorage retirement fails", () => {
+  it("retires a captured main destination without consulting changed defaults", () => {
+    const target = storageTargetForGateway("ws://captured-retirement.test");
+    const original = storedChatOutboxScopeKey({ sessionKey: "agent:main:main" });
+    const current = storedChatOutboxScopeKey({ sessionKey: "agent:main:current" });
+    const store = readStoredOutboxStore(sessionStorage, target);
+    store.sessions[original] = { draft: "old target", draftRevision: 10, updatedAt: 10 };
+    store.sessions[current] = { draft: "new target", draftRevision: 11, updatedAt: 11 };
+    writeStoredOutboxStore(sessionStorage, target, store);
+    const state = {
+      settings: { gatewayUrl: target.gatewayOwner },
+      agentsList: { defaultId: "main", mainKey: "current", scope: "per-sender" },
+    };
+    expect(
+      retireStoredComposerDrafts(state, [{ key: "agent:main:main", retireBeforeRevision: 20 }])
+        .storageFailed,
+    ).toBe(false);
+    const retired = readStoredOutboxStore(sessionStorage, target);
+    expect(retired.sessions[original]?.draft).toBeUndefined();
+    expect(retired.sessions[original]?.draftRevision).toBeGreaterThan(20);
+    expect(retired.sessions[current]).toEqual(store.sessions[current]);
+  });
+
+  it("keeps the exact captured scope when sessionStorage retirement fails", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
-        mainAlias: { key: "workspace", agentId: "work" },
         sessions: {
           "global\u0000agent:work": {
             draft: "retire me",
@@ -160,9 +223,8 @@ describe("stored outbox summaries", () => {
     const retired = retireStoredComposerDrafts(
       {
         settings: { gatewayUrl },
-        agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
       },
-      [{ key: "workspace", retireBeforeRevision: 20 }],
+      [{ key: "global", agentId: "work", retireBeforeRevision: 20 }],
     );
     expect(retired).toEqual({
       gatewayOwner: gatewayUrl,
@@ -180,11 +242,11 @@ describe("stored outbox summaries", () => {
 
   it("retires a batch with one write and notification while preserving newer replacements", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
@@ -231,9 +293,9 @@ describe("stored outbox summaries", () => {
   it("lists only non-empty drafts under the same scope used by sidebar sessions", () => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
+      `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
@@ -268,7 +330,7 @@ describe("stored outbox summaries", () => {
     expect(addEventListener).toHaveBeenCalledWith("storage", expect.any(Function));
 
     window.dispatchEvent(
-      new StorageEvent("storage", { key: "openclaw.control.chatComposer.v3:gateway" }),
+      new StorageEvent("storage", { key: "openclaw.control.chatComposer.v4:gateway" }),
     );
     expect(firstListener).toHaveBeenCalledTimes(1);
     expect(secondListener).toHaveBeenCalledTimes(1);
@@ -320,11 +382,11 @@ describe("stored outbox summaries", () => {
 
   it("rejects a v2 store owned by another gateway", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: "ws://other.test/control",
         sessions: {
@@ -350,9 +412,9 @@ describe("stored outbox summaries", () => {
   it("deduplicates item ids within a scope, not across scopes", () => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
+      `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
@@ -384,9 +446,9 @@ describe("stored outbox summaries", () => {
       "waiting-reconnect",
     ] as const;
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayUrl)}`,
+      `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {

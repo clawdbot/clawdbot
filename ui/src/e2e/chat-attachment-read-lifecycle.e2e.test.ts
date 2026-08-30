@@ -41,7 +41,12 @@ async function installDeferredAttachmentReader(page: Page): Promise<void> {
     ) as FileReader["readAsDataURL"];
     const abort = Reflect.get(FileReader.prototype, "abort") as FileReader["abort"];
     FileReader.prototype.readAsDataURL = function (blob: Blob) {
-      proof.finish = () => readAsDataURL.call(this, blob);
+      proof.finish = () => {
+        // Only the paste read is held; later outbox hydration uses native reads.
+        FileReader.prototype.readAsDataURL = readAsDataURL;
+        proof.finish = undefined;
+        readAsDataURL.call(this, blob);
+      };
     };
     FileReader.prototype.abort = function () {
       proof.aborts += 1;

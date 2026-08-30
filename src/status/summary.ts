@@ -226,9 +226,16 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
+  // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
+  const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
   const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async ({ sessionKey: key, entry }) => {
+      candidates.map(async (candidate) => {
+        const cached = sessionRows.get(candidate);
+        if (cached) {
+          return { ...cached, flags: [...cached.flags] };
+        }
+        const { sessionKey: key, entry } = candidate;
         const agentId = parseAgentSessionKey(key)?.agentId;
         const updatedAt = entry.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
@@ -316,7 +323,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           contextTokens && contextTokens > 0 && freshTotal !== undefined
             ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
-        return {
+        const row = {
           agentId,
           key,
           kind: classifySessionKey(key, entry),
@@ -351,6 +358,8 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
+        sessionRows.set(candidate, row);
+        return row;
       }),
     );
 

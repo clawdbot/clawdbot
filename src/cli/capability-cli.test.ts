@@ -677,6 +677,7 @@ describe("capability cli", () => {
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
+    mocks.setTtsPersona.mockClear();
     mocks.getTtsProvider.mockReset().mockReturnValue("openai");
     mocks.listSpeechProviders.mockReset().mockReturnValue([]);
     mocks.resolveExplicitTtsOverrides.mockClear();
@@ -1667,6 +1668,35 @@ describe("capability cli", () => {
     expect(firstGatewayCall()?.method).toBe("tts.status");
     expect(firstJsonOutput()?.transport).toBe("gateway");
   });
+
+  it.each(
+    (["local", "gateway"] as const).flatMap((transport) => [
+      { order: "persona then off", selectorArgs: ["--persona", "work", "--off"], transport },
+      { order: "off then persona", selectorArgs: ["--off", "--persona", "work"], transport },
+    ]),
+  )(
+    "rejects conflicting TTS persona selectors via $transport ($order)",
+    async ({ selectorArgs, transport }) => {
+      const argv = ["infer", "tts", "set-persona", ...selectorArgs, `--${transport}`, "--json"];
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+
+      let error: unknown;
+      try {
+        await program.parseAsync(argv, { from: "user" });
+      } catch (cause) {
+        error = cause;
+      }
+
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.setTtsPersona).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      expect(error).toMatchObject({
+        code: "commander.conflictingOption",
+        message: "error: option '--persona <id>' cannot be used with option '--off'",
+      });
+    },
+  );
 
   it("routes image describe through media understanding, not generation", async () => {
     await runCapability("image", "describe", "--file", "photo.jpg", "--json");

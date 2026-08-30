@@ -3,7 +3,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import {
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import {
   anyChatOutboxPaneMatches,
   isDurableQueuedMessage,
@@ -61,7 +64,8 @@ function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueue
     item.sendState === edit.source.sendState &&
     item.agentId === edit.source.agentId &&
     item.sessionKey === edit.source.sessionKey &&
-    item.orderKey === edit.source.orderKey
+    item.orderKey === edit.source.orderKey &&
+    item.attachmentPayload?.key === edit.source.attachmentPayload?.key
   );
 }
 
@@ -104,7 +108,17 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
  * deliver the text an operator is visibly rewriting.
  */
 export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: string): boolean {
-  return anyChatOutboxPaneMatches(host, (pane) => activeQueuedMessageEdit(pane)?.id === id);
+  // Credentials fence edit actions, but a pane still on the captured conversation
+  // holds its source against a peer drain until the correction is released.
+  const gatewayOwner = storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner;
+  return anyChatOutboxPaneMatches(
+    host,
+    (pane) =>
+      pane.chatQueuedEdit?.id === id &&
+      pane.chatQueuedEdit.gatewayOwner === gatewayOwner &&
+      storedChatOutboxScopeKey(pane.chatQueuedEdit) ===
+        storedChatOutboxScopeKey(resolveStoredChatOutboxScope(pane, pane.sessionKey)),
+  );
 }
 
 /** Removal is a conflicting shared-outbox action while any pane owns the row draft. */
@@ -134,6 +148,8 @@ export function beginQueuedMessageEdit(
     !owner ||
     !item ||
     !isMovableChatQueueItem(item) ||
+    Boolean(item.attachmentStorageError) ||
+    Boolean(item.attachments?.some((attachment) => !getChatAttachmentDataUrl(attachment))) ||
     item.localCommandName ||
     activeQueuedMessageEdit(host) ||
     isQueuedMessageBeingEdited(host, id)

@@ -64,7 +64,13 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
       ? entry.createdAt
       : Date.now();
-  if (!id || (!text.trim() && !Array.isArray(entry.attachments))) {
+  if (
+    !id ||
+    (!text.trim() &&
+      !Array.isArray(entry.attachments) &&
+      entry.attachmentPayload === undefined &&
+      entry.attachmentStorageError === undefined)
+  ) {
     return null;
   }
   const attachments = Array.isArray(entry.attachments)
@@ -73,6 +79,37 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (entry.attachmentPayload !== undefined) {
+    const payload = entry.attachmentPayload;
+    if (
+      isRecord(payload) &&
+      typeof payload.key === "string" &&
+      typeof payload.recoveryScope === "string" &&
+      typeof payload.tabId === "string"
+    ) {
+      item.attachmentPayload = {
+        key: payload.key,
+        recoveryScope: payload.recoveryScope,
+        tabId: payload.tabId,
+      };
+    } else {
+      item.attachmentStorageError = "missing";
+    }
+  }
+  if (
+    entry.attachmentStorageError === "missing" ||
+    entry.attachmentStorageError === "unavailable" ||
+    entry.attachmentStorageError === "capacity"
+  ) {
+    item.attachmentStorageError = entry.attachmentStorageError;
+  }
+  if (Array.isArray(entry.attachments) && attachments.length !== entry.attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+  if (item.attachmentPayload && !attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+
   if (entry.intent !== undefined) {
     const intent = entry.intent;
     // Never restore a structured admission as ordinary text after losing its intent.

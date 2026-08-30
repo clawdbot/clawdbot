@@ -1,6 +1,7 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
+import { outboxPayloadMatchesOwner } from "./outbox-payload-store.runtime.ts";
 import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import {
   readProjectedOutboxStore,
@@ -38,7 +39,17 @@ function listStoredComposerRows(
     }
     return Object.entries(store.sessions).flatMap(([key, session]) => {
       const scope = parseStoredChatOutboxScope(key);
-      return scope ? [{ scope, session }] : [];
+      return scope
+        ? [
+            {
+              scope,
+              session: {
+                ...session,
+                queue: session.queue?.filter((item) => outboxPayloadMatchesOwner(state, item)),
+              },
+            },
+          ]
+        : [];
     });
   } catch {
     return [];

@@ -1,10 +1,13 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
 import type { BrowserAnnotationAttachment, ChatGoalDraftMode } from "./chat-types.ts";
+import {
+  openControlUiDatabase,
+  requestResult,
+  transactionComplete,
+} from "./control-ui-database.runtime.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { parseStoredChatOutboxScope, storedChatOutboxScopeKey } from "./outbox-store.ts";
 
-const DATABASE_NAME = "openclaw-control-ui";
-const DATABASE_VERSION = 1;
 const STORE_NAME = "composerDrafts";
 const OWNER_INDEX = "ownerKey";
 const CHAT_SCOPE_PREFIX = "chat:v3:";
@@ -56,8 +59,18 @@ type DurableComposerDraftWriteResult =
   | { status: "payload-too-large"; revision?: number; writeId?: string }
   | { status: "storage-failed" };
 
-let databasePromise: Promise<IDBDatabase> | null = null;
 let lastFenceRevision = 0;
+
+let sweptDatabase: IDBDatabase | null = null;
+async function openDraftDatabase(): Promise<IDBDatabase> {
+  const database = await openControlUiDatabase();
+  if (sweptDatabase !== database) {
+    sweptDatabase = database;
+    // Draft expiry never visits outbox payloads: live queues have no age limit.
+    globalThis.setTimeout(() => void sweepExpiredRecords(database).catch(() => undefined), 0);
+  }
+  return database;
+}
 
 function ownerKey(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
@@ -71,96 +84,6 @@ function nextFenceRevision(baseline: number): number {
   const revision = Math.max(Date.now(), baseline + 1, lastFenceRevision + 1);
   lastFenceRevision = revision;
   return revision;
-}
-
-function indexedDbError(error: DOMException | null, message: string): Error {
-  return error ?? new Error(message);
-}
-
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result), { once: true });
-    request.addEventListener(
-      "error",
-      () => reject(indexedDbError(request.error, "IndexedDB request failed")),
-      { once: true },
-    );
-  });
-}
-
-function transactionComplete(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve(), { once: true });
-    transaction.addEventListener(
-      "abort",
-      () => reject(indexedDbError(transaction.error, "IndexedDB transaction aborted")),
-      { once: true },
-    );
-    transaction.addEventListener(
-      "error",
-      () => reject(indexedDbError(transaction.error, "IndexedDB transaction failed")),
-      { once: true },
-    );
-  });
-}
-
-function openDatabase(): Promise<IDBDatabase> {
-  if (databasePromise) {
-    return databasePromise;
-  }
-  databasePromise = new Promise((resolve, reject) => {
-    if (typeof indexedDB === "undefined") {
-      reject(new Error("IndexedDB is unavailable"));
-      return;
-    }
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener(
-      "upgradeneeded",
-      () => {
-        const database = request.result;
-        const store = database.objectStoreNames.contains(STORE_NAME)
-          ? request.transaction?.objectStore(STORE_NAME)
-          : database.createObjectStore(STORE_NAME, { keyPath: "key" });
-        if (store && !store.indexNames.contains(OWNER_INDEX)) {
-          store.createIndex(OWNER_INDEX, OWNER_INDEX, { unique: false });
-        }
-      },
-      { once: true },
-    );
-    request.addEventListener(
-      "success",
-      () => {
-        const database = request.result;
-        database.addEventListener("versionchange", () => {
-          database.close();
-          databasePromise = null;
-        });
-        resolve(database);
-        // Expiry cleanup spans every owner and must not hold foreground draft reads
-        // behind a database-wide cursor scan. Start it in the next task so the
-        // operation that opened the database registers its transaction first.
-        globalThis.setTimeout(() => void sweepExpiredRecords(database).catch(() => undefined), 0);
-      },
-      { once: true },
-    );
-    request.addEventListener(
-      "error",
-      () => {
-        databasePromise = null;
-        reject(indexedDbError(request.error, "IndexedDB open failed"));
-      },
-      { once: true },
-    );
-    request.addEventListener(
-      "blocked",
-      () => {
-        databasePromise = null;
-        reject(new Error("IndexedDB upgrade was blocked"));
-      },
-      { once: true },
-    );
-  });
-  return databasePromise;
 }
 
 function isStoredAttachment(value: unknown): value is DurableComposerDraftAttachment {
@@ -310,7 +233,7 @@ export async function prepareDurableComposerRecovery(
 > {
   let transaction: IDBTransaction | undefined;
   try {
-    const database = await openDatabase();
+    const database = await openDraftDatabase();
     transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const values: unknown[] = await requestResult(
@@ -396,7 +319,7 @@ export async function restoreDurableComposerRecovery(
 ): Promise<DurableComposerDraftWriteResult> {
   let transaction: IDBTransaction | undefined;
   try {
-    const database = await openDatabase();
+    const database = await openDraftDatabase();
     transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const original = parseStoredDraft(
@@ -448,7 +371,7 @@ export async function readDurableComposerDraft(
   scope: DurableComposerDraftScope,
 ): Promise<DurableComposerDraftReadResult> {
   try {
-    const database = await openDatabase();
+    const database = await openDraftDatabase();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const value = await requestResult(store.get(recordKey(scope)));
@@ -527,7 +450,7 @@ export async function writeDurableComposerDraft(
       : fallbackResult;
   }
   try {
-    const database = await openDatabase();
+    const database = await openDraftDatabase();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const key = recordKey(scope);
@@ -576,7 +499,7 @@ export async function retireDurableComposerDraft(
   retireBeforeRevision?: number,
 ): Promise<DurableComposerDraftWriteResult> {
   try {
-    const database = await openDatabase();
+    const database = await openDraftDatabase();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const now = Date.now();
@@ -637,7 +560,7 @@ export async function retireDurableComposerDrafts(
   }[],
 ): Promise<"completed" | "storage-failed"> {
   try {
-    const database = await openDatabase();
+    const database = await openDraftDatabase();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const now = Date.now();

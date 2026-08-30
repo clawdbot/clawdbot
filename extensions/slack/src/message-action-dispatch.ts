@@ -97,6 +97,19 @@ export async function handleSlackMessageAction(params: {
     return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
   };
 
+  if (action === "conversation-open") {
+    return await invoke(
+      {
+        action: "openConversation",
+        userIds: actionParams.userIds,
+        teamId: readStringParam(actionParams, "teamId"),
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
+    );
+  }
+
   if (action === "send") {
     const to = readStringParam(actionParams, "to", { required: true });
     const content = readStringParam(actionParams, "message", {

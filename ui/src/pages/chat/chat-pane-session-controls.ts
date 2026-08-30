@@ -135,6 +135,7 @@ export function renderChatPaneComposerControls(params: {
           effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
           sending: state.chatSending,
           sessionKey: state.sessionKey,
+          selectedSession,
           sessionsResult: state.sessionsResult,
           stream: state.chatStream,
           onRequestUpdate: () => state.requestUpdate?.(),

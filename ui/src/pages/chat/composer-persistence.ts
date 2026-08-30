@@ -4,6 +4,7 @@ import type {
   ChatGoalDraftMode,
   ChatQueueItem,
 } from "../../lib/chat/chat-types.ts";
+import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   MAX_STORED_QUEUE_ITEMS,
@@ -19,6 +20,7 @@ import {
 } from "../../lib/chat/outbox-store-draft-state.ts";
 import {
   applyStoredChatOutboxScope,
+  captureChatOutboxAdmission,
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore as readStore,
   resolvePendingComposerSessions,
@@ -126,13 +128,24 @@ function serializeChatAttachment(attachment: ChatAttachment): ChatAttachment | n
 function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (
     !item.id?.trim() ||
-    (!item.text?.trim() && !item.attachments?.length) ||
+    (!item.text?.trim() &&
+      !item.attachments?.length &&
+      !item.attachmentPayload &&
+      !item.attachmentStorageError) ||
     item.pendingRunId ||
     (item.sendState === "sending" && !item.sendRunId)
   ) {
     return null;
   }
-  const attachments = item.attachments?.map(serializeChatAttachment) ?? [];
+  const attachments = (item.attachments ?? []).map((attachment) => {
+    const { dataUrl: _dataUrl, previewUrl: _previewUrl, ...metadata } = attachment;
+    // A failed migration owns no Blob yet: retain its inline bytes across reload.
+    // Only a payload reference permits removing bytes from the stored queue row.
+    if (item.attachmentPayload) {
+      return metadata;
+    }
+    return serializeChatAttachment(attachment) ?? (item.attachmentStorageError ? metadata : null);
+  });
   if (item.attachments?.length && attachments.some((attachment) => attachment === null)) {
     return null;
   }
@@ -168,7 +181,8 @@ function queueItemVersionMatches(
     stored.sendState === canonicalExpected.sendState &&
     stored.agentId === canonicalExpected.agentId &&
     stored.sessionKey === canonicalExpected.sessionKey &&
-    stored.orderKey === canonicalExpected.orderKey,
+    stored.orderKey === canonicalExpected.orderKey &&
+    stored.attachmentPayload?.key === canonicalExpected.attachmentPayload?.key,
   );
 }
 
@@ -280,7 +294,7 @@ export function loadChatComposerCommittedDraftRevision(
 export function loadChatComposerSnapshot(
   state: Pick<
     ChatComposerPersistenceState,
-    "settings" | "assistantAgentId" | "agentsList" | "hello"
+    "settings" | "assistantAgentId" | "agentsList" | "hello" | "client" | "connected"
   >,
   sessionKey: string,
   agentIdOverride?: string,
@@ -294,7 +308,7 @@ export function loadChatComposerSnapshot(
 function loadCapturedChatComposerSnapshot(
   state: Pick<
     ChatComposerPersistenceState,
-    "settings" | "assistantAgentId" | "agentsList" | "hello"
+    "settings" | "assistantAgentId" | "agentsList" | "hello" | "client" | "connected"
   >,
   captured: StoredChatOutboxScope,
 ): { draft: string; goalMode?: ChatGoalDraftMode; queue: ChatQueueItem[] } | null {
@@ -322,6 +336,7 @@ function loadCapturedChatComposerSnapshot(
       draft,
       ...(session.goalMode ? { goalMode: session.goalMode } : {}),
       queue: (session.queue ?? [])
+        .filter((item) => outboxPayloadMatchesOwner(state, item))
         .map((item) => serializeQueueItemForScope(item, captured))
         .filter((item): item is ChatQueueItem => item !== null),
     };
@@ -337,10 +352,7 @@ function persistChatComposerStateResult(
 ): ChatComposerPersistStatus {
   return persistCapturedChatComposerStateResult(
     state,
-    {
-      scope: resolveStoredChatOutboxScope(state, sessionKey, options.agentId),
-      awaitingDefaults: !hasUiSessionDefaults(state),
-    },
+    captureChatOutboxAdmission(state, sessionKey, options.agentId),
     options,
   );
 }
@@ -449,6 +461,7 @@ export function admitStoredChatComposerQueueItem(
   item: ChatQueueItem,
   agentId?: string,
   replaces?: StoredChatQueueReplacement,
+  captured = captureChatOutboxAdmission(state, sessionKey, agentId ?? item.agentId),
 ): boolean {
   const storage = getSafeSessionStorage();
   if (!storage || !sessionKey.trim()) {
@@ -457,7 +470,7 @@ export function admitStoredChatComposerQueueItem(
   try {
     const target = storageTargetForGateway(state.settings?.gatewayUrl);
     const store = readStore(storage, target);
-    const scope = resolveStoredChatOutboxScope(state, sessionKey, agentId ?? item.agentId);
+    const scope = captured.scope;
     const serialized = serializeQueueItemForScope(item, scope);
     if (!serialized) {
       return false;
@@ -495,7 +508,7 @@ export function admitStoredChatComposerQueueItem(
       return false;
     }
     writeStoredComposerSession(store, storeSessionKey, session, [...queue, serialized]);
-    if (!hasUiSessionDefaults(state)) {
+    if (captured.awaitingDefaults) {
       store.sessions[storeSessionKey]!.awaitingDefaults = true;
     }
     writeStore(storage, target, store);
@@ -1044,10 +1057,18 @@ export class ChatComposerPersistence {
     if (!scope) {
       return;
     }
+    const previousOwner = this.durableOwner;
+    // Draft writes notify panes synchronously. Publish the new owner before
+    // clearing the old draft so reentrant persistence cannot repeat this transition.
+    this.durableOwner = {
+      client: state.client,
+      gatewayOwner: scope.gatewayOwner,
+      recoveryScope: scope.recoveryScope,
+    };
     if (
-      this.durableOwner &&
-      (this.durableOwner.gatewayOwner !== scope.gatewayOwner ||
-        this.durableOwner.recoveryScope !== scope.recoveryScope)
+      previousOwner &&
+      (previousOwner.gatewayOwner !== scope.gatewayOwner ||
+        previousOwner.recoveryScope !== scope.recoveryScope)
     ) {
       releaseChatAttachmentPayloads(state.chatAttachments);
       state.chatMessage = "";
@@ -1067,13 +1088,7 @@ export class ChatComposerPersistence {
       this.durableRestoreProtected = false;
       this.forceDurableOwnerRestore = true;
       this.durablePersistence.resetRestoreScope();
-      state.requestUpdate?.();
     }
-    this.durableOwner = {
-      client: state.client,
-      gatewayOwner: scope.gatewayOwner,
-      recoveryScope: scope.recoveryScope,
-    };
     if (this.durableRestoreProtected) {
       this.durableRestoreProtected = false;
       const snapshot = this.snapshot(

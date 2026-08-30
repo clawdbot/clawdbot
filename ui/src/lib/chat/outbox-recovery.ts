@@ -1,5 +1,9 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { hasUiSessionDefaults } from "../sessions/session-key.ts";
+import {
+  observeOutboxRecoveryOwner,
+  outboxPayloadMatchesOwner,
+} from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import {
   nextDraftRevision,
@@ -32,7 +36,11 @@ export function readChatOutboxRecovery(state: ChatComposerScope): {
   }
   const store = readStoredOutboxStore(storage, storageTargetForGateway(state.settings?.gatewayUrl));
   return {
-    entries: Object.entries(store.recovery).map(([id, entry]) => Object.assign({}, entry, { id })),
+    entries: Object.entries(store.recovery)
+      .filter(([, entry]) =>
+        (entry.session.queue ?? []).every((item) => outboxPayloadMatchesOwner(state, item)),
+      )
+      .map(([id, entry]) => Object.assign({}, entry, { id })),
     blocked: store.recoveryBlocked === true,
   };
 }
@@ -42,7 +50,12 @@ export function captureChatOutboxRecoveryDestination(
   scope: StoredChatOutboxScope,
 ) {
   const storage = getSafeSessionStorage();
-  if (!storage || !hasUiSessionDefaults(state)) {
+  if (
+    !storage ||
+    !hasUiSessionDefaults(state) ||
+    state.selectedChatSessionIncognito ||
+    (state.connected && state.client && !state.client.recoveryScopeReady)
+  ) {
     return null;
   }
   const target = storageTargetForGateway(state.settings?.gatewayUrl);
@@ -55,6 +68,7 @@ export function captureChatOutboxRecoveryDestination(
   return {
     scope,
     gatewayOwner: target.gatewayOwner,
+    recoveryScope: observeOutboxRecoveryOwner(state),
     session: JSON.stringify(session),
     revision: Math.max(
       session?.draftRevision ?? 0,
@@ -82,7 +96,10 @@ export function restoreChatOutboxRecovery(
     const target = storageTargetForGateway(state.settings?.gatewayUrl);
     const store = readStoredOutboxStore(storage, target);
     const { id, ...expected } = entry;
-    if (JSON.stringify(store.recovery[id]) !== JSON.stringify(expected)) {
+    if (
+      JSON.stringify(store.recovery[id]) !== JSON.stringify(expected) ||
+      !(entry.session.queue ?? []).every((item) => outboxPayloadMatchesOwner(state, item))
+    ) {
       return "conflict";
     }
     const scope = resolveStoredChatOutboxScope(

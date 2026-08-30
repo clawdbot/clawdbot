@@ -1,8 +1,13 @@
 // Status message tests cover status message formatting and persistence.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
 import { buildStatusMessage, buildStatusMessageParts } from "./status-message.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
@@ -42,6 +47,20 @@ describe("buildStatusMessage current time", () => {
 });
 
 describe("buildStatusMessageParts presentation", () => {
+  it("reports the loaded build commit", () => {
+    const parts = buildStatusMessageParts({
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(parts.presentation.title).toContain("(aaaaaaa)");
+  });
+
   it("mirrors the text body as a titled status table with context lines", () => {
     const parts = buildStatusMessageParts({
       now: 1_751_529_600_000,

@@ -2609,6 +2609,75 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
+  it.each(
+    [
+      {
+        name: "the corrected final payload",
+        provisional: "Working...",
+        replacement: "Done.",
+        payloads: [{ text: "Done." }],
+        expected: "Done.",
+      },
+      {
+        name: "all finalized payloads",
+        provisional: "First.Second.",
+        payloads: [{ text: "First." }, { text: "Second." }],
+        expected: "First.\n\nSecond.",
+      },
+      {
+        name: "streamed commentary when the final payload is empty",
+        provisional: "Working...",
+        payloads: [],
+        expected: "Working...",
+      },
+    ].flatMap((scenario) => (["required", "pinned"] as const).map((mode) => ({ scenario, mode }))),
+  )("uses $scenario.name for $mode tool-stream terminal commentary", async ({ scenario, mode }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId: string }).runId;
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: scenario.provisional, delta: scenario.provisional },
+      });
+      if (scenario.replacement) {
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: scenario.replacement, delta: "", replace: true, phase: "final_answer" },
+        });
+      }
+      return {
+        payloads: scenario.payloads,
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
+        },
+      };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Check the weather." }],
+      stream: true,
+      tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
+      tool_choice:
+        mode === "required" ? "required" : { type: "function", function: { name: "get_weather" } },
+    });
+    let content = "";
+    const finishReasons: string[] = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        content += choice.delta.content ?? "";
+        if (choice.finish_reason) {
+          finishReasons.push(choice.finish_reason);
+        }
+      }
+    }
+    expect(content).toBe(scenario.expected);
+    expect(finishReasons).toEqual(["tool_calls"]);
+  });
+
   it.each([
     {
       name: "successful completion without a provider terminal",

@@ -335,6 +335,7 @@ describe("slackPlugin actions", () => {
         "send",
         "react",
         "reactions",
+        "conversation-open",
         "read",
         "edit",
         "delete",

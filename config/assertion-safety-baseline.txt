@@ -1798,7 +1798,7 @@ src/agents/embedded-agent-runner/run/attempt-client-tools.ts	2
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-finalize.ts	3
-src/agents/embedded-agent-runner/run/attempt-history.ts	19
+src/agents/embedded-agent-runner/run/attempt-history.ts	17
 src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	19
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	2
@@ -3133,7 +3133,7 @@ src/infra/fs-safe-remove.ts	4
 src/infra/gateway-lock.ts	4
 src/infra/gateway-processes.ts	1
 src/infra/gemini-auth.ts	1
-src/infra/git-commit.ts	2
+src/infra/git-commit.ts	1
 src/infra/heartbeat-outcome-store.ts	1
 src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1

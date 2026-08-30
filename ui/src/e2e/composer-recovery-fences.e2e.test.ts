@@ -89,7 +89,7 @@ suite.define(() => {
         }
         const records = await page.evaluate(() => {
           const raw = sessionStorage.getItem(
-            `openclaw.control.chatComposer.v3:${encodeURIComponent("ws://recovery-fence.test")}`,
+            `openclaw.control.chatComposer.v4:${encodeURIComponent("ws://recovery-fence.test")}`,
           );
           if (!raw) {
             throw new Error("Missing migrated recovery state");

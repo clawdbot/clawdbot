@@ -8,6 +8,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
@@ -28,6 +29,7 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
@@ -41,24 +43,42 @@ import {
 } from "./queued-message-edit.ts";
 
 const SESSION_KEY = "agent:main:main";
+const outboxSubscriptions: Array<() => void> = [];
+const stagedAttachments: ChatAttachment[] = [];
 
 beforeEach(() => {
+  installOutboxBrowserStorage();
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
 });
 
 afterEach(() => {
+  for (const unsubscribe of outboxSubscriptions.splice(0)) {
+    unsubscribe();
+  }
+  releaseChatAttachmentPayloads(stagedAttachments.splice(0));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+function trackOutboxProjection(host: Parameters<typeof subscribeChatOutboxProjection>[0]) {
+  const unsubscribe = subscribeChatOutboxProjection(host);
+  outboxSubscriptions.push(unsubscribe);
+  return unsubscribe;
+}
 
 function queueHost(
   items: readonly Partial<ChatQueueItem>[],
   overrides: Parameters<typeof makeChatHost>[0] = {},
 ) {
-  const host = makeChatHost({ sessionKey: SESSION_KEY, connected: false, ...overrides });
-  const unsubscribe = subscribeChatOutboxProjection(host as never);
+  const host = makeChatHost({
+    sessionKey: SESSION_KEY,
+    connected: false,
+    requestHandlers: {},
+    ...overrides,
+  });
+  const unsubscribe = trackOutboxProjection(host as never);
   items.forEach((item, index) => {
     expect(
       admitQueuedMessageForSession(host as never, SESSION_KEY, {
@@ -93,11 +113,13 @@ function storedOutboxesByAgent(host: unknown): Record<string, string[]> {
 
 /** An image whose bytes live in the payload store, so releasing it is observable. */
 function stageQueuedImage(id: string): ChatAttachment {
-  return registerChatAttachmentPayload({
+  const attachment = registerChatAttachmentPayload({
     attachment: { id, mimeType: "image/png" },
-    dataUrl: `data:image/png;base64,iVB${id}`,
+    dataUrl: "data:image/png;base64,cG5n",
     file: new File(["png"], `${id}.png`, { type: "image/png" }),
   });
+  stagedAttachments.push(attachment);
+  return attachment;
 }
 
 /** A full store: any write that would grow it is rejected, exactly as quota does. */
@@ -362,7 +384,7 @@ describe("queued message edit round-trip", () => {
       requestHandlers: { "chat.send": sendRequest },
       sessionKey: SESSION_KEY,
     });
-    const stopPeer = subscribeChatOutboxProjection(peer as never);
+    const stopPeer = trackOutboxProjection(peer as never);
 
     try {
       beginQueuedMessageEdit(host as never, original.id);
@@ -384,8 +406,12 @@ describe("queued message edit round-trip", () => {
 
   it("reports when a peer reorder crosses the row another pane is editing", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
-    const peer = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
-    const stopPeer = subscribeChatOutboxProjection(peer as never);
+    const peer = makeChatHost({
+      client: host.client,
+      connected: false,
+      sessionKey: SESSION_KEY,
+    });
+    const stopPeer = trackOutboxProjection(peer as never);
 
     try {
       beginQueuedMessageEdit(host as never, "queued-2");
@@ -401,8 +427,12 @@ describe("queued message edit round-trip", () => {
 
   it("translates peer reorder indices within one side of an edited-row barrier", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}, {}]);
-    const peer = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
-    const stopPeer = subscribeChatOutboxProjection(peer as never);
+    const peer = makeChatHost({
+      client: host.client,
+      connected: false,
+      sessionKey: SESSION_KEY,
+    });
+    const stopPeer = trackOutboxProjection(peer as never);
 
     try {
       beginQueuedMessageEdit(host as never, "queued-2");
@@ -452,7 +482,7 @@ describe("queued message edit round-trip", () => {
 
   it("cannot retire a row in the outbox a global agent switch left behind", async () => {
     const host = makeChatHost({ assistantAgentId: "lily", connected: false, sessionKey: "global" });
-    const unsubscribe = subscribeChatOutboxProjection(host as never);
+    const unsubscribe = trackOutboxProjection(host as never);
     expect(
       admitQueuedMessageForSession(host as never, "global", {
         id: "queued-1",

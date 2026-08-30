@@ -22,7 +22,7 @@ type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
 };
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
-const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
+const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
 
 function gatewayOwner(gatewayUrl: string | null | undefined): string {
   return gatewayUrl?.trim() || "default";
@@ -139,7 +139,7 @@ describe("chat composer persistence", () => {
     sessionStorage.setItem(
       storageKeyForGateway(gatewayUrl),
       JSON.stringify({
-        version: 3,
+        version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
@@ -161,7 +161,7 @@ describe("chat composer persistence", () => {
     const gatewayUrl = state.settings?.gatewayUrl;
     const storageKey = storageKeyForGateway(gatewayUrl);
     sessionStorage.setItem(
-      storageKey.replace(".v3:", ".v2:"),
+      storageKey.replace(".v4:", ".v2:"),
       JSON.stringify({
         version: 2,
         recovery: {},
@@ -508,33 +508,52 @@ describe("chat composer persistence", () => {
     ).toBe(false);
   });
 
-  it("uses item versions to reject stale updates and deletes", () => {
-    const state = createState({ chatMessage: "keep this draft" });
-    persistChatComposerState(state);
-    const original = reconnectItem("versioned", 1);
-    const attempted = { ...original, sendAttempts: 1 };
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
-    expect(updateStoredChatComposerQueueItem(state, state.sessionKey, original, attempted)).toBe(
-      true,
-    );
+  it.each(["send-attempt", "payload-reference"])(
+    "uses item versions to reject stale updates and deletes after a %s change",
+    (change) => {
+      const state = createState({
+        chatMessage: "keep this draft",
+        client: { recoveryScope: "versioned-owner", recoveryScopeReady: true },
+      });
+      persistChatComposerState(state);
+      const reference = {
+        key: "original-payload",
+        recoveryScope: "versioned-owner",
+        tabId: "versioned-tab",
+      };
+      const original: ChatQueueItem = {
+        ...reconnectItem("versioned", 1),
+        attachments: [{ id: "versioned-file", mimeType: "image/png", sizeBytes: 3 }],
+        attachmentPayload: reference,
+      };
+      const successor =
+        change === "send-attempt"
+          ? { ...original, sendAttempts: 1 }
+          : { ...original, attachmentPayload: { ...reference, key: "replacement-payload" } };
+      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      expect(updateStoredChatComposerQueueItem(state, state.sessionKey, original, successor)).toBe(
+        true,
+      );
 
-    expect(
-      updateStoredChatComposerQueueItem(state, state.sessionKey, original, {
-        ...original,
-        sendAttempts: 2,
-      }),
-    ).toBe(false);
-    expect(removeStoredChatComposerQueueItem(state, state.sessionKey, original.id, original)).toBe(
-      false,
-    );
-    expect(
-      removeStoredChatComposerQueueItem(state, state.sessionKey, attempted.id, attempted),
-    ).toBe(true);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)).toEqual({
-      draft: "keep this draft",
-      queue: [],
-    });
-  });
+      expect(
+        updateStoredChatComposerQueueItem(state, state.sessionKey, original, {
+          ...original,
+          sendAttempts: 2,
+        }),
+      ).toBe(false);
+      expect(
+        removeStoredChatComposerQueueItem(state, state.sessionKey, original.id, original),
+      ).toBe(false);
+      expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject(successor);
+      expect(
+        removeStoredChatComposerQueueItem(state, state.sessionKey, successor.id, successor),
+      ).toBe(true);
+      expect(loadChatComposerSnapshot(state, state.sessionKey)).toEqual({
+        draft: "keep this draft",
+        queue: [],
+      });
+    },
+  );
 
   it("keeps unresolved bare main and raw global independent until their owners resolve", () => {
     const offlineMain = createState({ agentsList: null, hello: null, sessionKey: "main" });
@@ -1199,7 +1218,7 @@ describe("chat composer persistence", () => {
     expect(listStoredChatOutboxes(otherGateway)).toEqual([]);
   });
 
-  it("isolates long same-prefix gateways in owner-tagged v3 buckets", () => {
+  it("isolates long same-prefix gateways in owner-tagged v4 buckets", () => {
     const sharedPrefix = `wss://gateway.test/${"a".repeat(260)}`;
     const firstGatewayUrl = `${sharedPrefix}?route=first`;
     const secondGatewayUrl = `${sharedPrefix}?route=second`;
@@ -1233,7 +1252,7 @@ describe("chat composer persistence", () => {
     });
     for (const gatewayUrl of [firstGatewayUrl, secondGatewayUrl]) {
       const stored = JSON.parse(sessionStorage.getItem(storageKeyForGateway(gatewayUrl)) ?? "{}");
-      expect(stored).toMatchObject({ gatewayOwner: gatewayUrl, version: 3 });
+      expect(stored).toMatchObject({ gatewayOwner: gatewayUrl, version: 4 });
     }
   });
 
@@ -1264,7 +1283,7 @@ describe("chat composer persistence", () => {
     }
   });
 
-  it("migrates an unambiguous shipped v1 bucket into owner-tagged v3", () => {
+  it("migrates an unambiguous shipped v1 bucket into owner-tagged v4", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
     const storageKey = storageKeyForGateway(gatewayUrl);
@@ -1291,7 +1310,7 @@ describe("chat composer persistence", () => {
     expect(sessionStorage.getItem(legacyStorageKey)).toBeNull();
     expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "{}")).toMatchObject({
       gatewayOwner: gatewayUrl,
-      version: 3,
+      version: 4,
       recovery: {},
     });
   });

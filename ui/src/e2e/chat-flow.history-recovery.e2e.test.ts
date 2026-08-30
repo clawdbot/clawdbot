@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -10,6 +11,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  readOutboxPayloadAttachments,
   requireString,
   scrollChatThreadToTop,
   visibleChatBubbleTexts,
@@ -734,6 +736,7 @@ suite.define(() => {
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
+      expect(secondParams.sessionKey).toBe(firstParams.sessionKey);
       expect(secondParams.message).toBe(prompt);
       await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
@@ -903,60 +906,38 @@ suite.define(() => {
       await queue.getByText(prompt).waitFor({ timeout: 10_000 });
       const requestsBeforeReconnect = await gateway.getRequests("chat.send");
       expect(requestsBeforeReconnect).toHaveLength(0);
-      const readStoredProof = () =>
-        page.evaluate(
-          ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
-            const storedValues = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v3:"))
-              .map(([, value]) => value);
-            const stored = storedValues.join("\n");
-            let runId: string | null = null;
-            for (const value of storedValues) {
-              try {
+      const readStoredProof = async () => {
+        const item = await page.evaluate(
+          (expectedPrompt) =>
+            Object.entries(sessionStorage)
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
+              .flatMap(([, value]) => {
                 const parsed = JSON.parse(value) as {
-                  sessions?: Record<
-                    string,
-                    {
-                      queue?: Array<{
-                        attachments?: Array<{ dataUrl?: unknown; fileName?: unknown }>;
-                        sendRunId?: unknown;
-                        text?: unknown;
-                      }>;
-                    }
-                  >;
+                  sessions: Record<string, { queue?: ChatQueueItem[] }>;
                 };
-                const item = Object.values(parsed.sessions ?? {})
-                  .flatMap((session) => session.queue ?? [])
-                  .find((entry) => entry.text === expectedPrompt);
-                if (typeof item?.sendRunId === "string") {
-                  runId = item.sendRunId;
-                  const attachment = item.attachments?.find(
-                    (entry) => entry.fileName === expectedAttachmentName,
-                  );
-                  return {
-                    attachment: attachment?.dataUrl === expectedAttachmentDataUrl,
-                    prompt: true,
-                    runId,
-                    waitingReconnect: value.includes('"sendState":"waiting-reconnect"'),
-                  };
-                }
-              } catch {
-                // Ignore unrelated malformed session storage in this focused proof.
-              }
-            }
-            return {
-              attachment: false,
-              prompt: stored.includes(expectedPrompt),
-              runId,
-              waitingReconnect: stored.includes('"sendState":"waiting-reconnect"'),
-            };
-          },
-          {
-            expectedAttachmentDataUrl: attachmentDataUrl,
-            expectedAttachmentName: attachmentName,
-            expectedPrompt: prompt,
-          },
+                return Object.values(parsed.sessions).flatMap((session) => session.queue ?? []);
+              })
+              .find((entry) => entry.text === expectedPrompt),
+          prompt,
         );
+        const attachment = item?.attachments?.find((entry) => entry.fileName === attachmentName);
+        const payload = item?.attachmentPayload
+          ? await readOutboxPayloadAttachments(page, item.attachmentPayload.key)
+          : null;
+        const storedAttachment = payload?.find((entry) => entry.fileName === attachmentName);
+        return {
+          attachment: Boolean(
+            attachment &&
+            storedAttachment &&
+            attachment.dataUrl === undefined &&
+            `data:${storedAttachment.mimeType};base64,${storedAttachment.base64}` ===
+              attachmentDataUrl,
+          ),
+          prompt: item !== undefined,
+          runId: item?.sendRunId ?? null,
+          waitingReconnect: item?.sendState === "waiting-reconnect",
+        };
+      };
       await expect.poll(readStoredProof).toEqual({
         attachment: true,
         prompt: true,

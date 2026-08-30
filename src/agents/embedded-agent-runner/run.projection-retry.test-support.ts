@@ -1,17 +1,17 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let agentDatabase: typeof import("../../state/openclaw-agent-db.js");
 let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
@@ -29,14 +29,26 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.projection-retry" });
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
+    expect(
+      agentDatabase
+        .listOpenClawAgentDatabasesForTest()
+        .filter((database) => database.path.startsWith(`${state.stateDir}${path.sep}`)),
+    ).toEqual([]);
+    await expect(fs.stat(state.root)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("settles an owned compacted retry before durable reopen while ordinary reads stay fail-fast", async () => {
     const sessionId = "projection-retry-session";
     const sessionKey = "agent:main:projection-retry";
-    const storePath = path.join(tempDirs.make("openclaw-projection-retry-"), "sessions.json");
+    const storePath = state.statePath("alternate", "sessions.json");
     const sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
     await sessionAccessor.persistSessionTranscriptTurn(sessionTarget, {
       messages: [
@@ -114,7 +126,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       });
 
       await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         runId: "run-owned-projection-retry",
         sessionId,
         sessionKey,
@@ -126,10 +138,18 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(waitForProjection).toHaveBeenCalledOnce();
       expect(waitForProjection).toHaveBeenCalledWith(sessionTarget, controller.signal);
+      agentDatabase.closeOpenClawAgentDatabaseByPath(
+        agentDatabase.resolveOpenClawAgentSqlitePath(databaseOptions),
+      );
+      expect(
+        activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
+          maxMessages: 1,
+          offset: 0,
+        }).totalMessages,
+      ).toBe(1);
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
-      agentDatabase.closeOpenClawAgentDatabasesForTest();
     }
   });
 });

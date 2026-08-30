@@ -5,7 +5,8 @@ import { retireSessionPaneHandoffs } from "../../pages/chat/chat-pane-shared.ts"
 import { deleteStoredChatSessionSnapshots } from "../../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { showToast } from "../toast.ts";
 import { retireDurableComposerDrafts } from "./composer-draft-store.runtime.ts";
-import { retireStoredComposerDrafts, storedChatOutboxScopeKey } from "./outbox-store.ts";
+import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
+import { storedChatOutboxScopeKey } from "./outbox-store.ts";
 
 type DeletedComposerDraftTarget = {
   key: string;

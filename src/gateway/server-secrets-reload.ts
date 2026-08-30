@@ -1,5 +1,8 @@
 // Owns serialized secrets snapshot replacement and dependent runtime lifecycle recovery.
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
@@ -65,12 +68,18 @@ export type GatewaySecretsReloaderParams = {
 async function activateSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   expectedRevision: number,
-  options: { canActivate: () => boolean; onActivated: () => void },
+  options: {
+    canActivate: () => boolean;
+    onActivated: () => void;
+    runtimeSourceConfig: OpenClawConfig | undefined;
+  },
 ): Promise<number | null> {
   const runtime = await import("../secrets/runtime.js");
   if (
     !options.canActivate() ||
-    !runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision)
+    !runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, {
+      runtimeSourceConfig: options.runtimeSourceConfig,
+    })
   ) {
     return null;
   }
@@ -83,9 +92,14 @@ async function restoreSnapshotIfCurrent(
   expectedRevision: number,
   ownedSnapshot: PreparedSecretsRuntimeSnapshot,
   onActivated: () => void,
+  runtimeSourceConfig: OpenClawConfig | undefined,
 ): Promise<void> {
   const runtime = await import("../secrets/runtime.js");
-  if (runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot)) {
+  if (
+    runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot, {
+      runtimeSourceConfig,
+    })
+  ) {
     onActivated();
   }
 }
@@ -146,6 +160,7 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
       let transaction:
         | (SecretsReloadPublication & {
             previousSnapshot: PreparedSecretsRuntimeSnapshot;
+            previousRuntimeSourceConfig: OpenClawConfig | undefined;
             previousGeneration: string | undefined;
             previousRequiredGeneration: string | undefined | null;
             prepared: PreparedSecretsRuntimeSnapshot;
@@ -171,6 +186,8 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
             throw new Error("Secrets runtime snapshot is not active.");
           }
           const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+          // Credential refresh must not promote catalog defaults into authored transport policy.
+          const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
           const previousOwnership = captureSharedGatewaySessionGenerationOwnership(
             params.sharedGatewaySessionGenerationState,
           );
@@ -209,6 +226,7 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
             transaction = {
               ...capturePublication(generationOwnership),
               previousSnapshot,
+              previousRuntimeSourceConfig,
               previousGeneration,
               previousRequiredGeneration,
               prepared,
@@ -227,7 +245,11 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
             const activated = await activateIfCurrent(
               prepared,
               previousRevision,
-              { reason: "reload", activate: true },
+              {
+                reason: "reload",
+                activate: true,
+                runtimeSourceConfig: previousRuntimeSourceConfig,
+              },
               claimGeneration,
               ownsPreviousGeneration,
             );
@@ -241,6 +263,7 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
               {
                 canActivate: ownsPreviousGeneration,
                 onActivated: claimGeneration,
+                runtimeSourceConfig: previousRuntimeSourceConfig,
               },
             );
             if (publishedSnapshotRevision === null) {
@@ -416,6 +439,7 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
                   ),
                 );
               },
+              failedTransaction.previousRuntimeSourceConfig,
             );
             await restoration?.modelPublication;
           } catch {

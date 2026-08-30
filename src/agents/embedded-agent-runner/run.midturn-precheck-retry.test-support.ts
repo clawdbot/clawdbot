@@ -1,5 +1,6 @@
 // Full-entry coverage for retrying an already-capped mid-turn transcript.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   makeAttemptResult,
@@ -9,7 +10,7 @@ import {
 import {
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
@@ -28,6 +29,7 @@ const settledExecResult = {
   timestamp: 2,
 };
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function requireAttemptCall(index: number): {
@@ -52,7 +54,7 @@ function expectRetryContinuesFromTranscript(): void {
   const retry = requireAttemptCall(1);
   expect(retry.prompt).toContain("Continue from the current transcript");
   expect(retry.suppressNextUserMessagePersistence).toBe(true);
-  expect(retry.prompt).not.toBe(overflowBaseRunParams.prompt);
+  expect(retry.prompt).not.toBe(createOverflowRunParams(state).prompt);
 }
 
 function makeReplayUnsafeMidTurnOverflow(params?: {
@@ -101,8 +103,14 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.midturn-precheck-retry" });
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("continues once when persisted truncation is already a no-op", async () => {
@@ -122,7 +130,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       .mockResolvedValueOnce(makeAttemptResult());
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-midturn-precheck-noop",
       promptCacheKey: "stable-cache-key",
     });
@@ -162,7 +170,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-midturn-precheck-provider-overflow",
     });
 
@@ -185,7 +193,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-midturn-settled-unsafe",
     });
 
@@ -216,7 +224,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-midturn-waiting-exec",
     });
 
@@ -250,7 +258,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       );
 
       const result = await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         runId: `run-midturn-waiting-exec-rotated-${activeCount}`,
       });
 
@@ -273,7 +281,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: `run-midturn-fail-closed-${_label.replaceAll(" ", "-")}`,
     });
 
@@ -297,7 +305,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     });
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-midturn-settled-compaction-failure",
     });
 

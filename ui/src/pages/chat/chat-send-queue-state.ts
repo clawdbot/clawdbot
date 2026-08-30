@@ -1,5 +1,6 @@
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -8,22 +9,29 @@ import type {
   QueuedChatSendResult,
   QueuedChatStorageMode,
 } from "./chat-outbox-drain.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
-  keepVolatileQueuedMessage,
   readQueuedMessageById,
   updateQueuedMessageForSession,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { chatSendHoldReason, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import {
+  chatSendHoldReason,
+  surfaceChatDeliveryFailure,
+  OFFLINE_QUEUE_STORAGE_ERROR,
+} from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
+import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-  type StoredChatOutboxScope,
-} from "./composer-persistence.ts";
+  captureOutboxPayloadOwner,
+  failOutboxPayload,
+  prepareOutboxPayload,
+  retireOutboxPayload,
+} from "./outbox-payloads.ts";
 import { controlUiNowMs } from "./performance.ts";
+import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
@@ -36,7 +44,7 @@ export function setChatError(
   host.chatError = message;
 }
 
-export function enqueuePendingSendMessage(
+export function createPendingSendMessage(
   host: ChatHost,
   text: string,
   attachments?: ChatAttachment[],
@@ -48,12 +56,13 @@ export function enqueuePendingSendMessage(
   queueMode?: ChatQueueItem["queueMode"],
   intent?: ChatQueueItem["intent"],
   expectedLeafEntryId?: string | null,
-): ChatQueueItem | null {
+): { item: ChatQueueItem; admission: ReturnType<typeof captureChatOutboxAdmission> } | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return null;
   }
+  const admission = captureChatOutboxAdmission(host, host.sessionKey);
   const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
   // A send that resumes an edited row inherits its place; the row itself is
   // retired by the write that admits this replacement, not here.
@@ -73,20 +82,26 @@ export function enqueuePendingSendMessage(
       : {}),
     ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
     sendSubmittedAtMs: submittedAtMs,
-    ...resolveStoredChatOutboxScope(host, host.sessionKey),
+    ...admission.scope,
     ...(sender ? { sender } : {}),
     ...(replyToId ? { replyToId } : {}),
   };
-  keepVolatileQueuedMessage(host, host.sessionKey, pending, pending.agentId);
+  return { item: pending, admission };
+}
+
+export function publishPendingSendMessage(host: ChatHost, pending: ChatQueueItem): void {
+  const submittedAtMs = pending.sendSubmittedAtMs ?? controlUiNowMs();
+  chatOutboxOwner(host).keep(
+    host,
+    { sessionKey: pending.sessionKey!, agentId: pending.agentId },
+    pending,
+  );
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
-  if (sendState === "waiting-model" || sendState === "waiting-reconnect") {
-    recordChatSendTiming(host, pending, sendState, submittedAtMs);
+  if (pending.sendState === "waiting-model" || pending.sendState === "waiting-reconnect") {
+    recordChatSendTiming(host, pending, pending.sendState, submittedAtMs);
   }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
-  scheduleChatScroll(host, true, false, {
-    source: "manual",
-  });
-  return pending;
+  scheduleChatScroll(host, true, false, { source: "manual" });
 }
 
 export function reconnectSafeQueuedSendState(
@@ -203,4 +218,71 @@ export async function waitForPendingChatSettings(
     pending = nextPending;
   }
   return false;
+}
+
+export async function prepareQueuedChatPayload(
+  host: ChatHost,
+  queued: ChatQueueItem,
+  queuedSessionKey: string,
+): Promise<ChatQueueItem | QueuedChatSendResult> {
+  const id = queued.id;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
+  const ownerIsCurrent = captureOutboxPayloadOwner(host);
+  const original = queued;
+  const payload = await prepareOutboxPayload(host, original);
+  const current = readQueuedMessageById(host, id);
+  if (
+    !connectionIsCurrent() ||
+    !ownerIsCurrent() ||
+    !current ||
+    current.sendRunId !== original.sendRunId ||
+    current.attachmentPayload?.key !== original.attachmentPayload?.key ||
+    current.sendAttempts !== original.sendAttempts ||
+    current.sendState !== original.sendState ||
+    isQueuedMessageBeingEdited(host, id)
+  ) {
+    if (payload.status === "ready" && !original.attachmentPayload) {
+      retireOutboxPayload(payload.item);
+    }
+    return "pending";
+  }
+  if (payload.status === "failed") {
+    const failed = failOutboxPayload(current, payload.reason);
+    updateQueuedMessageForSession(host, original.sessionKey ?? queuedSessionKey, id, () => failed);
+    surfaceChatDeliveryFailure(
+      host,
+      original.sessionKey ?? queuedSessionKey,
+      original.agentId,
+      failed.sendError,
+    );
+    return "failed";
+  }
+  const hydrated = payload.item;
+  if (
+    hydrated.attachmentPayload?.key !== original.attachmentPayload?.key &&
+    hydrated.sendState === "unconfirmed"
+  ) {
+    updateQueuedMessageForSession(
+      host,
+      original.sessionKey ?? queuedSessionKey,
+      id,
+      () => payload.item,
+    );
+    return "pending";
+  }
+  if (
+    (!original.attachmentPayload || original.attachmentStorageError) &&
+    !updateQueuedMessageForSession(
+      host,
+      original.sessionKey ?? queuedSessionKey,
+      id,
+      () => payload.item,
+    )
+  ) {
+    if (!original.attachmentPayload) {
+      retireOutboxPayload(payload.item);
+    }
+    return "pending";
+  }
+  return payload.item;
 }

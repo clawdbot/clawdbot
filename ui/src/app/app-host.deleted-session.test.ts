@@ -236,7 +236,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       const storage = createStorageMock();
       vi.stubGlobal("sessionStorage", storage);
       const gatewayUrl = "ws://gateway.test";
-      const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+      const storageKey = storageTargetForGateway(gatewayUrl).key;
       const replacement = { ...h.alpha, sessionId: "generation-b" };
       const { shell, replace } = createSessionRecoveryShell({
         activeSessionKey: h.alpha.key,
@@ -262,7 +262,8 @@ describe("OpenClaw shell deleted-session recovery", () => {
         storage.setItem(
           storageKey,
           JSON.stringify({
-            version: 2,
+            version: 4,
+            recovery: {},
             gatewayOwner: gatewayUrl,
             sessions: {
               [`${h.alpha.key}\u0000agent:main`]: {
@@ -310,7 +311,6 @@ describe("OpenClaw shell deleted-session recovery", () => {
         const scopeKey = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
         const retired = h.sessions.state.deletedSessions.find(({ key }) => key === h.alpha.key)!;
         await vi.waitFor(() => {
-          expect(storage.getItem(storageKey)).toBeNull();
           const tombstone = readStoredOutboxStore(storage, target).sessions[scopeKey];
           expect(tombstone).toEqual({
             draftRevision: expect.any(Number),
@@ -333,10 +333,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
     const gatewayUrl = "ws://gateway.test";
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
+    const storageKey = storageTargetForGateway(gatewayUrl).key;
     storage.setItem(
-      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      storageKey,
       JSON.stringify({
-        version: 2,
+        version: 4,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           [`${deletedKey}\u0000agent:main`]: {
@@ -376,9 +378,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       deletedSessions: [],
     });
     await import("../lib/chat/composer-draft-retirement.runtime.ts");
-    expect(
-      storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`),
-    ).toContain("retire me");
+    expect(storage.getItem(storageKey)).toContain("retire me");
     shell.observeDeletedSessions(state);
     shell.observeDeletedSessions(state);
 

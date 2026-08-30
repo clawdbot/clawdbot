@@ -52,14 +52,19 @@ suite.define(() => {
       const draftStore = await page.evaluateHandle<
         typeof import("../lib/chat/composer-draft-store.runtime.ts")
       >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const outboxStore = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
+        'import("/src/lib/chat/outbox-store.ts")',
+      );
       const owner = await page.evaluate(
-        async ({ store, sessionKeys }) => {
+        async ({ store, outbox, sessionKeys }) => {
           const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
             ?.context.gateway.snapshot.client;
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
-          const gatewayOwner = client.gatewayUrl.trim() || "default";
+          const { gatewayOwner, key: storageKey } = outbox.storageTargetForGateway(
+            client.gatewayUrl,
+          );
           const sessions = Object.fromEntries(
             sessionKeys.map((key, index) => [
               `${key}\u0000agent:main`,
@@ -72,8 +77,8 @@ suite.define(() => {
             ]),
           );
           sessionStorage.setItem(
-            `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayOwner)}`,
-            JSON.stringify({ version: 3, gatewayOwner, sessions, recovery: {} }),
+            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}`,
+            JSON.stringify({ version: 4, gatewayOwner, sessions, recovery: {} }),
           );
           const recoveryScope = client.recoveryScope;
           await Promise.all(
@@ -89,9 +94,9 @@ suite.define(() => {
               ),
             ),
           );
-          return { gatewayOwner, recoveryScope };
+          return { gatewayOwner, recoveryScope, storageKey };
         },
-        { store: draftStore, sessionKeys: keys },
+        { store: draftStore, outbox: outboxStore, sessionKeys: keys },
       );
       const deleteFromRuntime = (sessionKeys: string[]) =>
         page.evaluate(async (targets) => {
@@ -125,7 +130,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
       const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, unknown>;
           };
@@ -155,7 +160,7 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             async ({ store, key, scopeOwner }) => {
-              const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
               const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
                 sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
               };
@@ -177,7 +182,7 @@ suite.define(() => {
 
       await page.evaluate(
         async ({ store, key, scopeOwner }) => {
-          const storageKey = `openclaw.control.chatComposer.v3:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, { draft?: string; draftRevision?: number }>;
           };
@@ -217,7 +222,7 @@ suite.define(() => {
             async ({ store, sessionKeys, scopeOwner }) => {
               const local = JSON.parse(
                 sessionStorage.getItem(
-                  `openclaw.control.chatComposer.v3:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
+                  `openclaw.control.chatComposer.v4:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
                 ) ?? "{}",
               ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
               return Object.fromEntries(

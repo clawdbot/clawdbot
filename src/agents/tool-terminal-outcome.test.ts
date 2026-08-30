@@ -144,6 +144,21 @@ describe("tool terminal outcome observer", () => {
       state: "failed_no_effect",
     },
     {
+      name: "completed computer observation",
+      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed computer observation",
+      input: {
+        toolName: "computer",
+        arguments: { action: "get_cursor_position" },
+        outcome: "failure",
+        failure: { error: "observation unavailable" },
+      },
+      state: "failed_no_effect",
+    },
+    {
       name: "owner-declared replay-safe failure",
       input: {
         toolName: "plugin_read",

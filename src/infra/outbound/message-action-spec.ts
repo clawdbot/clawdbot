@@ -60,6 +60,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "channel-info": "channelId",
     "channel-list": "none",
     "channel-create": "none",
+    "conversation-open": "none",
     "channel-edit": "channelId",
     "channel-delete": "channelId",
     "channel-move": "channelId",

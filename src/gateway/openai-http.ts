@@ -1172,11 +1172,9 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
 
-  let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let streamedAssistantText = "";
-  let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
@@ -1285,13 +1283,7 @@ export async function handleOpenAiHttpRequest(
       // If the provider ignores `tool_choice`, no partial text should leak
       // before the stream fails with an OpenAI-compatible error payload.
       if (toolChoiceConstraint) {
-        bufferedAssistantContent += content;
         return;
-      }
-
-      if (!wroteRole) {
-        wroteRole = true;
-        writeAssistantRoleChunk(res, streamIdentity);
       }
 
       sawAssistantDelta = true;
@@ -1350,7 +1342,6 @@ export async function handleOpenAiHttpRequest(
     releaseStreamRootWork();
   });
 
-  wroteRole = true;
   writeAssistantRoleChunk(res, streamIdentity);
 
   void (async () => {
@@ -1400,14 +1391,11 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        if (!wroteRole) {
-          wroteRole = true;
-          writeAssistantRoleChunk(res, streamIdentity);
-        }
         if (!sawAssistantDelta) {
+          // Final payloads own held prose; snapshots may replace provisional deltas.
           const commentary =
-            bufferedAssistantContent ||
             resolveAgentResponseCommentary(result) ||
+            streamedAssistantText ||
             bufferedReplaceableAssistantContent;
           if (commentary) {
             sawAssistantDelta = true;
@@ -1426,11 +1414,6 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (!sawAssistantDelta) {
-        if (!wroteRole) {
-          wroteRole = true;
-          writeAssistantRoleChunk(res, streamIdentity);
-        }
-
         const content =
           resolveAgentResponseCommentary(result) ||
           bufferedReplaceableAssistantContent ||

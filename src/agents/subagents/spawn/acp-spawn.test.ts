@@ -1285,6 +1285,50 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
+  it("strips an inherited OpenClaw auth profile before ACP initialization", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            model: "openai/gpt-5.6-luna@openai:test-profile",
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "Investigate flaky tests", agentId: "codex" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toEqual(
+      expect.objectContaining({ model: "openai/gpt-5.6-luna" }),
+    );
+  });
+
+  it("rejects an explicit OpenClaw auth profile for ACP runtimes", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "openai/gpt-5.6-luna@openai:test-profile",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result).toHaveProperty(
+      "error",
+      "ACP model overrides cannot select OpenClaw auth profiles; configure credentials in the ACP runtime instead.",
+    );
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
   it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),

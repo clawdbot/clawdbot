@@ -131,7 +131,7 @@ describe("outbox destination identity", () => {
 });
 
 describe("outbox browser-state transfer", () => {
-  const seed = (version: 1 | 2, sessions: Record<string, unknown>) => {
+  const seed = (version: 1 | 2 | 3, sessions: Record<string, unknown>) => {
     const key = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
     const raw = JSON.stringify({ version, gatewayOwner: gatewayUrl, sessions });
     sessionStorage.setItem(key, raw);
@@ -200,10 +200,14 @@ describe("outbox browser-state transfer", () => {
     expect(restoreChatOutboxRecovery(state, entry!, destination)).toBe("conflict");
   });
 
-  it.each(["throw", "noop"])("keeps source bytes when migration storage writes %s", (failure) => {
-    const source = seed(2, { "global\u0000agent:selected": legacy });
+  it.each(
+    ([1, 2, 3] as const).flatMap((version) =>
+      ["quota", "noop"].map((failure) => ({ version, failure })),
+    ),
+  )("keeps v$version source bytes when migration writes $failure", ({ version, failure }) => {
+    const source = seed(version, { "main\u0000agent:selected": legacy });
     const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-      if (failure === "throw") {
+      if (failure === "quota") {
         throw new DOMException("quota", "QuotaExceededError");
       }
     });
@@ -228,41 +232,47 @@ describe("outbox browser-state transfer", () => {
     expect(readChatOutboxRecovery(state).entries[0]).toEqual(entry);
   });
 
-  it("retains later writes from an older UI for review after the current namespace exists", () => {
-    const source = seed(2, { "global\u0000agent:selected": legacy });
-    const first = readChatOutboxRecovery(state).entries[0]!;
-    const later = { ...legacy, draft: "written after downgrade", draftRevision: 99 };
-    seed(2, { "global\u0000agent:selected": later });
-    const entries = readChatOutboxRecovery(state).entries;
-    expect(entries.map((entry) => entry.session.draft)).toEqual([
-      first.session.draft,
-      "written after downgrade",
-    ]);
-    expect(listStoredChatOutboxes(state)).toEqual([]);
-    expect(sessionStorage.getItem(source.key)).toBeNull();
-  });
+  it.each([1, 2, 3] as const)(
+    "retains later v%i writes for review after the current namespace exists",
+    (version) => {
+      const source = seed(version, { "main\u0000agent:selected": legacy });
+      const first = readChatOutboxRecovery(state).entries[0]!;
+      const later = { ...legacy, draft: "written after downgrade", draftRevision: 99 };
+      seed(version, { "main\u0000agent:selected": later });
+      const entries = readChatOutboxRecovery(state).entries;
+      expect(entries.map((entry) => entry.session.draft)).toEqual([
+        first.session.draft,
+        "written after downgrade",
+      ]);
+      expect(listStoredChatOutboxes(state)).toEqual([]);
+      expect(sessionStorage.getItem(source.key)).toBeNull();
+    },
+  );
 
-  it("does not reimport an acknowledged source when legacy deletion failed", () => {
-    const source = seed(2, { "global\u0000agent:selected": legacy });
-    const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {});
-    const entry = readChatOutboxRecovery(state).entries[0]!;
-    const destination = captureChatOutboxRecoveryDestination(state, {
-      sessionKey: state.sessionKey,
-      agentId: "default",
-    })!;
-    expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
-    expect(sessionStorage.getItem(source.key)).toBe(source.raw);
-    expect(readChatOutboxRecovery(state).entries).toEqual([]);
-    expect(listStoredChatOutboxes(state)[0]?.queue).toHaveLength(60);
-    remove.mockRestore();
-  });
+  it.each([1, 2, 3] as const)(
+    "does not reimport an acknowledged v%i source when legacy deletion failed",
+    (version) => {
+      const source = seed(version, { "main\u0000agent:selected": legacy });
+      const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {});
+      const entry = readChatOutboxRecovery(state).entries[0]!;
+      const destination = captureChatOutboxRecoveryDestination(state, {
+        sessionKey: state.sessionKey,
+        agentId: "default",
+      })!;
+      expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
+      expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+      expect(readChatOutboxRecovery(state).entries).toEqual([]);
+      expect(listStoredChatOutboxes(state)[0]?.queue).toHaveLength(60);
+      remove.mockRestore();
+    },
+  );
 
   it("keeps full recovery usable while a later source waits intact for space", () => {
     const target = storageTargetForGateway(gatewayUrl);
     sessionStorage.setItem(
       target.key,
       JSON.stringify({
-        version: 3,
+        version: 4,
         gatewayOwner: gatewayUrl,
         sessions: {},
         recovery: Object.fromEntries(

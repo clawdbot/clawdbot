@@ -258,6 +258,7 @@ vi.mock("./command-execution-startup.js", () => ({
 
 vi.mock("../version.js", () => ({
   VERSION: "9.9.9-test",
+  resolveRuntimeServiceCommit: () => null,
 }));
 
 vi.mock("./banner.js", () => ({

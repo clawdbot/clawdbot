@@ -9,10 +9,13 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { writeConfigFile } from "../config/config.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  activateSecretsRuntimeSnapshot,
+  activateSecretsRuntimeSnapshotWithSource,
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
@@ -92,8 +95,10 @@ afterEach(async () => {
 async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
   const config = sourceConfig();
   await state.writeConfig(config);
+  const runtimeConfig: OpenClawConfig = structuredClone(config);
+  runtimeConfig.models!.providers!["healthy-fixture"]!.models[0]!.compat = { supportsStore: false };
   const initial = await prepareSecretsRuntimeSnapshot({
-    config,
+    config: runtimeConfig,
     allowUnavailableSecretOwners: true,
   });
   expect(initial.degradedOwners).toEqual(
@@ -105,7 +110,7 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
       }),
     ]),
   );
-  activateSecretsRuntimeSnapshot(initial);
+  activateSecretsRuntimeSnapshotWithSource(initial, config);
   await refreshPreparedModelRuntimeSnapshots(requireRuntimeConfig(), {
     catalogMode: "static",
     gatewayLifecycle: true,
@@ -143,11 +148,12 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
 
 describe("secret reload model-runtime publication", () => {
   it("publishes recovered config refs to the model owner without an auth-profile mutation", async () => {
-    const { reload } = await coldRuntime();
+    const { config, reload } = await coldRuntime();
     const authRevision = getRuntimeAuthProfileStoreCredentialsRevision();
 
     await reload();
 
+    expect(getRuntimeConfigSourceSnapshot()).toEqual(config);
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(authRevision);
     expect(requireRuntimeConfig().models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
       "recovered-fixture-key",
@@ -162,13 +168,14 @@ describe("secret reload model-runtime publication", () => {
   });
 
   it("restores the authoritative runtime model config after a publication failure", async () => {
-    const { reload } = await coldRuntime();
+    const { config, reload } = await coldRuntime();
     vi.spyOn(providerCatalog, "prepareImplicitProviderStaticCatalog").mockRejectedValueOnce(
       new Error("catalog build failed"),
     );
 
     await expect(reload()).rejects.toThrow("catalog build failed");
 
+    expect(getRuntimeConfigSourceSnapshot()).toEqual(config);
     const current = requireRuntimeConfig();
     const published = await prepareModelRuntimeSnapshot({
       config: current,
@@ -287,6 +294,7 @@ describe("secret reload model-runtime publication", () => {
         await nextPublication;
         expect((await reader).config).toBe(current);
         expect(requireRuntimeConfig()).toBe(current);
+        expect(getRuntimeConfigSourceSnapshot()?.models).toEqual(next.models);
         expect(generationState).toEqual({ current: "newer", required: null });
       } finally {
         release.resolve();
