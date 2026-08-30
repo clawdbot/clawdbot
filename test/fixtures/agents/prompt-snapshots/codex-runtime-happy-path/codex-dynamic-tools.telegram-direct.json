@@ -1143,7 +1143,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+        "description": "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
         "inputSchema": {
           "properties": {
             "limit": {

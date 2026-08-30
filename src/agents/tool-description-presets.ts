@@ -88,7 +88,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
 /** Describes the sessions_search tool for model-facing instructions. */
 export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "Search your own past sessions for matching user and assistant text.",
+    "Search visible past sessions for matching user and assistant text.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
