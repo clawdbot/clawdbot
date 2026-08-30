@@ -151,6 +151,11 @@ and `sqlite-volume`. In aggregate runs,
 fixtures but excludes the expensive `sqlite-volume` scenario. Use
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=far-reaching` to include it.
 
+`auth-profile-v2026-7-2-beta-5` is explicitly selectable outside those aggregate
+aliases. It imports the historical JSON credential fixture, verifies credentials
+and auth ordering in the current shared store, and checks archived source bytes.
+It does not test retention of credentials created in a published SQLite store.
+
 The `sqlite-volume` scenario combines configured Matrix, Discord, and Telegram
 plugin/channel state with 4,800 sessions, 23,890 transcript events, and 2,200
 cron crawl jobs by default. For baselines that expose the plugin-state SDK, it
