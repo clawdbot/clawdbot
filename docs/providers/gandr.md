@@ -66,13 +66,13 @@ openclaw gateway restart
 
 ## Configuration options
 
-| Option           | Path                                   | Description                                                             |
-| ---------------- | -------------------------------------- | ----------------------------------------------------------------------- |
-| `apiKey`         | `tts.providers.gandr.apiKey`           | Gandr API key. Falls back to `GANDR_API_KEY`.                           |
-| `baseUrl`        | `tts.providers.gandr.baseUrl`          | Override Gandr API base URL (default `https://tts.gandr.ai/v1`).        |
-| `speakerVoiceId` | `tts.providers.gandr.speakerVoiceId`   | Voice identifier (default `gandr-mia`). Legacy alias: `voiceId`.        |
-| `modelId`        | `tts.providers.gandr.modelId`          | TTS model id (default `tts-1`).                                         |
-| `responseFormat` | `tts.providers.gandr.responseFormat`   | Audio attachment format, `mp3` (default) or `wav`.                      |
+| Option           | Path                                 | Description                                                      |
+| ---------------- | ------------------------------------ | ---------------------------------------------------------------- |
+| `apiKey`         | `tts.providers.gandr.apiKey`         | Gandr API key. Falls back to `GANDR_API_KEY`.                    |
+| `baseUrl`        | `tts.providers.gandr.baseUrl`        | Override Gandr API base URL (default `https://tts.gandr.ai/v1`). |
+| `speakerVoiceId` | `tts.providers.gandr.speakerVoiceId` | Voice identifier (default `gandr-mia`). Legacy alias: `voiceId`. |
+| `modelId`        | `tts.providers.gandr.modelId`        | TTS model id (default `tts-1`).                                  |
+| `responseFormat` | `tts.providers.gandr.responseFormat` | Audio attachment format, `mp3` (default) or `wav`.               |
 
 ## Notes
 

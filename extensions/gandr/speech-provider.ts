@@ -11,6 +11,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_GANDR_MODEL_ID,
   DEFAULT_GANDR_VOICE_ID,
+  GANDR_MAX_INPUT_CHARS,
   GANDR_PCM_SAMPLE_RATE_HERTZ,
   GANDR_TTS_MODELS,
   type GandrResponseFormat,
@@ -167,6 +168,14 @@ export function buildGandrSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { modelId: trimToUndefined(params.modelId) }),
     }),
+    prepareSynthesis: ({ text }) => {
+      if (text.length > GANDR_MAX_INPUT_CHARS) {
+        throw new Error(
+          `Gandr TTS input too long: ${text.length} chars (limit: ${GANDR_MAX_INPUT_CHARS} chars)`,
+        );
+      }
+      return undefined;
+    },
     listVoices: async () => listGandrVoices(),
     isConfigured: ({ providerConfig }) =>
       Boolean(resolveGandrApiKey(readGandrProviderConfig(providerConfig).apiKey)),

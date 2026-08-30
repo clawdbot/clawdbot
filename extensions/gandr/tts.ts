@@ -29,7 +29,7 @@ export const GANDR_TTS_MODELS = ["tts-1"] as const;
 
 // Stock voice catalog. Gandr does not expose a voices listing endpoint, so
 // the catalog ships with the provider.
-export const GANDR_TTS_VOICE_IDS = [
+const GANDR_TTS_VOICE_IDS = [
   "gandr-mia",
   "gandr-ava",
   "gandr-jenny",
