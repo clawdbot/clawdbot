@@ -308,7 +308,21 @@ export function normalizeReleaseTelegramWaiver({
     liveSuiteFilter
       .toLowerCase()
       .split(",")
-      .some((lane) => ["qa-live-telegram", "qa-telegram", "telegram"].includes(lane.trim()))
+      .some((lane) =>
+        [
+          "qa-live",
+          "qa-live-all",
+          "qa-all",
+          "qa-live-non-slack",
+          "qa-non-slack",
+          "non-slack",
+          "no-slack",
+          "without-slack",
+          "qa-live-telegram",
+          "qa-telegram",
+          "telegram",
+        ].includes(lane.trim()),
+      )
   ) {
     throw new Error("Telegram waiver conflicts with explicitly requested Telegram validation");
   }

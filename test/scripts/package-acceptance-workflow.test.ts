@@ -5192,6 +5192,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     { telegramWaiver: "true" },
     { rerunGroup: "npm-telegram" },
     { liveSuiteFilter: "qa-telegram" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-all" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-all" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-non-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-non-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "non-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "no-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "without-slack" },
   ])("rejects a conflicting Telegram waiver request: %j", (override) => {
     const options = { telegramWaiver: "2026.8.1-owner-approved", ...override };
     const umbrella = runFullReleaseInputValidation("stable", "false", options);
@@ -5205,6 +5213,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(umbrella.status).not.toBe(0);
     expect(direct.result.status).not.toBe(0);
+    expect(umbrella.stderr).toContain("Telegram waiver");
+    expect(direct.result.stderr).toContain("Telegram waiver");
   });
 
   it("allows Package Acceptance Telegram deferral only for beta validation", () => {

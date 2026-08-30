@@ -241,7 +241,8 @@ It omits source Telegram QA, Package Acceptance Telegram E2E, and the
 published-package Telegram E2E; their evidence states **waived / not run**,
 never passed. Telegram unit tests and every other selected gate remain active,
 including stable soak and performance checks. An explicit Telegram rerun or
-suite filter conflicts with the waiver and is rejected. The declaration and
+suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
+that selects Telegram, conflicts with the waiver and is rejected. The declaration and
 target version bind the immutable execution plan, manifest, and reuse identity;
 the publisher carries the waiver into release verification notes. The beta-only
 package deferral above remains unchanged.
