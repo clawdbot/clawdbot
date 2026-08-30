@@ -659,6 +659,7 @@ function readPersistedAppToolApprovalOverrideNames(
     return [];
   }
   return Object.entries(tools)
+    .filter(([toolName]) => !app.readOnlyToolConfigKeys?.includes(toolName))
     .filter(([, value]) => hasPersistedToolApprovalOverride(value))
     .map(([toolName]) => toolName)
     .toSorted();
