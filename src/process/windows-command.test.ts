@@ -200,8 +200,8 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
   ];
 
   it.each(
-    cases.flatMap((testCase) =>
-      ["argv.cmd", "argv with spaces.cmd", "argv^caret.cmd"].map((file) => ({ ...testCase, file })),
+    cases.flatMap(({ name, args }) =>
+      ["argv.cmd", "argv with spaces.cmd", "argv^caret.cmd"].map((file) => ({ name, args, file })),
     ),
   )(
     "preserves $name through $file",
