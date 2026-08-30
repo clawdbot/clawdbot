@@ -79,17 +79,20 @@ describe("Telegram userbot driver runtime", () => {
         `    pathlib.Path(${JSON.stringify(markerPath)}).write_text('sent')`,
       ].join("\n"),
     );
-    const revoked = Promise.withResolvers<Error>();
+    let revoke: (error: Error) => void = () => {};
+    const whenUnhealthy = new Promise<Error>((resolve) => {
+      revoke = resolve;
+    });
     const driver = await TelegramUserbotDriver.start({
       chatId: "-1001",
       driverEnv: {},
-      leaseHealth: { assertHealthy() {}, whenUnhealthy: revoked.promise },
+      leaseHealth: { assertHealthy() {}, whenUnhealthy },
       userDriverPath: scriptPath,
       onUpdate() {},
     });
 
     const sending = driver.send({ text: "must not send" });
-    revoked.resolve(new Error("lease revoked"));
+    revoke(new Error("lease revoked"));
 
     await expect(sending).rejects.toThrow("lease revoked");
     await new Promise((resolve) => {
