@@ -49,7 +49,7 @@ import {
   sleep,
 } from "./chat-history-retry.ts";
 import { applyChatPendingInputs, clearChatPendingInputs } from "./chat-pending-inputs.ts";
-import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
+import { reconcileChatRunStartup, type ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
@@ -625,7 +625,10 @@ function applyHistoryRunSnapshot(params: {
       },
     ];
   }
-  const startupPhase = run.events?.findLast((event) => event.stream === "run_status")?.data.phase;
+  const startup = run.events?.findLast(
+    (event) => event.runId === inFlightRunId && event.stream === "run_status",
+  );
+  const startupPhase = startup?.data.phase;
   const hasStartupStatus =
     startupPhase === "preparing_workspace" ||
     startupPhase === "naming_worktree" ||
@@ -634,10 +637,16 @@ function applyHistoryRunSnapshot(params: {
     startupPhase === "provisioning_environment" ||
     startupPhase === "preparing_context" ||
     startupPhase === "starting_model";
-  state.chatRunStartup =
-    hasStartupStatus && !tail && !(sameRunContinued && state.chatRunStartup?.state === "activity")
-      ? { state: "status", runId: inFlightRunId, phase: startupPhase }
-      : { state: "activity", runId: inFlightRunId };
+  if (run.text) {
+    reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
+  } else if (startup && hasStartupStatus) {
+    reconcileChatRunStartup(state, {
+      state: "status",
+      runId: inFlightRunId,
+      phase: startupPhase,
+      seq: startup.seq,
+    });
+  }
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
@@ -744,6 +753,7 @@ function reconcileLoadedHistoryTail(options: {
 
 export type ChatEventPayload = {
   runId?: string;
+  seq?: number;
   sessionKey: string;
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
@@ -2123,7 +2133,7 @@ async function loadChatHistoryUncached(
       pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
       const liveToolIds = currentLiveToolCallIds(state);
       if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
-        state.chatRunStartup = { state: "activity", runId: state.chatRunId };
+        reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }
       const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
       const historyReplacedToolStream =
