@@ -92,7 +92,10 @@ export function matchControlUiCatalogSharePath(params: {
   if (!params.pathname.startsWith(prefix)) {
     return null;
   }
-  const match = CATALOG_SHARE_PATH_RE.exec(params.pathname.slice(prefix.length));
+  // SAFETY: The anchored pattern requires exactly two non-empty captures.
+  const match = CATALOG_SHARE_PATH_RE.exec(params.pathname.slice(prefix.length)) as
+    | [string, string, string]
+    | null;
   if (!match || isControlUiReservedRouteSegment(match[1])) {
     return null;
   }
