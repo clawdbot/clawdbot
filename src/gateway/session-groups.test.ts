@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,6 +23,7 @@ import {
   SessionGroupNotEmptyError,
   updateSessionGroupDefaults,
 } from "./session-groups.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 describe("session groups catalog", () => {
   let root: string;
@@ -82,6 +83,28 @@ describe("session groups catalog", () => {
     expect(putSessionGroups({ cfg, names: ["Keep"], env })).toEqual([
       { name: "Keep", position: 0 },
     ]);
+  });
+
+  it("propagates changed member authorization before reporting a non-empty drop", async () => {
+    const groups = putSessionGroups({ cfg, names: ["Keep", "Gone"], env });
+    const sessionKey = "agent:main:dashboard:changed-member";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "changed-member", updatedAt: Date.now(), category: "Gone" },
+    });
+    const error = new SessionMutationAuthorizationChangedError({
+      code: "INVALID_REQUEST",
+      message: "session changed before sessions.groups.put; retry the request",
+    });
+    const assertTargetCurrent = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => putSessionGroups({ cfg, names: ["Keep"], env, assertTargetCurrent })).toThrow(
+      error,
+    );
+    expect(assertTargetCurrent).toHaveBeenCalledExactlyOnceWith({ agentId: "main", sessionKey });
+    expect(listSessionGroups(env)).toEqual(groups);
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("Gone");
   });
 
   it("roundtrips normalized sidebar order, including catalog section ids", () => {

@@ -4,7 +4,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
-import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import {
+  applySessionEntryReplacements,
+  listSessionEntriesReadOnly,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -14,8 +17,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-sharing-target-input.js";
-import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  type SessionMutationTarget,
+} from "./session-mutation-authorization-error.js";
 
 // Write transactions must run on the same env-scoped handle as their
 // statements; a bare transaction would open the default state DB while the
@@ -111,7 +116,7 @@ function hasSessionGroupDefaultsSchema(db: DatabaseSync): boolean {
   );
 }
 
-function normalizeGroupNames(names: readonly string[]): string[] {
+export function normalizeGroupNames(names: readonly string[]): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const raw of names) {
@@ -207,16 +212,26 @@ export function putSessionGroups(params: {
   names: readonly string[];
   sectionOrder?: readonly string[];
   env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
+  assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
 }): SessionGroupRecord[] {
   const { cfg, names, sectionOrder, env = process.env } = params;
   const normalized = normalizeGroupNames(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
+  params.assertCurrent?.();
   const dropped = listSessionGroups(env).filter((group) => !normalized.includes(group.name));
   if (dropped.length > 0) {
     // Accepted race: sessions.patch can assign a dropped category between this scan and commit.
     // That residue self-heals via ensureSessionGroupRegistered absorption on the next patch.
     const targetsByName = resolveSessionGroupMutationTargetsByName(cfg, env);
+    // Unlike updateMemberCategories, put has not committed any catalog changes yet.
+    // Fail closed on changed targets before disclosing any member counts.
+    for (const { name } of dropped) {
+      for (const target of targetsByName.get(name) ?? []) {
+        params.assertTargetCurrent?.({ agentId: target.agentId, sessionKey: target.sessionKey });
+      }
+    }
     const nonEmpty = dropped
       .map(({ name }) => ({ name, memberSessions: targetsByName.get(name)?.length ?? 0 }))
       .filter((group) => group.memberSessions > 0);
@@ -416,6 +431,28 @@ export function updateSessionGroupDefaults(
     ensuredSessionGroupDefaultsDatabases.add(database.db);
   }
   return updated ? listSessionGroupDefaults(env) : null;
+}
+
+export function resolveSessionGroupMutationTargetsByName(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Map<string, SessionMutationTarget[]> {
+  const targetsByName = new Map<string, SessionMutationTarget[]>();
+  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
+      agentId: storeTarget.agentId,
+      storePath: storeTarget.storePath,
+    })) {
+      const groupName = normalizeOptionalString(entry.category);
+      if (!groupName) {
+        continue;
+      }
+      const targets = targetsByName.get(groupName) ?? [];
+      targets.push({ sessionKey, agentId: storeTarget.agentId });
+      targetsByName.set(groupName, targets);
+    }
+  }
+  return targetsByName;
 }
 
 /**

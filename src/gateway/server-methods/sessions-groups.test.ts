@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ vi.mock("../session-groups.js", () => ({
   listSidebarSectionOrder: vi.fn(() => []),
   putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
+  resolveSessionGroupMutationTargetsByName: vi.fn(() => new Map()),
   SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
@@ -79,7 +81,7 @@ describe("sessions.groups.put", () => {
     );
   });
 
-  it("replaces the catalog using the runtime config", async () => {
+  it("replaces the catalog using the runtime config and authorization guards", async () => {
     const cfg = { agents: { list: [{ id: "main" }] } };
     const names = ["Keep"];
     const sectionOrder = ["category:Keep", "ungrouped"];
@@ -88,15 +90,42 @@ describe("sessions.groups.put", () => {
     const respond = vi.fn();
     const options = updateOptions({ names, sectionOrder }, respond);
     options.context.getRuntimeConfig = () => cfg;
+    const assertCurrent = vi.fn();
+    const assertTargetCurrent = vi.fn();
+    options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
 
     await expectDefined(
       sessionGroupHandlers["sessions.groups.put"],
       'sessionGroupHandlers["sessions.groups.put"] test invariant',
     )(options);
 
-    expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({ cfg, names, sectionOrder });
+    expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      names,
+      sectionOrder,
+      assertCurrent,
+      assertTargetCurrent,
+    });
     expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+  });
+
+  it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
+    const error = new SessionMutationAuthorizationChangedError({
+      code: "INVALID_REQUEST",
+      message: "session changed before sessions.groups.put; retry the request",
+    });
+    groupMocks.put.mockImplementation(() => {
+      throw error;
+    });
+    const respond = vi.fn();
+    await expect(
+      expectDefined(
+        sessionGroupHandlers["sessions.groups.put"],
+        'sessionGroupHandlers["sessions.groups.put"] test invariant',
+      )(updateOptions({ names: [] }, respond)),
+    ).rejects.toBe(error);
+    expect(respond).not.toHaveBeenCalled();
   });
 });
 
