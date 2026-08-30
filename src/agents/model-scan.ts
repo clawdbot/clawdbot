@@ -20,7 +20,7 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
-import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
@@ -28,6 +28,7 @@ import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { readProviderJsonArrayFieldResponse } from "./provider-http-errors.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -183,26 +184,6 @@ function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
   return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
-// Reads the OpenRouter /models success body under a byte cap before JSON.parse.
-// The success path was previously buffered with an unbounded res.json(); a faulty
-// or hostile provider could stream an effectively endless document and exhaust
-// memory. readResponseWithLimit caps the read, cancels the stream on overflow,
-// and bounds idle stalls with the call's existing timeout.
-async function readOpenRouterModelsJson(response: Response, timeoutMs: number): Promise<unknown> {
-  const buffer = await readResponseWithLimit(response, OPENROUTER_MODELS_BODY_MAX_BYTES, {
-    chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(`OpenRouter /models response too large: ${size} bytes (limit ${maxBytes} bytes)`),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
-  });
-  try {
-    return JSON.parse(buffer.toString("utf8")) as unknown;
-  } catch (cause) {
-    throw new Error("OpenRouter /models response is malformed JSON", { cause });
-  }
-}
-
 async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
@@ -220,8 +201,17 @@ async function fetchOpenRouterModels(
         if (!res.ok) {
           throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
         }
-        const payload = (await readOpenRouterModelsJson(res, timeoutMs)) as { data?: unknown };
-        const entries = Array.isArray(payload.data) ? payload.data : [];
+        const entries = await readProviderJsonArrayFieldResponse(
+          res,
+          "OpenRouter /models",
+          "data",
+          {
+            maxBytes: OPENROUTER_MODELS_BODY_MAX_BYTES,
+            chunkTimeoutMs: timeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
+          },
+        );
 
         return entries
           .map((entry) => {

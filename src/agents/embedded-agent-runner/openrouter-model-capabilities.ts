@@ -20,19 +20,16 @@
 
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { cancelUnreadResponseBody, readResponseWithLimit } from "../../infra/http-body.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createCorePluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { readProviderJsonArrayFieldResponse } from "../provider-http-errors.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-// Cap the catalog body so an untrusted/oversized OpenRouter response cannot force
-// the runtime to buffer an unbounded payload before parsing. Mirrors the bound
-// applied to the sibling pricing-cache endpoint (16 MiB).
-const OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SQLITE_CACHE_OWNER_ID = "core:openrouter-model-capabilities";
 const SQLITE_CACHE_NAMESPACE = "models.v3";
 const SQLITE_CACHE_MAX_ENTRIES = 10_000;
@@ -197,15 +194,19 @@ async function doFetch(): Promise<void> {
       return;
     }
 
-    const bytes = await readResponseWithLimit(response, OPENROUTER_MODELS_RESPONSE_MAX_BYTES, {
-      onOverflow: ({ size }) => new Error(`OpenRouter models response too large: ${size} bytes`),
-    });
-    const data = JSON.parse(bytes.toString("utf8")) as { data?: OpenRouterApiModel[] };
-    const models = data.data ?? [];
+    const models = await readProviderJsonArrayFieldResponse(
+      response,
+      "OpenRouter models response",
+      "data",
+    );
     const map = new Map<string, OpenRouterModelCapabilities>();
 
-    for (const model of models) {
-      if (!model.id) {
+    for (const value of models) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const model = value as OpenRouterApiModel;
+      if (typeof model.id !== "string" || !model.id) {
         continue;
       }
       map.set(model.id, parseModel(model));

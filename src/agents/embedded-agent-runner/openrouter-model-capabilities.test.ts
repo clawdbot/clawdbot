@@ -271,6 +271,76 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+  it.each([
+    ["missing data", {}],
+    ["non-array data", { data: {} }],
+  ])("preserves cached capabilities when a refresh has %s", async (_label, malformedPayload) => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "acme/healthy-model";
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: modelId,
+                  name: "Healthy Model",
+                  context_length: 8192,
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(malformedPayload), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const writer = await importOpenRouterModelCapabilities(`malformed-writer-${_label}`);
+      await writer.loadOpenRouterModelCapabilities(modelId);
+      await writer.loadOpenRouterModelCapabilities("acme/new-model");
+
+      expect(writer.getOpenRouterModelCapabilities(modelId)?.name).toBe("Healthy Model");
+      const reader = await importOpenRouterModelCapabilities(`malformed-reader-${_label}`);
+      expect(reader.getOpenRouterModelCapabilities(modelId)?.name).toBe("Healthy Model");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("treats an explicit empty catalog as an authoritative replacement", async () => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "acme/removed-model";
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [{ id: modelId, name: "Removed Model", context_length: 8192 }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const module = await importOpenRouterModelCapabilities("authoritative-empty");
+      await module.loadOpenRouterModelCapabilities(modelId);
+      await module.loadOpenRouterModelCapabilities("acme/new-model");
+
+      expect(module.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
+    });
+  });
+
   it("preserves explicit OpenRouter tool support metadata", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(
