@@ -424,6 +424,7 @@ async function runSetupWizardOnce(
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
         config: baseConfig,
+        originScopedDeviceAuth: true,
         token: remoteProbeAuth?.auth.token,
         ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })
