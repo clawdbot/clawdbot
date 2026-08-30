@@ -4,12 +4,12 @@ import path from "node:path";
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { buildShellCommandInvocation } from "../../shell-utils.js";
 import {
   expectNativeBashSpill,
   nativeBashSpillScenarios,
 } from "../bash-output-spill.test-support.js";
-import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import type { BashOperations } from "./bash-operations.js";
 import { createBashTool, createLocalBashOperations } from "./bash.js";
 import { resolveBashTimeoutMs } from "./bash.test-support.js";

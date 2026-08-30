@@ -3,8 +3,8 @@ import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { spawnNodeEvalSync } from "../../../test-utils/node-process.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
+import { spawnNodeEvalSync } from "../../../test-utils/node-process.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 
 describe("OutputAccumulator", () => {
