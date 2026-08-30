@@ -485,4 +485,29 @@ describe("bundle LSP runtime", () => {
     await runtime.dispose();
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
+
+  it("rejects retained tools after the LSP runtime is disposed", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+    const hoverTool = runtime.tools.find((tool) => tool.name === "lsp_hover_typescript");
+    if (!hoverTool) {
+      throw new Error("expected hover tool");
+    }
+
+    await runtime.dispose();
+
+    await expect(
+      hoverTool.execute("retained-call", {
+        uri: "file:///tmp/workspace/index.ts",
+        line: 0,
+        character: 0,
+      }),
+    ).rejects.toThrow("LSP session disposed");
+    expect(child.receivedMessages).not.toContainEqual(
+      expect.objectContaining({ method: "textDocument/hover" }),
+    );
+  });
 });
