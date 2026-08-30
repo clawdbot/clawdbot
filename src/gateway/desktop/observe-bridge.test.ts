@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   DESKTOP_OBSERVE_PATH,
   handleDesktopObserveUpgrade,
@@ -43,13 +44,10 @@ async function createProxyHarness(
   const root = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-desktop-observe-"));
   const localSocketPath = path.join(root, "desktop.sock");
   let desktopPeer: net.Socket | undefined;
-  let resolvePeer: (socket: net.Socket) => void = () => {};
-  const peerConnected = new Promise<net.Socket>((resolve) => {
-    resolvePeer = resolve;
-  });
+  const peerConnected = createDeferred<net.Socket>();
   const server = net.createServer((socket) => {
     desktopPeer = socket;
-    resolvePeer(socket);
+    peerConnected.resolve(socket);
   });
   cleanup.push(async () => {
     desktopPeer?.destroy();
@@ -108,7 +106,13 @@ async function createProxyHarness(
     ws.once("open", resolve);
     ws.once("error", reject);
   });
-  return { closeObserver, desktopPeer: await peerConnected, observerUrl: ws.url, release, ws };
+  return {
+    closeObserver,
+    desktopPeer: await peerConnected.promise,
+    observerUrl: ws.url,
+    release,
+    ws,
+  };
 }
 
 function readSocketBytes(socket: net.Socket, byteLength: number): Promise<Buffer> {
@@ -141,7 +145,7 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
   });
 }
 
-describe("worker desktop observer proxy", () => {
+describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
   it("clears the credential-bearing token timer when the token is consumed", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
