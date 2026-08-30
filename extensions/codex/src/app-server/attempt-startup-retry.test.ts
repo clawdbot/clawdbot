@@ -134,7 +134,7 @@ function startFixtureAttempt(fixture: Awaited<ReturnType<typeof createStartupFai
         modelId: "gpt-5.4-codex",
         model: createCodexTestModel("codex"),
         thinkLevel: "medium",
-        disableTools: false,
+        disableTools: true,
         timeoutMs: 5_000,
         authStorage: {} as never,
         authProfileStore: { version: 1, profiles: {} },

@@ -62,7 +62,6 @@ const matrixRoomSchema = buildGroupEntrySchema({
   botLoopProtection: botLoopProtectionSchema,
   autoReply: z.boolean().optional(),
   users: AllowFromListSchema,
-  turnTaking: z.literal(false).optional(),
 })
   .omit({ toolsBySender: true, allowFrom: true })
   .strict()
@@ -106,25 +105,6 @@ const matrixStreamingSchema = z
   })
   .strict();
 
-const matrixTurnTakingNextStepSchema = z.discriminatedUnion("decider", [
-  z.object({ decider: z.literal("ai") }).strict(),
-  z
-    .object({
-      decider: z.literal("user"),
-      action: z.enum(["redraft", "discard", "send-as-is"]),
-    })
-    .strict(),
-]);
-
-const matrixTurnTakingSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    redraftDepth: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
-    nextStep: matrixTurnTakingNextStepSchema.optional(),
-  })
-  .strict()
-  .optional();
-
 const retiredMatrixAccountStreamingKeys = [
   "streamMode",
   "chunkMode",
@@ -147,34 +127,6 @@ function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
   return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
 }
 
-function hasNoMatrixAccountTurnTakingOverride(account: unknown): boolean {
-  if (typeof account !== "object" || account === null || Array.isArray(account)) {
-    return true;
-  }
-  // SAFETY: This refinement's guards prove the account is a non-array object before field reads.
-  const record = account as Record<string, unknown>;
-  if (Object.hasOwn(record, "turnTaking")) {
-    return false;
-  }
-  for (const roomMapKey of ["groups", "rooms"] as const) {
-    const roomMap = record[roomMapKey];
-    if (typeof roomMap !== "object" || roomMap === null || Array.isArray(roomMap)) {
-      continue;
-    }
-    for (const entry of Object.values(roomMap)) {
-      if (
-        typeof entry === "object" &&
-        entry !== null &&
-        !Array.isArray(entry) &&
-        Object.hasOwn(entry, "turnTaking")
-      ) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -192,10 +144,6 @@ const MatrixConfigSchema = z.object({
         .refine(hasCanonicalMatrixAccountStreaming, {
           message:
             'flat or scalar streaming values are no longer supported; use streaming.* and run "openclaw doctor --fix"',
-        })
-        .refine(hasNoMatrixAccountTurnTakingOverride, {
-          message:
-            "turnTaking is channel-wide; configure channels.matrix.turnTaking and top-level Matrix room opt-outs only",
         }),
     )
     .optional(),
@@ -219,7 +167,6 @@ const MatrixConfigSchema = z.object({
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   streaming: matrixStreamingSchema.optional(),
-  turnTaking: matrixTurnTakingSchema,
   replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),

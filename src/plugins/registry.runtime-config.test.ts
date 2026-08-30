@@ -63,14 +63,12 @@ describe("plugin registry runtime config scope", () => {
       source: "/plugins/codex/index.js",
       origin: "bundled",
       packageName: undefined,
-      sourceFinalization: true,
     },
     {
       label: "official global",
       source: "/plugins/node_modules/@openclaw/codex/index.js",
       origin: "global",
       packageName: "@openclaw/codex",
-      sourceFinalization: false,
     },
   ] as const)("binds native compaction to the $label Codex harness", (fixture) => {
     const pluginRegistry = createTestRegistry(createPluginRuntime());
@@ -99,9 +97,6 @@ describe("plugin registry runtime config scope", () => {
 
     expect(pluginRegistry.registry.agentHarnesses).toHaveLength(1);
     expect(pluginRegistry.registry.agentHarnesses[0]?.nativeCompaction).toBe(nativeCompaction);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.bundledCodexSourceFinalization === true).toBe(
-      fixture.sourceFinalization,
-    );
     expect(pluginRegistry.registry.agentHarnesses[0]?.harness).not.toHaveProperty("compactNative");
   });
 

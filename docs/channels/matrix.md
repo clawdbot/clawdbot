@@ -312,87 +312,6 @@ By default, Matrix messages from other configured OpenClaw Matrix accounts are i
 
 Use strict room allowlists and mention requirements when enabling bot-to-bot traffic in shared rooms.
 
-## Intelligent multi-agent turn-taking
-
-Matrix can coordinate multiple OpenClaw agent accounts in the same room without requiring every message to mention an agent and without forcing every agent to answer. This feature is channel-wide and off by default:
-
-```json5
-{
-  channels: {
-    matrix: {
-      turnTaking: {
-        enabled: true,
-        redraftDepth: 1,
-        nextStep: { decider: "ai" },
-        // Fixed-policy alternative:
-        // nextStep: { decider: "user", action: "redraft" },
-      },
-      groups: {
-        // Disable the channel-wide feature in one room.
-        "!quiet-room:example.org": { turnTaking: false },
-      },
-    },
-  },
-}
-```
-
-Configure `turnTaking` only at the top-level `channels.matrix` object. It is one policy shared by every local Matrix account; account-level `turnTaking` values and account-level room opt-outs are rejected. A room is eligible when all of the following are true:
-
-- `turnTaking.enabled` is `true`, and the room does not set `groups.<room>.turnTaking: false` (legacy `rooms` also works).
-- The current joined-room membership contains at least two distinct, enabled, configured Matrix account identities from this Gateway. Configuration alone is not enough; membership is rechecked and cached briefly.
-- The room is unencrypted. Enhanced turn-taking currently fails closed in E2EE rooms; ordinary Matrix E2EE behavior continues without this feature.
-
-A normal one-human/one-agent DM has only one eligible local agent and remains unchanged. A room still marked as a Matrix direct room is eligible if its live membership contains at least two eligible local agent accounts.
-
-### Participation decision
-
-For each native message event, one deterministic local owner makes one shared, low-reasoning utility-model call for accounts allowed by their room and sender access policies. Each account's own routing determines which agent identity is used. The model receives bounded recent room context, the current message, routed agent identities, and bounded active sibling-preview progress. Shared context includes only content permitted by every participant's context visibility policy. It returns exactly one disposition per candidate:
-
-- `strongly-speak`: context strongly indicates that this agent should answer.
-- `strongly-silent`: context strongly indicates that this agent should not answer. This is the only disposition that suppresses a turn.
-- `neutral`: neither conclusion is strong. The agent remains eligible to answer.
-
-The decision is shared across account monitors, so one Matrix event does not create competing classifier calls. Invalid output, model failure, or timeout fails open to `neutral`. A classifier request exceeding the total context budget is logged and also uses `neutral`; OpenClaw does not truncate the candidate roster. Commands, including `/steer`, bypass participation classification and continue through the normal command path.
-
-Participation classification is independent of the replying agent's full runtime. Set `redraftDepth: 0` for participation-only mode with any otherwise supported runtime. At depth `1` or `2`, the built-in OpenClaw embedded path and prepared CLI runner retain their source-finalization support. For plugin agent harnesses, the private finalization handoff is supported only by the exact bundled, registry-attested Codex runtime; Copilot and other plugin harnesses do not receive that private capability.
-
-Explicit channel enablement authorizes authenticated protocol finals from a currently joined, configured sibling account to bypass the legacy `allowBots` and mention-only gates. It does not bypass `groupPolicy`, `dm.policy`, `groupAllowFrom`, `dm.allowFrom`, per-room `users`, room enablement, room opt-out, self-message rejection, replay protection, or bot-pair loop protection. Arbitrary bot traffic and unmarked configured-bot messages still follow [`allowBots`](#bot-to-bot-rooms). Matrix room turn-taking is separate from the local `tools.agentToAgent` and `sessions_send` controls.
-
-### Fresh-message action and redraft depth
-
-After the replying agent has produced a complete candidate but before terminal delivery, OpenClaw checks for newer room activity. `nextStep` distinguishes who decides from the three possible actions:
-
-- `{ decider: "ai" }`: the fast utility model dynamically chooses `redraft`, `discard`, or `send-as-is` from bounded newer activity.
-- `{ decider: "user", action: "redraft" | "discard" | "send-as-is" }`: configuration fixes the action. The three action names are values, not separate feature toggles.
-
-`redraftDepth` is exactly `0`, `1`, or `2`:
-
-- `0`: no pre-send freshness check.
-- `1` (default): check once. If the action is `redraft`, perform at most one rewrite.
-- `2`: check once and, only after an actual rewrite, check once more for activity that arrived after the first check. At most two rewrites occur; there is no third check.
-
-When a freshness-enabled turn selects an unsupported plugin harness, OpenClaw rejects that harness before provider or model work. When a later model candidate resolves to a supported source-finalization path, normal model fallback can continue through that candidate; if none is available, the user sees an error that identifies OpenClaw's registry-attested bundled Codex harness as the supported plugin runtime, also notes the embedded/CLI alternatives, and names `redraftDepth: 0` as participation-only mode. "Registry-attested" identifies the harness registration and provenance; it is not a Codex app-server version pin or ceiling, and OpenClaw's normal minimum-version compatibility continues to apply. OpenClaw does not silently deliver a plugin-harness candidate without the configured freshness gate.
-
-Before each freshness snapshot, OpenClaw waits up to five seconds for Matrix ingress that has already been announced to a local handler, then proceeds with the activity observed by that point. This barrier is intentionally bounded: an event not yet delivered to any local handler, or still unresolved after the five-second wait, can be absent from that snapshot.
-
-Freshness checks apply the replying account's own room access and `contextVisibility` policy to both messages and preview revisions. Another account receiving a message does not grant this account access to it. Existing `contextVisibility: "all"` behavior still permits supplemental context from otherwise blocked senders; in group rooms, `allowlist` and `allowlist_quote` filter history and previews by the receiver's sender allowlist. Accounts with different reply-thread settings share the native source event's decision; sibling answers in another thread are included only when their protocol marker names that exact trigger event.
-
-The utility model only selects an action. A `redraft` is a hidden retry through the replying agent's already-selected normal/full runtime: the same embedded model/provider/auth/persona/session path, or the same prepared CLI backend/model/auth/runtime binding. The retry retains committed tool results but disables model access to external tools, so it cannot repeat those tool actions. Native Codex models that require Code Mode may retain isolated JavaScript computation with an empty tool registry. Normal lifecycle hooks, including the final-message gate, still run. A `discard` is deterministic host behavior: OpenClaw closes any visible preview, removes the rejected assistant candidate and pending client action, and finishes silently without asking a model to emit `NO_REPLY`.
-
-Utility-model failure, timeout, or invalid output selects `send-as-is`, preserving the completed draft. Once an embedded redraft has been accepted, the rejected assistant leaf is rewound before the normal-model retry; if that retry ultimately fails, OpenClaw fails the turn rather than resurrecting a draft that freshness review rejected. A CLI redraft preparation or execution failure before a successor is accepted keeps the current pre-rewrite draft. Both supported runtime paths run the freshness gate before assistant transcript persistence and terminal delivery.
-
-### Preview streaming behavior
-
-Enhanced rooms support Matrix `partial`, `quiet`, and `progress` preview streaming. OpenClaw correlates an initial preview, its edits, and its final state so sibling agents can observe bounded progress without treating every edit as a new message. Only one authenticated logical final is promoted into sibling ingress; partial, ancillary media, tool progress, and abandoned previews never trigger a normal sibling turn. Media-bearing replacements close and redact the old preview before publishing the replacement final.
-
-The embedded runtime streams source-owned provisional previews during generation while holding assistant events and final replies for freshness review. If a plugin also registers a global `before_agent_finalize` hook, Matrix disables preview streaming and holds the final reply until finalization is accepted.
-
-`streaming.block.enabled` is effectively forced off for each eligible enhanced turn without rewriting stored config. Block streaming is not supported by intelligent turn-taking. Ineligible and opted-out rooms keep their configured streaming behavior.
-
-Preview awareness is transient and bounded. In-progress previews older than two minutes are ignored after reconnect, and terminal protocol events older than 30 minutes cannot start a fresh turn. Normal persistent Matrix replay claims still protect promoted finals. Because Matrix clients may already have rendered partial text, a later redraft or discard is a live correction: OpenClaw edits or redacts the preview, but cannot make text that a human already saw retroactively invisible.
-
-Enhanced turn-taking is deliberately disabled in encrypted rooms for now. Decrypted Matrix messages still use the ordinary Matrix pipeline, but OpenClaw does not emit or consume enhanced turn-taking protocol as conversational input there. This avoids treating an incompletely decrypted replacement edit as a final sibling answer.
-
 ## Encryption and verification
 
 In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image previews are encrypted alongside the full attachment; unencrypted rooms use plain `thumbnail_url`. No configuration is needed - the plugin detects E2EE state automatically.
@@ -858,7 +777,7 @@ Authorization rules still apply: command senders must satisfy the same DM or roo
 
 **Inheritance:**
 
-- Top-level `channels.matrix` values act as defaults for named accounts unless an account overrides them. `turnTaking` is the exception: it is channel-wide and cannot be overridden per account.
+- Top-level `channels.matrix` values act as defaults for named accounts unless an account overrides them.
 - Scope an inherited room entry to a specific account with `groups.<room>.account`. Entries without `account` are shared across accounts; `account: "default"` still works when the default account is configured at the top level.
 
 **Default account selection:**
@@ -986,13 +905,6 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `"allowlist"`. Alias entries resolve against the homeserver, not against state claimed by the invited room.
 - `contextVisibility`: supplemental context visibility (`"all"` default, `"allowlist"`, `"allowlist_quote"`).
 
-### Intelligent turn-taking
-
-- `turnTaking.enabled`: enable shared intelligent multi-agent participation for eligible unencrypted Matrix rooms. Default: `false`.
-- `turnTaking.redraftDepth`: `0`, `1` (default), or `2`; `0` is participation-only and works with any otherwise supported runtime. Depth `1` and `2` use a supported embedded or CLI finalizer; among plugin harnesses, OpenClaw's registry-attested bundled Codex harness is required. This is an identity/provenance check, not an exact-version pin.
-- `turnTaking.nextStep`: `{ decider: "ai" }` (default), or `{ decider: "user", action: "redraft" | "discard" | "send-as-is" }`.
-- `groups.<room>.turnTaking`: only `false` is accepted; opts one room out of the channel-wide feature. This key is top-level only and cannot appear under `accounts.<id>.groups` or `accounts.<id>.rooms`.
-
 ### Reply behavior
 
 - `joinIntro`: introduce when the bot joins an allowed group room. Default: `true`. Per-account override: `accounts.<accountId>.joinIntro`.
@@ -1028,7 +940,6 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
   - `groups.<room>.autoReply`: per-room mention-gating override. `true` disables mention requirements for that room; `false` forces them back on.
   - `groups.<room>.skills`: per-room skill filter.
   - `groups.<room>.systemPrompt`: per-room system prompt snippet.
-  - `groups.<room>.turnTaking`: set `false` to opt this room out of channel-wide intelligent turn-taking.
 
 ### Exec approval settings
 

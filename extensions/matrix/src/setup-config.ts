@@ -6,10 +6,7 @@ import {
   normalizeSecretInputString,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
@@ -64,35 +61,6 @@ function cloneIfObject<T>(value: T): T {
     return structuredClone(value);
   }
   return value;
-}
-
-function splitMatrixRoomScopeForAccountPromotion(value: unknown): {
-  accountValue?: unknown;
-  channelValue?: unknown;
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { accountValue: cloneIfObject(value) };
-  }
-
-  const accountEntries: Record<string, unknown> = {};
-  const channelEntries: Record<string, unknown> = {};
-  for (const [roomId, rawEntry] of Object.entries(value)) {
-    const rawEntryRecord = asOptionalRecord(rawEntry);
-    if (rawEntryRecord?.turnTaking === false) {
-      const { turnTaking: _turnTaking, ...accountEntry } = rawEntryRecord;
-      channelEntries[roomId] = { turnTaking: false };
-      if (Object.keys(accountEntry).length > 0) {
-        accountEntries[roomId] = cloneIfObject(accountEntry);
-      }
-      continue;
-    }
-    accountEntries[roomId] = cloneIfObject(rawEntry);
-  }
-
-  return {
-    accountValue: Object.keys(accountEntries).length > 0 ? accountEntries : undefined,
-    channelValue: Object.keys(channelEntries).length > 0 ? channelEntries : undefined,
-  };
 }
 
 function resolveSetupAvatarUrl(input: MatrixSetupInput): string | undefined {
@@ -157,24 +125,12 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
   const resolvedTargetAccountId = resolveExistingMatrixAccountKey(accounts, targetAccountId);
 
   const nextAccount: Record<string, unknown> = { ...accounts[resolvedTargetAccountId] };
+  for (const key of keysToMove) {
+    nextAccount[key] = cloneIfObject(base[key]);
+  }
   const nextChannel = { ...base };
   for (const key of keysToMove) {
-    if (key === "groups" || key === "rooms") {
-      const split = splitMatrixRoomScopeForAccountPromotion(base[key]);
-      if (split.accountValue === undefined) {
-        delete nextAccount[key];
-      } else {
-        nextAccount[key] = split.accountValue;
-      }
-      if (split.channelValue === undefined) {
-        delete nextChannel[key];
-      } else {
-        nextChannel[key] = split.channelValue;
-      }
-    } else {
-      nextAccount[key] = cloneIfObject(base[key]);
-      delete nextChannel[key];
-    }
+    delete nextChannel[key];
   }
 
   return {

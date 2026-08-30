@@ -5,7 +5,6 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
-import type { CodexSourceFinalizationAttemptOptions } from "./turn-local-finalization-types.js";
 
 export type CodexRunAttemptOptions = {
   bindingStore: CodexAppServerBindingStore;
@@ -28,11 +27,7 @@ export type CodexRunAttemptOptions = {
   clientFactory?: CodexAppServerClientFactory;
 };
 
-/** Bundled-only attempt shape; source-finalization fields are not public harness API. */
-export type CodexEmbeddedRunAttemptParams = EmbeddedRunAttemptParams &
-  CodexSourceFinalizationAttemptOptions;
-
 export type CodexRunAttemptInput = {
-  params: CodexEmbeddedRunAttemptParams;
+  params: EmbeddedRunAttemptParams;
   options: CodexRunAttemptOptions;
 };

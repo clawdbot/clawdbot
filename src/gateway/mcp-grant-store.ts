@@ -42,8 +42,6 @@ export type McpLoopbackRequestContext = {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  /** Hold exact-source message-tool delivery for the source final gate. */
-  deferSourceMessageToolDelivery?: boolean;
   /** Immutable completion-only authority; never sourced from MCP request headers. */
   sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;

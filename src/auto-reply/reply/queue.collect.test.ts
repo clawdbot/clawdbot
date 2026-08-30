@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createAdmittedRoomEventSource } from "../../../test/helpers/admitted-room-event-source.js";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
@@ -209,31 +208,6 @@ describe("followup queue collect routing", () => {
     const cancelA = resolveFollowupDeliveryContextKey(cancelOnly);
     const cancelB = resolveFollowupDeliveryContextKey(cancelOnlyShared);
     expect(cancelA).toEqual(cancelB);
-  });
-
-  it("separates authorized and unprivileged automatic room-event delivery contexts", async () => {
-    const source = await createAdmittedRoomEventSource();
-    const authorized = createRun({ prompt: "authorized room event" });
-    authorized.currentInboundEventKind = "room_event";
-    authorized.run.sourceReplyDeliveryMode = "automatic";
-    authorized.queuedSourceReplyDelivery = source.createQueuedSourceReplyDelivery({
-      deliver: vi.fn(async () => "delivered" as const),
-    });
-    const unprivileged = createRun({ prompt: "unprivileged room event" });
-    unprivileged.currentInboundEventKind = "room_event";
-    unprivileged.run.sourceReplyDeliveryMode = "automatic";
-    unprivileged.queuedSourceReplyDelivery = {
-      deliver: vi.fn(async () => "delivered" as const),
-      presentationOptions: {},
-    };
-
-    try {
-      expect(resolveFollowupDeliveryContextKey(authorized)).not.toBe(
-        resolveFollowupDeliveryContextKey(unprivileged),
-      );
-    } finally {
-      source.retire();
-    }
   });
 
   it("retries lifecycle admission after a callback rejection", async () => {
@@ -1600,47 +1574,6 @@ describe("followup queue collect routing", () => {
     expect(calls[2]?.originatingChatType).toBe("channel");
   });
 
-  it("keeps an enhanced source owner paired with its gate across a pre-admission deferral", async () => {
-    const key = `test-overflow-deferred-owner-gate-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const done = createDeferred();
-    const settings = createQueueSettings({ mode: "followup", cap: 1 });
-    const owner = {
-      deliver: vi.fn(async () => "delivered" as const),
-      presentationOptions: {},
-    };
-    const gate = vi.fn(async () => ({ action: "continue" as const }));
-    const dropped = createRun({ prompt: "deferred enhanced source" });
-    dropped.currentInboundEventKind = "room_event";
-    dropped.run.sourceReplyDeliveryMode = "automatic";
-    dropped.queuedSourceReplyDelivery = owner;
-    dropped.onBeforeAgentFinalize = gate;
-    enqueueFollowupRun(key, dropped, settings);
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
-
-    let summaryAttempts = 0;
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (run.prompt.includes("[Queue overflow]")) {
-        summaryAttempts += 1;
-        if (summaryAttempts === 1) {
-          throw new FollowupRunDeferredError();
-        }
-        return;
-      }
-      done.resolve();
-    });
-    await done.promise;
-
-    expect(calls).toHaveLength(3);
-    for (const attempt of calls.slice(0, 2)) {
-      expect(attempt.prompt).toContain("- deferred enhanced source");
-      expect(attempt.queuedSourceReplyDelivery).toBe(owner);
-      expect(attempt.onBeforeAgentFinalize).toBe(gate);
-    }
-    expect(calls[2]?.prompt).toBe("live followup");
-  });
-
   it("collects compatible items after one cross-channel drain", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-after-cross-${Date.now()}`,
@@ -2290,39 +2223,6 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).not.toContain("first");
   });
 
-  it("never collect-merges distinct turn-local finalization gates", async () => {
-    const key = `test-collect-turn-local-finalize-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const firstGate = vi.fn(async () => ({ action: "continue" as const }));
-    const secondGate = vi.fn(async () => ({ action: "continue" as const }));
-    const first = createRun({
-      prompt: "first room event",
-      originatingChannel: "matrix",
-      originatingTo: "room:one",
-    });
-    first.onBeforeAgentFinalize = firstGate;
-    const second = createRun({
-      prompt: "second room event",
-      originatingChannel: "matrix",
-      originatingTo: "room:one",
-    });
-    second.onBeforeAgentFinalize = secondGate;
-
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toContain("first room event");
-    expect(calls[0]?.prompt).not.toContain("second room event");
-    expect(calls[0]?.onBeforeAgentFinalize).toBe(firstGate);
-    expect(calls[1]?.prompt).toContain("second room event");
-    expect(calls[1]?.prompt).not.toContain("first room event");
-    expect(calls[1]?.onBeforeAgentFinalize).toBe(secondGate);
-  });
-
   it("splits collect batches when queued authority facts change", async () => {
     const key = `test-collect-queued-authority-split-${Date.now()}`;
     const { calls, done, runFollowup } = createDrainRecorder(3);
@@ -2953,47 +2853,24 @@ describe("followup queue collect routing", () => {
     expect(calls[2]?.prompt).toContain("owner message");
   });
 
-  it("preserves routing metadata and the latest enhanced owner-gate pair on overflow summaries", async () => {
+  it("preserves routing metadata on overflow summary followups", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-overflow-summary-routing-${Date.now()}`,
       { mode: "followup", cap: 1 },
-      2,
     );
-    const route = {
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-      originatingAccountId: "work",
-      originatingThreadId: "1739142736.000100",
-    } as const;
-    const first = createRun({ prompt: "first", ...route });
-    const second = createRun({ prompt: "second", ...route });
-    const third = createRun({ prompt: "third", ...route });
-    first.currentInboundEventKind = "room_event";
-    second.currentInboundEventKind = "room_event";
-    first.run.sourceReplyDeliveryMode = "automatic";
-    second.run.sourceReplyDeliveryMode = "automatic";
-    const firstSourceOwner = {
-      deliver: vi.fn(),
-      presentationOptions: {},
-    } as never;
-    const secondSourceOwner = {
-      deliver: vi.fn(),
-      presentationOptions: {},
-    } as never;
-    const firstGate = vi.fn(async () => ({ action: "continue" as const }));
-    const secondGate = vi.fn(async () => ({ action: "continue" as const }));
-    first.queuedSourceReplyDelivery = firstSourceOwner;
-    second.queuedSourceReplyDelivery = secondSourceOwner;
-    first.onBeforeAgentFinalize = firstGate;
-    second.onBeforeAgentFinalize = secondGate;
-    first.turnAdoptionLifecycle = {
-      onAdopted: vi.fn(async () => {}),
-      cronCreatorAuthorityUnavailable: "queued-local-operator",
-    };
-    second.turnAdoptionLifecycle = { onAdopted: vi.fn(async () => {}) };
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, third, settings);
+
+    enqueueRoutedRuns(
+      key,
+      settings,
+      {
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+      },
+      "first",
+      "second",
+    );
 
     await drainRecordedQueue(key, runFollowup, done);
 
@@ -3001,35 +2878,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:C1");
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
-    expect(calls[0]?.queuedSourceReplyDelivery).toBe(secondSourceOwner);
-    expect(calls[0]?.onBeforeAgentFinalize).toBe(secondGate);
-    expect(calls[0]?.onBeforeAgentFinalize).not.toBe(firstGate);
-    expect(calls[0]?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable).toBe(
-      "queued-local-operator",
-    );
-  });
-
-  it("does not merge final-candidate gates across an ownerless multi-source overflow summary", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-overflow-summary-ownerless-gates-${Date.now()}`,
-      { mode: "followup", cap: 1 },
-      2,
-    );
-    const first = createRun({ prompt: "first gated source" });
-    const second = createRun({ prompt: "second gated source" });
-    first.onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
-    second.onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
-    expect(calls[0]?.queuedSourceReplyDelivery).toBeUndefined();
-    expect(calls[0]?.onBeforeAgentFinalize).toBeUndefined();
-    expect(calls[1]?.prompt).toBe("live followup");
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
   });
 
   it("keeps live item runtime metadata out of standalone overflow summaries", async () => {

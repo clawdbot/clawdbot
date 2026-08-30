@@ -106,9 +106,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       harness: normalizedHarness,
-      ...(record.origin === "bundled" && record.id === "codex" && id === "codex"
-        ? { bundledCodexSourceFinalization: true as const }
-        : {}),
       ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
       source: record.source,
       rootDir: record.rootDir,

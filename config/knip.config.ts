@@ -443,12 +443,6 @@ const config = {
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
-    // Focused Matrix tests instantiate isolated coordinators and inspect the reserved wire marker;
-    // production uses the singleton coordinator and protocol helpers within their owning modules.
-    "extensions/matrix/src/matrix/monitor/turn-taking-coordinator.ts": ["exports"],
-    "extensions/matrix/src/matrix/preview-protocol.ts": ["exports"],
-    // Focused retry tests exercise this parameter-resolution seam; production calls it in-module.
-    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are

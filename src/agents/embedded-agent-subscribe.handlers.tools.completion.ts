@@ -18,6 +18,7 @@ import {
   consumeStructuredReplaySafeToolCall,
   consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   isDeliveredCoreCurrentChannelWidgetResult,
   readEmbeddedMessageDeliveryFact,
@@ -25,10 +26,13 @@ import {
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyText,
+  resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "./embedded-agent-messaging-extraction.js";
 import {
@@ -61,7 +65,6 @@ import {
   readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
-import { commitMessagingToolDeliveryEvidence } from "./embedded-agent-subscribe.handlers.tools.source-reply.js";
 import {
   buildCommandItemId,
   buildCommandItemTitle,
@@ -338,21 +341,56 @@ export async function handleToolExecutionEnd(
       result,
       isToolError,
     });
-  commitMessagingToolDeliveryEvidence({
-    ctx,
-    toolCallId,
-    toolName,
-    startArgs,
-    result,
-    isMessagingSend,
-    didDeliverMessagingResult,
-    deliveredMessageToolSourceReply,
-    deliveredCurrentSourceReply,
-    messageText,
-    confirmedMessageTarget,
-    committedMediaUrls,
-    hasRichContent,
-  });
+  const sourceReplyFinal = deliveredMessageToolSourceReply
+    ? resolveMessageToolSourceReplyFinal(startArgs)
+    : undefined;
+  ctx.state.pendingMessagingTexts.delete(toolCallId);
+  ctx.state.pendingMessagingTargets.delete(toolCallId);
+  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+  if (didDeliverMessagingResult && messageText) {
+    ctx.state.messagingToolSentTexts.push(messageText);
+    ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
+    ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
+    ctx.trimMessagingToolSent();
+  }
+  if (didDeliverMessagingResult && confirmedMessageTarget) {
+    ctx.state.messagingToolSentTargets.push({
+      ...confirmedMessageTarget,
+      ...(messageText ? { text: messageText } : {}),
+      ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
+      ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+    });
+    ctx.trimMessagingToolSent();
+  }
+  if (deliveredCurrentSourceReply) {
+    ctx.state.messageToolOnlySourceReplyDelivered = true;
+    if (deliveredMessageToolSourceReply) {
+      const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+      const normalizedSourceReplyText = sourceReplyText
+        ? normalizeTextForComparison(sourceReplyText)
+        : "";
+      if (normalizedSourceReplyText) {
+        ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+        ctx.trimMessagingToolSent();
+      }
+    }
+    ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+  }
+  if (didDeliverMessagingResult && isMessagingSend) {
+    if (committedMediaUrls.length > 0) {
+      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
+      ctx.trimMessagingToolSent();
+    }
+    const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
+    if (sourceReplyPayload) {
+      ctx.state.messagingToolSourceReplyPayloads.push({
+        ...sourceReplyPayload,
+        ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+      });
+      ctx.trimMessagingToolSent();
+    }
+  }
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&

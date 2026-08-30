@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getAgentToolResultMiddlewareMatcherScope,
   listAgentToolResultMiddlewares,
@@ -37,8 +36,6 @@ import type {
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
-const log = createSubsystemLogger("agents/harness/native-hook-relay");
-
 function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_tool_call") {
   const registry = getGlobalHookRunnerRegistry();
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
@@ -70,10 +67,7 @@ export function nativeHookRelayEventHasLocalWork(
     return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
   }
   if (event === "before_agent_finalize") {
-    return (
-      hasGlobalHooks("before_agent_finalize") ||
-      registration.turnLocalBeforeAgentFinalize !== undefined
-    );
+    return hasGlobalHooks("before_agent_finalize");
   }
   return true;
 }
@@ -105,7 +99,7 @@ export function nativeHookRelayEventToolMatcher(
 }
 
 export async function processNativeHookRelayInvocation(params: {
-  registration: ActiveNativeHookRelayRegistration;
+  registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -238,63 +232,42 @@ async function runNativeHookRelayPostToolUse(params: {
 }
 
 async function runNativeHookRelayBeforeAgentFinalize(params: {
-  registration: ActiveNativeHookRelayRegistration;
+  registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
-  const localFinalizer = params.registration.turnLocalBeforeAgentFinalize;
-  if (!localFinalizer?.skipGlobalBeforeAgentFinalize) {
-    const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
-      event: {
-        runId: params.registration.runId,
-        sessionId: params.registration.sessionId,
-        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-        ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
-        provider: params.registration.provider,
-        ...(params.invocation.model ? { model: params.invocation.model } : {}),
-        ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
-        ...(params.invocation.transcriptPath
-          ? { transcriptPath: params.invocation.transcriptPath }
-          : {}),
-        stopHookActive: params.invocation.stopHookActive === true,
-        ...(params.invocation.lastAssistantMessage
-          ? { lastAssistantMessage: params.invocation.lastAssistantMessage }
-          : {}),
-      },
-      ctx: {
-        ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-        sessionId: params.registration.sessionId,
-        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-        runId: params.registration.runId,
-        ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-        ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
-        ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
-      },
-    });
-    if (outcome.action === "revise") {
-      return params.adapter.renderBeforeAgentFinalizeReviseResponse(outcome.reason);
-    }
-    if (outcome.action === "finalize") {
-      return params.adapter.renderBeforeAgentFinalizeStopResponse(outcome.reason);
-    }
+  const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+    event: {
+      runId: params.registration.runId,
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
+      provider: params.registration.provider,
+      ...(params.invocation.model ? { model: params.invocation.model } : {}),
+      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.transcriptPath
+        ? { transcriptPath: params.invocation.transcriptPath }
+        : {}),
+      stopHookActive: params.invocation.stopHookActive === true,
+      ...(params.invocation.lastAssistantMessage
+        ? { lastAssistantMessage: params.invocation.lastAssistantMessage }
+        : {}),
+    },
+    ctx: {
+      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      runId: params.registration.runId,
+      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+      ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
+      ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
+    },
+  });
+  if (outcome.action === "revise") {
+    return params.adapter.renderBeforeAgentFinalizeReviseResponse(outcome.reason);
   }
-  const turnId = params.invocation.turnId;
-  const lastAssistantMessage = params.invocation.lastAssistantMessage;
-  if (!localFinalizer || !turnId || !lastAssistantMessage) {
-    return params.adapter.renderNoopResponse(params.invocation.event);
-  }
-  try {
-    const localOutcome = await localFinalizer.evaluate({ turnId, lastAssistantMessage });
-    if (localOutcome.action === "revise" || localOutcome.action === "discard") {
-      // A source-local rewrite must use the outer zero-tool retry. Blocking this
-      // native Stop would resample inside the same Codex turn with tools enabled.
-      return params.adapter.renderBeforeAgentFinalizeStopResponse();
-    }
-  } catch (error) {
-    log.warn(
-      `turn-local before-finalize gate failed; finalizing ` +
-        `runId=${params.registration.runId} sessionId=${params.registration.sessionId}: ${String(error)}`,
-    );
+  if (outcome.action === "finalize") {
+    return params.adapter.renderBeforeAgentFinalizeStopResponse(outcome.reason);
   }
   return params.adapter.renderNoopResponse(params.invocation.event);
 }

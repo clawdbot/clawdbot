@@ -1,7 +1,6 @@
 /** Extracts message delivery evidence from embedded-agent tool calls and results. */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -28,31 +27,16 @@ export function extractMessagingToolSourceReplyPayload(
   result: unknown,
 ): MessagingToolSourceReplyPayload | undefined {
   const details = readToolResultDetails(result);
-  if (!details) {
+  if (!details || details.sourceReplySink !== "internal-ui") {
     return undefined;
   }
   const status = normalizeOptionalLowercaseString(details.deliveryStatus);
-  const hostFinalDeferred =
-    details.sourceReplySink === "host-final" &&
-    details.hostFinalDeferred === true &&
-    status === "deferred";
-  const deliveredInternalReply =
-    details.sourceReplySink === "internal-ui" && (!status || status === "sent");
-  if (!hostFinalDeferred && !deliveredInternalReply) {
+  if (status && status !== "sent") {
     return undefined;
   }
   const sourceReply = readRecord(details.sourceReply) ?? details;
-  // host-final is produced by core after canonical message-payload preparation;
-  // keep the full payload shape so location, delivery options, attachments,
-  // and future channel-neutral fields cannot disappear at the ownership seam.
-  let payload: MessagingToolSourceReplyPayload = {};
-  if (hostFinalDeferred) {
-    // SAFETY: Core emits host-final only after canonical ReplyPayload preparation; this copy crosses tool-result type erasure without changing that payload.
-    payload = { ...sourceReply } as MessagingToolSourceReplyPayload;
-  }
-  const text =
-    readStringValue(sourceReply.text) ??
-    (hostFinalDeferred ? undefined : readStringValue(details.message));
+  const payload: MessagingToolSourceReplyPayload = {};
+  const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
   if (text) {
     payload.text = text;
   }
@@ -131,46 +115,7 @@ export function extractMessagingToolSourceReplyPayload(
   if (details.sourceReplyTranscriptOwner === true) {
     payload.transcriptOwner = true;
   }
-  if (hostFinalDeferred) {
-    payload.hostFinalDeferred = true;
-  }
   return Object.keys(payload).length > 0 ? payload : undefined;
-}
-
-/**
- * Projects retained host-owned reply payloads into the exact candidate seen by
- * freshness/next-step gates. Plain text stays plain; structured or media
- * content is included as a deterministic envelope so a media-only final cannot
- * bypass the gate and an assistant acknowledgement cannot replace the actual
- * pending reply as the decision input.
- */
-export function resolveHostFinalDeferredDraftCandidate(
-  payloads: readonly MessagingToolSourceReplyPayload[] | undefined,
-): string | undefined {
-  const candidates = (payloads ?? []).flatMap((payload, index): string[] => {
-    if (payload.hostFinalDeferred !== true) {
-      return [];
-    }
-    const {
-      hostFinalDeferred: _hostFinalDeferred,
-      idempotencyKey: _idempotencyKey,
-      sourceReplyFinal: _sourceReplyFinal,
-      transcriptOwner: _transcriptOwner,
-      ...reply
-    } = payload;
-    const text = normalizeOptionalString(reply.text);
-    const structured = Object.fromEntries(
-      Object.entries(reply).filter(([key, value]) => key !== "text" && value !== undefined),
-    );
-    if (Object.keys(structured).length === 0) {
-      return text ? [text] : [];
-    }
-    const envelope = `<host-final-reply-payload index="${index}">${stableStringify(
-      structured,
-    )}</host-final-reply-payload>`;
-    return [[text, envelope].filter((part): part is string => Boolean(part)).join("\n\n")];
-  });
-  return normalizeOptionalString(candidates.join("\n\n"));
 }
 
 // Core tool names that are allowed to emit trusted local media artifacts.

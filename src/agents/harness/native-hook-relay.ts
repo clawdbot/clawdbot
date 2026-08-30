@@ -58,8 +58,6 @@ import type {
   NativeHookRelayPermissionApprovalRequester,
   NativeHookRelayProcessResponse,
   NativeHookRelayRegistration,
-  NativeHookRelayTurnLocalFinalizer,
-  RetainedNativeHookRelayRegistrationHandle,
   RegisterNativeHookRelayParams,
 } from "./native-hook-relay-types.js";
 import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
@@ -106,7 +104,6 @@ export type NativeHookRelayRetention = Readonly<{
 
 type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
   retention: NativeHookRelayRetention;
-  turnLocalBeforeAgentFinalize?: NativeHookRelayTurnLocalFinalizer;
 };
 
 function readRelayLifetime(
@@ -161,26 +158,21 @@ function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | 
 export function registerNativeHookRelay(
   params: RegisterNativeHookRelayParams,
 ): ActiveNativeHookRelayRegistrationHandle {
-  return registerNativeHookRelayInternal(params, undefined, undefined);
+  return registerNativeHookRelayInternal(params, undefined);
 }
 
 /** Private-local bundled runtime entrypoint; not exported through the public SDK. */
 export function registerRetainedNativeHookRelay(
   params: RetainedNativeHookRelayParams,
-): RetainedNativeHookRelayRegistrationHandle {
-  const { retention, turnLocalBeforeAgentFinalize, ...registrationParams } = params;
-  return registerNativeHookRelayInternal(
-    registrationParams,
-    retention,
-    turnLocalBeforeAgentFinalize,
-  );
+): ActiveNativeHookRelayRegistrationHandle {
+  const { retention, ...registrationParams } = params;
+  return registerNativeHookRelayInternal(registrationParams, retention);
 }
 
 function registerNativeHookRelayInternal(
   params: RegisterNativeHookRelayParams,
   retention: NativeHookRelayRetention | undefined,
-  turnLocalBeforeAgentFinalize: NativeHookRelayTurnLocalFinalizer | undefined,
-): RetainedNativeHookRelayRegistrationHandle {
+): ActiveNativeHookRelayRegistrationHandle {
   pruneExpiredNativeHookRelays();
   pruneNativeHookRelayPermissionAllowAlways();
   const relayId = normalizeRelayKey(params.relayId, "id") ?? randomUUID();
@@ -225,7 +217,6 @@ function registerNativeHookRelayInternal(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
-      ...(turnLocalBeforeAgentFinalize ? { turnLocalBeforeAgentFinalize } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
       // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
@@ -249,7 +240,7 @@ function registerNativeHookRelayInternal(
     }
     registerNativeHookRelayBridge(registration, stateDbPath, invokeNativeHookRelay);
     scheduleNativeHookRelayExpiry(relayId, registration);
-    const handle: RetainedNativeHookRelayRegistrationHandle = {
+    const handle: ActiveNativeHookRelayRegistrationHandle = {
       ...registration,
       shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
       toolMatcherForEvent: (event) => nativeHookRelayEventToolMatcher(registration, event),
@@ -261,10 +252,9 @@ function registerNativeHookRelayInternal(
           generation: registration.generation,
           event,
           nice: params.command?.nice,
-          timeoutMs: Math.max(
-            options?.minimumTimeoutMs ?? 0,
-            resolveNativeHookRelayCommandTimeoutMs(params.command?.timeoutMs, options?.timeoutMs) ??
-              0,
+          timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
+            params.command?.timeoutMs,
+            options?.timeoutMs,
           ),
           executable: params.command?.executable,
           nodeExecutable: params.command?.nodeExecutable,
@@ -404,7 +394,7 @@ async function resolveNativeHookRelayInvocationBinding(
   registration: ActiveNativeHookRelayRegistration,
   event: NativeHookRelayEvent,
   rawPayload: unknown,
-): Promise<ActiveNativeHookRelayRegistration> {
+): Promise<NativeHookRelayRegistration> {
   const lifetime = readRelayLifetime(registration);
   if (!lifetime) {
     throw new Error("native hook relay registration is inactive");
@@ -527,9 +517,7 @@ export async function invokeNativeHookRelay(
     event,
     params.rawPayload,
   );
-  const authorityBearingEvent =
-    event === "pre_tool_use" || event === "permission_request" || event === "before_agent_finalize";
-  if (authorityBearingEvent) {
+  if (event === "pre_tool_use" || event === "permission_request") {
     effectiveRegistration.assertActive?.();
   }
   recordNativeHookRelayInvocation(normalized);
@@ -541,7 +529,7 @@ export async function invokeNativeHookRelay(
   });
   // Policy and approval callbacks may yield while their admitted run closes.
   // Never let a late allow cross back into the native runtime.
-  if (authorityBearingEvent) {
+  if (event === "pre_tool_use" || event === "permission_request") {
     effectiveRegistration.assertActive?.();
   }
   if (

@@ -93,9 +93,6 @@ function createFixture() {
   const clearTimers = vi.fn(() => order.push("clear-timers"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
   const getBeforeAgentFinalizeRevisionEntryId = vi.fn(() => undefined);
-  const getBeforeAgentFinalizeRevisionDisableTools = vi.fn(() => false);
-  const getBeforeAgentFinalizeRevisionAccepted = vi.fn(() => undefined);
-  const getBeforeAgentFinalizeDiscarded = vi.fn(() => false);
   const promptActiveSession = vi.fn(async () => undefined);
   const messages = [
     {
@@ -167,9 +164,6 @@ function createFixture() {
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
       getBeforeAgentFinalizeRevisionEntryId,
-      getBeforeAgentFinalizeRevisionDisableTools,
-      getBeforeAgentFinalizeRevisionAccepted,
-      getBeforeAgentFinalizeDiscarded,
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
@@ -327,8 +321,6 @@ function createFixture() {
     clearTimers,
     detachBackend,
     getBeforeAgentFinalizeRevisionReason,
-    getBeforeAgentFinalizeRevisionDisableTools,
-    getBeforeAgentFinalizeRevisionAccepted,
     input,
     order,
     queueHandle,

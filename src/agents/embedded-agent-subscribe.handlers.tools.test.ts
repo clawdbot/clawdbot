@@ -3849,47 +3849,6 @@ describe("messaging tool media URL tracking", () => {
     ]);
   });
 
-  it("retains a host-final payload without recording premature delivery evidence", async () => {
-    const { ctx } = createTestContext();
-    const toolCallId = "tool-host-final-deferred";
-    await startTool(ctx, {
-      toolName: "message",
-      toolCallId,
-      args: { action: "send", message: "pending host answer" },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId,
-      isError: false,
-      result: {
-        details: {
-          status: "deferred",
-          deliveryStatus: "deferred",
-          sourceReplySink: "host-final",
-          hostFinalDeferred: true,
-          sourceReply: {
-            text: "pending host answer",
-            mediaUrls: ["https://example.org/final.png"],
-            location: { latitude: 31.778, longitude: 35.235 },
-          },
-        },
-      },
-    });
-
-    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
-      {
-        text: "pending host answer",
-        mediaUrls: ["https://example.org/final.png"],
-        location: { latitude: 31.778, longitude: 35.235 },
-        hostFinalDeferred: true,
-      },
-    ]);
-    expect(ctx.state.messagingToolSentTexts).toEqual([]);
-    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
-    expect(ctx.state.messagingToolSentTargets).toEqual([]);
-    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
-  });
-
   it("commits trusted core current-channel widgets as message-tool-only source replies", async () => {
     const { ctx } = createTestContext();
     const onDeliveredMessageToolOnlySourceReply = vi.fn();

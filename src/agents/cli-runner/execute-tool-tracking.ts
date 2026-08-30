@@ -233,23 +233,6 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
     isError?: boolean;
   }) => {
-    const toolArgs = params.args ?? {};
-    const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
-    const sourceReplyPayload = isMessagingSend
-      ? extractMessagingToolSourceReplyPayload(params.result)
-      : undefined;
-    const retainSourceReplyPayload = (
-      payload: MessagingToolSourceReplyPayload,
-      sourceReplyFinal?: boolean,
-    ) => {
-      if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-        messagingToolSourceReplyPayloads.shift();
-      }
-      messagingToolSourceReplyPayloads.push({
-        ...payload,
-        ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
-      });
-    };
     const deliveryFact = readEmbeddedMessageDeliveryFact(
       readToolResultDetails(params.result)?.messageDelivery,
     );
@@ -258,12 +241,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         (params.isError !== true || deliveryFact.partialDelivery)
       : isPluginNativeMessagingTool(params.toolName) && isDeliveredMessagingToolResult(params);
     if (!delivered) {
-      if (sourceReplyPayload?.hostFinalDeferred === true) {
-        retainSourceReplyPayload(sourceReplyPayload);
-      }
       return;
     }
     didSendViaMessagingTool = true;
+    const toolArgs = params.args ?? {};
+    const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
     const confirmedTarget =
       params.target && extractMessagingToolSendResult(params.target, params.result);
@@ -303,10 +285,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       );
       if (deliveredCurrentSourceReply) {
         didDeliverSourceReplyViaMessageTool = true;
-        if (sourceReplyPayload) {
+        const payload = extractMessagingToolSourceReplyPayload(params.result);
+        if (payload) {
+          if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+            messagingToolSourceReplyPayloads.shift();
+          }
           // Each internal source-reply send is a distinct delivery, even when
           // two intentional sends have identical text or media.
-          retainSourceReplyPayload(sourceReplyPayload, sourceReplyFinal);
+          messagingToolSourceReplyPayloads.push({
+            ...payload,
+            ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+          });
         }
       }
     }

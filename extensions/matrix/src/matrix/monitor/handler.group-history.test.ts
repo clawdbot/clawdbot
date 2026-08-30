@@ -342,9 +342,11 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     });
 
     const first = handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$a", body: "first" }));
-    await vi.waitFor(() => expect(getUserIdCalls).toBe(1));
+    await Promise.resolve();
     const second = handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "second" }));
-    await vi.waitFor(() => expect(getUserIdCalls).toBe(2));
+    await Promise.resolve();
+
+    expect(getUserIdCalls).toBe(2);
 
     firstUserId.resolve("@bot:example.org");
     await Promise.all([first, second]);

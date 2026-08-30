@@ -4,6 +4,7 @@ import {
   embeddedAgentLog,
   loadCodexBundleMcpThreadConfig,
   supportsModelTools,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
@@ -20,7 +21,6 @@ import {
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
-import type { CodexEmbeddedRunAttemptParams } from "./run-attempt-types.js";
 import {
   assertScheduledCodexAppAuthorityRuntime,
   buildLegacyScheduledCodexAppRecoveryPrompt,
@@ -30,7 +30,7 @@ import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 function resolveCodexAttemptBundleManifestRegistry(
-  preparedModelRuntime: CodexEmbeddedRunAttemptParams["preparedModelRuntime"],
+  preparedModelRuntime: EmbeddedRunAttemptParams["preparedModelRuntime"],
 ) {
   const metadataSnapshot = preparedModelRuntime?.metadataSnapshot;
   // Scoped snapshots are partial views and cannot replace complete bundle discovery.
@@ -112,9 +112,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: undefined,
     maxTokens: undefined,
-  } as unknown as CodexEmbeddedRunAttemptParams["model"];
+  } as unknown as EmbeddedRunAttemptParams["model"];
   const legacyScheduledAppRecoveryPrompt = buildLegacyScheduledCodexAppRecoveryPrompt(params);
-  const runtimeParams: CodexEmbeddedRunAttemptParams = usesSupervisionConnection
+  const runtimeParams: EmbeddedRunAttemptParams = usesSupervisionConnection
     ? {
         ...paramsWithoutOuterNativeOwnership,
         provider: "codex",
@@ -139,7 +139,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       };
   const activeSessionId = params.sessionId;
   const activeSessionFile = params.sessionFile;
-  const buildActiveRunAttemptParams = (): CodexEmbeddedRunAttemptParams => ({
+  const buildActiveRunAttemptParams = (): EmbeddedRunAttemptParams => ({
     ...runtimeParams,
     sessionId: activeSessionId,
     sessionFile: activeSessionFile,

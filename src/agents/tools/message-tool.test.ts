@@ -445,7 +445,6 @@ function createChannelPlugin(params: {
   message?: ChannelMessageAdapterShape;
   messaging?: ChannelPlugin["messaging"];
   outbound?: ChannelPlugin["outbound"];
-  threading?: ChannelPlugin["threading"];
 }): ChannelPlugin {
   return {
     id: params.id as ChannelPlugin["id"],
@@ -466,7 +465,6 @@ function createChannelPlugin(params: {
     ...(params.message ? { message: params.message } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
     ...(params.outbound ? { outbound: params.outbound } : {}),
-    ...(params.threading ? { threading: params.threading } : {}),
     actions: {
       describeMessageTool:
         params.describeMessageTool ??
@@ -684,155 +682,6 @@ describe("message tool gateway timeout", () => {
     });
 
     expect(call?.gateway?.timeoutMs).toBe(5000);
-  });
-});
-
-describe("source-final message-tool fence", () => {
-  function createFinalizeGatedMatrixTool() {
-    const plugin = createChannelPlugin({
-      id: "matrix",
-      label: "Matrix",
-      docsPath: "/channels/matrix",
-      blurb: "Matrix test plugin.",
-      actions: ["send", "reply"],
-      config: { listAccountIds: () => ["alpha", "beta"] },
-      threading: {
-        matchesToolContextTarget: ({ target, toolContext }) =>
-          [toolContext.currentChannelId, toolContext.currentMessagingTarget].includes(target),
-        resolveAutoThreadId: ({ toolContext }) => toolContext?.currentThreadTs,
-      },
-    });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
-    return createMessageTool({
-      config: {} as never,
-      currentChannelProvider: "matrix",
-      currentChannelId: "!source:example.org",
-      currentMessagingTarget: "room:!source:example.org",
-      currentThreadTs: "$source-thread",
-      agentAccountId: "alpha",
-      deferSourceMessageToolDelivery: true,
-      workspaceDir: "/tmp",
-      runMessageAction: mocks.runMessageAction as never,
-    });
-  }
-
-  it("suppresses only sends and replies to the exact source room/account/thread", async () => {
-    const tool = createFinalizeGatedMatrixTool();
-
-    const implicitSource = await tool.execute("source-implicit", {
-      action: "send",
-      message: "answer before freshness",
-    });
-    const explicitSource = await tool.execute("source-explicit", {
-      action: "send",
-      target: "room:!source:example.org",
-      threadId: "$source-thread",
-      replyTo: "$specific-message",
-      message: "same answer",
-    });
-    const sourceWithMedia = await tool.execute("source-media", {
-      action: "send",
-      target: "room:!source:example.org",
-      threadId: "$source-thread",
-      message: "same answer with attachment",
-      mediaUrl: "https://example.org/proof.png",
-    });
-    const sourceWithLocation = await tool.execute("source-location", {
-      action: "send",
-      target: "room:!source:example.org",
-      threadId: "$source-thread",
-      location: { latitude: 31.778, longitude: 35.235, name: "Jerusalem" },
-    });
-
-    expect(implicitSource.details).toMatchObject({
-      status: "deferred",
-      reason: "source_final_delivery_deferred",
-      sourceReplySink: "host-final",
-      hostFinalDeferred: true,
-      sourceReply: { text: "answer before freshness" },
-    });
-    expect(explicitSource.details).toMatchObject({
-      status: "deferred",
-      reason: "source_final_delivery_deferred",
-      sourceReply: {
-        text: "same answer",
-        replyToId: "$specific-message",
-        replyToIdSource: "explicit",
-      },
-    });
-    expect(sourceWithMedia.details).toMatchObject({
-      status: "deferred",
-      reason: "source_final_delivery_deferred",
-      sourceReply: {
-        text: "same answer with attachment",
-        mediaUrl: "https://example.org/proof.png",
-        mediaUrls: ["https://example.org/proof.png"],
-      },
-    });
-    expect(sourceWithLocation.details).toMatchObject({
-      status: "deferred",
-      reason: "source_final_delivery_deferred",
-      sourceReply: {
-        location: { latitude: 31.778, longitude: 35.235, name: "Jerusalem" },
-      },
-    });
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
-  });
-
-  it("suppresses non-final source progress without replacing the eventual host final", async () => {
-    const tool = createFinalizeGatedMatrixTool();
-
-    const progress = await tool.execute("source-progress", {
-      action: "send",
-      message: "Still working",
-      final: false,
-    });
-    const completed = await tool.execute("source-complete", {
-      action: "send",
-      message: "Completed answer",
-      final: true,
-    });
-
-    expect(progress.details).toMatchObject({
-      status: "suppressed",
-      deliveryStatus: "suppressed",
-      reason: "source_progress_host_final_unsupported",
-      sourceReplySink: "host-final",
-    });
-    expect(progress.details).not.toHaveProperty("hostFinalDeferred");
-    expect(progress.details).not.toHaveProperty("sourceReply");
-    expect(completed.details).toMatchObject({
-      status: "deferred",
-      hostFinalDeferred: true,
-      sourceReply: { text: "Completed answer" },
-    });
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
-  });
-
-  it("allows sends to another room, thread, or account", async () => {
-    const tool = createFinalizeGatedMatrixTool();
-    mockSendResult({ channel: "matrix", to: "!other:example.org" });
-
-    await tool.execute("other-room", {
-      action: "send",
-      target: "!other:example.org",
-      message: "out of band",
-    });
-    await tool.execute("other-thread", {
-      action: "send",
-      target: "!source:example.org",
-      threadId: "$other-thread",
-      message: "separate thread",
-    });
-    await tool.execute("other-account", {
-      action: "send",
-      target: "!source:example.org",
-      threadId: "$source-thread",
-      accountId: "beta",
-      message: "separate account",
-    });
-
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(3);
   });
 });
 

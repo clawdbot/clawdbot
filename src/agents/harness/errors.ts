@@ -40,28 +40,6 @@ export class AgentHarnessPreflightError extends Error {
   }
 }
 
-/** A requested Matrix freshness gate cannot run on the selected plugin harness. */
-export class PluginHarnessSourceFinalizationUnsupportedError extends AgentHarnessPreflightError {
-  readonly harnessId: string;
-
-  constructor(harnessId: string) {
-    super(
-      "The selected plugin agent runtime does not support Matrix fresh-message redraft and discard, so it was not started. " +
-        "Use OpenClaw's registry-attested bundled Codex harness for plugin-harness freshness, select a supported embedded or CLI runtime, or set " +
-        "channels.matrix.turnTaking.redraftDepth to 0 for participation-only mode.",
-      { scope: "harness" },
-    );
-    this.name = "PluginHarnessSourceFinalizationUnsupportedError";
-    this.harnessId = harnessId;
-  }
-}
-
-export function isPluginHarnessSourceFinalizationUnsupportedError(
-  err: unknown,
-): err is PluginHarnessSourceFinalizationUnsupportedError {
-  return err instanceof PluginHarnessSourceFinalizationUnsupportedError;
-}
-
 // The host records the selected harness where the attempt runs. Plugins can opt
 // into harness-local fallback, but cannot suppress candidates by naming an owner.
 const agentHarnessPreflightOwners = new WeakMap<AgentHarnessPreflightError, string>();

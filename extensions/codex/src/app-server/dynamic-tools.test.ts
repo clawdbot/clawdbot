@@ -2338,44 +2338,6 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("retains deferred host-final source replies for host-owned delivery", async () => {
-    const toolResult = textToolResult("Prepared for host delivery.", {
-      status: "deferred",
-      deliveryStatus: "deferred",
-      reason: "source_final_delivery_deferred",
-      sourceReplySink: "host-final",
-      hostFinalDeferred: true,
-      sourceReply: {
-        text: "visible reply",
-        mediaUrls: ["/tmp/reply.png"],
-        location: { latitude: 31.778, longitude: 35.235, name: "Jerusalem" },
-        replyToId: "$source-event",
-      },
-    });
-    const bridge = createBridgeWithToolResult("message", toolResult);
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      target: "room:!source:example.org",
-      message: "visible reply",
-    });
-
-    expect(result).toEqual(expectInputText("Prepared for host delivery."));
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
-    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
-    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
-      {
-        text: "visible reply",
-        mediaUrls: ["/tmp/reply.png"],
-        location: { latitude: 31.778, longitude: 35.235, name: "Jerusalem" },
-        replyToId: "$source-event",
-        hostFinalDeferred: true,
-      },
-    ]);
-  });
-
   it("treats omitted source-reply finality as terminal", async () => {
     const bridge = createBridgeWithToolResult(
       "message",

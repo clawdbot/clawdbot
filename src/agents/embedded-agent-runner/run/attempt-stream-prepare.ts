@@ -123,14 +123,11 @@ export function prepareEmbeddedAttemptStream(input: {
   const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
-  let beforeAgentFinalizeRevisionDisableTools = false;
-  let beforeAgentFinalizeRevisionAccepted: (() => Promise<void> | void) | undefined;
-  let beforeAgentFinalizeDiscarded = false;
   let acceptingSteerMessages = true;
   let activeQueueAdmissions = 0;
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
-    (hookRunner?.hasHooks("before_agent_finalize") || attempt.onBeforeAgentFinalize !== undefined);
+    hookRunner?.hasHooks("before_agent_finalize");
   const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
     ? async (event: {
         messages: AgentMessage[];
@@ -138,7 +135,6 @@ export function prepareEmbeddedAttemptStream(input: {
         assistantEntryId?: string;
         lastAssistant?: AgentMessage;
         assistantTexts: readonly string[];
-        hostFinalDeferredCandidate?: string;
         hasAssistantVisibleText: boolean;
         isError: boolean;
         incompleteTerminalAssistant: boolean;
@@ -149,13 +145,12 @@ export function prepareEmbeddedAttemptStream(input: {
           event.willRetry ||
           event.isError ||
           event.incompleteTerminalAssistant ||
-          (!event.hasAssistantVisibleText && !event.hostFinalDeferredCandidate)
+          !event.hasAssistantVisibleText
         ) {
           return;
         }
         const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
         const lastAssistantMessage =
-          normalizeOptionalString(event.hostFinalDeferredCandidate) ??
           normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
           normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
           normalizeOptionalString(event.assistantTexts.join("\n\n"));
@@ -170,6 +165,7 @@ export function prepareEmbeddedAttemptStream(input: {
           state.aborted ||
           state.promptError ||
           state.timedOut ||
+          hasCompletedClientToolCall ||
           state.yieldDetected ||
           silentFinalReply
         ) {
@@ -209,97 +205,45 @@ export function prepareEmbeddedAttemptStream(input: {
         }
         let keepAdmissionClosed = false;
         try {
-          // Preserve the historical client-tool safety boundary for arbitrary
-          // global hooks. A source-local gate is allowed to inspect the final
-          // candidate because its revision contract hard-disables tools.
-          let outcome = hasCompletedClientToolCall
-            ? ({ action: "continue" } as const)
-            : await runAgentHarnessBeforeAgentFinalizeHook({
-                event: {
-                  runId: attempt.runId,
-                  sessionId: attempt.sessionId,
-                  ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-                  provider: reportedModelRef.provider,
-                  model: reportedModelRef.model,
-                  ...((attempt.cwd ?? attempt.workspaceDir)
-                    ? { cwd: attempt.cwd ?? attempt.workspaceDir }
-                    : {}),
-                  ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
-                  stopHookActive: false,
-                  lastAssistantMessage,
-                  messages: hookMessages,
-                },
-                ctx: {
-                  runId: attempt.runId,
-                  trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-                  agentId: input.hookAgentId,
-                  sessionKey: attempt.sessionKey,
-                  sessionId: attempt.sessionId,
-                  workspaceDir: attempt.workspaceDir,
-                  modelProviderId: reportedModelRef.provider,
-                  modelId: reportedModelRef.model,
-                  trigger: attempt.trigger,
-                  ...buildAgentHookContextChannelFields(attempt),
-                  ...buildAgentHookContextIdentityFields({
-                    trigger: attempt.trigger,
-                    senderId: attempt.senderId,
-                    chatId: attempt.chatId,
-                    channelContext: attempt.channelContext,
-                  }),
-                },
-                hookRunner,
-              });
-          if (outcome.action === "finalize") {
-            return;
-          }
-          let sourceLocalRevision = false;
-          let sourceLocalDiscard = false;
-          if (outcome.action === "continue" && attempt.onBeforeAgentFinalize) {
-            if (!event.assistantEntryId) {
-              return;
-            }
-            try {
-              const localOutcome = await attempt.onBeforeAgentFinalize({
-                runId: attempt.runId,
-                sessionId: attempt.sessionId,
-                ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-                provider: reportedModelRef.provider,
-                model: reportedModelRef.model,
-                lastAssistantMessage,
-                revisionAttempt: attempt.beforeAgentFinalizeRevisionAttempts ?? 0,
-              });
-              if (localOutcome.action === "discard") {
-                sourceLocalDiscard = true;
-                beforeAgentFinalizeRevisionAccepted = localOutcome.onAccepted;
-              } else if (localOutcome.action === "revise" && localOutcome.instruction.trim()) {
-                sourceLocalRevision = true;
-                outcome = { action: "revise", reason: localOutcome.instruction.trim() };
-                beforeAgentFinalizeRevisionDisableTools = localOutcome.disableTools ?? false;
-                beforeAgentFinalizeRevisionAccepted = localOutcome.onAccepted;
-              } else {
-                outcome = { action: "continue" };
-              }
-            } catch (error) {
-              log.warn(
-                `turn-local before-finalize gate failed; finalizing ` +
-                  `runId=${attempt.runId} sessionId=${attempt.sessionId}: ${String(error)}`,
-              );
-              return;
-            }
-          }
-          if (sourceLocalDiscard) {
-            keepAdmissionClosed = true;
-            beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
-            beforeAgentFinalizeDiscarded = true;
-            return { suppressTerminalDelivery: true };
-          }
+          const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+            event: {
+              runId: attempt.runId,
+              sessionId: attempt.sessionId,
+              ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+              provider: reportedModelRef.provider,
+              model: reportedModelRef.model,
+              ...((attempt.cwd ?? attempt.workspaceDir)
+                ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+                : {}),
+              ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+              stopHookActive: false,
+              lastAssistantMessage,
+              messages: hookMessages,
+            },
+            ctx: {
+              runId: attempt.runId,
+              trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
+              agentId: input.hookAgentId,
+              sessionKey: attempt.sessionKey,
+              sessionId: attempt.sessionId,
+              workspaceDir: attempt.workspaceDir,
+              modelProviderId: reportedModelRef.provider,
+              modelId: reportedModelRef.model,
+              trigger: attempt.trigger,
+              ...buildAgentHookContextChannelFields(attempt),
+              ...buildAgentHookContextIdentityFields({
+                trigger: attempt.trigger,
+                senderId: attempt.senderId,
+                chatId: attempt.chatId,
+                channelContext: attempt.channelContext,
+              }),
+            },
+            hookRunner,
+          });
           if (outcome.action !== "revise") {
             return;
           }
-          if (
-            event.hadDeterministicSideEffect &&
-            !(sourceLocalRevision && beforeAgentFinalizeRevisionDisableTools)
-          ) {
+          if (event.hadDeterministicSideEffect) {
             log.warn(
               `before_agent_finalize requested revision after potential side effects; finalizing ` +
                 `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
@@ -358,10 +302,6 @@ export function prepareEmbeddedAttemptStream(input: {
     blockReplyBreak: attempt.blockReplyBreak,
     blockReplyChunking: attempt.blockReplyChunking,
     onPartialReply: attempt.onPartialReply,
-    // A source gate owns provisional previews; global hooks retain their full
-    // delivery quarantine even when the same turn also has a source finalizer.
-    partialReplyIsProvisional:
-      attempt.onBeforeAgentFinalize !== undefined && !hookRunner?.hasHooks("before_agent_finalize"),
     onAssistantMessageStart: attempt.onAssistantMessageStart,
     onExecutionPhase: attempt.onExecutionPhase,
     onAgentEvent: attempt.onAgentEvent,
@@ -649,9 +589,6 @@ export function prepareEmbeddedAttemptStream(input: {
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
-    getBeforeAgentFinalizeRevisionDisableTools: () => beforeAgentFinalizeRevisionDisableTools,
-    getBeforeAgentFinalizeRevisionAccepted: () => beforeAgentFinalizeRevisionAccepted,
-    getBeforeAgentFinalizeDiscarded: () => beforeAgentFinalizeDiscarded,
     stopAcceptingSteerMessages: () => {
       acceptingSteerMessages = false;
     },

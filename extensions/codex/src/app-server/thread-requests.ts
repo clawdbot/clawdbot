@@ -45,8 +45,11 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   suppress_unstable_features_warning: true,
 };
 
-const CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG: JsonObject = {
+const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.goals": false,
+};
+
+const CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG: JsonObject = {
   // OpenClaw owns the durable progress card; Codex's native checklist would create a second owner.
   "tools.update_plan.enabled": false,
 };
@@ -337,10 +340,12 @@ export function buildCodexRuntimeThreadConfig(
     const disabledConfig = mergeCodexThreadConfigs(
       configured,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG,
+      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
     ) ?? {
       ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      ...CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG,
+      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
     };
     // Native patch streaming is part of native code mode, so do not send it
     // when runtime policy disables that tool surface.
@@ -351,13 +356,15 @@ export function buildCodexRuntimeThreadConfig(
     const merged = mergeCodexThreadConfigs(
       codeModeConfig,
       configured,
-      CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG,
+      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
       {
         "features.code_mode_only": true,
       },
     ) ?? {
       ...codeModeConfig,
-      ...CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG,
+      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
       "features.code_mode_only": true,
     };
     return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
@@ -365,10 +372,12 @@ export function buildCodexRuntimeThreadConfig(
   const merged = mergeCodexThreadConfigs(
     codeModeConfig,
     configured,
-    CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG,
+    CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+    CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
   ) ?? {
     ...codeModeConfig,
-    ...CODEX_NATIVE_PLANNING_DISABLED_THREAD_CONFIG,
+    ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+    ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
   };
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
@@ -421,9 +430,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
-  const isolateNativeHooks =
+  const restrictedToolSurface =
     ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
-  const restrictedToolSurface = isolateNativeHooks || params.disableTools === true;
   const restrictedTurnDisablesProjectDocs =
     ringZeroActive ||
     messageOnlySourceReply ||
@@ -462,9 +470,13 @@ export function buildCodexRuntimeThreadConfigForRun(
       params.delegationCapability === "report_only"
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
-      restrictedToolSurface
-        ? buildRestrictedToolConfigPatch(restrictedToolSurfaceMcpServerNames, !isolateNativeHooks)
-        : undefined,
+      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
+        ? buildRestrictedToolConfigPatch(restrictedToolSurfaceMcpServerNames)
+        : buildCodexRingZeroThreadConfigPatch(
+            params,
+            options.hostSystemAgentActive,
+            restrictedToolSurfaceMcpServerNames,
+          ),
       restrictedTurnDisablesProjectDocs ? CODEX_NO_PROJECT_DOCS_CONFIG : undefined,
       params.authoredContextTokenCap === undefined
         ? undefined
@@ -495,28 +507,17 @@ export function buildCodexRingZeroThreadConfigPatch(
   };
 }
 
-function buildRestrictedToolConfigPatch(
-  inheritedMcpServerNames: readonly string[],
-  preserveNativeHooks = false,
-): JsonObject {
+function buildRestrictedToolConfigPatch(inheritedMcpServerNames: readonly string[]): JsonObject {
   // Restricted turns already send environments: [] and disable native code mode.
   // Remove Codex-owned tool sources here; project-document suppression belongs to
   // ring-zero, message-only, and tool-disabled context policy at the caller.
   const mcpServers = Object.fromEntries(
     [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
   );
-  const config: JsonObject = {
+  return {
     ...CODEX_RING_ZERO_THREAD_CONFIG,
     ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
   };
-  // Ordinary no-tool retries retain lifecycle hooks, including the authoritative
-  // Stop gate. Ring-zero and policy-isolated turns still suppress ambient execution.
-  if (preserveNativeHooks) {
-    delete config["features.hooks"];
-    delete config.hooks;
-    delete config.notify;
-  }
-  return config;
 }
 
 export async function readCodexInheritedMcpServerNames(
@@ -570,7 +571,6 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   client: Pick<CodexAppServerClient, "request">,
   options: {
     restrictedToolSurface: boolean;
-    preserveNativeHooks?: boolean;
     additionalDeniedFeatures?: readonly string[];
   },
   signal?: AbortSignal,
@@ -589,7 +589,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   if (!isJsonObject(response.requirements)) {
     throw new Error("Codex configRequirements/read returned invalid requirements");
   }
-  if (options.restrictedToolSurface && !options.preserveNativeHooks) {
+  if (options.restrictedToolSurface) {
     for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
       const hooks = response.requirements[key];
       if (hooks === undefined || hooks === null) {
@@ -619,7 +619,6 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
       const canonicalFeature = CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES.get(feature) ?? feature;
       const deniedByToolPolicy =
         (options.restrictedToolSurface &&
-          (!options.preserveNativeHooks || canonicalFeature !== "hooks") &&
           CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
         additionalDeniedFeatures.has(canonicalFeature);
       if (enabled && deniedByToolPolicy) {

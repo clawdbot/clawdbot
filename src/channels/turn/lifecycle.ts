@@ -1,7 +1,6 @@
 import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../audit/execution-identity-admission.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { bindAdmittedRoomEventSourceDelivery } from "../../auto-reply/reply/automatic-room-event-final-capability.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
@@ -443,24 +442,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
         let dispatchError: unknown;
         try {
           dispatchResult = await runWithSessionInitConflictRetry(
-            () => {
-              if (
-                ownership === "routed-delivery" &&
-                params.admission?.kind === "dispatch" &&
-                replyOptions.sourceReplyDeliveryMode === "automatic"
-              ) {
-                bindAdmittedRoomEventSourceDelivery({
-                  context: params.ctxPayload,
-                  channelId: params.channel,
-                  accountId: params.accountId,
-                  messageId: params.messageId,
-                });
-              }
-              return (
-                ownership === "routed-delivery"
-                  ? dispatchInboundMessageWithRoutedChannelDispatcher
-                  : params.dispatchReplyWithBufferedBlockDispatcher
-              )({
+            () =>
+              (ownership === "routed-delivery"
+                ? dispatchInboundMessageWithRoutedChannelDispatcher
+                : params.dispatchReplyWithBufferedBlockDispatcher)({
                 ctx: params.ctxPayload,
                 cfg: params.cfg,
                 ...(ownership === "routed-delivery"
@@ -644,8 +629,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                 toolsAllow: params.toolsAllow,
                 replyOptions,
                 replyResolver: params.replyResolver,
-              });
-            },
+              }),
             params.sessionInitRetry
               ? {
                   retryDelaysMs: params.sessionInitRetry.delaysMs,

@@ -288,10 +288,6 @@ export type EmbeddedRunAttemptResult = {
     readonly messages: readonly AgentMessage[];
   };
   beforeAgentFinalizeRevisionReason?: string;
-  /** A source-local revision requested that every retry after the rejected draft omit tools. */
-  beforeAgentFinalizeRevisionDisableTools?: true;
-  /** A source-local final-candidate gate deterministically suppressed the rejected draft. */
-  beforeAgentFinalizeDiscarded?: true;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;

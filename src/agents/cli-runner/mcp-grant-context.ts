@@ -177,7 +177,6 @@ export function buildCliMcpGrantContext(params: {
     accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    deferSourceMessageToolDelivery: params.run.deferSourceMessageToolDelivery,
     ...(sourceReplyOnly ? { sourceReplyOnly: true } : {}),
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,

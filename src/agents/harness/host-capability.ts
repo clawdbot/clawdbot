@@ -366,13 +366,7 @@ export function createAgentHarnessHostCapabilities(params: {
     createToolSurface: (options, bindingOptions) => {
       assertActive();
       const tools = bindToolSurface(
-        createOpenClawCodingTools({
-          ...options,
-          ...(attempt.deferSourceMessageToolDelivery === true
-            ? { deferSourceMessageToolDelivery: true }
-            : {}),
-          operationalRunInstance,
-        }),
+        createOpenClawCodingTools({ ...options, operationalRunInstance }),
         bindingOptions,
       );
       for (const tool of tools) {

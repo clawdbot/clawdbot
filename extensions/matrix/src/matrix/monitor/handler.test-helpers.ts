@@ -11,12 +11,10 @@ import type {
   MatrixConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
-  MatrixTurnTakingConfig,
   ReplyToMode,
 } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import type { MatrixTurnTakingCoordinator } from "./turn-taking-coordinator.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
 
 type MatrixMonitorHandlerParams = Parameters<typeof createMatrixRoomMessageHandler>[0];
@@ -85,10 +83,6 @@ type MatrixHandlerTestHarnessOptions = {
   startupGraceMs?: number;
   dropPreStartupMessages?: boolean;
   needsRoomAliasesForConfig?: boolean;
-  turnTaking?: MatrixTurnTakingConfig;
-  turnTakingRoomsConfig?: Record<string, MatrixRoomConfig>;
-  needsRoomAliasesForTurnTakingConfig?: boolean;
-  turnTakingCoordinator?: MatrixTurnTakingCoordinator;
   isDirectMessage?: boolean;
   historyLimit?: number;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
@@ -101,10 +95,6 @@ type MatrixHandlerTestHarnessOptions = {
   resolveStorePath?: () => string;
   recordInboundSession?: (...args: unknown[]) => Promise<void>;
   formatAgentEnvelope?: ({ body }: { body: string }) => string;
-  channelInbound?: MatrixMonitorHandlerParams["channelInbound"];
-  hostBuildInboundContext?: NonNullable<
-    MatrixMonitorHandlerParams["channelInbound"]
-  >["buildContext"];
   finalizeInboundContext?: (ctx: unknown) => unknown;
   createReplyDispatcherWithTyping?: (params?: {
     onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
@@ -296,7 +286,6 @@ export function createMatrixHandlerTestHarness(
     client: {
       getUserId: async () => "@bot:example.org",
       getEvent: async () => ({ sender: "@bot:example.org" }),
-      getMessageWireEventType: async () => "m.room.message",
       ...options.client,
     } as never,
     core: {
@@ -393,22 +382,9 @@ export function createMatrixHandlerTestHarness(
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
-    turnTaking: options.turnTaking,
-    turnTakingRoomsConfig: options.turnTakingRoomsConfig,
-    needsRoomAliasesForTurnTakingConfig: options.needsRoomAliasesForTurnTakingConfig,
-    turnTakingCoordinator: options.turnTakingCoordinator
-      ? Object.assign({ configureMonitorAccess: vi.fn() }, options.turnTakingCoordinator)
-      : undefined,
     resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
     resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
     createChannelInboundEnvelopeBuilder,
-    channelInbound:
-      options.channelInbound ??
-      (options.hostBuildInboundContext
-        ? ({ buildContext: options.hostBuildInboundContext, run } as NonNullable<
-            MatrixMonitorHandlerParams["channelInbound"]
-          >)
-        : undefined),
     finalizeInboundContext,
     resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
     historyLimit: options.historyLimit ?? 0,

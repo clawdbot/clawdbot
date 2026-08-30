@@ -21,11 +21,6 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
-import {
-  bindQueuedSourceReplyDeliveryCapability,
-  hasQueuedSourceReplyDeliveryCapability,
-  mintAutomaticRoomEventFinalCapability,
-} from "./reply/automatic-room-event-final-capability.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type {
@@ -38,8 +33,6 @@ import type {
 } from "./reply/get-reply.types.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
-  captureDeferredReplyDispatcherFactory,
-  captureReplyDispatchDeliveryOutcome,
   composeReplyDispatchBeforeDeliver,
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
@@ -49,14 +42,6 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
-import {
-  bindAdmittedMatrixSourceFinalizationRequest,
-  readSourceFinalizationPrivateOptions,
-} from "./reply/source-finalization-private.js";
-import type {
-  QueuedSourceReplyDelivery,
-  QueuedSourceReplyPresentationOptions,
-} from "./reply/source-finalization.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
@@ -167,143 +152,6 @@ function bindReplyPayloadRunState(
   };
 }
 
-function captureQueuedSourceReplyPresentationOptions(
-  replyOptions: InternalDispatchReplyOptions,
-): QueuedSourceReplyPresentationOptions {
-  return {
-    promptCacheKey: replyOptions.promptCacheKey,
-    onAgentRunStart: replyOptions.onAgentRunStart,
-    isHeartbeat: replyOptions.isHeartbeat,
-    bootstrapContextMode: replyOptions.bootstrapContextMode,
-    suppressToolErrorWarnings: replyOptions.suppressToolErrorWarnings,
-    enableHeartbeatTool: replyOptions.enableHeartbeatTool,
-    forceHeartbeatTool: replyOptions.forceHeartbeatTool,
-    suppressDefaultToolProgressMessages: replyOptions.suppressDefaultToolProgressMessages,
-    suppressToolProgressMessages: replyOptions.suppressToolProgressMessages,
-    allowToolLifecycleWhenProgressHidden: replyOptions.allowToolLifecycleWhenProgressHidden,
-    allowProgressCallbacksWhenSourceDeliverySuppressed:
-      replyOptions.allowProgressCallbacksWhenSourceDeliverySuppressed,
-    onVerboseProgressVisibility: replyOptions.onVerboseProgressVisibility,
-    preserveProgressCallbackStartOrder: replyOptions.preserveProgressCallbackStartOrder,
-    onPartialReply: replyOptions.onPartialReply,
-    onReasoningStream: replyOptions.onReasoningStream,
-    onReasoningProgress: replyOptions.onReasoningProgress,
-    streamReasoningInNonStreamModes: replyOptions.streamReasoningInNonStreamModes,
-    onReasoningEnd: replyOptions.onReasoningEnd,
-    onAssistantMessageStart: replyOptions.onAssistantMessageStart,
-    onBlockReplyQueued: replyOptions.onBlockReplyQueued,
-    // The retained dispatcher below is the exact source owner; never inherit
-    // or retain a generic runner-level block callback alongside it.
-    onBlockReply: undefined,
-    onToolResult: replyOptions.onToolResult,
-    onToolStart: replyOptions.onToolStart,
-    onItemEvent: replyOptions.onItemEvent,
-    onNarrationUpdate: replyOptions.onNarrationUpdate,
-    onProgressNarratorLifecycle: replyOptions.onProgressNarratorLifecycle,
-    isProgressDraftVisible: replyOptions.isProgressDraftVisible,
-    narrationHideCommandText: replyOptions.narrationHideCommandText,
-    commentaryProgressEnabled: replyOptions.commentaryProgressEnabled,
-    progressPreambleEnabled: replyOptions.progressPreambleEnabled,
-    reasoningPayloadsEnabled: replyOptions.reasoningPayloadsEnabled,
-    commentaryPayloadsEnabled: replyOptions.commentaryPayloadsEnabled,
-    shouldDeliverCommentaryPayloads: replyOptions.shouldDeliverCommentaryPayloads,
-    onPlanUpdate: replyOptions.onPlanUpdate,
-    onApprovalEvent: replyOptions.onApprovalEvent,
-    onCommandOutput: replyOptions.onCommandOutput,
-    onPatchSummary: replyOptions.onPatchSummary,
-    onCompactionStart: replyOptions.onCompactionStart,
-    onCompactionEnd: replyOptions.onCompactionEnd,
-    onModelSelected: replyOptions.onModelSelected,
-    onQueuedFollowupAdmitted: replyOptions.onQueuedFollowupAdmitted,
-    onQueuedFollowupSettled: replyOptions.onQueuedFollowupSettled,
-    onObservedReplyDelivery: replyOptions.onObservedReplyDelivery,
-    forceToolResultProgress: replyOptions.forceToolResultProgress,
-    hasRepliedRef: replyOptions.hasRepliedRef,
-    onDeliberateSilentTerminalReply: replyOptions.onDeliberateSilentTerminalReply,
-    onPendingContinuation: replyOptions.onPendingContinuation,
-    cronCreatorAuthorityCapability: undefined,
-  };
-}
-
-function bindQueuedSourceReplyDelivery(params: {
-  replyOptions: InternalDispatchReplyOptions;
-  dispatcher: ReplyDispatcher;
-  runState: ReplyPayloadRunState;
-  context: FinalizedMsgContext;
-}): InternalDispatchReplyOptions {
-  const privateOptions = readSourceFinalizationPrivateOptions(params.replyOptions);
-  if (privateOptions?.retainQueuedSourceReplyDelivery !== true) {
-    return params.replyOptions;
-  }
-  const createDeferredDispatcher = captureDeferredReplyDispatcherFactory(params.dispatcher);
-  if (!createDeferredDispatcher) {
-    throw new Error("queued source reply delivery requires a core-owned reply dispatcher");
-  }
-  // Matrix enhanced-final commitment state lives in the source transport
-  // closure. Keep one queue-owned lane so concurrent late finals cannot both
-  // observe that state before the first wire acceptance commits it.
-  let deliveryChain = Promise.resolve();
-  const requiresRoomEventCapability = params.context.InboundEventKind === "room_event";
-  const sourceIsLive = privateOptions.isSourceLive ?? (() => true);
-  const queuedSourceReplyDelivery: QueuedSourceReplyDelivery = {
-    presentationOptions: captureQueuedSourceReplyPresentationOptions(params.replyOptions),
-    deliver: (payload, info) => {
-      if (
-        !sourceIsLive() ||
-        (requiresRoomEventCapability &&
-          !hasQueuedSourceReplyDeliveryCapability(queuedSourceReplyDelivery))
-      ) {
-        return Promise.resolve("cancelled");
-      }
-      const delivery = deliveryChain.then(async () => {
-        if (
-          !sourceIsLive() ||
-          (requiresRoomEventCapability &&
-            !hasQueuedSourceReplyDeliveryCapability(queuedSourceReplyDelivery))
-        ) {
-          return "cancelled";
-        }
-        // Preflight rejection can deliver without starting an agent, so stamp
-        // hook metadata at the exact retained delivery boundary as well.
-        params.runState.runId = info.runId;
-        const dispatcher = createDeferredDispatcher(
-          () =>
-            sourceIsLive() &&
-            (!requiresRoomEventCapability ||
-              hasQueuedSourceReplyDeliveryCapability(queuedSourceReplyDelivery)),
-        );
-        const outcome = captureReplyDispatchDeliveryOutcome(payload);
-        try {
-          const accepted =
-            info.kind === "tool"
-              ? dispatcher.sendToolResult(payload)
-              : info.kind === "block"
-                ? dispatcher.sendBlockReply(payload)
-                : dispatcher.sendFinalReply(payload);
-          return accepted && outcome.isTracked() ? await outcome.promise : "cancelled";
-        } finally {
-          dispatcher.markComplete();
-          await dispatcher.waitForIdle();
-        }
-      });
-      deliveryChain = delivery.then(
-        () => undefined,
-        () => undefined,
-      );
-      return delivery;
-    },
-  };
-  bindQueuedSourceReplyDeliveryCapability({
-    queued: queuedSourceReplyDelivery,
-    capability: params.replyOptions.automaticRoomEventFinalCapability,
-    context: params.context,
-  });
-  return {
-    ...params.replyOptions,
-    queuedSourceReplyDelivery,
-  };
-}
-
 function installReplyPayloadSendingBeforeDeliver(
   dispatcher: ReplyDispatcher,
   ctx: MsgContext | FinalizedMsgContext,
@@ -363,6 +211,10 @@ export async function dispatchInboundMessage(params: {
   onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
   const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
+  const replyPayloadRunState = params.replyPayloadRunState ?? {
+    runId: replyOptions?.runId,
+  };
+  const replyOptionsWithRunState = bindReplyPayloadRunState(replyOptions, replyPayloadRunState);
   const finalized = measureDiagnosticsTimelineSpanSync(
     "auto_reply.finalize_context",
     () => finalizeInboundContext(params.ctx),
@@ -372,28 +224,6 @@ export async function dispatchInboundMessage(params: {
       attributes: buildDispatchTimelineAttributes(params.ctx),
     },
   );
-  const replyPayloadRunState = params.replyPayloadRunState ?? {
-    runId: replyOptions?.runId,
-  };
-  const replyOptionsWithRunState = bindReplyPayloadRunState(replyOptions, replyPayloadRunState);
-  const automaticRoomEventFinalCapability =
-    replyOptionsWithRunState.sourceReplyDeliveryMode === "automatic"
-      ? mintAutomaticRoomEventFinalCapability(finalized)
-      : undefined;
-  const hostBoundReplyOptions = automaticRoomEventFinalCapability
-    ? { ...replyOptionsWithRunState, automaticRoomEventFinalCapability }
-    : replyOptionsWithRunState;
-  const sourceFinalizationBoundReplyOptions = bindAdmittedMatrixSourceFinalizationRequest({
-    replyOptions: hostBoundReplyOptions,
-    context: finalized,
-    capability: automaticRoomEventFinalCapability,
-  });
-  const boundReplyOptions = bindQueuedSourceReplyDelivery({
-    replyOptions: sourceFinalizationBoundReplyOptions,
-    dispatcher: params.dispatcher,
-    runState: replyPayloadRunState,
-    context: finalized,
-  });
   if (isDiagnosticsEnabled(params.cfg)) {
     logMessageReceived({
       sessionKey: finalized.SessionKey,
@@ -418,7 +248,7 @@ export async function dispatchInboundMessage(params: {
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
-            replyOptions: boundReplyOptions,
+            replyOptions: replyOptionsWithRunState,
             replyResolver: params.replyResolver,
             onSessionMetadataChanges: params.onSessionMetadataChanges,
             usePublishedModelRuntime: true,

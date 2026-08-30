@@ -68,8 +68,6 @@ export type SubscribeEmbeddedAgentSessionParams = {
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
-  /** Source-owned preview only; committed events and blocks still await terminal acceptance. */
-  partialReplyIsProvisional?: boolean;
   onAssistantMessageStart?: () => void | Promise<void>;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
@@ -93,8 +91,6 @@ export type SubscribeEmbeddedAgentSessionParams = {
     assistantEntryId?: string;
     lastAssistant?: AgentMessage;
     assistantTexts: readonly string[];
-    /** Actual unsent host-owned reply, projected for freshness/next-step decisions. */
-    hostFinalDeferredCandidate?: string;
     hasAssistantVisibleText: boolean;
     isError: boolean;
     incompleteTerminalAssistant: boolean;

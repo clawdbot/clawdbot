@@ -18,8 +18,7 @@ vi.mock("./agent-runner-session-reset.js", () => ({
   resetReplyRunSession: (...args: unknown[]) => state.reset(...args),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntryReadOnly: (...args: unknown[]) => state.loadEntryReadOnly(...args),
 }));
 
@@ -136,34 +135,6 @@ describe("executeFollowupTurn", () => {
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
-  });
-
-  it("projects the queued lifecycle instead of a newer runner lifecycle", async () => {
-    const queuedLifecycle = {
-      onAdopted: vi.fn(async () => {}),
-      cronCreatorAuthorityUnavailable: "queued-local-operator" as const,
-    };
-    const newerRunnerLifecycle = { onAdopted: vi.fn(async () => {}) };
-    const turn = createTurn();
-    turn.queued.turnAdoptionLifecycle = queuedLifecycle;
-
-    await executeFollowupTurn({
-      turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "instant",
-        defaultModel: "claude",
-        opts: { turnAdoptionLifecycle: newerRunnerLifecycle },
-      },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-
-    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
-    expect(call.opts?.turnAdoptionLifecycle).toBe(queuedLifecycle);
-    expect(call.opts?.turnAdoptionLifecycle).not.toBe(newerRunnerLifecycle);
-    expect(queuedLifecycle.onAdopted).not.toHaveBeenCalled();
-    expect(newerRunnerLifecycle.onAdopted).not.toHaveBeenCalled();
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {
@@ -409,6 +380,54 @@ describe("executeFollowupTurn", () => {
       expect(onItemEvent).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps room-event progress, tool summaries, and typing silent", async () => {
+    const turn = createTurn({
+      queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
+    });
+    const typing = createTypingController();
+    const onToolResult = vi.fn(async () => {});
+    const onCompactionStart = vi.fn(async () => {});
+    const onCompactionEnd = vi.fn(async () => {});
+    const onReasoningEnd = vi.fn(async () => {});
+    const onNarrationUpdate = vi.fn(async () => {});
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.typingSignals.signalRunStart();
+      await params.opts?.onToolResult?.({ text: "private progress" });
+      await params.opts?.onCompactionStart?.();
+      await params.opts?.onCompactionEnd?.();
+      await params.opts?.onReasoningEnd?.();
+      await params.opts?.onNarrationUpdate?.({ text: "private narration" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: {
+          forceToolResultProgress: true,
+          onCompactionStart,
+          onCompactionEnd,
+          onReasoningEnd,
+          onNarrationUpdate,
+        },
+      },
+      onToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
+    expect(onReasoningEnd).not.toHaveBeenCalled();
+    expect(onNarrationUpdate).not.toHaveBeenCalled();
+  });
 
   it("routes channel-forced tool progress through the channel when verbosity is off", async () => {
     const onToolStart = vi.fn(async () => {});
