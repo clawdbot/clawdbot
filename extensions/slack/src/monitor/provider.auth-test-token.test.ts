@@ -665,7 +665,7 @@ describe("user identity provider transport", () => {
     await stopSlackMonitor(monitor);
   });
 
-  it("delivers another user's DM and drops a self-authored DM", async () => {
+  it("delivers another user's DM and quietly drops a self-authored DM at the monitor boundary", async () => {
     const config = userSocketConfig();
     resetSlackTestState(config);
     getSlackClient().auth.test.mockResolvedValueOnce({
@@ -705,6 +705,7 @@ describe("user identity provider transport", () => {
     });
     await flush();
 
+    expect(replyMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledTimes(1);
     await stopSlackMonitor(monitor);
   });

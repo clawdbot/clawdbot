@@ -381,7 +381,6 @@ type SlackAuthorizationContext = {
 
 /** Stable, non-sensitive reasons for an inbound event that never reaches dispatch. */
 type SlackInboundDropReason =
-  | "self-message"
   | "bot-disabled"
   | "missing-user"
   | "missing-sender"
@@ -609,7 +608,7 @@ async function authorizeSlackInboundMessage(params: {
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
-      return drop("self-message");
+      return null;
     }
     if (allowBotsMode === "off") {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);

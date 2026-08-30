@@ -408,6 +408,25 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
   });
 
+  it("keeps self-message loop prevention out of rejection receipts", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.botUserId = "U_SELF";
+    const info = vi.spyOn(ctx.logger, "info").mockImplementation(() => undefined);
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({
+        user: "U_SELF",
+        bot_id: "B_SELF",
+        subtype: "bot_message",
+      }),
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeNull();
+    expect(info).not.toHaveBeenCalled();
+  });
+
   it("queues inbound message system events without duplicating body text", async () => {
     const body =
       "please summarize the deployment, rollback checks, health checks, and follow-up items";
