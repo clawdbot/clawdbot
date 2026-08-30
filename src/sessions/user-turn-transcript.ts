@@ -231,13 +231,8 @@ export function createUserTurnTranscriptRecorder(
       .catch(() => undefined);
   };
 
-  const resolveUnboundMessageForPersistence = async (): Promise<
-    PersistedUserTurnMessage | undefined
-  > => {
-    if (params.message || !params.resolveInput) {
-      return applyMessageOverrides(message);
-    }
-    if (!resolvedMessagePromise) {
+  const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
+    if (!params.message && params.resolveInput && !resolvedMessagePromise) {
       resolvedMessagePromise = (async () => {
         try {
           const resolvedInput = await params.resolveInput?.();
@@ -254,11 +249,9 @@ export function createUserTurnTranscriptRecorder(
         }
       })();
     }
-    return await resolvedMessagePromise;
-  };
-
-  const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
-    const resolved = await resolveUnboundMessageForPersistence();
+    const resolved = await (params.message || !params.resolveInput
+      ? applyMessageOverrides(message)
+      : resolvedMessagePromise);
     if (!pendingInput && resolved && params.pendingInputSources) {
       const sources = params.pendingInputSources.flatMap(
         (source) => pendingInputReceipts.get(source)?.() ?? [],
@@ -367,23 +360,12 @@ export function createUserTurnTranscriptRecorder(
             ...resolvedTarget,
             logicalTurnId,
             message: candidate,
-            ...(params.sessionTurnMutation
-              ? { sessionTurnMutation: params.sessionTurnMutation }
-              : {}),
-            ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-            ...((options.sessionLifecyclePatch ?? params.sessionLifecyclePatch)
-              ? {
-                  sessionLifecyclePatch:
-                    options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
-                }
-              : {}),
-            ...((options.expectedSessionState ?? params.expectedSessionState)
-              ? {
-                  expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
-                }
-              : {}),
+            sessionTurnMutation: params.sessionTurnMutation,
+            expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
+            sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
+            expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
-            ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
+            beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
           });
         // Collection can resolve its media lazily during admission. Bind custody
         // here too so the canonical append always consumes the exact sources.

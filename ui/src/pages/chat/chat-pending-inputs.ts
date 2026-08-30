@@ -16,8 +16,8 @@ import type { ChatState } from "./chat-state-contract.ts";
 import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
-  publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
+  setChatSessionProjection,
 } from "./history-merge.ts";
 
 type PendingInputView = {
@@ -38,13 +38,21 @@ export function buildPendingInputItems(
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
+  if (!inputs.length) {
+    return items;
+  }
+  const pendingIds = new Set(inputs.map((input) => input.id));
+  for (const message of history) {
+    const identity = readSessionMessageIdentity(message);
+    if (identity?.role === "user" && identity.id) {
+      pendingIds.delete(identity.id);
+      if (!pendingIds.size) {
+        break;
+      }
+    }
+  }
   for (const input of inputs) {
-    if (
-      history.some((message) => {
-        const identity = readSessionMessageIdentity(message);
-        return identity?.role === "user" && identity.id === input.id;
-      })
-    ) {
+    if (!pendingIds.has(input.id)) {
       continue;
     }
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
@@ -87,20 +95,19 @@ export function readChatInputRunIds(state: ChatState): string[] {
     readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
   );
   const runIds = [
-    ...projection.entries.map(
-      (entry) => entry.pending && entry.identity?.role === "user" && entry.pendingRunId,
-    ),
-    ...state.chatQueue.map(
-      (item) =>
-        ((item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed") && item.sendRunId,
-    ),
+    ...projection.entries
+      .filter((entry) => entry.pending && entry.identity?.role === "user")
+      .map((entry) => entry.pendingRunId),
+    ...state.chatQueue
+      .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
+      .map((item) => item.sendRunId),
   ];
   return [
     ...new Set(
       runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
     ),
   ]
-    .toSorted()
+    .sort()
     .slice(0, CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS);
 }
 
@@ -120,25 +127,25 @@ export function applyChatPendingInputs(
   const acceptedRunIds = new Set(
     [...(page?.items ?? []), ...(options.consumptions ?? [])].map((item) => item.runId),
   );
-  // The server owns accepted input even after an interruption. Retiring the
-  // outbox copy prevents reconnect from silently submitting it a second time.
-  for (const item of state.chatQueue) {
-    if (
-      item.sendRunId &&
-      acceptedRunIds.has(item.sendRunId) &&
-      (!item.sessionId || item.sessionId === state.currentSessionId)
-    ) {
-      removeQueuedMessage(state, item.id);
+  if (acceptedRunIds.size) {
+    // The server owns accepted input even after an interruption. Retiring the
+    // outbox copy prevents reconnect from silently submitting it a second time.
+    for (const item of state.chatQueue) {
+      if (
+        item.sendRunId &&
+        acceptedRunIds.has(item.sendRunId) &&
+        (!item.sessionId || item.sessionId === state.currentSessionId)
+      ) {
+        removeQueuedMessage(state, item.id);
+      }
     }
-  }
-  const scope = readChatSessionProjectionScope(state, {
-    agentId: resolveUiSelectedSessionAgentId(state),
-  });
-  const projection = getChatSessionProjection(state, state.chatMessages, scope);
-  // Custody replaces only this pane's provisional user copy, never a canonical
-  // message or active assistant state that happens to share the run correlation.
-  const messages = projection.entries
-    .filter(
+    const scope = readChatSessionProjectionScope(state, {
+      agentId: resolveUiSelectedSessionAgentId(state),
+    });
+    const projection = getChatSessionProjection(state, state.chatMessages, scope);
+    // Custody replaces only this pane's provisional user copy, never a canonical
+    // message or active assistant state that happens to share the run correlation.
+    const entries = projection.entries.filter(
       (entry) =>
         !(
           entry.pending &&
@@ -147,10 +154,12 @@ export function applyChatPendingInputs(
           entry.identity.sequence === null &&
           acceptedRunIds.has(entry.pendingRunId ?? "")
         ),
-    )
-    .map((entry) => entry.message);
-  if (messages.length !== projection.messages.length) {
-    publishChatSessionProjectionMessages(state, messages, { scope });
+    );
+    if (entries.length !== projection.entries.length) {
+      const messages = entries.map((entry) => entry.message);
+      setChatSessionProjection(state, { ...projection, entries, messages });
+      state.chatMessages = [...messages];
+    }
   }
   state.requestUpdate?.();
 }

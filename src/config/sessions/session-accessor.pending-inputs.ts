@@ -22,11 +22,10 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
-  hasSessionPendingInputOwner,
-  isSessionPendingInputRowLive,
   parseSessionPendingInputMessage,
   projectSessionPendingInput,
   readSessionPendingInputByKey,
+  readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
   runWithSessionPendingInput,
@@ -190,7 +189,10 @@ export async function stageSessionPendingInput(
           finish: () => {},
         };
       }
-      if (existing.state !== "queued" || !isSessionPendingInputRowLive(database, existing)) {
+      if (
+        existing.state !== "queued" ||
+        !readSessionPendingInputOwnerIds(database, [existing]).has(existing.input_id)
+      ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }
       throw new Error("Pending input is already admitted; wait for its current turn");
@@ -346,8 +348,9 @@ function readPendingInputRows(
       : [];
     // An aborted but registered owner still owns the terminal disposition. Reads
     // must not race its finish(cancelled) by recording an inferred interruption.
+    const ownedIds = readSessionPendingInputOwnerIds(database, rows);
     const staleIds = rows
-      .filter((row) => row.state === "queued" && !hasSessionPendingInputOwner(database, row))
+      .filter((row) => row.state === "queued" && !ownedIds.has(row.input_id))
       .map((row) => row.input_id);
     return {
       rows,
@@ -371,8 +374,9 @@ function readPendingInputRows(
           .where("input_id", "in", snapshot.staleIds)
           .where("state", "=", "queued")
           .where("consumed_event_id", "is", null),
-      ).rows.filter((row) => !hasSessionPendingInputOwner(database, row));
-      const ids = candidates.map((row) => row.input_id);
+      ).rows;
+      const ownedIds = readSessionPendingInputOwnerIds(database, candidates);
+      const ids = candidates.flatMap((row) => (ownedIds.has(row.input_id) ? [] : [row.input_id]));
       if (ids.length) {
         executeSqliteQuerySync(
           database.db,

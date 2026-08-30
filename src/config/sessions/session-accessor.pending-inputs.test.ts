@@ -375,6 +375,7 @@ describe("accepted input custody", () => {
         return appendTranscriptMessage(scope(), { message: receipt.message });
       }),
     ).rejects.toThrow("run authority closed");
+    await expect(stage("authority")).rejects.toThrow("already admitted");
     expect(listSessionPendingInputs(scope()).items[0]?.state).toBe("queued");
     receipt.finish("cancelled");
     expect(listSessionPendingInputs(scope()).items[0]?.state).toBe("cancelled");
@@ -592,9 +593,17 @@ describe("accepted input custody", () => {
 
   it("rejects a reset target and removes custody on logical deletion that retains transcript windows", async () => {
     const receipt = await stage("reset");
+    const second = await stage("reset-second");
+    expect(listSessionPendingInputs(scope()).items.map((input) => input.state)).toEqual([
+      "queued",
+      "queued",
+    ]);
     await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 2 });
     await expect(promote(receipt)).rejects.toThrow("session changed");
-    expect(readSessionPendingInput(scope(), receipt.inputId)?.state).toBe("interrupted");
+    expect(listSessionPendingInputs(scope()).items).toMatchObject([
+      { id: receipt.inputId, state: "interrupted" },
+      { id: second.inputId, state: "interrupted" },
+    ]);
     await deleteSessionEntryLifecycle({
       archiveTranscript: false,
       storePath: fixture.storePath(),

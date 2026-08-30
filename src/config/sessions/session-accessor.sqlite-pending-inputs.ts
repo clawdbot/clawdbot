@@ -112,55 +112,37 @@ export function runWithSessionPendingInputPersistence<T>(
   return owners.current.run(owner, persist);
 }
 
-export function isSessionPendingInputRowLive(
+/** Registration owns disposition; execution and promotion check the private operational predicates. */
+export function readSessionPendingInputOwnerIds(
   database: PendingInputDatabase,
-  row: SessionPendingInputRow,
-): boolean {
-  const owner = readSessionPendingInputOwner(database, row);
-  if (!owner) {
-    return false;
+  rows: readonly SessionPendingInputRow[],
+): Set<string> {
+  const candidates = rows.filter((row) => {
+    const owner = owners.live.get(row.input_id);
+    return (
+      owner?.databasePath === database.path &&
+      owner.sessionId === row.session_id &&
+      owner.sessionKey === row.session_key &&
+      owner.lifecycleGeneration === row.lifecycle_generation &&
+      isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)
+    );
+  });
+  if (!candidates.length) {
+    return new Set();
   }
-  try {
-    assertPendingInputOwnerCurrent(owner);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function hasSessionPendingInputOwner(
-  database: PendingInputDatabase,
-  row: SessionPendingInputRow,
-): boolean {
-  return readSessionPendingInputOwner(database, row) !== undefined;
-}
-
-function readSessionPendingInputOwner(
-  database: PendingInputDatabase,
-  row: SessionPendingInputRow,
-): SessionPendingInputOwner | undefined {
-  const owner = owners.live.get(row.input_id);
-  if (
-    !owner ||
-    owner.databasePath !== database.path ||
-    owner.sessionId !== row.session_id ||
-    owner.sessionKey !== row.session_key ||
-    owner.lifecycleGeneration !== row.lifecycle_generation ||
-    !isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)
-  ) {
-    return undefined;
-  }
-  const session = executeSqliteQueryTakeFirstSync(
+  const sessions = executeSqliteQuerySync(
     database.db,
     getSessionKysely(database.db)
       .selectFrom("session_nodes")
-      .select("current_session_id")
-      .where("session_key", "=", row.session_key),
+      .select(["session_key", "current_session_id"])
+      .where("session_key", "in", [...new Set(candidates.map((row) => row.session_key))]),
+  ).rows;
+  const current = new Map(sessions.map((row) => [row.session_key, row.current_session_id]));
+  return new Set(
+    candidates
+      .filter((row) => current.get(row.session_key) === row.session_id)
+      .map((row) => row.input_id),
   );
-  if (session?.current_session_id !== row.session_id) {
-    return undefined;
-  }
-  return owner;
 }
 
 export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
@@ -244,8 +226,23 @@ export function resolveSessionPendingInputAppend(
     throw new Error("Pending input cannot be appended outside its admitted turn");
   }
   if (owner.sources) {
+    const acceptedByKey = new Map(
+      executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .selectFrom("session_pending_inputs")
+          .selectAll()
+          .where("session_id", "=", scope.sessionId)
+          .where("session_key", "=", scope.sessionKey)
+          .where(
+            "idempotency_key",
+            "in",
+            owner.sources.map((source) => source.idempotencyKey),
+          ),
+      ).rows.map((row) => [row.idempotency_key, row]),
+    );
     const sources = owner.sources.map((source) => {
-      const accepted = readSessionPendingInputByKey(database, scope, source.idempotencyKey);
+      const accepted = acceptedByKey.get(source.idempotencyKey);
       if (
         !accepted ||
         accepted.input_id !== source.inputId ||

@@ -266,11 +266,7 @@ export function guardSessionManager(
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      if (persistence.anchor) {
-        recorder?.markRuntimePersisted(message, persistence.anchor);
-      } else {
-        recorder?.markRuntimePersisted(message);
-      }
+      recorder?.markRuntimePersisted(message, persistence.anchor);
       await opts?.onUserMessagePersisted?.(message, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
