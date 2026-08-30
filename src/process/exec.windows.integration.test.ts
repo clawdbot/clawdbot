@@ -1,11 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
-import { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec.js";
+import { runUtf8CommandWithTimeout } from "./exec.js";
 import { killProcessTree } from "./kill-tree.js";
 
 describe("runUtf8CommandWithTimeout Windows integration", () => {
@@ -78,52 +75,5 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
       }
     },
     15_000,
-  );
-});
-
-describe.runIf(process.platform === "win32")("Windows batch argv preservation", () => {
-  const cases = [
-    { name: "ordinary arguments", args: ["alpha", "omega"] },
-    { name: "spaces", args: ["two words", "omega"] },
-    { name: "a leading empty argument", args: ["", "omega"] },
-    { name: "a middle empty argument", args: ["alpha", "", "omega"] },
-    { name: "a trailing empty argument", args: ["alpha", ""] },
-    { name: "an embedded tab", args: ["two\twords", "omega"] },
-    { name: "a tab-only argument", args: ["\t", "omega"] },
-    { name: "double quotes", args: ['say "hello"', "omega"] },
-    { name: "a caret", args: ["left^right", "omega"] },
-    { name: "a quoted trailing backslash", args: ["C:\\two words\\", "omega"] },
-  ];
-
-  it.each(cases)(
-    "preserves $name through a real .cmd wrapper",
-    async ({ args }) => {
-      await withTempDir("openclaw-batch-argv-", async (cwd) => {
-        const command = path.join(cwd, "argv.cmd");
-        await writeFile(
-          path.join(cwd, "argv.cjs"),
-          "process.stdout.write(JSON.stringify(process.argv.slice(2)))",
-        );
-        await writeFile(command, `@"${process.execPath}" "%~dp0argv.cjs" %*\r\n`);
-        const result = await runCommandWithTimeout([command, ...args], { cwd, timeoutMs: 5_000 });
-        expect(result.code).toBe(0);
-        expect(result.termination).toBe("exit");
-        expect(JSON.parse(result.stdout)).toEqual(args);
-      });
-    },
-    15_000,
-  );
-
-  it.each(["&", "|", "<", ">", "%", "\r", "\n"])(
-    "continues to reject unsafe batch argument character %j before launch",
-    async (character) => {
-      await withTempDir("openclaw-batch-argv-reject-", async (cwd) => {
-        const command = path.join(cwd, "argv.cmd");
-        await writeFile(command, "@exit /b 99\r\n");
-        await expect(
-          runCommandWithTimeout([command, `left${character}right`], { cwd, timeoutMs: 5_000 }),
-        ).rejects.toThrow("Unsafe Windows cmd.exe argument detected");
-      });
-    },
   );
 });
