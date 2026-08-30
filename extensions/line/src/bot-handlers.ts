@@ -9,6 +9,7 @@ import {
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
@@ -277,6 +278,14 @@ async function shouldProcessLineEvent(
         activation: {
           requireMention: isGroup && event.type === "message" && requireMention,
           allowTextCommands: true,
+          // A quote of the bot is the one implicit mention LINE produces. Carry the
+          // configured policy so turning that fact off actually stops it from
+          // bypassing the group's mention requirement.
+          implicitMentions: resolveChannelImplicitMentions({
+            cfg,
+            channel: "line",
+            accountId: account.accountId,
+          }),
         },
       },
       allowFrom: normalizeStringEntries(account.config.allowFrom),

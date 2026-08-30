@@ -261,6 +261,7 @@ function createLineWebhookTestContext(params: {
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
+  implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   const lineConfig = {
@@ -272,7 +273,12 @@ function createLineWebhookTestContext(params: {
   return {
     cfg: {
       ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
-      channels: { line: lineConfig },
+      channels: {
+        line: lineConfig,
+        ...(params.implicitMentions
+          ? { defaults: { implicitMentions: params.implicitMentions } }
+          : {}),
+      },
     },
     account: {
       accountId: "default",
@@ -1244,6 +1250,34 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(processMessage).toHaveBeenCalled();
+  });
+
+  it("skips a quote of the bot when the configured policy turns that fact off", async () => {
+    const processMessage = vi.fn();
+    recordLineSentMessages("default", ["m-bot-sent-2"]);
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-quote-off",
+        type: "text",
+        text: "quoting you, but the operator turned this off",
+        quotedMessageId: "m-bot-sent-2",
+        quoteToken: "q-quote-off",
+      },
+      source: { type: "group", groupId: "group-quote", userId: "user-quote" },
+      webhookEventId: "evt-quote-off",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        implicitMentions: { quotedBot: false },
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
   });
 
   it("skips a group message quoting a message the bot did not send", async () => {
