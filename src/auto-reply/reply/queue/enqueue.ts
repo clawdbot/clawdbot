@@ -9,13 +9,13 @@ import {
   countPendingQueueItems,
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
+import { resolveFollowupReplyDeliveryTargetKey } from "./delivery-target.js";
 import {
   clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
   resolveFollowupDeliveryContextKey,
-  resolveFollowupReplyAnchor,
 } from "./drain.js";
 import {
   peekRecentQueueMessageId,
@@ -39,17 +39,7 @@ import {
 } from "./types.js";
 
 function followupRouteIdentityKey(run: FollowupRun): string {
-  return JSON.stringify([
-    channelRouteDedupeKey({
-      channel: run.originatingChannel,
-      to: run.originatingTo,
-      accountId: run.originatingAccountId,
-      threadId: run.originatingThreadId,
-    }),
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
-  ]);
+  return resolveFollowupReplyDeliveryTargetKey(run);
 }
 
 function followupMessageRouteIdentityKey(run: FollowupRun): string {

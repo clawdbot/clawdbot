@@ -6,6 +6,7 @@ import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -15,6 +16,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { scheduleFollowupDrainAfterReplyOperationClear } from "./agent-runner-core.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   clearSessionQueues,
@@ -26,10 +28,61 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { resolveFollowupReplyDeliveryTargetKey } from "./queue/delivery-target.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import {
+  consumeQueuedReplyCompletionHandoff,
+  recordReplyOperationCompletedSourceReply,
+  type ReplyCompletionHandoff,
+} from "./reply-completion-handoff.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 
 installQueueRuntimeErrorSilencer();
+
+function createCompletionEligibleRun(key: string, prompt: string): FollowupRun {
+  const queued = createRun({
+    prompt,
+    currentInboundEventKind: "user_request",
+    originatingChannel: "telegram",
+    originatingTo: "chat-1",
+    originatingAccountId: "primary",
+    originatingThreadId: 7,
+  });
+  queued.run.sessionKey = key;
+  queued.run.sessionId = "session-1";
+  queued.run.messageProvider = "telegram";
+  queued.run.agentAccountId = "primary";
+  queued.run.sourceReplyDeliveryMode = "message_tool_only";
+  return queued;
+}
+
+function createCompletionHandoff(key: string): ReplyCompletionHandoff {
+  return Object.freeze({
+    kind: "completed_source_reply",
+    ownerKey: key,
+    ownerSessionId: "session-1",
+    ownerLifecycleGeneration: getAgentEventLifecycleGeneration(),
+    deliveryTargetKey: resolveFollowupReplyDeliveryTargetKey(
+      createCompletionEligibleRun(key, "source"),
+    ),
+  });
+}
+
+function createCompletionConsumer(
+  handoff: ReplyCompletionHandoff,
+  overrides: Partial<Pick<ReplyOperation, "key" | "sessionId" | "lifecycleGeneration">> = {},
+): ReplyOperation {
+  return {
+    key: overrides.key ?? handoff.ownerKey,
+    sessionId: overrides.sessionId ?? handoff.ownerSessionId,
+    lifecycleGeneration:
+      overrides.lifecycleGeneration === undefined
+        ? handoff.ownerLifecycleGeneration
+        : overrides.lifecycleGeneration,
+    result: null,
+  } as unknown as ReplyOperation;
+}
 
 describe("followup queue drain restart after idle window", () => {
   it("keeps a detached drain on a live root after its enqueue request returns", async () => {
@@ -740,5 +793,298 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-idle");
+  });
+});
+
+describe("followup queue completed-reply handoff", () => {
+  it("does not let duplicate owner-clear callbacks erase the canonical handoff", async () => {
+    const key = `test-completion-owner-clear-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const source = createCompletionEligibleRun(key, "A");
+    const successor = createCompletionEligibleRun(key, "B");
+    const owner = createReplyOperation({
+      sessionKey: key,
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+    const done = createDeferred();
+    let observed: ReplyCompletionHandoff | undefined;
+    const runFollowup = async (queued: FollowupRun) => {
+      const handoff = createCompletionHandoff(key);
+      observed = consumeQueuedReplyCompletionHandoff(queued, createCompletionConsumer(handoff));
+      done.resolve();
+    };
+
+    try {
+      enqueueFollowupRun(key, successor, settings);
+      recordReplyOperationCompletedSourceReply(owner, source);
+      // Ordinary concurrent arrivals register distinct callbacks on one owner.
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: owner,
+        queueKey: key,
+        runFollowup: async (queued) => runFollowup(queued),
+      });
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: owner,
+        queueKey: key,
+        runFollowup: async (queued) => runFollowup(queued),
+      });
+      owner.complete();
+
+      await done.promise;
+      expect(observed).toMatchObject({
+        kind: "completed_source_reply",
+        ownerKey: key,
+        ownerSessionId: "session-1",
+      });
+    } finally {
+      owner.complete();
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("drops the handoff after the owner session rotates without dropping the queued request", async () => {
+    const key = `test-completion-session-rotation-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const source = createCompletionEligibleRun(key, "A");
+    const successor = createCompletionEligibleRun(key, "B");
+    successor.run.sessionId = "session-2";
+    const owner = createReplyOperation({
+      sessionKey: key,
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+    const originalHandoff = createCompletionHandoff(key);
+    const done = createDeferred();
+    let observed: ReplyCompletionHandoff | undefined;
+
+    try {
+      enqueueFollowupRun(key, successor, settings);
+      recordReplyOperationCompletedSourceReply(owner, source);
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: owner,
+        queueKey: key,
+        runFollowup: async (queued) => {
+          observed = consumeQueuedReplyCompletionHandoff(
+            queued,
+            createCompletionConsumer(originalHandoff, { sessionId: "session-2" }),
+          );
+          done.resolve();
+        },
+      });
+      owner.updateSessionId("session-2");
+      owner.complete();
+
+      await done.promise;
+      expect(observed).toBeUndefined();
+    } finally {
+      owner.complete();
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("replaces the active drain predecessor so A's fact reaches B and B's reaches C", async () => {
+    const key = `test-completion-chain-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const predecessorA = createCompletionHandoff(key);
+    const predecessorB = createCompletionHandoff(key);
+    const observed: Array<ReplyCompletionHandoff | undefined> = [];
+    const done = createDeferred();
+    const operationB = createReplyOperation({
+      sessionKey: key,
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    try {
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "B"), settings);
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "C"), settings);
+
+      scheduleFollowupDrain(
+        key,
+        async (queued) => {
+          const expected = queued.prompt === "B" ? predecessorA : predecessorB;
+          observed.push(
+            consumeQueuedReplyCompletionHandoff(queued, createCompletionConsumer(expected)),
+          );
+          if (queued.prompt === "B") {
+            // B completes while A's original drain callback still owns the loop.
+            // Its after-clear path must replace A before that loop selects C.
+            recordReplyOperationCompletedSourceReply(operationB, queued);
+            scheduleFollowupDrainAfterReplyOperationClear({
+              operation: operationB,
+              queueKey: key,
+              runFollowup: async () => {},
+            });
+            operationB.complete();
+          } else {
+            done.resolve();
+          }
+        },
+        { predecessorHandoff: predecessorA },
+      );
+
+      await done.promise;
+      expect(observed).toEqual([predecessorA, predecessorB]);
+    } finally {
+      operationB.complete();
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("clears A's fact when B completes without a source reply before C runs", async () => {
+    const key = `test-completion-chain-no-delivery-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const predecessorA = createCompletionHandoff(key);
+    const observed: Array<[string, ReplyCompletionHandoff | undefined]> = [];
+    const done = createDeferred();
+    const operationB = createReplyOperation({
+      sessionKey: key,
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    try {
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "B"), settings);
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "C"), settings);
+
+      scheduleFollowupDrain(
+        key,
+        async (queued) => {
+          observed.push([
+            queued.prompt,
+            consumeQueuedReplyCompletionHandoff(queued, createCompletionConsumer(predecessorA)),
+          ]);
+          if (queued.prompt === "B") {
+            // The canonical B owner-clear callback is claimed without a delivery
+            // fact, replacing A before the still-active drain selects C.
+            scheduleFollowupDrainAfterReplyOperationClear({
+              operation: operationB,
+              queueKey: key,
+              runFollowup: async () => {},
+            });
+            operationB.complete();
+          } else {
+            done.resolve();
+          }
+        },
+        { predecessorHandoff: predecessorA },
+      );
+
+      await done.promise;
+      expect(observed).toEqual([
+        ["B", predecessorA],
+        ["C", undefined],
+      ]);
+    } finally {
+      operationB.complete();
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("preserves the predecessor across admission deferral and consumes it once on retry", async () => {
+    const key = `test-completion-deferred-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const predecessor = createCompletionHandoff(key);
+    const done = createDeferred();
+    let attempts = 0;
+    let observed: ReplyCompletionHandoff | undefined;
+
+    try {
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "deferred"), settings);
+      scheduleFollowupDrain(
+        key,
+        async (queued) => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new FollowupRunDeferredError("reply lane busy");
+          }
+          observed = consumeQueuedReplyCompletionHandoff(
+            queued,
+            createCompletionConsumer(predecessor),
+          );
+          done.resolve();
+        },
+        { predecessorHandoff: predecessor },
+      );
+
+      await done.promise;
+      expect(attempts).toBe(2);
+      expect(observed).toBe(predecessor);
+    } finally {
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("skips an aborted queue entry and hands the fact to the first executed successor", async () => {
+    const key = `test-completion-aborted-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const predecessor = createCompletionHandoff(key);
+    const aborted = createCompletionEligibleRun(key, "aborted");
+    aborted.originatingTo = "foreign-aborted-route";
+    const controller = new AbortController();
+    controller.abort();
+    aborted.queueAbortSignal = controller.signal;
+    const observed: Array<[string, ReplyCompletionHandoff | undefined]> = [];
+    const done = createDeferred();
+
+    try {
+      enqueueFollowupRun(key, aborted, settings);
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "successor"), settings);
+      scheduleFollowupDrain(
+        key,
+        async (queued) => {
+          observed.push([
+            queued.prompt,
+            consumeQueuedReplyCompletionHandoff(queued, createCompletionConsumer(predecessor)),
+          ]);
+          if (queued.prompt === "successor") {
+            done.resolve();
+          }
+        },
+        { predecessorHandoff: predecessor },
+      );
+
+      await done.promise;
+      expect(observed).toEqual([["successor", predecessor]]);
+    } finally {
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("drops a route-mismatched fact without suppressing or reclassifying either candidate", async () => {
+    const key = `test-completion-route-mismatch-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const predecessor = createCompletionHandoff(key);
+    const mismatched = createCompletionEligibleRun(key, "foreign route");
+    mismatched.originatingTo = "chat-2";
+    const observed: Array<[string, ReplyCompletionHandoff | undefined]> = [];
+    const done = createDeferred();
+
+    try {
+      enqueueFollowupRun(key, mismatched, settings);
+      enqueueFollowupRun(key, createCompletionEligibleRun(key, "later match"), settings);
+      scheduleFollowupDrain(
+        key,
+        async (queued) => {
+          observed.push([
+            queued.prompt,
+            consumeQueuedReplyCompletionHandoff(queued, createCompletionConsumer(predecessor)),
+          ]);
+          if (queued.prompt === "later match") {
+            done.resolve();
+          }
+        },
+        { predecessorHandoff: predecessor },
+      );
+
+      await done.promise;
+      expect(observed).toEqual([
+        ["foreign route", undefined],
+        ["later match", undefined],
+      ]);
+    } finally {
+      clearSessionQueues([key]);
+    }
   });
 });

@@ -35,6 +35,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -53,6 +54,8 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { scheduleFollowupDrain as scheduleFollowupDrainActual } from "./queue/drain.js";
+import { enqueueFollowupRun as enqueueFollowupRunActual } from "./queue/enqueue.js";
 import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -71,7 +74,11 @@ import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+const COMPLETED_SOURCE_REPLY_HANDOFF_MARKER = "immediately preceding turn already delivered";
+
 type AgentRunParams = {
+  prompt?: string;
+  currentInboundContext?: { text?: string };
   sessionId?: string;
   sessionFile?: string;
   onPartialReply?: (payload: { text?: string }) => Promise<boolean | void> | boolean | void;
@@ -377,6 +384,7 @@ function createMinimalRun(params?: {
   shouldSteer?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  resolvedQueueOverrides?: Partial<QueueSettings>;
   replyOperation?: ReplyOperation;
   currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
   sessionCtx?: Partial<TemplateContext>;
@@ -404,6 +412,7 @@ function createMinimalRun(params?: {
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const resolvedQueue = {
     mode: params?.resolvedQueueMode ?? "interrupt",
+    ...params?.resolvedQueueOverrides,
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
   const followupRun = {
@@ -1682,6 +1691,126 @@ describe("runReplyAgent heartbeat followup guard", () => {
     active.complete();
 
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands a confirmed source reply through owner clear and collect admission without suppressing the new answer", async () => {
+    vi.mocked(enqueueFollowupRun).mockImplementation(enqueueFollowupRunActual);
+    vi.mocked(scheduleFollowupDrain).mockImplementation(scheduleFollowupDrainActual);
+    const owner = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const onBlockReply = vi.fn();
+    const onObservedReplyDelivery = vi.fn();
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "chat-1",
+      AccountId: "primary",
+      MessageSid: "source-message",
+    };
+    const source = createMinimalRun({
+      replyOperation: owner,
+      currentInboundEventKind: "user_request",
+      opts: { sourceReplyDeliveryMode: "message_tool_only", onBlockReply },
+      sessionCtx,
+      runOverrides: {
+        messageProvider: "whatsapp",
+        agentAccountId: "primary",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+    source.followupRun.originatingAccountId = "primary";
+
+    const createQueuedQuestion = (prompt: string, messageId: string) => {
+      const queued = createMinimalRun({
+        currentInboundEventKind: "user_request",
+        isActive: true,
+        isRunActive: () => true,
+        shouldFollowup: true,
+        resolvedQueueMode: "collect",
+        resolvedQueueOverrides: { debounceMs: 0, cap: 50, dropPolicy: "summarize" },
+        opts: {
+          onBlockReply,
+          onObservedReplyDelivery,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+        sessionCtx: { ...sessionCtx, MessageSid: messageId },
+        runOverrides: {
+          messageProvider: "whatsapp",
+          agentAccountId: "primary",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      });
+      queued.followupRun.prompt = prompt;
+      queued.followupRun.summaryLine = prompt;
+      queued.followupRun.transcriptPrompt = prompt;
+      queued.followupRun.originatingAccountId = "primary";
+      queued.followupRun.currentInboundContext = { text: MESSAGE_TOOL_ONLY_DELIVERY_HINT };
+      return queued;
+    };
+    const questionB = createQueuedQuestion("Please repeat the prior answer for me.", "question-b");
+    const questionC = createQueuedQuestion("Question C?", "question-c");
+    let admittedPrompt: string | undefined;
+    let admittedContext: string | undefined;
+    state.runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "NO_REPLY" }],
+        messagingToolSentTargets: [
+          {
+            channel: "whatsapp",
+            to: "chat-1",
+            accountId: "primary",
+            text: "Visible answer to the source turn",
+            sourceReplyFinal: true,
+          },
+        ],
+        meta: {},
+      })
+      .mockImplementationOnce(async (params: AgentRunParams) => {
+        admittedPrompt = params.prompt;
+        admittedContext = params.currentInboundContext?.text;
+        return {
+          payloads: [{ text: "NO_REPLY" }],
+          messagingToolSentTargets: [
+            {
+              channel: "whatsapp",
+              to: "chat-1",
+              accountId: "primary",
+              text: "Answer to the current queued questions",
+              sourceReplyFinal: true,
+            },
+          ],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+    try {
+      await expect(questionB.run()).resolves.toBeUndefined();
+      await expect(questionC.run()).resolves.toBeUndefined();
+      await expect(source.run()).resolves.toBeUndefined();
+      // The queued runs begin without an admission override; the canonical
+      // owner clear supplies the causal completion update to the real drain.
+      expect(questionB.followupRun.admissionSessionId).toBeUndefined();
+      expect(questionC.followupRun.admissionSessionId).toBeUndefined();
+      owner.complete();
+
+      await vi.waitFor(() => expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2), {
+        timeout: 5_000,
+      });
+      await vi.waitFor(() => expect(onObservedReplyDelivery).toHaveBeenCalledOnce(), {
+        timeout: 5_000,
+      });
+      expect(admittedPrompt).toContain("Please repeat the prior answer for me.");
+      expect(admittedPrompt).toContain("Question C?");
+      expect(admittedContext).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+      expect(admittedContext).toContain(COMPLETED_SOURCE_REPLY_HANDOFF_MARKER);
+      expect(onBlockReply).not.toHaveBeenCalled();
+    } finally {
+      owner.complete();
+      clearSessionQueues(["main"]);
+    }
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {

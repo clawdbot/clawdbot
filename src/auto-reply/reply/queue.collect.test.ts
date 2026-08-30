@@ -14,8 +14,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { appendCompletedSourceReplyHandoffDirective } from "./prompt-prelude.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -29,8 +31,16 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { resolveFollowupReplyDeliveryTargetKey } from "./queue/delivery-target.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import {
+  consumeQueuedReplyCompletionHandoff,
+  type ReplyCompletionHandoff,
+} from "./reply-completion-handoff.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+
+const COMPLETED_SOURCE_REPLY_HANDOFF_MARKER = "immediately preceding turn already delivered";
 
 type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
@@ -1703,6 +1713,80 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.prompt).toContain("Queued #1");
     expect(calls[0]?.prompt).toContain("Queued #2");
+  });
+
+  it("hands one completed predecessor to the admitted collect aggregate", async () => {
+    const key = `test-collect-completion-handoff-${Date.now()}`;
+    const settings = createQueueSettings();
+    const generation = getAgentEventLifecycleGeneration();
+    const predecessor: ReplyCompletionHandoff = Object.freeze({
+      kind: "completed_source_reply",
+      ownerKey: key,
+      ownerSessionId: "session-1",
+      ownerLifecycleGeneration: generation,
+      deliveryTargetKey: resolveFollowupReplyDeliveryTargetKey(
+        createRun({
+          prompt: "source",
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          originatingAccountId: "primary",
+        }),
+      ),
+    });
+    const consumer = {
+      key,
+      sessionId: "session-1",
+      lifecycleGeneration: generation,
+      result: null,
+    } as unknown as ReplyOperation;
+    const done = createDeferred();
+    let aggregate: FollowupRun | undefined;
+    let directiveContext: ReturnType<typeof appendCompletedSourceReplyHandoffDirective> | undefined;
+
+    try {
+      for (const prompt of ["Question B?", "Question C?"]) {
+        const queued = createRun({
+          prompt,
+          currentInboundEventKind: "user_request",
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          originatingAccountId: "primary",
+        });
+        queued.run.sessionKey = key;
+        queued.run.sessionId = "session-1";
+        queued.run.messageProvider = "telegram";
+        queued.run.agentAccountId = "primary";
+        enqueueFollowupRun(key, queued, settings);
+      }
+
+      scheduleFollowupDrain(
+        key,
+        async (queued) => {
+          aggregate = queued;
+          const handoff = consumeQueuedReplyCompletionHandoff(queued, consumer);
+          directiveContext = handoff
+            ? appendCompletedSourceReplyHandoffDirective(queued.currentInboundContext)
+            : undefined;
+          done.resolve();
+        },
+        { predecessorHandoff: predecessor },
+      );
+
+      await done.promise;
+      if (!aggregate) {
+        throw new Error("expected collected successor");
+      }
+      expect(aggregate.prompt).toContain("Question B?");
+      expect(aggregate.prompt).toContain("Question C?");
+      // Collect uses the ordinary user-request default (undefined) rather than
+      // reclassifying the aggregate as a room event.
+      expect(aggregate.currentInboundEventKind).not.toBe("room_event");
+      expect(directiveContext?.text).toContain(COMPLETED_SOURCE_REPLY_HANDOFF_MARKER);
+      expect(directiveContext?.text.split(COMPLETED_SOURCE_REPLY_HANDOFF_MARKER)).toHaveLength(2);
+      expect(consumeQueuedReplyCompletionHandoff(aggregate, consumer)).toBeUndefined();
+    } finally {
+      clearFollowupQueue(key);
+    }
   });
 
   it("drains runtime-context followups individually instead of collecting them", async () => {

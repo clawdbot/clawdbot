@@ -37,6 +37,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
+import { takeReplyOperationCompletionHandoff } from "./reply-completion-handoff.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
@@ -64,7 +65,18 @@ export function scheduleFollowupDrainAfterReplyOperationClear(params: {
                 ? { ...queued, admissionSessionId }
                 : queued,
             );
-    scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
+    const completionUpdate = takeReplyOperationCompletionHandoff({
+      operation: params.operation,
+      queueKey: params.queueKey,
+      admissionSessionId,
+    });
+    scheduleFollowupDrain(
+      params.queueKey,
+      runFollowupAfterClear,
+      completionUpdate.kind === "claimed"
+        ? { predecessorHandoff: completionUpdate.handoff }
+        : undefined,
+    );
   });
 }
 

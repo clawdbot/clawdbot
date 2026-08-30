@@ -2,13 +2,39 @@
 import { describe, expect, it } from "vitest";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
+import {
+  appendCompletedSourceReplyHandoffDirective,
+  buildReplyPromptEnvelope,
+} from "./prompt-prelude.js";
+
+const COMPLETED_SOURCE_REPLY_HANDOFF_MARKER = "immediately preceding turn already delivered";
 
 function countOccurrences(text: string | undefined, needle: string): number {
   return (text?.split(needle).length ?? 1) - 1;
 }
 
 describe("buildReplyPromptEnvelope", () => {
+  it("adds the completion handoff directive to runtime context without mutating its input", () => {
+    const original = {
+      text: "Authenticated current request",
+      resumableText: "Resumable current request",
+      promptJoiner: " " as const,
+    };
+
+    const appended = appendCompletedSourceReplyHandoffDirective(original);
+
+    expect(original).toEqual({
+      text: "Authenticated current request",
+      resumableText: "Resumable current request",
+      promptJoiner: " ",
+    });
+    expect(appended).not.toBe(original);
+    expect(appended.text).toContain("Authenticated current request");
+    expect(countOccurrences(appended.text, COMPLETED_SOURCE_REPLY_HANDOFF_MARKER)).toBe(1);
+    expect(appended.resumableText).toContain("Resumable current request");
+    expect(countOccurrences(appended.resumableText, COMPLETED_SOURCE_REPLY_HANDOFF_MARKER)).toBe(1);
+  });
+
   it("keeps bare reset runtime context in the model prompt and out of transcript/current-turn context", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",

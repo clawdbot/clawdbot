@@ -15,10 +15,107 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { takeReplyOperationCompletionHandoff } from "./reply-completion-handoff.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
+async function executeMessageToolOnlyAndTakeHandoff(result: Record<string, unknown>) {
+  const key = `test-message-tool-handoff-${Date.now()}-${Math.random()}`;
+  const sessionId = `session-${Math.random()}`;
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId,
+    resetTriggered: false,
+  });
+  const followupRun = createFollowupRun();
+  followupRun.run.sessionKey = key;
+  followupRun.run.sessionId = sessionId;
+  followupRun.run.messageProvider = "telegram";
+  followupRun.run.agentAccountId = "primary";
+  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  followupRun.originatingChannel = "telegram";
+  followupRun.originatingTo = "chat-1";
+  followupRun.originatingAccountId = "primary";
+  state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
+
+  try {
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const params = createMinimalRunAgentTurnParams({ followupRun, replyOperation: operation });
+    params.sessionKey = key;
+    await executeAgentTurn(params);
+    operation.complete();
+    const take = takeReplyOperationCompletionHandoff({
+      operation,
+      queueKey: key,
+      admissionSessionId: sessionId,
+    });
+    return take.kind === "claimed" ? take.handoff : undefined;
+  } finally {
+    operation.complete();
+  }
+}
+
 describe("executeAgentTurn: message tool progress", () => {
+  it("mints a handoff only from an explicit completed source-final delivery", async () => {
+    const handoff = await executeMessageToolOnlyAndTakeHandoff({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTargets: [
+        {
+          channel: "telegram",
+          to: "chat-1",
+          accountId: "primary",
+          text: "Visible final reply",
+          sourceReplyFinal: true,
+        },
+      ],
+      meta: {},
+    });
+
+    expect(handoff).toMatchObject({
+      kind: "completed_source_reply",
+      deliveryTargetKey: expect.any(String),
+    });
+    expect(Object.isFrozen(handoff)).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "foreign/unrelated message-tool send",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          { channel: "telegram", to: "chat-2", text: "Foreign send", sourceReplyFinal: false },
+        ],
+        meta: {},
+      },
+    },
+    {
+      label: "progress or partial source send",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          { channel: "telegram", to: "chat-1", text: "Partial", sourceReplyFinal: false },
+        ],
+        meta: {},
+      },
+    },
+    {
+      label: "failed run after a source-final marker",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        messagingToolSentTargets: [
+          { channel: "telegram", to: "chat-1", text: "Unsettled", sourceReplyFinal: true },
+        ],
+        meta: { error: { message: "provider crashed" } },
+      },
+    },
+  ])("does not mint a handoff for $label", async ({ result }) => {
+    await expect(executeMessageToolOnlyAndTakeHandoff(result)).resolves.toBeUndefined();
+  });
+
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
     let releaseItemEvent: (() => void) | undefined;
     const itemEventGate = new Promise<void>((resolve) => {

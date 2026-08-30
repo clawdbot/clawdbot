@@ -24,7 +24,6 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
-import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -35,7 +34,16 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
+import {
+  bindReplyCompletionHandoffToQueuedRun,
+  replaceReplyCompletionQueuePredecessor,
+  type ReplyCompletionHandoff,
+} from "../reply-completion-handoff.js";
 import { isRoutableChannel } from "../route-reply.js";
+import {
+  resolveFollowupReplyAnchor,
+  resolveFollowupReplyDeliveryTargetKey,
+} from "./delivery-target.js";
 import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
@@ -318,17 +326,8 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
   const execution = run.run;
   const provenance = execution.inputProvenance;
   return JSON.stringify([
-    channelRouteDedupeKey({
-      channel: run.originatingChannel,
-      to: run.originatingTo,
-      accountId: run.originatingAccountId,
-      threadId: run.originatingThreadId,
-    }),
+    resolveFollowupReplyDeliveryTargetKey(run),
     hasPreparedCurrentTurnImages(run),
-    run.originatingChatId ?? "",
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
     resolveFollowupAuthorizationKey(run),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
@@ -375,25 +374,6 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.blockReplyBreak,
     resolveTurnAdoptionLifecycleDeliveryKey(run.turnAdoptionLifecycle),
   ]);
-}
-
-export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
-  if (run.originatingReplyToMode === "off") {
-    return undefined;
-  }
-  const replyToId = normalizeOptionalString(run.originatingReplyToId);
-  if (replyToId || normalizeMessageChannel(run.originatingChannel) !== "slack") {
-    return replyToId;
-  }
-  const threadId = run.originatingThreadId;
-  const hasRoutedThread =
-    typeof threadId === "number"
-      ? Number.isFinite(threadId)
-      : normalizeOptionalString(threadId) !== undefined;
-  // Slack standalone turns have no parent reply id, but enabled reply policies
-  // still need the message id so collect groups cannot cross independent roots.
-  // A routed thread already owns that boundary and remains collectable across turns.
-  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
 function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
@@ -1364,8 +1344,14 @@ async function drainOverflowSummaryGroup(params: {
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
+  completion?: { predecessorHandoff?: ReplyCompletionHandoff },
 ): void {
   const existingQueue = FOLLOWUP_QUEUES.get(key);
+  if (existingQueue && completion) {
+    // The concrete queue owner follows every actual predecessor, even while an
+    // older drain callback is still active for A -> B -> C execution.
+    replaceReplyCompletionQueuePredecessor(existingQueue, completion.predecessorHandoff);
+  }
   if (existingQueue?.draining) {
     // The active drain keeps its current callback, but deferred retries must
     // use the latest session/runtime context supplied by the finishing run.
@@ -1378,7 +1364,11 @@ export function scheduleFollowupDrain(
   }
   const drainOwner = {};
   queue.drainOwner = drainOwner;
-  const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const baseRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const effectiveRunFollowup = async (run: FollowupRun) => {
+    bindReplyCompletionHandoffToQueuedRun({ owner: queue, queueKey: key, queued: run });
+    return await baseRunFollowup(run);
+  };
   const reserveOptions = {
     inFlight: queue.inFlight,
     shouldRestoreOnError: () =>
@@ -1387,7 +1377,7 @@ export function scheduleFollowupDrain(
   };
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
-  rememberFollowupDrainCallback(key, effectiveRunFollowup);
+  rememberFollowupDrainCallback(key, baseRunFollowup);
   const drainQueuedFollowups = async (): Promise<void> => {
     let retryDeferred = false;
     let waitingForSteer = false;
@@ -1640,15 +1630,16 @@ export function scheduleFollowupDrain(
         const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
         if (waitingForSteer && hasPendingQueueWork) {
           if (!queue.items.some((item) => item.steerPending)) {
-            scheduleFollowupDrain(key, effectiveRunFollowup);
+            scheduleFollowupDrain(key, baseRunFollowup);
           }
         } else if (retryDeferred && hasPendingQueueWork) {
-          scheduleFollowupDrain(key, effectiveRunFollowup);
+          scheduleFollowupDrain(key, baseRunFollowup);
         } else if (!hasPendingQueueWork) {
+          replaceReplyCompletionQueuePredecessor(queue, undefined);
           FOLLOWUP_QUEUES.delete(key);
           clearFollowupDrainCallback(key);
         } else {
-          scheduleFollowupDrain(key, effectiveRunFollowup);
+          scheduleFollowupDrain(key, baseRunFollowup);
         }
       }
     }

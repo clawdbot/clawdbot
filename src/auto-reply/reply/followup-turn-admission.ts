@@ -26,12 +26,14 @@ import {
 } from "./compaction-notice.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
+import { appendCompletedSourceReplyHandoffDirective } from "./prompt-prelude.js";
 import {
   admitFollowupRunLifecycle,
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue.js";
+import { consumeQueuedReplyCompletionHandoff } from "./reply-completion-handoff.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
@@ -468,6 +470,15 @@ export async function admitFollowupTurn(params: {
         }),
         turn,
       );
+    }
+    // This is the irreversible queue-admission boundary: lifecycle adoption and
+    // preflight succeeded, so a deferred retry can no longer restore this item.
+    // Only now consume the queue-owned one-shot fact and add runtime-only context.
+    const completionHandoff = consumeQueuedReplyCompletionHandoff(params.queued, operation);
+    if (completionHandoff) {
+      const handoffContext = appendCompletedSourceReplyHandoffDirective(turn.currentInboundContext);
+      turn.currentInboundContext = handoffContext;
+      turn.queued = { ...turn.queued, currentInboundContext: handoffContext };
     }
     return { kind: "admitted", turn };
   } catch (error) {

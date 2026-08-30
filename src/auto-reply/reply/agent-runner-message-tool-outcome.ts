@@ -1,8 +1,8 @@
-import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
+import { recordSourceReplyEvidence } from "./reply-completion-handoff-producer.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
@@ -34,8 +34,7 @@ export function recordMessageToolOnlyRunOutcome(
       : !outcome || outcome.kind === "rejected" || outcome.status === "failed"
         ? "errored"
         : "completed";
-  const toolDelivered =
-    outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+  const toolDelivered = recordSourceReplyEvidence(params, result);
   const values = {
     runId: result?.runId ?? params.opts?.runId ?? "unknown",
     sessionKey,

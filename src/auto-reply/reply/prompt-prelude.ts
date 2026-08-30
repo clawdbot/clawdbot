@@ -15,6 +15,8 @@ import { appendChannelPromptContext } from "./channel-prompt-context.js";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
   "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.";
+const COMPLETED_SOURCE_REPLY_HANDOFF_DIRECTIVE =
+  "The immediately preceding turn already delivered its final user-visible reply via the `message` tool. Do not replay it merely to finish that preceding turn. Treat the current queued content as a fresh request, answer it normally, and send a new reply whenever it warrants one—including when it explicitly asks to repeat or discuss the prior reply.";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
@@ -166,6 +168,19 @@ function resolvePerTurnDeliveryDirective(params: {
     return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
   }
   return undefined;
+}
+
+/** Adds predecessor context to this turn only, never to transcript history. */
+export function appendCompletedSourceReplyHandoffDirective(
+  context: CurrentInboundPromptContext | undefined,
+): CurrentInboundPromptContext {
+  const append = (value?: string) =>
+    [value, COMPLETED_SOURCE_REPLY_HANDOFF_DIRECTIVE].filter(Boolean).join("\n\n");
+  return {
+    ...context,
+    text: append(context?.text),
+    ...(context?.resumableText ? { resumableText: append(context.resumableText) } : {}),
+  };
 }
 
 // The current event itself is the user turn body; the context block carries
