@@ -14,7 +14,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
+import { isExactSemverVersion, resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -178,6 +178,17 @@ export async function resolveNpmSpecMetadata(params: {
         ok: false,
         error: `npm view produced incomplete package metadata (missing: ${missingFields})`,
         category: "metadata-env",
+      };
+    }
+    const selector = resolveNpmSpecVersionSelector(params.spec);
+    const requestedRange = selector ? validSemverRange(selector) : null;
+    if (selector && requestedRange && !satisfiesSemver(metadata.version, requestedRange)) {
+      const expectation = isExactSemverVersion(selector)
+        ? `expected exact version ${selector}`
+        : `expected version satisfying ${selector}`;
+      return {
+        ok: false,
+        error: `npm metadata resolved ${metadata.name}@${metadata.version}, but ${expectation} for ${params.spec}`,
       };
     }
     return { ok: true, metadata };
