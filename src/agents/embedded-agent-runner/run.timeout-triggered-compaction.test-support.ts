@@ -132,6 +132,8 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   });
 
   it("restores terminal abandonment when retry preparation fails before registration", async () => {
+    const session = await createSharedRunIntegrationSession();
+    fixture = session;
     const preparationError = new Error("next attempt preparation failed");
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
       const handle = createEmbeddedRunHandle({ runId: params.runId });
@@ -169,14 +171,14 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       return defaultBuildRuntimePlan!();
     });
 
-    await expect(runEmbeddedAgent(overflowBaseRunParams)).rejects.toBe(preparationError);
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBe(preparationError);
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(2);
     expect(
       isEmbeddedRunAbandoned({
-        sessionId: overflowBaseRunParams.sessionId,
-        sessionKey: overflowBaseRunParams.sessionKey,
+        sessionId: session.runParams.sessionId,
+        sessionKey: session.runParams.sessionKey,
       }),
     ).toBe(true);
   });
