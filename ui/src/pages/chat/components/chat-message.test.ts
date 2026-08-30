@@ -2487,7 +2487,7 @@ describe("grouped chat rendering", () => {
     expect(forwarded).not.toBeNull();
     expect(forwarded?.classList.contains("chat-group--sender-tint")).toBe(true);
     expect(forwarded?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
-    const attribution = container.querySelector(".chat-forwarded-attribution");
+    const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
     const link = attribution?.querySelector<HTMLAnchorElement>(
       'a.markdown-session-link[data-session-key="agent:main:main"]',
     );
@@ -2523,7 +2523,7 @@ describe("grouped chat rendering", () => {
       );
 
       expect(container.querySelector(".chat-group--forwarded")).not.toBeNull();
-      const attribution = container.querySelector(".chat-forwarded-attribution");
+      const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
       expect(attribution?.textContent?.replace(/\s+/g, " ").trim()).toBe(label);
       expect(attribution?.querySelector("a")).toBeNull();
       expect(attribution?.querySelector("[tabindex]")).toBeNull();
@@ -2549,7 +2549,11 @@ describe("grouped chat rendering", () => {
       title: "Main session",
     });
     const sourceLink = () =>
-      expectElement(container, ".chat-forwarded-attribution a", HTMLAnchorElement);
+      expectElement(
+        container,
+        ".chat-group--forwarded .chat-reply-attribution a",
+        HTMLAnchorElement,
+      );
 
     render(renderTestMessageGroup(group), container);
     await titler.decorate(sourceLink(), true);

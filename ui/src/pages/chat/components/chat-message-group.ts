@@ -597,8 +597,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       <div class="chat-group-messages">
         ${isForwarded
           ? html`
-              <div class="chat-forwarded-attribution">
-                <span class="chat-forwarded-attribution__icon" aria-hidden="true"
+              <div class="chat-reply-attribution">
+                <span class="chat-reply-attribution__icon" aria-hidden="true"
                   >${icons.forward}</span
                 >
                 ${linkableSourceKey

@@ -1875,11 +1875,6 @@ openclaw-session-discussion {
   font-weight: 600;
 }
 
-.file-view__loading {
-  position: absolute;
-  inset: 12px;
-  pointer-events: none;
-}
 
 .file-view__save-notice {
   display: flex;

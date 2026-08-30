@@ -96,11 +96,10 @@ const SENDER_TINT_BUBBLE_RULE =
 // on source order (see the order contract in chat/grouped.css). Asserting the
 // dark fills against light palettes would guard a surface nothing paints.
 const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
-// oxfmt wraps this selector in grouped.css; the reader matches raw bytes.
+// Light mode tints only user bubbles; forwarded bubbles keep the card skin
+// there (boot CSS budget decision, 2026-08-29) while dark mode tints both.
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
-  ':root[data-theme-mode="light"]\n' +
-  "  .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint\n" +
-  "  .chat-bubble";
+  ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
 
 type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
