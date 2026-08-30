@@ -26,12 +26,22 @@ const authStatusWithUsage = {
         windows: [{ label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 }],
       },
     },
+    {
+      provider: "github-copilot",
+      displayName: "Copilot",
+      status: "ok",
+      profiles: [{ profileId: "github-copilot", type: "token", status: "ok" }],
+      usage: {
+        providerId: "github-copilot",
+        windows: [{ label: "Day", usedPercent: 41 }],
+      },
+    },
   ],
 };
 
 const gatewayInjectedSessions = {
   count: 1,
-  defaults: { contextTokens: 200_000, model: "gateway-injected", modelProvider: "openclaw" },
+  defaults: { contextTokens: 200_000, model: "gateway-injected", modelProvider: "openai" },
   path: "",
   sessions: [
     {
@@ -42,7 +52,7 @@ const gatewayInjectedSessions = {
       kind: "direct",
       label: "Main",
       model: "gateway-injected",
-      modelProvider: "openclaw",
+      modelProvider: "openai",
       status: "done",
       totalTokens: 46_000,
       totalTokensFresh: true,
@@ -181,7 +191,8 @@ suite.define(() => {
     const { page } = fixture;
     try {
       const contextRing = page.locator(".context-ring");
-      const usageLink = page.locator('[data-chat-provider-usage="true"]');
+      const usageLinks = page.locator('[data-chat-provider-usage="true"]');
+      const usageLink = usageLinks.first();
       await contextRing.waitFor({ state: "visible" });
       expect(await usageLink.isVisible()).toBe(false);
       await contextRing.click();
@@ -191,11 +202,15 @@ suite.define(() => {
         path: path.join(artifactDir, "02-context-usage-popover.png"),
       });
 
+      expect(await usageLinks.count()).toBe(1);
       expect(await usageLink.getAttribute("href")).toBe("/usage");
       const rows = await page.locator(".context-usage__limit").allTextContents();
       const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
       expect(normalized).toHaveLength(1);
       expect(normalized[0]).toMatch(/^Weekly Resets .+ 71%$/);
+      expect((await page.locator(".context-usage__popover").textContent()) ?? "").not.toContain(
+        "Copilot",
+      );
       expect(
         (await page.locator('[data-chat-usage-provider="true"]').textContent())
           ?.replace(/\s+/g, " ")

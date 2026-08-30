@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
-  it("renders session context and plan usage through the full composer", () => {
+  it("renders only the current session provider's plan usage", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     const container = renderComposer({
@@ -27,7 +27,7 @@ describe("renderChatComposer context usage", () => {
             totalTokens: 46_000,
             contextTokens: 200_000,
             model: "gateway-injected",
-            modelProvider: "openclaw",
+            modelProvider: "openai",
           },
         ],
         defaults: { contextTokens: 200_000 },
@@ -47,6 +47,16 @@ describe("renderChatComposer context usage", () => {
                 windows: [
                   { label: "Week", usedPercent: 72, resetAt: 1_700_000_000_000 + 3 * 3_600_000 },
                 ],
+              },
+            },
+            {
+              provider: "github-copilot",
+              displayName: "Copilot",
+              status: "ok",
+              profiles: [{ profileId: "github-copilot", type: "token", status: "ok" }],
+              usage: {
+                providerId: "github-copilot",
+                windows: [{ label: "Day", usedPercent: 41 }],
               },
             },
           ],
@@ -70,6 +80,7 @@ describe("renderChatComposer context usage", () => {
         ?.textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("Provider: OpenAI");
+    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
     const popoverText = container.querySelector(".context-usage__popover")?.textContent ?? "";
     expect(popoverText).not.toContain("openclaw");
     expect(popoverText).not.toContain("gateway-injected");
@@ -79,6 +90,7 @@ describe("renderChatComposer context usage", () => {
   it("renders plan usage before session metrics arrive", () => {
     const container = renderComposer({
       sessions: null,
+      messages: [{ role: "assistant", content: "hello", provider: "openai" }],
       providerUsage: {
         basePath: "/control",
         modelAuthStatusResult: {
@@ -238,15 +250,58 @@ describe("renderChatComposer context usage", () => {
 
     const container = renderComposer(composerProps as never);
 
-    expect(providerNames(container)).toEqual(["Provider: Claude", "Provider: OpenAI"]);
+    expect(providerNames(container)).toEqual([]);
     expect(container.textContent).toContain("Cost by Type");
     expect(container.textContent).not.toContain("Model:");
 
     session.modelProvider = undefined;
-    expect(providerNames(renderComposer(composerProps as never))).toEqual([
-      "Provider: OpenAI",
-      "Provider: Claude",
-    ]);
+    expect(providerNames(renderComposer(composerProps as never))).toEqual(["Provider: OpenAI"]);
+  });
+
+  it("keeps context, token, and cost details when only unrelated plan usage exists", () => {
+    const container = renderComposer({
+      sessions: {
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            inputTokens: 800,
+            outputTokens: 200,
+            totalTokens: 46_000,
+            contextTokens: 200_000,
+            estimatedCostUsd: 0.03,
+            modelProvider: "openai",
+          },
+        ],
+        defaults: { contextTokens: 200_000 },
+      } as never,
+      providerUsage: {
+        modelAuthStatusResult: {
+          ts: Date.now(),
+          providers: [
+            {
+              provider: "github-copilot",
+              displayName: "Copilot",
+              status: "ok",
+              profiles: [{ profileId: "github-copilot", type: "token", status: "ok" }],
+              usage: {
+                providerId: "github-copilot",
+                windows: [{ label: "Day", usedPercent: 41 }],
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const popoverText = container.querySelector(".context-usage__popover")?.textContent ?? "";
+    expect(container.querySelector(".context-usage__plan-header")).toBeNull();
+    expect(popoverText).not.toContain("Copilot");
+    expect(popoverText).toContain("Context window");
+    expect(popoverText).toContain("Latest run tokens");
+    expect(popoverText).toContain("Est. cost");
+    expect(popoverText).toContain("$0.03");
   });
 
   it("omits the cost-by-type section when every recorded cost is zero", () => {
@@ -345,12 +400,12 @@ describe("renderChatComposer context usage", () => {
       [...container.querySelectorAll(".context-usage__limit")].map((row) =>
         row.textContent?.replace(/\s+/g, " ").trim(),
       ),
-    ).toEqual(["Weekly 25%", "Weekly 72%"]);
+    ).toEqual(["Weekly 25%"]);
     expect(
       [...container.querySelectorAll("[data-chat-usage-provider='true']")].map((row) =>
         row.textContent?.replace(/\s+/g, " ").trim(),
       ),
-    ).toEqual(["Provider: Claude", "Provider: OpenAI"]);
+    ).toEqual(["Provider: Claude"]);
     expect(container.textContent).not.toContain("Model:");
   });
 
