@@ -19,14 +19,14 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Security boundaries:** reject escaped-newline command words, exact-origin mismatches, injected Git option arguments, inherited secret-response identifiers, unsafe browser mutations, and malformed or oversized node payloads.
-- **Delivery and transcript recovery:** keep retry delays accurate, preserve imported messages and plugin-blocked tool results, retain detached admissions, and avoid silently dropping channel actions or recovery work.
+- **Delivery and transcript recovery:** keep retry delays accurate, preserve imported messages and plugin-blocked tool results, retain detached admissions, and avoid silently dropping channel actions or recovery work. Thanks @RomneyDa.
 - **Resource and lifecycle safety:** bound catalog, history, media, stderr, API, and provider waits; stop canceled parallel tools; drain channel shutdown; and reject queued worker requests after close.
 - **Text and schema correctness:** preserve UTF-16 boundaries across user-visible truncation paths, keep root tool-schema properties, reject non-finite schema values, and report exact UTF-8 write sizes.
 - **Official plugins:** repair message parsing, proxy paths, request timeouts, media handling, privacy-safe logging, and runtime aliases across the npm-published plugin inventory.
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.7.1-2..367e7e23efe91117ae8063a8ca29460f8d72e682 history: 129 in-range PRs + 0 retained seed-only PRs = 129 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.7.1-2..d430006788d9563aeb13329cc8e88324fde7b03c history: 126 in-range PRs + 0 retained seed-only PRs = 126 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
@@ -105,7 +105,6 @@ This audited record covers the complete v2026.7.1-2..367e7e23efe91117ae8063a8ca2
 - **PR #103728** Thanks @Leon-SK668 and @vincentkoc.
 - **PR #104426** Related #104425.
 - **PR #103731** Thanks @Leon-SK668 and @vincentkoc.
-- **PR #104450** Related #91212. Thanks @Enominera.
 - **PR #104263** Thanks @qingminglong.
 - **PR #104156** Thanks @qingminglong.
 - **PR #104173** Thanks @qingminglong.
@@ -120,7 +119,6 @@ This audited record covers the complete v2026.7.1-2..367e7e23efe91117ae8063a8ca2
 - **PR #102974** Thanks @hugenshen.
 - **PR #104610**
 - **PR #104301** Thanks @whiteyzy.
-- **PR #104578** Thanks @hugenshen.
 - **PR #103445** Thanks @zw-xysk and @cursoragent.
 - **PR #104677** Thanks @Leon-SK668.
 - **PR #104423** Thanks @mushuiyu886.
@@ -129,7 +127,6 @@ This audited record covers the complete v2026.7.1-2..367e7e23efe91117ae8063a8ca2
 - **PR #104715** Thanks @Leon-SK668.
 - **PR #104470** Related #104469. Thanks @VectorPeak.
 - **PR #104498** Thanks @VectorPeak.
-- **PR #104741** Thanks @vincentkoc.
 - **PR #113259** Thanks @lzw112.
 - **PR #112855** Related #112854. Thanks @fr-meyer.
 - **PR #113609**
