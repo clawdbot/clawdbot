@@ -1,10 +1,12 @@
 // Whatsapp plugin module implements access control behavior.
+import { createHash } from "node:crypto";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { normalizeE164 } from "../text-runtime.js";
 import { buildWhatsAppInboundAdmission, type WhatsAppInboundAdmission } from "./admission.js";
 
 type BlockedInboundAccessControlResult = {
@@ -13,6 +15,7 @@ type BlockedInboundAccessControlResult = {
   isSelfChat: boolean;
   resolvedAccountId: string;
   admission?: never;
+  reason?: string;
 };
 
 export type AcceptedInboundAccessControlResult = {
@@ -38,12 +41,14 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 
 function blockedInboundAccess(
   policy: ReturnType<typeof resolveWhatsAppInboundPolicy>,
+  reason?: string,
 ): BlockedInboundAccessControlResult {
   return {
     allowed: false,
     shouldMarkRead: false,
     isSelfChat: policy.isSelfChat,
     resolvedAccountId: policy.account.accountId,
+    reason,
   };
 }
 
@@ -65,6 +70,7 @@ export async function checkInboundAccessControl(params: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
   remoteJid: string;
+  messageId?: string;
 }): Promise<InboundAccessControlResult> {
   const policy = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
@@ -185,6 +191,49 @@ export async function checkInboundAccessControl(params: {
         `Blocked unauthorized sender ${params.from} (dmPolicy=${policy.dmPolicy})`,
       );
       return blockedInboundAccess(policy);
+    }
+
+    const e164 = normalizeE164(params.from) ?? params.from;
+    const exactCfg = policy.account.direct?.[e164];
+    const wildcardCfg = policy.account.direct?.["*"];
+    let rate: number | undefined;
+    let scope: string | undefined;
+
+    if (exactCfg?.replyRate !== undefined) {
+      rate = exactCfg.replyRate;
+      scope = `exact match ${e164}`;
+    } else if (wildcardCfg?.replyRate !== undefined) {
+      rate = wildcardCfg.replyRate;
+      scope = "wildcard direct";
+    } else if (policy.account.replyRate !== undefined) {
+      rate = policy.account.replyRate;
+      scope = "account default";
+    }
+
+    if (rate !== undefined) {
+      logWhatsAppVerbose(
+        params.verbose,
+        `[whatsapp access-control] Resolved replyRate ${rate} from ${scope}`,
+      );
+    }
+
+    if (typeof rate === "number" && rate >= 0 && rate < 1) {
+      const messageHash = createHash("md5")
+        .update(params.messageId ?? "test-fixture-id")
+        .digest("hex")
+        .slice(0, 8);
+      const randomValue = Number.parseInt(messageHash, 16) / 0xffffffff;
+      if (randomValue >= rate) {
+        logWhatsAppVerbose(
+          params.verbose,
+          `[whatsapp rate-limit] Dropping message ${params.messageId}... MD5 hash modulo ${randomValue.toFixed(2)} >= ${rate}`,
+        );
+        logWhatsAppVerbose(
+          params.verbose,
+          `Ignored message from ${params.from} (${rate * 100}% probabilistic rule).`,
+        );
+        return blockedInboundAccess(policy, "reply_rate_suppressed");
+      }
     }
   }
 

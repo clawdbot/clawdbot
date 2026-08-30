@@ -673,6 +673,24 @@ Example:
 }
 ```
 
+## Probabilistic Reply Rate (`replyRate`)
+
+You can configure WhatsApp to intentionally and probabilistically drop inbound
+direct messages before they trigger an agent turn. This is useful for simulating human
+non-response. This setting applies only to direct messages and does not suppress group traffic.
+
+- Set `replyRate` to a decimal between `0` and `1`. A rate of `1` (or omitted)
+  always admits the message; `0` always drops it; `0.35` drops it 65% of the
+  time.
+- Dropped messages do not generate read receipts or agent activity logs, but
+  they are recorded as completed in the durable queue with a
+  `reply_rate_suppressed` reason for diagnostics.
+- The decision is uniformly pseudo-random and evaluated in this precedence
+  order:
+  1. Exact direct entry (`channels.whatsapp.direct["+15551234567"].replyRate`)
+  2. Direct wildcard (`channels.whatsapp.direct["*"].replyRate`)
+  3. Account-wide default (`channels.whatsapp.replyRate`)
+
 ## Configuration reference pointers
 
 Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)

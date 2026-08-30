@@ -38,7 +38,9 @@ export type WhatsAppIngressAdmission = Omit<WhatsAppDurableInboundPayload, "mess
 
 export type WhatsAppIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
+export type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult<{
+  reason?: string;
+}>;
 
 type WhatsAppIngressFacts = {
   eventId: string;
@@ -68,11 +70,19 @@ function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts
   };
 }
 
-export type WhatsAppDurableInboundQueue = ChannelIngressQueue<WhatsAppDurableInboundPayload>;
+export type WhatsAppDurableInboundQueue = ChannelIngressQueue<
+  WhatsAppDurableInboundPayload,
+  unknown,
+  { reason?: string }
+>;
 
 /** Account-scoped queue shared with the pre-drain WhatsApp receive journal. */
 export function createWhatsAppDurableInboundQueue(accountId: string): WhatsAppDurableInboundQueue {
-  return getWhatsAppRuntime().state.openChannelIngressQueue<WhatsAppDurableInboundPayload>({
+  return getWhatsAppRuntime().state.openChannelIngressQueue<
+    WhatsAppDurableInboundPayload,
+    unknown,
+    { reason?: string }
+  >({
     accountId: hashNamespacePart(accountId),
     stateDir: getWhatsAppRuntime().state.resolveStateDir(),
   });
@@ -100,7 +110,9 @@ export function createWhatsAppIngressMonitor(params: {
   return createChannelIngressMonitor<
     WhatsAppIngressAdmission,
     WhatsAppDurableInboundPayload,
-    WhatsAppDurableInboundPayload
+    WhatsAppDurableInboundPayload,
+    unknown,
+    { reason?: string }
   >({
     queue: params.queue,
     inspect: (admission) => inspectWhatsAppIngressMessage(admission.message),

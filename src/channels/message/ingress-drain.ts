@@ -64,7 +64,10 @@ export type CreateChannelIngressDrainOptions<
   dispatchClaimedEvent: (
     event: ChannelIngressQueueClaim<TPayload, TMetadata>,
     lifecycle: ChannelIngressDispatchLifecycle,
-  ) => Promise<ChannelIngressDrainDispatchResult | void> | ChannelIngressDrainDispatchResult | void;
+  ) =>
+    | Promise<ChannelIngressDrainDispatchResult<TCompletedMetadata> | void>
+    | ChannelIngressDrainDispatchResult<TCompletedMetadata>
+    | void;
   resolveNonRetryableFailure?: (err: unknown) => IngressNonRetryableFailure | null;
   shouldSupersedePending?: (
     newEvent:
@@ -488,7 +491,8 @@ export function createChannelIngressDrain<
           state.phase = "adopted";
           clearStallTimer(state);
           await state.settleOnce(async () => {
-            await completeClaimWithRetry(claim);
+            const metadata = result?.kind === "completed" ? result.metadata : undefined;
+            await completeClaimWithRetry(claim, metadata);
           });
         }
       } catch (err) {

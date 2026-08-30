@@ -14,8 +14,8 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
   return error instanceof IngressAdoptionLostError;
 }
 
-export type ChannelIngressDrainDispatchResult =
-  | { kind: "completed" }
+export type ChannelIngressDrainDispatchResult<TCompletedMetadata = unknown> =
+  | { kind: "completed"; metadata?: TCompletedMetadata }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
 

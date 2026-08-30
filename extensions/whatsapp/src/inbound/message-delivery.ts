@@ -19,6 +19,7 @@ import {
   type WhatsAppDurableInboundQueue,
   type WhatsAppIngressAdmission,
   type WhatsAppIngressLifecycle,
+  type WhatsAppIngressDispatchResult,
   type WhatsAppReadReceiptTarget,
 } from "./durable-receive.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
@@ -405,7 +406,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
   const processDurableInboundMessage = async (
     admission: WhatsAppIngressAdmission,
     lifecycle: WhatsAppIngressLifecycle,
-  ): Promise<"completed" | "deferred"> => {
+  ): Promise<WhatsAppIngressDispatchResult> => {
     const { message: msg, ...context } = admission;
     rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
     const remoteJid = msg.key?.remoteJid;
@@ -419,15 +420,20 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       preparedInboundByDurableId.delete(durableId);
     }
     if (context.skipRecentOutboundEcho === true) {
-      return "completed";
+      return { kind: "completed" };
     }
     const prepared = await preparation;
     if (prepared === null) {
-      return "completed";
+      return { kind: "completed" };
     }
     const inbound = prepared ?? (await normalizeInboundMessage(msg));
     if (!inbound) {
-      return "completed";
+      return { kind: "completed" };
+    }
+    if ("blocked" in inbound) {
+      return inbound.reason
+        ? { kind: "completed", metadata: { reason: inbound.reason } }
+        : { kind: "completed" };
     }
     if (
       await maybeResolveWhatsAppQuestionReaction({
@@ -439,13 +445,13 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
       })
     ) {
-      return "completed";
+      return { kind: "completed" };
     }
     const readReceipt = buildReadReceiptTarget(inbound);
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
     if (context.skipStaleAppend === true) {
       await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
-      return "completed";
+      return { kind: "completed" };
     }
 
     const enriched = await enrichWhatsAppInboundMessage({
@@ -456,7 +462,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      return "completed";
+      return { kind: "completed" };
     }
 
     recordAcceptedInboundActivity(options.accountId);
@@ -465,14 +471,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       receiveOrder: context.receiveOrder ?? context.receivedAt,
       turnAdoptionLifecycle: lifecycle,
     });
-    return "deferred";
+    return { kind: "deferred" };
   };
 
   const durableInboundMonitor = createWhatsAppIngressMonitor({
     queue: durableInboundQueue,
-    dispatch: async (admission, lifecycle) => ({
-      kind: await processDurableInboundMessage(admission, lifecycle),
-    }),
+    dispatch: processDurableInboundMessage,
     pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
     onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
     onError: (error) =>
@@ -570,7 +574,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       if (result.kind === "durable" && result.queueResult.kind === "completed") {
         finishPreparation(undefined);
         const inbound = await normalizeInboundMessage(msg);
-        if (inbound) {
+        if (inbound && !("blocked" in inbound)) {
           await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
         }
       } else if (result.kind === "durable" && result.queueResult.kind === "accepted") {

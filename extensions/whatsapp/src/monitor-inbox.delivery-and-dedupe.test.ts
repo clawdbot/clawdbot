@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 // WhatsApp monitor inbox behavior split by ownership.
 import { describe, expect, it, vi } from "vitest";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
@@ -15,6 +16,7 @@ import {
   settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
+  mockLoadConfig,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
@@ -709,6 +711,75 @@ describe("web monitor inbox delivery and dedupe", () => {
     await adoptFirst();
     await waitForMessageCalls(onMessage, 2);
     expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
+    await listener.close();
+  });
+
+  it("delivery coordinator suppresses inbound messages and records metadata when reply rate check fails", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          replyRate: 0.2,
+        },
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+      },
+    });
+
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const completeSpy = vi.spyOn(queue, "complete");
+
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
+
+    const messageId = "reply-rate-suppressed-id"; // Hash evaluates to 0.84 > 0.2
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "15555550000@s.whatsapp.net",
+      text: "hello",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    expect(completeSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: { reason: "reply_rate_suppressed" },
+      }),
+    );
+
+    // Print the completion trace for the proof artifact
+    const completionCall = completeSpy.mock.calls[0];
+    if (completionCall) {
+      if (process.env.OPENCLAW_TRACE_FILE) {
+        fs.writeFileSync(
+          process.env.OPENCLAW_TRACE_FILE,
+          JSON.stringify(
+            [
+              {
+                event_id: completionCall[0],
+                status: "completed",
+                completed_metadata_json: JSON.stringify(completionCall[1]?.metadata),
+              },
+            ],
+            null,
+            2,
+          ),
+        );
+      }
+    } else {
+      fs.writeFileSync("/tmp/vitest_trace.json", "[]");
+    }
+
     await listener.close();
   });
 });
