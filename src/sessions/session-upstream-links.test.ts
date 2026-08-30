@@ -29,7 +29,7 @@ function upsertLink(
       agentId,
       catalogId,
       hostId: "gateway:local",
-      threadId: `thread-${agentId}-${sessionKey}`,
+      threadId: agentId === "main" ? `thread-${sessionKey}` : `thread-${agentId}-${sessionKey}`,
       upstreamKind: catalogId === "claude" ? "claude-cli" : "codex-app-server",
       upstreamRef: { source: sessionKey },
       marker: { offset: 1 },
