@@ -720,12 +720,6 @@ async function maybeSteerSubagentAnnounce(params: {
     };
   }
 
-  // A stale_run refusal means the requester run is evidence-dead: it will not
-  // drain its steer queue, so "dropped" would discard the handoff. Report
-  // not-active so dispatch takes the direct fallback instead.
-  if (queueOutcome.reason === "stale_run") {
-    return { status: "none" };
-  }
   const currentActivity = resolveRequesterSessionActivity(canonicalKey);
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
