@@ -47,6 +47,15 @@ describe("OpenRouter provider catalog", () => {
             architecture: { modality: "text+image->image" },
             context_length: 65_536,
           },
+          {
+            id: "openrouter/fusion",
+            architecture: { modality: "text->text" },
+            supported_parameters: [],
+          },
+          {
+            id: "custom/legacy-model",
+            architecture: { modality: "text->text" },
+          },
         ],
       }),
       finalUrl: url,
@@ -72,10 +81,23 @@ describe("OpenRouter provider catalog", () => {
       name: "Google: Gemini 3.6 Flash",
       reasoning: true,
       input: ["text", "image"],
+      compat: { supportsTools: true },
       contextWindow: 1_048_576,
       maxTokens: 65_536,
       cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
     });
+    expect(
+      provider.models.find((model) => model.id === "google/gemini-3.5-flash-lite")?.compat,
+    ).toEqual({
+      supportsTools: false,
+    });
+    expect(provider.models.find((model) => model.id === "openrouter/fusion")?.compat).toEqual({
+      supportsTools: false,
+    });
+    expect(
+      provider.models.find((model) => model.id === "custom/legacy-model")?.compat,
+    ).toBeUndefined();
+    expect(provider.models.find((model) => model.id === "openrouter/auto")?.compat).toBeUndefined();
     expect(
       new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).get("authorization"),
     ).toBe("Bearer resolved-openrouter-key");

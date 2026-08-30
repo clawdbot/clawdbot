@@ -140,10 +140,6 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
   };
 }
 
-function readStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
-  return filterStringEntries(record?.[key]);
-}
-
 function readTokenPrice(record: Record<string, unknown> | undefined, key: string): number {
   const value = record?.[key];
   const parsed =
@@ -155,7 +151,7 @@ function readOpenRouterModalities(
   architecture: Record<string, unknown> | undefined,
   direction: "input" | "output",
 ): string[] {
-  const explicit = readStringArray(architecture, `${direction}_modalities`);
+  const explicit = filterStringEntries(architecture?.[`${direction}_modalities`]);
   if (explicit.length > 0) {
     return explicit;
   }
@@ -176,7 +172,7 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
     return undefined;
   }
   const inputModalities = readOpenRouterModalities(architecture, "input");
-  const supportedParameters = readStringArray(record, "supported_parameters");
+  const supportedParameters = filterStringEntries(record?.supported_parameters);
   const topProvider = asOptionalRecord(record?.top_provider);
   const pricing = asOptionalRecord(record?.pricing);
   return {
@@ -186,6 +182,9 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
       supportedParameters.includes("reasoning") ||
       supportedParameters.includes("include_reasoning"),
     input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
+    ...(Array.isArray(record?.supported_parameters)
+      ? { compat: { supportsTools: supportedParameters.includes("tools") } }
+      : {}),
     cost: {
       input: readTokenPrice(pricing, "prompt"),
       output: readTokenPrice(pricing, "completion"),
