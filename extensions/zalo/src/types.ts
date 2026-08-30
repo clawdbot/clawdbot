@@ -1,0 +1,58 @@
+// Zalo type declarations define plugin contracts.
+import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+
+export type ZaloAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this Zalo account. Default: true. */
+  enabled?: boolean;
+  /** Bot token from Zalo Bot Creator. */
+  botToken?: SecretInput;
+  /** Path to file containing the bot token. */
+  tokenFile?: string;
+  /** Webhook URL for receiving updates (HTTPS required). */
+  webhookUrl?: string;
+  /** Webhook secret token (8-256 chars) for request verification. */
+  webhookSecret?: SecretInput;
+  /** Webhook path for the gateway HTTP server (defaults to webhook URL path). */
+  webhookPath?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+  /** Allowlist for DM senders (Zalo user IDs). */
+  allowFrom?: Array<string | number>;
+  /** Group-message access policy. */
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  /** Allowlist for group senders (falls back to allowFrom when unset). */
+  groupAllowFrom?: Array<string | number>;
+  /** Max inbound media size in MB. */
+  mediaMaxMb?: number;
+  /** Proxy URL for API requests. */
+  proxy?: string;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
+};
+
+export type ZaloConfig = {
+  /** Optional per-account Zalo configuration (multi-account). */
+  accounts?: Record<string, ZaloAccountConfig>;
+  /** Default account ID when multiple accounts are configured. */
+  defaultAccount?: string;
+} & ZaloAccountConfig;
+
+type ZaloTokenSource = "env" | "config" | "configFile" | "none";
+export type ZaloTokenStatus = "available" | "configured_unavailable" | "missing";
+
+export type ResolvedZaloAccount = {
+  accountId: string;
+  name?: string;
+  enabled: boolean;
+  token: string;
+  tokenSource: ZaloTokenSource;
+  tokenStatus?: ZaloTokenStatus;
+  credentialDiagnostics?: Extract<
+    ReturnType<typeof tryReadSecretFileSync>,
+    { status: "configured_unavailable" }
+  >["diagnostic"][];
+  config: ZaloAccountConfig;
+};

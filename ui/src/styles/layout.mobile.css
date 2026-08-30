@@ -1,0 +1,723 @@
+/* ===========================================
+   Mobile Layout
+   =========================================== */
+
+@media (max-width: 1320px) {
+  .content--chat .content-header {
+    align-items: center;
+    gap: 8px;
+    row-gap: 0;
+    min-height: 44px;
+    max-height: 44px;
+    overflow: visible;
+  }
+
+  .content--chat .content-header > div:first-child {
+    min-width: 0;
+  }
+
+  .content--chat .page-meta {
+    align-self: center;
+    height: 36px;
+    align-items: center;
+    min-width: 0;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+
+  .chat-controls__model {
+    grid-area: model;
+  }
+
+  .chat-controls__session,
+  .chat-controls__model {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .chat-controls__session select,
+  .chat-controls__inline-select-trigger {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+/* The app host chooses this class from the platform-aware drawer breakpoint.
+   Native macOS keeps its rail beside the half-width link browser until 600px;
+   regular browsers retain the 1100px tablet breakpoint. */
+.shell--mobile-nav,
+.shell--mobile-nav.shell--nav-collapsed {
+  --shell-topbar-height: 58px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "content";
+  /* The nav collapses to an overlay drawer here, so it no longer reserves a
+     column. Zero the width the docked terminal reads or it would leave a
+     258px gap and waste most of a phone viewport. */
+  --shell-nav-width: 0px;
+}
+
+/* Plain-browser chat owns the only narrow chrome row in its pane header. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome {
+  --shell-topbar-height: 0px;
+  grid-template-rows: 0px minmax(0, 1fr);
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome
+  .topbar {
+  display: none;
+}
+
+.shell--mobile-nav .shell-nav,
+.shell--mobile-nav.shell--nav-collapsed .shell-nav {
+  position: fixed;
+  top: max(8px, var(--safe-area-top, 0px));
+  bottom: max(8px, var(--safe-area-bottom, 0px));
+  left: 0;
+  z-index: 70;
+  width: min(86vw, 320px);
+  min-width: 0;
+  min-height: 0;
+  border-inline-end: none;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border-radius: 0 22px 22px 0;
+  box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 100ms ease-out;
+}
+
+/* A session dashboard keeps the board primary on narrow shells. Every desktop
+   edge becomes one bounded bottom sheet; the stored tab preference is left
+   untouched and returns when the viewport widens. */
+.shell--mobile-nav .board-session-surface--dock-bottom {
+  flex-direction: column;
+}
+
+.shell--mobile-nav .board-session-surface__board {
+  order: 1;
+}
+
+.shell--mobile-nav .board-session-surface__divider {
+  display: none;
+}
+
+.shell--mobile-nav .board-session-surface__chat {
+  order: 2;
+  width: 100% !important;
+  height: min(42dvh, 360px) !important;
+  min-width: 0;
+  min-height: 180px;
+  max-width: none;
+  max-height: 48dvh;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
+}
+
+.shell--mobile-nav .sidebar-resizer {
+  display: none;
+}
+
+.shell--mobile-nav .shell-nav-backdrop {
+  position: fixed;
+  z-index: 65;
+  inset: 0;
+  display: block;
+  width: auto;
+  padding: 0;
+  pointer-events: none;
+  visibility: hidden;
+  border: 0;
+  border-radius: 0;
+  background: rgb(0 0 0 / 44%);
+  opacity: 0;
+  transition:
+    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 160ms;
+  touch-action: none;
+}
+
+.shell--mobile-nav .shell-nav:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
+  will-change: transform;
+}
+
+.shell--mobile-nav .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
+  will-change: opacity;
+}
+
+.shell--mobile-nav .shell-nav[data-nav-drawer-dragging],
+.shell--mobile-nav .shell-nav-backdrop[data-nav-drawer-dragging] {
+  transition: none;
+}
+
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  transition:
+    opacity 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s;
+}
+
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav,
+.shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+  transition-duration: 200ms, 140ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .shell-nav,
+  .shell--mobile-nav.shell--nav-collapsed .shell-nav,
+  .shell--mobile-nav.shell--nav-drawer-open .shell-nav {
+    transition-duration: 0.01ms, 100ms;
+  }
+
+  .shell--mobile-nav .shell-nav-backdrop,
+  .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+    transition-duration: 100ms, 0s;
+  }
+}
+
+/* Inside the drawer there is no Escape key to hint at. */
+.shell--mobile-nav .settings-sidebar__esc {
+  display: none;
+}
+
+/* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+   the desktop rail toggle makes no sense once the sidebar is a drawer. */
+.shell--mobile-nav .topbar .topbar-nav-toggle {
+  display: inline-flex;
+}
+
+.shell--mobile-nav .topbar {
+  display: flex;
+}
+
+.shell--mobile-nav .topnav-shell {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
+  gap: 10px;
+}
+
+.shell--mobile-nav .topnav-shell__content {
+  display: flex;
+  justify-content: center;
+}
+
+.shell--mobile-nav .topbar-brand {
+  display: flex;
+}
+
+.shell--mobile-nav .topnav-shell__actions {
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.shell--mobile-nav .topbar-search {
+  display: inline-flex;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+}
+
+.shell--mobile-nav .sidebar {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  border-inline-end: none;
+}
+
+.shell--mobile-nav .sidebar-shell {
+  --sidebar-pad-x: 16px;
+  padding: 18px var(--sidebar-pad-x) 14px;
+  border-radius: 0;
+}
+
+.shell--mobile-nav .nav-item {
+  margin: 0;
+  min-height: 40px;
+  padding: 0 12px 0 8px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* Native macOS narrow widths (e.g. the in-app link browser splitting the
+   window): fold the titlebar clearance into one 58px row instead of stacking
+   it. body-qualified + !important outranks the Mac-app-injected topbar rules
+   (DashboardWindowController), so shipped apps get the compact row too. The
+   brand moves first, clears the traffic lights, and stays non-interactive
+   under the AppKit drag region (x 78-254, y < 46); the drawer toggle and
+   search sit to its right. */
+html.openclaw-native-macos body .shell--mobile-nav {
+  --shell-topbar-height: 58px;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topbar {
+  padding: 0 12px 0 92px !important;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell {
+  display: flex;
+  gap: 8px;
+  min-height: 58px;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__content {
+  order: -1;
+  flex: 0 0 auto;
+  min-width: 176px;
+  justify-content: flex-start;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
+  margin-left: auto;
+}
+
+/* Mobile-specific styles */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .shell {
+    --shell-pad: 8px;
+    --shell-gap: 8px;
+  }
+
+  /* Topbar */
+  .shell--mobile-nav .topbar {
+    display: flex;
+    padding: 10px 12px;
+    min-height: auto;
+  }
+
+  .shell--mobile-nav .topnav-shell {
+    gap: 10px;
+  }
+
+  .shell--mobile-nav .topnav-shell__actions {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .shell--mobile-nav .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .shell--mobile-nav .topbar-brand {
+    display: flex;
+  }
+
+  .shell--mobile-nav .topbar .topbar-nav-toggle {
+    display: inline-flex;
+  }
+
+  .shell--mobile-nav .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .shell--mobile-nav .sidebar-mode-switch {
+    display: block;
+  }
+
+  .shell--mobile-nav .shell-nav,
+  .shell--mobile-nav.shell--nav-collapsed .shell-nav {
+    width: min(86vw, 320px);
+    box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+  }
+
+  .shell--mobile-nav .sidebar-shell {
+    --sidebar-pad-x: 14px;
+    padding: 8px var(--sidebar-pad-x) 10px;
+  }
+
+  .shell--mobile-nav .nav-item {
+    font-size: var(--control-ui-text-sm);
+  }
+
+  /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
+  .content--chat .content-header {
+    display: none;
+  }
+
+  /* Match desktop: the composer owns its own bottom breathing room, so the
+     page shell adds none. The `main` qualifier outranks the generic mobile
+     `.content` padding rules later in this file that would re-add 12-16px. */
+  main.content--chat {
+    gap: 2px;
+    padding-bottom: 0;
+  }
+
+  /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
+     content rule below from stacking shell spacing onto that owner. */
+  main.content--custodian {
+    gap: 0;
+    padding: 0;
+  }
+
+  .content {
+    --content-inline-padding: 4px;
+    padding: 4px var(--content-inline-padding) 16px;
+    gap: 12px;
+  }
+
+  /* Cards */
+  .card {
+    padding: 12px;
+    border-radius: var(--radius-md);
+  }
+
+  .card-title {
+    font-size: 13px;
+  }
+
+  /* Stats */
+  .stat {
+    padding: 10px;
+    border-radius: var(--radius-md);
+  }
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  /* Forms */
+  .field input,
+  .field textarea,
+  .field select {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  /* Pills */
+  .pill {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+
+  /* Chat */
+  .chat-session {
+    min-width: unset;
+    width: 100%;
+  }
+
+  .chat-thread {
+    margin-top: 0;
+    /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
+       on the scroll container floats macOS overlay scrollbars off the edge. */
+    padding: 0 0 12px;
+  }
+
+  .chat-msg {
+    max-width: 90%;
+  }
+
+  .chat-bubble {
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+  }
+
+  .agent-chat__input {
+    margin: 0 8px calc(10px + var(--safe-area-bottom));
+  }
+
+  .agent-chat__input-btn,
+  .chat-send-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .agent-chat__input-btn svg,
+  .chat-send-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Log stream */
+  .log-stream {
+    border-radius: var(--radius-md);
+    max-height: 380px;
+  }
+
+  .content:has(openclaw-logs-page) {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  .content openclaw-logs-page,
+  .content .settings-workspace--fill-height,
+  .content .settings-workspace--fill-height > .settings-workspace__body,
+  .content .settings-workspace--fill-height .logs-card {
+    display: block;
+    height: auto;
+    min-height: 0;
+    flex: initial;
+    overflow-y: visible;
+  }
+
+  .content .settings-workspace--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .log-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .log-time {
+    font-size: 12px; /* was 10px */
+  }
+
+  .log-level {
+    font-size: 12px; /* was 9px */
+  }
+
+  .log-subsystem {
+    font-size: 12px; /* was 11px */
+  }
+
+  .log-message {
+    font-size: 12px;
+  }
+
+  /* Lists */
+  .list-item {
+    padding: 10px;
+    border-radius: var(--radius-md);
+  }
+
+  .list-title {
+    font-size: 13px;
+  }
+
+  .list-sub {
+    font-size: 12px; /* was 11px */
+  }
+
+  /* Code blocks */
+  .code-block {
+    padding: 8px;
+    border-radius: var(--radius-md);
+    font-size: 12px; /* was 11px */
+  }
+}
+
+/* Small mobile */
+@media (max-width: 400px) {
+  .shell {
+    --shell-pad: 4px;
+  }
+
+  .topbar {
+    padding: 8px 10px;
+  }
+
+  .nav-item {
+    padding: 6px 8px;
+    font-size: var(--control-ui-text-sm); /* was 11px */
+  }
+
+  .content {
+    padding: 4px var(--content-inline-padding) 12px;
+    gap: 10px;
+  }
+
+  .card {
+    padding: 10px;
+  }
+
+  .stat {
+    padding: 8px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .chat-bubble {
+    padding: 8px 10px;
+  }
+
+  .btn {
+    padding: 6px 10px;
+    font-size: 12px; /* was 11px */
+  }
+}
+
+/* ===========================================
+   Sessions table – responsive column hiding
+   =========================================== */
+
+/* nth-child is 1-based and includes the checkbox column (col 1). The optional
+   Group column in category mode shifts later indexes; grouping is a desktop
+   workflow, so the hide rules target the default 7-column roster. */
+
+/* ≤900px: tighten padding */
+@media (max-width: 900px) {
+  .data-table.sessions-table {
+    min-width: 640px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 10px;
+  }
+}
+
+/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
+@media (max-width: 768px) {
+  wa-dropdown.session-menu {
+    --menu-item-height: 40px;
+    --menu-padding: 3px;
+  }
+
+  .session-menu .session-menu__separator {
+    margin-block: 2px;
+  }
+
+  .data-table.sessions-table {
+    min-width: 500px;
+  }
+
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6) {
+    display: none;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .data-table-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .data-table-pagination__info {
+    text-align: center;
+  }
+
+  .data-table-pagination__controls {
+    justify-content: center;
+  }
+
+  .data-table-search input {
+    font-size: 14px;
+    padding: 8px 10px;
+  }
+
+  .session-key-cell {
+    max-width: 200px;
+  }
+
+  .session-details-panel {
+    padding: 12px;
+  }
+
+  .session-details-panel__hero,
+  .session-details-section {
+    padding: 12px;
+  }
+
+  .session-details-panel__title {
+    max-width: 100%;
+  }
+
+  .session-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-key-cell .session-link,
+  .session-key-cell .session-key-display-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .filters {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+@media (max-width: 560px) {
+  .data-table.sessions-table {
+    min-width: 320px;
+  }
+
+  .sessions-table th:nth-child(3),
+  .sessions-table td:nth-child(3),
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
+    display: none;
+  }
+
+  .data-table.sessions-table .data-table-key-col {
+    width: 106px;
+    min-width: 106px;
+    max-width: 106px;
+  }
+
+  /* The 106px key column has no room for the kind avatar; run state stays
+     visible through the status column, which this breakpoint keeps. */
+  .sessions-table .session-avatar {
+    display: none;
+  }
+
+  .sessions-table .session-status-col {
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 6px 4px;
+    font-size: 12px; /* was 11px */
+  }
+
+  .session-key-cell {
+    max-width: 140px;
+  }
+}

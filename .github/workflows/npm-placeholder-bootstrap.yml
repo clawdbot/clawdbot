@@ -1,0 +1,350 @@
+name: NPM Placeholder Bootstrap
+run-name: NPM Placeholder Bootstrap ${{ inputs.ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact main-ancestry commit SHA containing the release-enabled plugin manifests
+        required: true
+        type: string
+      packages:
+        description: Ordered comma-separated @openclaw package names to reserve at 0.0.0
+        required: true
+        type: string
+      dry_run:
+        description: Build and verify the immutable publication plan without entering npm-release
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: npm-placeholder-release
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
+
+jobs:
+  plan:
+    name: Plan npm placeholder publication
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact_digest: ${{ steps.artifact_identity.outputs.digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+      producer_run_attempt: ${{ github.run_attempt }}
+      target_sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Validate trusted workflow and target
+        id: target
+        env:
+          SOURCE_REF: ${{ inputs.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_REF" == "refs/heads/main" && "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "NPM placeholder publication must run from the trusted main workflow." >&2
+            exit 1
+          }
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ && "$SOURCE_REF" == "$EVENT_SHA" && "$SOURCE_REF" == "$WORKFLOW_SHA" && "$(git rev-parse HEAD)" == "$SOURCE_REF" ]] || {
+            echo "NPM placeholder publication requires ref to equal the exact main workflow SHA." >&2
+            exit 1
+          }
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
+            echo "NPM placeholder workflow revision is not reachable from current main." >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$SOURCE_REF" origin/main || {
+            echo "NPM placeholder target must be reachable from current main." >&2
+            exit 1
+          }
+          echo "sha=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Create deterministic placeholder publication
+        id: publication
+        env:
+          PACKAGES: ${{ inputs.packages }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/npm-placeholder-publication.mjs create \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output-dir "$RUNNER_TEMP/npm-placeholder-publication" \
+            --packages "$PACKAGES" \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Bind immutable artifact name
+        id: identity
+        run: echo "artifact_name=npm-placeholder-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable placeholder publication
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/npm-placeholder-publication/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Bind immutable artifact digest
+        id: artifact_identity
+        env:
+          RAW_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RAW_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "NPM placeholder artifact digest must be 64 lowercase hex characters." >&2
+            exit 1
+          }
+          echo "digest=sha256:${RAW_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Record secretless plan
+        env:
+          NEW_PACKAGE_COUNT: ${{ steps.publication.outputs.new_package_count }}
+          EXISTING_WITHOUT_ZERO_COUNT: ${{ steps.publication.outputs.existing_without_zero_count }}
+          PACKAGE_COUNT: ${{ steps.publication.outputs.package_count }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          {
+            echo "## NPM placeholder plan"
+            echo
+            echo "- Target: \`${TARGET_SHA}\`"
+            echo "- Selected packages: \`${PACKAGE_COUNT}\`"
+            echo "- Registry 404 packages: \`${NEW_PACKAGE_COUNT}\`"
+            echo "- Existing packages without \`0.0.0\`: \`${EXISTING_WITHOUT_ZERO_COUNT}\`"
+            echo "- Dry run: \`${{ inputs.dry_run }}\`"
+            echo "- Credentials: **not available to this job**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify npm placeholder publication
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted verification tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Checkout bound target manifests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.target_sha }}
+          path: target-source
+          fetch-depth: 1
+
+      - name: Setup trusted Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve immutable artifact metadata
+        id: artifact
+        env:
+          ARTIFACT_DIGEST: ${{ needs.plan.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.plan.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.plan.outputs.artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/npm-placeholder-artifact.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "$metadata"
+          jq -e \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --arg name "$ARTIFACT_NAME" \
+            --argjson id "$ARTIFACT_ID" \
+            '.id == $id and .name == $name and .digest == $digest and .expired == false' \
+            "$metadata" >/dev/null || {
+              echo "NPM placeholder artifact metadata does not match the plan output." >&2
+              exit 1
+            }
+          echo "size_bytes=$(jq -er '.size_in_bytes' "$metadata")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable placeholder publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.plan.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/npm-placeholder-publication.mjs verify-artifact \
+            --artifact-digest "${{ needs.plan.outputs.artifact_digest }}" \
+            --artifact-id "${{ needs.plan.outputs.artifact_id }}" \
+            --artifact-name "${{ needs.plan.outputs.artifact_name }}" \
+            --artifact-size-bytes "${{ steps.artifact.outputs.size_bytes }}" \
+            --consumer-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output-dir "$RUNNER_TEMP/verified-npm-placeholder-publication" \
+            --producer-run-attempt "${{ needs.plan.outputs.producer_run_attempt }}" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --target-root "$GITHUB_WORKSPACE/target-source" \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Record secretless verification
+        run: |
+          {
+            echo "## NPM placeholder verification"
+            echo
+            echo "- Immutable artifact: **verified**"
+            echo "- Credentials: **not available to this job**"
+            echo "- Publication: **not attempted**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish npm placeholders
+    needs: [plan, verify]
+    if: inputs.dry_run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted publication tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Checkout bound target manifests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.target_sha }}
+          path: target-source
+          fetch-depth: 1
+
+      - name: Setup trusted Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve immutable artifact metadata
+        id: artifact
+        env:
+          ARTIFACT_DIGEST: ${{ needs.plan.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.plan.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.plan.outputs.artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/npm-placeholder-artifact.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "$metadata"
+          jq -e \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --arg name "$ARTIFACT_NAME" \
+            --argjson id "$ARTIFACT_ID" \
+            '.id == $id and .name == $name and .digest == $digest and .expired == false' \
+            "$metadata" >/dev/null || {
+              echo "NPM placeholder artifact metadata does not match the plan output." >&2
+              exit 1
+            }
+          echo "size_bytes=$(jq -er '.size_in_bytes' "$metadata")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable placeholder publication
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.plan.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/npm-placeholder-publication.mjs verify-artifact \
+            --artifact-digest "${{ needs.plan.outputs.artifact_digest }}" \
+            --artifact-id "${{ needs.plan.outputs.artifact_id }}" \
+            --artifact-name "${{ needs.plan.outputs.artifact_name }}" \
+            --artifact-size-bytes "${{ steps.artifact.outputs.size_bytes }}" \
+            --consumer-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output-dir "$RUNNER_TEMP/verified-npm-placeholder-publication" \
+            --producer-run-attempt "${{ needs.plan.outputs.producer_run_attempt }}" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --target-root "$GITHUB_WORKSPACE/target-source" \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish verified placeholders serially
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TARGET_SHA: ${{ needs.plan.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ -n "${NPM_TOKEN// }" ]] || {
+            echo "NPM placeholder publication requires the protected npm release token." >&2
+            exit 1
+          }
+          node scripts/npm-placeholder-publication.mjs publish \
+            --artifact-dir "$RUNNER_TEMP/verified-npm-placeholder-publication" \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --result-path "$RUNNER_TEMP/npm-placeholder-results.json"
+
+      - name: Record publication and trusted-publisher follow-up
+        run: |
+          set -euo pipefail
+          results="$RUNNER_TEMP/npm-placeholder-results.json"
+          {
+            echo "## NPM placeholder publication"
+            echo
+            jq -r '.results[] | "- `\(.packageName)`: `\(.action)`"' "$results"
+            echo
+            echo "### Newly created npm packages"
+            created="$(jq -r '[.results[] | select(.newPackage == true) | .packageName] | .[]' "$results")"
+            if [[ -n "$created" ]]; then
+              while IFS= read -r package_name; do
+                echo "- \`${package_name}\`"
+              done <<< "$created"
+              echo
+              echo "Configure each package's trusted publisher for repository \`openclaw/openclaw\`, workflow \`plugin-npm-release.yml\`, and environment \`npm-release\`."
+            else
+              echo "- None."
+            fi
+            echo
+            echo "### Existing-package trust inspection"
+            existing="$(jq -r '[.results[] | select(.newPackage == false) | .packageName] | .[]' "$results")"
+            if [[ -n "$existing" ]]; then
+              while IFS= read -r package_name; do
+                echo "- Inspect \`${package_name}\` trusted-publisher configuration for \`plugin-npm-release.yml\` / \`npm-release\`."
+              done <<< "$existing"
+            else
+              echo "- None."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,492 @@
+// Discord plugin module implements handle action.guild admin behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { handleDiscordAction } from "../../action-runtime-api.js";
+import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import {
+  isDiscordModerationAction,
+  readDiscordModerationCommand,
+} from "./runtime.moderation-shared.js";
+import {
+  readDiscordChannelCreateParams,
+  readDiscordChannelEditParams,
+  readDiscordChannelMoveParams,
+} from "./runtime.shared.js";
+
+type Ctx = Pick<
+  ChannelMessageActionContext,
+  | "action"
+  | "params"
+  | "cfg"
+  | "accountId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "toolContext"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+>;
+
+function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
+  const currentProvider = normalizeOptionalString(ctx.toolContext?.currentChannelProvider);
+  if (currentProvider?.toLowerCase() === "discord") {
+    return normalizeOptionalString(ctx.requesterSenderId);
+  }
+  if (
+    isTrustedRequesterGuildAdminAction(ctx.action) &&
+    (currentProvider || ctx.senderIsOwner !== true)
+  ) {
+    throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+  }
+  return undefined;
+}
+
+function senderParam(senderUserId: string | undefined) {
+  return senderUserId ? { senderUserId } : {};
+}
+
+export async function tryHandleDiscordMessageActionGuildAdmin(params: {
+  ctx: Ctx;
+  resolveChannelId: () => string;
+  readPolicyOptions?: DiscordMessagingActionOptions;
+  actionOptions: DiscordMessagingActionOptions;
+}): Promise<AgentToolResult<unknown> | undefined> {
+  const { ctx, resolveChannelId, readPolicyOptions, actionOptions } = params;
+  const { action, params: actionParams, cfg } = ctx;
+  const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
+  const senderUserId = readDiscordRequesterSenderId(ctx);
+
+  if (action === "member-info") {
+    const userId = readStringParam(actionParams, "userId", { required: true });
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      { action: "memberInfo", accountId: accountId ?? undefined, guildId, userId },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "role-info") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      { action: "roleInfo", accountId: accountId ?? undefined, guildId },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "emoji-list") {
+    const guildId = readStringParam(actionParams, "guildId");
+    const limit = readPositiveIntegerParam(actionParams, "limit");
+    return await handleDiscordAction(
+      {
+        action: "emojiList",
+        accountId: accountId ?? undefined,
+        ...(guildId ? { guildId } : { channelId: resolveChannelId() }),
+        ...(limit ? { limit } : {}),
+      },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "emoji-upload") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const name = readStringParam(actionParams, "emojiName", { required: true });
+    const mediaUrl = readStringParam(actionParams, "media", {
+      required: true,
+      trim: false,
+    });
+    const roleIds = readStringArrayParam(actionParams, "roleIds");
+    return await handleDiscordAction(
+      {
+        action: "emojiUpload",
+        accountId: accountId ?? undefined,
+        guildId,
+        name,
+        mediaUrl,
+        roleIds,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "sticker-upload") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const name = readStringParam(actionParams, "stickerName", {
+      required: true,
+    });
+    const description = readStringParam(actionParams, "stickerDesc", {
+      required: true,
+    });
+    const tags = readStringParam(actionParams, "stickerTags", {
+      required: true,
+    });
+    const mediaUrl = readStringParam(actionParams, "media", {
+      required: true,
+      trim: false,
+    });
+    return await handleDiscordAction(
+      {
+        action: "stickerUpload",
+        accountId: accountId ?? undefined,
+        guildId,
+        name,
+        description,
+        tags,
+        mediaUrl,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "role-add" || action === "role-remove") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const userId = readStringParam(actionParams, "userId", { required: true });
+    const roleId = readStringParam(actionParams, "roleId", { required: true });
+    return await handleDiscordAction(
+      {
+        action: action === "role-add" ? "roleAdd" : "roleRemove",
+        accountId: accountId ?? undefined,
+        guildId,
+        userId,
+        roleId,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "channel-info") {
+    const channelId = readStringParam(actionParams, "channelId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      { action: "channelInfo", accountId: accountId ?? undefined, channelId },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "channel-list") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      { action: "channelList", accountId: accountId ?? undefined, guildId },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "channel-create") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "channelCreate",
+        accountId: accountId ?? undefined,
+        ...readDiscordChannelCreateParams({ ...actionParams, guildId }),
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "channel-edit") {
+    const channelId = readStringParam(actionParams, "channelId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "channelEdit",
+        accountId: accountId ?? undefined,
+        ...readDiscordChannelEditParams({ ...actionParams, channelId }),
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "channel-delete") {
+    const channelId = readStringParam(actionParams, "channelId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "channelDelete",
+        accountId: accountId ?? undefined,
+        channelId,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "channel-move") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const channelId = readStringParam(actionParams, "channelId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "channelMove",
+        accountId: accountId ?? undefined,
+        ...readDiscordChannelMoveParams({ ...actionParams, guildId, channelId }),
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "category-create") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const name = readStringParam(actionParams, "name", { required: true });
+    const position = readNonNegativeIntegerParam(actionParams, "position");
+    return await handleDiscordAction(
+      {
+        action: "categoryCreate",
+        accountId: accountId ?? undefined,
+        guildId,
+        name,
+        position: position ?? undefined,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "category-edit") {
+    const categoryId = readStringParam(actionParams, "categoryId", {
+      required: true,
+    });
+    const name = readStringParam(actionParams, "name");
+    const position = readNonNegativeIntegerParam(actionParams, "position");
+    return await handleDiscordAction(
+      {
+        action: "categoryEdit",
+        accountId: accountId ?? undefined,
+        categoryId,
+        name: name ?? undefined,
+        position: position ?? undefined,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "category-delete") {
+    const categoryId = readStringParam(actionParams, "categoryId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "categoryDelete",
+        accountId: accountId ?? undefined,
+        categoryId,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "voice-status") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const userId = readStringParam(actionParams, "userId", { required: true });
+    return await handleDiscordAction(
+      { action: "voiceStatus", accountId: accountId ?? undefined, guildId, userId },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "event-list") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      { action: "eventList", accountId: accountId ?? undefined, guildId },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "event-create") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const name = readStringParam(actionParams, "eventName", { required: true });
+    const startTime = readStringParam(actionParams, "startTime", {
+      required: true,
+    });
+    const endTime = readStringParam(actionParams, "endTime");
+    const description = readStringParam(actionParams, "desc");
+    const channelId = readStringParam(actionParams, "channelId");
+    const location = readStringParam(actionParams, "location");
+    const entityType = readStringParam(actionParams, "eventType");
+    const image = readStringParam(actionParams, "image", { trim: false });
+    return await handleDiscordAction(
+      {
+        action: "eventCreate",
+        accountId: accountId ?? undefined,
+        guildId,
+        name,
+        startTime,
+        endTime,
+        description,
+        channelId,
+        location,
+        entityType,
+        image,
+        ...senderParam(senderUserId),
+      },
+      cfg,
+      { mediaLocalRoots: ctx.mediaLocalRoots },
+    );
+  }
+
+  if (isDiscordModerationAction(action)) {
+    const moderation = readDiscordModerationCommand(action, {
+      ...actionParams,
+      durationMinutes: readNonNegativeIntegerParam(actionParams, "durationMin"),
+      deleteMessageDays: readNonNegativeIntegerParam(actionParams, "deleteDays", {
+        max: 7,
+        message: "deleteDays must be an integer from 0 to 7",
+      }),
+    });
+    return await handleDiscordAction(
+      {
+        action: moderation.action,
+        accountId: accountId ?? undefined,
+        guildId: moderation.guildId,
+        userId: moderation.userId,
+        durationMinutes: moderation.durationMinutes,
+        until: moderation.until,
+        reason: moderation.reason,
+        deleteMessageDays: moderation.deleteMessageDays,
+        senderUserId,
+      },
+      cfg,
+    );
+  }
+
+  // Some actions are conceptually "admin", but still act on a resolved channel.
+  if (action === "thread-list") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const channelId = readStringParam(actionParams, "channelId");
+    const includeArchived =
+      typeof actionParams.includeArchived === "boolean" ? actionParams.includeArchived : undefined;
+    const before = readStringParam(actionParams, "before");
+    const limit = readPositiveIntegerParam(actionParams, "limit");
+    return await handleDiscordAction(
+      {
+        action: "threadList",
+        accountId: accountId ?? undefined,
+        guildId,
+        channelId,
+        includeArchived,
+        before,
+        limit,
+      },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  if (action === "thread-reply") {
+    const content = readStringParam(actionParams, "message", {
+      required: true,
+    });
+    const mediaUrl =
+      readStringParam(actionParams, "media", { trim: false }) ??
+      readStringParam(actionParams, "path", { trim: false }) ??
+      readStringParam(actionParams, "filePath", { trim: false });
+    const replyTo = readStringParam(actionParams, "replyTo");
+
+    // `message.thread-reply` (tool) uses `threadId`, while the CLI historically used `to`/`channelId`.
+    // Prefer `threadId` when present to avoid accidentally replying in the parent channel.
+    const threadId = readStringParam(actionParams, "threadId");
+    const channelId = threadId ?? resolveChannelId();
+
+    return await handleDiscordAction(
+      {
+        action: "threadReply",
+        accountId: accountId ?? undefined,
+        channelId,
+        content,
+        mediaUrl: mediaUrl ?? undefined,
+        replyTo: replyTo ?? undefined,
+        ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
+  if (action === "search") {
+    const guildId = readStringParam(actionParams, "guildId");
+    const query =
+      readStringParam(actionParams, "query") ?? readStringParam(actionParams, "content");
+    if (!query) {
+      throw new Error("Discord search requires query text. Provide query or content.");
+    }
+    // Fall back to the current session channel when no explicit channelId,
+    // channelIds, or guildId is provided. This lets the runtime resolve
+    // guildId from the channel without broadening explicitly-filtered or
+    // explicitly guild-scoped searches.
+    const explicitChannelIds = readStringArrayParam(actionParams, "channelIds");
+    const channelId =
+      readStringParam(actionParams, "channelId") ??
+      (!guildId &&
+      !explicitChannelIds?.length &&
+      ctx.toolContext?.currentChannelProvider?.trim().toLowerCase() === "discord"
+        ? ctx.toolContext?.currentChannelId?.trim() || undefined
+        : undefined);
+    return await handleDiscordAction(
+      {
+        action: "searchMessages",
+        accountId: accountId ?? undefined,
+        ...(guildId ? { guildId } : {}),
+        content: query,
+        channelId,
+        channelIds: explicitChannelIds,
+        authorId: readStringParam(actionParams, "authorId"),
+        authorIds: readStringArrayParam(actionParams, "authorIds"),
+        limit: readPositiveIntegerParam(actionParams, "limit"),
+      },
+      cfg,
+      readPolicyOptions,
+    );
+  }
+
+  return undefined;
+}

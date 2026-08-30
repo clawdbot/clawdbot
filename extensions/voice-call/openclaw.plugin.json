@@ -1,0 +1,972 @@
+{
+  "id": "voice-call",
+  "doctorContract": {
+    "resolveSessionStoreAgentIds": true,
+    "stateMigrations": true
+  },
+  "name": "Voice Call",
+  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "cliCommands": [
+    {
+      "name": "voicecall",
+      "description": "Voice call utilities",
+      "hasSubcommands": true
+    }
+  ],
+  "skills": ["./skills"],
+  "commandAliases": [{ "name": "voicecall" }],
+  "activation": {
+    "onStartup": true,
+    "onCommands": ["voicecall"]
+  },
+  "contracts": {
+    "tools": ["voice_call"]
+  },
+  "uiHints": {
+    "provider": {
+      "label": "Provider",
+      "help": "Use twilio, telnyx, or mock for dev/no-network."
+    },
+    "fromNumber": {
+      "label": "From Number",
+      "placeholder": "+15550001234"
+    },
+    "toNumber": {
+      "label": "Default To Number",
+      "placeholder": "+15550001234"
+    },
+    "inboundPolicy": {
+      "label": "Inbound Policy"
+    },
+    "allowFrom": {
+      "label": "Inbound Allowlist"
+    },
+    "inboundGreeting": {
+      "label": "Inbound Greeting",
+      "advanced": true
+    },
+    "numbers": {
+      "label": "Per-number Routing",
+      "help": "Inbound overrides keyed by dialed E.164 number.",
+      "advanced": true
+    },
+    "telnyx.apiKey": {
+      "label": "Telnyx API Key",
+      "sensitive": true
+    },
+    "telnyx.connectionId": {
+      "label": "Telnyx Connection ID"
+    },
+    "telnyx.publicKey": {
+      "label": "Telnyx Public Key",
+      "sensitive": true
+    },
+    "twilio.accountSid": {
+      "label": "Twilio Account SID"
+    },
+    "twilio.authToken": {
+      "label": "Twilio Auth Token",
+      "sensitive": true
+    },
+    "twilio.region": {
+      "label": "Twilio Region",
+      "advanced": true
+    },
+    "outbound.defaultMode": {
+      "label": "Default Call Mode"
+    },
+    "outbound.notifyHangupDelaySec": {
+      "label": "Notify Hangup Delay (sec)",
+      "advanced": true
+    },
+    "serve.port": {
+      "label": "Webhook Port"
+    },
+    "serve.bind": {
+      "label": "Webhook Bind"
+    },
+    "serve.path": {
+      "label": "Webhook Path"
+    },
+    "tailscale.mode": {
+      "label": "Tailscale Mode",
+      "advanced": true
+    },
+    "tailscale.port": {
+      "label": "Tailscale HTTPS Port",
+      "help": "External HTTPS port. Funnel supports 443, 8443, or 10000; Serve accepts any valid port.",
+      "advanced": true
+    },
+    "tailscale.path": {
+      "label": "Tailscale Path",
+      "advanced": true
+    },
+    "tunnel.provider": {
+      "label": "Tunnel Provider",
+      "advanced": true
+    },
+    "tunnel.ngrokAuthToken": {
+      "label": "ngrok Auth Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tunnel.ngrokDomain": {
+      "label": "ngrok Domain",
+      "advanced": true
+    },
+    "tunnel.allowNgrokFreeTierLoopbackBypass": {
+      "label": "Allow ngrok Free Tier (Loopback Bypass)",
+      "advanced": true
+    },
+    "streaming.enabled": {
+      "label": "Enable Streaming",
+      "help": "Classic streaming transcription currently requires the Twilio call provider.",
+      "advanced": true
+    },
+    "streaming.provider": {
+      "label": "Streaming Provider",
+      "help": "Uses the first registered realtime transcription provider when unset.",
+      "advanced": true
+    },
+    "streaming.providers": {
+      "label": "Streaming Provider Config",
+      "advanced": true
+    },
+    "streaming.streamPath": {
+      "label": "Media Stream Path",
+      "advanced": true
+    },
+    "realtime.enabled": {
+      "label": "Enable Realtime Voice",
+      "advanced": true
+    },
+    "realtime.provider": {
+      "label": "Realtime Voice Provider",
+      "help": "Uses the first registered realtime voice provider when unset.",
+      "advanced": true
+    },
+    "realtime.streamPath": {
+      "label": "Realtime Stream Path",
+      "advanced": true
+    },
+    "realtime.instructions": {
+      "label": "Realtime Instructions",
+      "advanced": true
+    },
+    "realtime.toolPolicy": {
+      "label": "Realtime Tool Policy",
+      "help": "Controls the shared openclaw_agent_consult tool.",
+      "advanced": true
+    },
+    "realtime.consultPolicy": {
+      "label": "Realtime Consult Policy",
+      "help": "Guides when the realtime voice model should call openclaw_agent_consult.",
+      "advanced": true
+    },
+    "realtime.consultThinkingLevel": {
+      "label": "Consult Thinking Level",
+      "help": "Optional override for the regular agent run behind realtime openclaw_agent_consult calls.",
+      "advanced": true
+    },
+    "realtime.consultFastMode": {
+      "label": "Consult Fast Mode",
+      "help": "Optional fast mode override for the regular agent run behind realtime openclaw_agent_consult calls.",
+      "advanced": true
+    },
+    "realtime.fastContext.enabled": {
+      "label": "Enable Fast Realtime Context",
+      "help": "Searches memory/session context before the full consult agent.",
+      "advanced": true
+    },
+    "realtime.fastContext.timeoutMs": {
+      "label": "Fast Context Timeout",
+      "advanced": true
+    },
+    "realtime.fastContext.maxResults": {
+      "label": "Fast Context Result Limit",
+      "advanced": true
+    },
+    "realtime.fastContext.sources": {
+      "label": "Fast Context Sources",
+      "advanced": true
+    },
+    "realtime.fastContext.fallbackToConsult": {
+      "label": "Fallback To Full Consult",
+      "advanced": true
+    },
+    "realtime.agentContext.enabled": {
+      "label": "Enable Agent Voice Context",
+      "help": "Injects a compact agent identity and workspace context capsule into realtime voice instructions.",
+      "advanced": true
+    },
+    "realtime.agentContext.maxChars": {
+      "label": "Agent Voice Context Limit",
+      "advanced": true
+    },
+    "realtime.agentContext.includeIdentity": {
+      "label": "Include Agent Identity",
+      "advanced": true
+    },
+    "realtime.agentContext.includeWorkspaceFiles": {
+      "label": "Include Agent Workspace Files",
+      "advanced": true
+    },
+    "realtime.agentContext.files": {
+      "label": "Agent Voice Context Files",
+      "advanced": true
+    },
+    "realtime.providers": {
+      "label": "Realtime Provider Config",
+      "advanced": true
+    },
+    "tts.provider": {
+      "label": "TTS Provider Override",
+      "help": "Deep-merges with top-level tts (Microsoft is ignored for calls).",
+      "advanced": true
+    },
+    "tts.providers": {
+      "label": "TTS Provider Config",
+      "advanced": true
+    },
+    "publicUrl": {
+      "label": "Public Webhook URL",
+      "advanced": true
+    },
+    "skipSignatureVerification": {
+      "label": "Skip Signature Verification",
+      "advanced": true
+    },
+    "store": {
+      "label": "Call Log Store Path",
+      "advanced": true
+    },
+    "agentId": {
+      "label": "Response Agent ID",
+      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
+      "advanced": true
+    },
+    "sessionScope": {
+      "label": "Session Scope",
+      "help": "Use per-phone to preserve caller memory, per-call to isolate every call, or main to share the configured agent's main session."
+    },
+    "responseModel": {
+      "label": "Response Model",
+      "help": "Optional override. Falls back to the runtime default model when unset.",
+      "advanced": true
+    },
+    "responseSystemPrompt": {
+      "label": "Response System Prompt",
+      "advanced": true
+    },
+    "responseTimeoutMs": {
+      "label": "Response Timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["telnyx", "twilio", "plivo", "mock"]
+      },
+      "telnyx": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "connectionId": {
+            "type": "string"
+          },
+          "publicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "twilio": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountSid": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": ["string", "object"]
+          },
+          "region": {
+            "type": "string",
+            "enum": ["us1", "ie1", "au1"]
+          }
+        }
+      },
+      "plivo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authId": {
+            "type": "string"
+          },
+          "authToken": {
+            "type": "string"
+          }
+        }
+      },
+      "fromNumber": {
+        "type": "string",
+        "pattern": "^\\+[1-9]\\d{1,14}$"
+      },
+      "toNumber": {
+        "type": "string",
+        "pattern": "^\\+[1-9]\\d{1,14}$"
+      },
+      "inboundPolicy": {
+        "type": "string",
+        "enum": ["disabled", "allowlist", "pairing", "open"]
+      },
+      "allowFrom": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        }
+      },
+      "inboundGreeting": {
+        "type": "string"
+      },
+      "numbers": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inboundGreeting": {
+              "type": "string"
+            },
+            "tts": {
+              "$ref": "#/properties/tts"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseModel": {
+              "type": "string"
+            },
+            "responseSystemPrompt": {
+              "type": "string"
+            },
+            "responseTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      },
+      "outbound": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultMode": {
+            "type": "string",
+            "enum": ["notify", "conversation"]
+          },
+          "notifyHangupDelaySec": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "maxDurationSeconds": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "silenceTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "transcriptTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "ringTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "maxConcurrentCalls": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "serve": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "tailscale": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "serve", "funnel"]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 443
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "tunnel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["none", "ngrok", "tailscale-serve", "tailscale-funnel"]
+          },
+          "ngrokAuthToken": {
+            "type": "string"
+          },
+          "ngrokDomain": {
+            "type": "string"
+          },
+          "allowNgrokFreeTierLoopbackBypass": {
+            "type": "boolean"
+          }
+        }
+      },
+      "webhookSecurity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trustForwardingHeaders": {
+            "type": "boolean"
+          },
+          "trustedProxyIPs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "streamPath": {
+            "type": "string"
+          },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "preStartTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnections": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnectionsPerIp": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxConnections": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "streamPath": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"]
+          },
+          "consultPolicy": {
+            "type": "string",
+            "enum": ["auto", "substantive", "always"]
+          },
+          "consultThinkingLevel": {
+            "type": "string",
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"]
+          },
+          "consultFastMode": {
+            "type": "boolean"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["function"]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["object"]
+                    },
+                    "properties": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "required": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["type", "properties"]
+                }
+              },
+              "required": ["type", "name", "description", "parameters"]
+            }
+          },
+          "fastContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1
+              },
+              "maxResults": {
+                "type": "number",
+                "minimum": 1
+              },
+              "sources": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": ["memory", "sessions"]
+                }
+              },
+              "fallbackToConsult": {
+                "type": "boolean"
+              }
+            }
+          },
+          "agentContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "maxChars": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "includeIdentity": {
+                "type": "boolean"
+              },
+              "includeWorkspaceFiles": {
+                "type": "boolean"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "publicUrl": {
+        "type": "string"
+      },
+      "skipSignatureVerification": {
+        "type": "boolean"
+      },
+      "tts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "auto": {
+            "type": "string",
+            "enum": ["off", "always", "inbound", "tagged"]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["final", "all"]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "summaryModel": {
+            "type": "string"
+          },
+          "modelOverrides": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "allowText": {
+                "type": "boolean"
+              },
+              "allowProvider": {
+                "type": "boolean"
+              },
+              "allowVoice": {
+                "type": "boolean"
+              },
+              "allowModelId": {
+                "type": "boolean"
+              },
+              "allowVoiceSettings": {
+                "type": "boolean"
+              },
+              "allowNormalization": {
+                "type": "boolean"
+              },
+              "allowSeed": {
+                "type": "boolean"
+              }
+            }
+          },
+          "providers": {
+            "type": "object",
+            "properties": {
+              "openai": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "apiKey": {
+                    "type": ["string", "object"]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "speakerVoice": {
+                    "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "speed": {
+                    "type": "number",
+                    "minimum": 0.25,
+                    "maximum": 4.0
+                  },
+                  "instructions": {
+                    "type": "string"
+                  }
+                }
+              },
+              "elevenlabs": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "apiKey": {
+                    "type": ["string", "object"]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "speakerVoiceId": {
+                    "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
+                  },
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4294967295
+                  },
+                  "applyTextNormalization": {
+                    "type": "string",
+                    "enum": ["auto", "on", "off"]
+                  },
+                  "languageCode": {
+                    "type": "string"
+                  },
+                  "voiceSettings": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "stability": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "similarityBoost": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "style": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "useSpeakerBoost": {
+                        "type": "boolean"
+                      },
+                      "speed": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "maximum": 2
+                      }
+                    }
+                  }
+                }
+              },
+              "microsoft": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "speakerVoice": {
+                    "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "lang": {
+                    "type": "string"
+                  },
+                  "outputFormat": {
+                    "type": "string"
+                  },
+                  "pitch": {
+                    "type": "string"
+                  },
+                  "rate": {
+                    "type": "string"
+                  },
+                  "volume": {
+                    "type": "string"
+                  },
+                  "saveSubtitles": {
+                    "type": "boolean"
+                  },
+                  "proxy": {
+                    "type": "string"
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
+                  }
+                }
+              },
+              "edge": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "speakerVoice": {
+                    "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "lang": {
+                    "type": "string"
+                  },
+                  "outputFormat": {
+                    "type": "string"
+                  },
+                  "pitch": {
+                    "type": "string"
+                  },
+                  "rate": {
+                    "type": "string"
+                  },
+                  "volume": {
+                    "type": "string"
+                  },
+                  "saveSubtitles": {
+                    "type": "boolean"
+                  },
+                  "proxy": {
+                    "type": "string"
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
+                  }
+                }
+              }
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "apiKey": {
+                  "type": ["string", "object"]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "prefsPath": {
+            "type": "string"
+          },
+          "maxTextLength": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 120000
+          }
+        }
+      },
+      "store": {
+        "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-phone", "per-call", "main"]
+      },
+      "responseModel": {
+        "type": "string"
+      },
+      "responseSystemPrompt": {
+        "type": "string"
+      },
+      "responseTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"],
+    "secretInputs": {
+      "paths": [
+        { "path": "twilio.authToken", "expected": "string" },
+        { "path": "realtime.providers.*.apiKey", "expected": "string" },
+        { "path": "streaming.providers.*.apiKey", "expected": "string" },
+        { "path": "tts.providers.*.apiKey", "expected": "string" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,7 @@
+<resources>
+    <string-array name="ask_openclaw_query_patterns">
+        <item>"OpenClaw\'a %1$s sor"</item>
+        <item>"OpenClaw\'a %1$s söyle"</item>
+        <item>"OpenClaw\'ı aç ve %1$s sor"</item>
+    </string-array>
+</resources>

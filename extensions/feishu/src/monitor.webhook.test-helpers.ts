@@ -1,0 +1,181 @@
+// Feishu helper module supports monitor.webhook helpers behavior.
+import crypto from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { vi } from "vitest";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { FeishuStatusSink, monitorFeishuProvider } from "./monitor.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+
+const WEBHOOK_READY_MAX_ATTEMPTS = 200;
+const WEBHOOK_READY_RETRY_DELAY_MS = 50;
+const WEBHOOK_MONITOR_START_MAX_ATTEMPTS = 4;
+
+export function createFeishuWebhookTestAccount(
+  accountId: string,
+  port: number,
+  webhookPath: string,
+): ResolvedFeishuAccount {
+  return {
+    accountId,
+    encryptKey: "encrypt_key",
+    config: {
+      enabled: true,
+      connectionMode: "webhook",
+      webhookHost: "127.0.0.1",
+      webhookPort: port,
+      webhookPath,
+    },
+  } as ResolvedFeishuAccount;
+}
+
+export function signFeishuPayload(params: {
+  encryptKey: string;
+  rawBody: string;
+  timestamp?: string;
+  nonce?: string;
+}): Record<string, string> {
+  const timestamp = params.timestamp ?? "1711111111";
+  const nonce = params.nonce ?? "nonce-test";
+  const signature = crypto
+    .createHash("sha256")
+    .update(timestamp + nonce + params.encryptKey + params.rawBody)
+    .digest("hex");
+  return {
+    "content-type": "application/json",
+    "x-lark-request-timestamp": timestamp,
+    "x-lark-request-nonce": nonce,
+    "x-lark-signature": signature,
+  };
+}
+
+export async function getFreePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo | null;
+  if (!address) {
+    throw new Error("missing server address");
+  }
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+  return address.port;
+}
+
+export async function waitUntilServerReady(url: string): Promise<void> {
+  for (let i = 0; i < WEBHOOK_READY_MAX_ATTEMPTS; i += 1) {
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        init: { method: "GET" },
+        policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+        auditContext: "feishu-webhook-test-ready",
+      });
+      try {
+        if (response.status >= 200 && response.status < 500) {
+          return;
+        }
+      } finally {
+        await release();
+      }
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, WEBHOOK_READY_RETRY_DELAY_MS);
+    });
+  }
+  throw new Error(`server did not start: ${url}`);
+}
+
+export function buildWebhookConfig(params: {
+  accountId: string;
+  path: string;
+  port: number;
+  verificationToken?: string;
+  encryptKey?: string;
+}): ClawdbotConfig {
+  return {
+    channels: {
+      feishu: {
+        enabled: true,
+        accounts: {
+          [params.accountId]: {
+            enabled: true,
+            appId: "cli_test",
+            appSecret: "secret_test", // pragma: allowlist secret
+            connectionMode: "webhook",
+            webhookHost: "127.0.0.1",
+            webhookPort: params.port,
+            webhookPath: params.path,
+            encryptKey: params.encryptKey,
+            verificationToken: params.verificationToken,
+          },
+        },
+      },
+    },
+  } as ClawdbotConfig;
+}
+
+export async function withRunningWebhookMonitor(
+  params: {
+    accountId: string;
+    path: string;
+    verificationToken: string;
+    encryptKey: string;
+    runtime?: RuntimeEnv;
+    statusSink?: FeishuStatusSink;
+  },
+  monitor: typeof monitorFeishuProvider,
+  run: (url: string) => Promise<void>,
+) {
+  let startupError: unknown;
+  for (let attempt = 1; attempt <= WEBHOOK_MONITOR_START_MAX_ATTEMPTS; attempt += 1) {
+    const port = await getFreePort();
+    const cfg = buildWebhookConfig({
+      accountId: params.accountId,
+      path: params.path,
+      port,
+      encryptKey: params.encryptKey,
+      verificationToken: params.verificationToken,
+    });
+
+    const abortController = new AbortController();
+    const runtime = params.runtime ?? { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitor({
+      config: cfg,
+      runtime,
+      abortSignal: abortController.signal,
+      accountId: params.accountId,
+      statusSink: params.statusSink,
+    });
+
+    const url = `http://127.0.0.1:${port}${params.path}`;
+    try {
+      await waitUntilServerReady(url);
+      try {
+        await run(url);
+      } finally {
+        abortController.abort();
+        await monitorPromise.catch(() => undefined);
+      }
+      return;
+    } catch (error) {
+      startupError = error;
+      abortController.abort();
+      await monitorPromise.catch(() => undefined);
+      if (attempt < WEBHOOK_MONITOR_START_MAX_ATTEMPTS) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, attempt * WEBHOOK_READY_RETRY_DELAY_MS);
+        });
+      }
+    }
+  }
+  throw startupError instanceof Error ? startupError : new Error("failed to start webhook monitor");
+}

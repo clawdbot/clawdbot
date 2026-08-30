@@ -1,0 +1,826 @@
+name: Maturity scorecard
+
+on:
+  workflow_dispatch:
+    inputs:
+      qa_evidence_run_id:
+        description: Optional workflow run id containing qa-evidence.json
+        required: false
+        type: string
+      ref:
+        description: OpenClaw branch, tag, or SHA containing the maturity score source
+        required: true
+        default: main
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+      publish_pull_request:
+        description: Open or update a pull request for generated maturity files
+        required: false
+        default: true
+        type: boolean
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: true
+        type: boolean
+  workflow_call:
+    inputs:
+      qa_evidence_run_id:
+        description: Optional workflow run id containing qa-evidence.json
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: OpenClaw branch, tag, or SHA containing the maturity score source
+        required: true
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA profile scenarios
+        required: true
+      OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
+        description: Optional OpenAI API key used by maturity scorecard agent steps
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
+      # Mixed-trigger workflows must declare referenced secrets for actionlint. Reusable calls
+      # remain artifact-only because exact caller and job workflow identities gate every use.
+      CLAWSWEEPER_APP_PRIVATE_KEY:
+        description: Optional contents-write App key used only by canonical direct dispatches
+        required: false
+      MANTIS_GITHUB_APP_PRIVATE_KEY:
+        description: Optional pull-request-write App key used only by canonical direct dispatches
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ${{ format('{0}-{1}-{2}', github.workflow, inputs.ref, inputs.qa_evidence_run_id || github.run_id) }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+
+jobs:
+  validate_selected_ref:
+    name: Validate selected ref
+    runs-on: ubuntu-24.04
+    outputs:
+      publication_base: ${{ steps.validate.outputs.publication_base }}
+      publication_head: ${{ steps.validate.outputs.publication_head }}
+      selected_revision: ${{ steps.validate.outputs.selected_revision }}
+      trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+      workflow_file_path: ${{ steps.workflow.outputs.workflow_file_path }}
+      workflow_ref: ${{ steps.workflow.outputs.workflow_ref }}
+      workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
+      workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
+    steps:
+      # Protect both direct dispatches and reusable calls before the workflow reaches the
+      # secret-bearing QA evidence workflow.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
+      # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the non-secret
+      # job context, validate those identity facts, and pass only checked outputs forward.
+      - name: Resolve job workflow identity
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const identity = {
+            workflow_file_path: job.workflow_file_path,
+            workflow_ref: job.workflow_ref,
+            workflow_repository: job.workflow_repository,
+            workflow_sha: job.workflow_sha,
+          };
+          for (const [name, value] of Object.entries(identity)) {
+            if (typeof value !== "string" || value.length === 0 || /[\r\n]/u.test(value)) {
+              throw new Error(`Missing or invalid job.${name}`);
+            }
+          }
+          if (!/^[0-9a-f]{40}$/u.test(identity.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          fs.appendFileSync(
+            outputPath,
+            `${Object.entries(identity)
+              .map(([name, value]) => `${name}=${value}`)
+              .join("\n")}\n`,
+          );
+          NODE
+
+      - name: Authorize workflow invocation
+        env:
+          CALLER_EVENT_NAME: ${{ github.event_name }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_WORKFLOW_FILE_PATH: ${{ steps.workflow.outputs.workflow_file_path }}
+          JOB_WORKFLOW_REF: ${{ steps.workflow.outputs.workflow_ref }}
+          JOB_WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.workflow_repository }}
+          PUBLISH_PULL_REQUEST: ${{ inputs.publish_pull_request || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected_file_path=".github/workflows/maturity-scorecard.yml"
+          expected_repository="openclaw/openclaw"
+          expected_workflow_ref="openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main"
+          canonical_direct=false
+          if [[ "$CALLER_EVENT_NAME" == "workflow_dispatch" &&
+            "$CALLER_WORKFLOW_REF" == "$expected_workflow_ref" &&
+            "$JOB_WORKFLOW_FILE_PATH" == "$expected_file_path" &&
+            "$JOB_WORKFLOW_REF" == "$expected_workflow_ref" &&
+            "$JOB_WORKFLOW_REPOSITORY" == "$expected_repository" ]]; then
+            canonical_direct=true
+          fi
+          if [[ "$PUBLISH_PULL_REQUEST" == "true" && "$canonical_direct" != "true" ]]; then
+            echo "Reusable maturity workflows are artifact-only and cannot publish pull requests." >&2
+            exit 1
+          fi
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate selected ref
+        id: validate
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id || github.run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          INPUT_REF: ${{ inputs.ref }}
+          PUBLISH_PULL_REQUEST: ${{ inputs.publish_pull_request }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import hashlib
+          import os
+          import re
+          import subprocess
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, check_cancelled
+
+          workspace = os.getcwd()
+          def git(*args, **kwargs):
+              run_git(workspace, *args, reclaim_locks=True, **kwargs)
+
+          def probe(*args, quiet=False):
+              try:
+                  git(*args, stdout=subprocess.DEVNULL if quiet else None,
+                      stderr=subprocess.DEVNULL if quiet else None)
+                  return True
+              except GitFailure as error:
+                  if error.code != 1:
+                      raise
+                  return False
+
+          def revision(ref):
+              return git_output(workspace, "rev-parse", ref).rstrip("\n")
+
+          def fail(*messages, code=1):
+              import sys
+              for message in messages:
+                  print(message, file=sys.stderr)
+              raise SystemExit(code)
+
+          selected_revision = revision("HEAD")
+          expected_sha = os.environ["EXPECTED_SHA"].lower()
+          input_ref = os.environ["INPUT_REF"]
+          branch_candidate = input_ref.removeprefix("refs/heads/")
+          default_branch = os.environ["DEFAULT_BRANCH"]
+          evidence_run_id = os.environ["EVIDENCE_RUN_ID"]
+          publish_pull_request = os.environ["PUBLISH_PULL_REQUEST"] == "true"
+          floating_default_branch = False
+          trusted_reason = ""
+          if expected_sha.replace(" ", "") and not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+              fail(f"expected_sha must be a full 40-character SHA; got: {os.environ['EXPECTED_SHA']}")
+          if expected_sha.replace(" ", "") and selected_revision != expected_sha:
+              fail(f"Ref '{input_ref}' resolved to {selected_revision}, expected {os.environ['EXPECTED_SHA']}.")
+
+          git("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
+          if not expected_sha.replace(" ", "") and branch_candidate == default_branch:
+              # Freeze fetched main before handing the immutable revision to reusable jobs.
+              floating_default_branch = True
+              selected_revision = revision("refs/remotes/origin/main")
+          if probe("merge-base", "--is-ancestor", selected_revision, "refs/remotes/origin/main"):
+              trusted_reason = "main-ancestor"
+          elif any(tag.startswith("v") for tag in git_output(workspace, "tag", "--points-at", selected_revision).splitlines()):
+              trusted_reason = "release-tag"
+          elif re.fullmatch(r"release/[0-9]{4}\.[0-9]+\.[0-9]+", branch_candidate):
+              git("fetch", "--no-tags", "origin", f"+refs/heads/{branch_candidate}:refs/remotes/origin/{branch_candidate}")
+              if selected_revision == revision(f"refs/remotes/origin/{branch_candidate}"):
+                  trusted_reason = "release-branch-head"
+          if not trusted_reason:
+              fail(f"Ref '{input_ref}' resolved to {selected_revision}, which is not trusted for this secret-bearing maturity scorecard run.",
+                   "Allowed refs must be on main, point to a release tag, or match a release branch head.")
+          if not re.fullmatch(r"[0-9]+", evidence_run_id):
+              fail("qa_evidence_run_id must be a numeric GitHub Actions run id.")
+          publication_base = default_branch
+          publication_head = ""
+          if publish_pull_request:
+              if (not input_ref.startswith("refs/tags/") and not re.fullmatch(r"[0-9a-fA-F]{40}", input_ref)
+                      and probe("check-ref-format", f"refs/heads/{branch_candidate}", quiet=True)):
+                  try:
+                      git("ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch_candidate}",
+                          timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                      publication_base = branch_candidate
+                  except (GitFailure, FetchTimeout) as error:
+                      # Only a drained ordinary status 2 means absent; status collisions
+                      # cannot turn owner failure or cancellation into the default branch.
+                      code = 124 if isinstance(error, FetchTimeout) else error.code
+                      if code != 2:
+                          fail(f"Unable to determine whether '{input_ref}' is a remote branch (status {code}).", code=code)
+              publication_ref = f"refs/remotes/origin/{publication_base}"
+              git("fetch", "--no-tags", "origin", f"+refs/heads/{publication_base}:{publication_ref}")
+              if floating_default_branch and publication_base == default_branch:
+                  selected_revision = revision(publication_ref)
+              if not probe("merge-base", "--is-ancestor", selected_revision, publication_ref):
+                  fail(f"Ref '{input_ref}' is not an ancestor of pull request base '{publication_base}'.",
+                       "Historical divergent refs remain available through artifact-only workflow calls.")
+              if not probe("diff", "--quiet", selected_revision, publication_ref, "--", ".",
+                           ":(exclude)qa/maturity-scores.yaml", ":(exclude)docs/maturity/scorecard.md",
+                           ":(exclude)docs/maturity/taxonomy.md"):
+                  fail(f"Pull request base '{publication_base}' changed maturity inputs after '{input_ref}' resolved.",
+                       "Dispatch again from the latest base before generating release evidence.")
+              publication_key = hashlib.sha256(f"{evidence_run_id}\n{publication_base}\n{selected_revision}\n".encode()).hexdigest()[:16]
+              publication_head = f"automation/maturity-scorecard-{evidence_run_id}-{publication_key}"
+          check_cancelled()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"publication_base={publication_base}\npublication_head={publication_head}\nselected_revision={selected_revision}\ntrusted_reason={trusted_reason}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(f"### Target\n\n- Requested ref: `{input_ref}`\n- Resolved SHA: `{selected_revision}`\n- Trust reason: `{trusted_reason}`\n")
+              if publish_pull_request:
+                  output.write(f"- Pull request base: `{publication_base}`\n- Automation branch: `{publication_head}`\n")
+              else:
+                  output.write("- Pull request: disabled for artifact-only rendering\n")
+          PYTHON
+
+  publisher_preflight:
+    name: Verify generated PR App permissions
+    needs: validate_selected_ref
+    if: ${{ inputs.publish_pull_request }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Create generated PR tokens
+        if: >-
+          ${{ inputs.publish_pull_request &&
+            github.event_name == 'workflow_dispatch' &&
+            github.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
+            needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
+            needs.validate_selected_ref.outputs.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
+            needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}
+        uses: ./.github/actions/create-generated-pr-tokens
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+
+  generate_qa_evidence:
+    name: Generate full taxonomy QA evidence
+    needs: [validate_selected_ref, publisher_preflight]
+    if: >-
+      ${{ always() &&
+        needs.validate_selected_ref.result == 'success' &&
+        (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') &&
+        inputs.qa_evidence_run_id == '' }}
+    uses: ./.github/workflows/qa-profile-evidence.yml
+    with:
+      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      trusted_ref: ${{ inputs.ref }}
+      expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      qa_profile: all
+      allow_failures: ${{ inputs.allow_failures }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+
+  publish:
+    name: Publish maturity docs PR
+    needs:
+      - validate_selected_ref
+      - publisher_preflight
+      - generate_qa_evidence
+    if: >-
+      ${{ always() &&
+        needs.validate_selected_ref.result == 'success' &&
+        (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') &&
+        (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Download provided QA evidence artifact
+        if: ${{ inputs.qa_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/maturity-evidence
+          gh run download "$QA_EVIDENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir .artifacts/maturity-evidence
+
+      - name: Download generated QA evidence artifact
+        if: ${{ inputs.qa_evidence_run_id == '' }}
+        env:
+          GENERATED_ARTIFACT_NAME: ${{ needs.generate_qa_evidence.outputs.artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GENERATED_ARTIFACT_NAME:-}" ]]; then
+            echo "Generated QA evidence workflow did not expose an artifact name." >&2
+            exit 1
+          fi
+          mkdir -p .artifacts/maturity-evidence
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$GENERATED_ARTIFACT_NAME" \
+            --dir .artifacts/maturity-evidence
+
+      - name: Require one QA evidence file
+        id: evidence
+        env:
+          QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
+        run: |
+          set -euo pipefail
+          mapfile -t manifest_paths < <(
+            find .artifacts/maturity-evidence -type f -name qa-profile-evidence-manifest.json | sort
+          )
+          if [[ "${#manifest_paths[@]}" -ne 1 ]]; then
+            echo "Expected exactly one aggregate QA evidence manifest, found ${#manifest_paths[@]}:" >&2
+            printf '%s\n' "${manifest_paths[@]}" >&2
+            exit 1
+          fi
+          evidence_path="$(dirname "${manifest_paths[0]}")/qa-evidence.json"
+          if [[ ! -f "$evidence_path" || -L "$evidence_path" ]]; then
+            echo "Aggregate QA evidence is missing next to ${manifest_paths[0]}." >&2
+            exit 1
+          fi
+          echo "qa_evidence_path=${evidence_path}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### QA evidence"
+            echo
+            echo "- Evidence path: \`${evidence_path}\`"
+            echo "- Evidence source run: \`${QA_EVIDENCE_RUN_ID:-$GITHUB_RUN_ID}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate QA evidence manifest
+        env:
+          QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        run: |
+          set -euo pipefail
+          node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
+
+          const evidencePath = process.env.QA_EVIDENCE_PATH;
+          const targetSha = process.env.TARGET_SHA;
+          if (!evidencePath) {
+            throw new Error("QA_EVIDENCE_PATH is required");
+          }
+          if (!targetSha) {
+            throw new Error("TARGET_SHA is required");
+          }
+
+          const evidence = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+          if (evidence.profile !== "all") {
+            throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
+          }
+          if (!evidence.profilePlan) {
+            throw new Error("qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
+          }
+
+          const artifactDir = path.dirname(evidencePath);
+          const manifestNames = fs
+            .readdirSync(artifactDir)
+            .filter((name) => name.endsWith("qa-profile-evidence-manifest.json"))
+            .sort();
+          if (manifestNames.length !== 1) {
+            throw new Error(
+              `Expected exactly one QA profile evidence manifest next to qa-evidence.json, found ${manifestNames.length}`,
+            );
+          }
+
+          const manifestPath = path.join(artifactDir, manifestNames[0]);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const manifestProfile = manifest.qaProfile ?? evidence.profile;
+          if (manifestProfile !== "all") {
+            throw new Error(`QA evidence manifest profile must be all, got ${JSON.stringify(manifestProfile)}`);
+          }
+          if (manifest.targetSha !== targetSha) {
+            throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
+          }
+          if (typeof manifest.profilePlanSha256 !== "string") {
+            throw new Error("QA evidence manifest is missing profilePlanSha256; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            evidence.profilePlan,
+            manifest.qaPassed === true,
+          );
+          if (profilePlan.profile !== "all") {
+            throw new Error(`qa-evidence.json profilePlan.profile must be all, got ${JSON.stringify(profilePlan.profile)}`);
+          }
+          if (profilePlanSha256 !== manifest.profilePlanSha256) {
+            throw new Error("QA evidence profilePlan digest does not match the manifest");
+          }
+          NODE
+
+      - name: Ensure maturity scorecard agent key exists
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex maturity scorecard agent
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        env:
+          MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
+          MATURITY_SCORES_PATH: qa/maturity-scores.yaml
+          MATURITY_TAXONOMY_PATH: taxonomy.yaml
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/maturity-scorecard-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Enforce focused maturity score patch
+        run: |
+          set -euo pipefail
+          git restore --staged :/
+
+          allowed='^qa/maturity-scores\.yaml$'
+          bad_tracked="$(
+            git diff --name-only HEAD -- | while IFS= read -r path; do
+              if [[ ! "$path" =~ $allowed ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_tracked" ]]; then
+            echo "Maturity scorecard agent touched forbidden tracked paths:"
+            printf '%s\n' "$bad_tracked"
+            exit 1
+          fi
+
+          bad_untracked="$(
+            git ls-files --others --exclude-standard | while IFS= read -r path; do
+              if [[ "$path" != "qa/maturity-scores.yaml" ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_untracked" ]]; then
+            echo "Maturity scorecard agent created forbidden untracked paths:"
+            printf '%s\n' "$bad_untracked"
+            exit 1
+          fi
+
+          if [[ ! -f qa/maturity-scores.yaml ]]; then
+            echo "Maturity scorecard agent must produce qa/maturity-scores.yaml." >&2
+            exit 1
+          fi
+
+      - name: Prepare aggregate QA evidence for rendering
+        env:
+          QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
+        run: |
+          set -euo pipefail
+          render_evidence_dir=".artifacts/maturity-render-evidence"
+          rm -rf "$render_evidence_dir"
+          mkdir -p "$render_evidence_dir"
+          install -m 0644 "$QA_EVIDENCE_PATH" "$render_evidence_dir/qa-evidence.json"
+
+      - name: Validate maturity score sources
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import { readValidatedQaMaturityScoreSources } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+
+          const { warnings } = readValidatedQaMaturityScoreSources({
+            scoresPath: "qa/maturity-scores.yaml",
+            taxonomyPath: "taxonomy.yaml",
+          });
+          for (const warning of warnings) {
+            console.error(`warning: ${warning}`);
+          }
+          NODE
+
+      - name: Render artifact docs
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+        run: |
+          set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
+          pnpm maturity:render -- \
+            --output-dir .artifacts/maturity-docs \
+            --static-assets-dir .artifacts/maturity-docs/assets/maturity \
+            --scores qa/maturity-scores.yaml \
+            --evidence-dir .artifacts/maturity-render-evidence \
+            --strict-inputs \
+            "${allow_failures_args[@]}"
+          {
+            echo "### Maturity scorecard docs"
+            echo
+            echo "- Source validation: passed"
+            echo "- Artifact docs: \`.artifacts/maturity-docs\`"
+            echo "- Strict inputs: \`true\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
+            echo "- QA evidence: included"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Render committed docs preview
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+        run: |
+          set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
+          pnpm maturity:render -- \
+            --output-dir docs \
+            --scores qa/maturity-scores.yaml \
+            --evidence-dir .artifacts/maturity-render-evidence \
+            --strict-inputs \
+            "${allow_failures_args[@]}"
+
+      - name: Upload generated PR files
+        if: ${{ inputs.publish_pull_request }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            qa/maturity-scores.yaml
+            docs/maturity/scorecard.md
+            docs/maturity/taxonomy.md
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload maturity docs artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: maturity-scorecard-docs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/maturity-docs/
+          retention-days: 30
+          if-no-files-found: error
+
+  publish_generated_pr:
+    name: Publish generated maturity PR
+    needs:
+      - validate_selected_ref
+      - publisher_preflight
+      - publish
+    if: >-
+      ${{ inputs.publish_pull_request &&
+        needs.publisher_preflight.result == 'success' &&
+        needs.publish.result == 'success' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
+        needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
+        needs.validate_selected_ref.outputs.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
+        needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          path: selected
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Prepare generated file staging
+        id: staging
+        env:
+          STAGING_DIR: ${{ runner.temp }}/maturity-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ -e "$STAGING_DIR" ]]; then
+            echo "Generated file staging path already exists." >&2
+            exit 1
+          fi
+          mkdir -p "$STAGING_DIR"
+          echo "path=$STAGING_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Download generated PR files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.staging.outputs.path }}
+
+      - name: Validate and copy generated PR files
+        env:
+          STAGING_DIR: ${{ steps.staging.outputs.path }}
+        run: |
+          set -euo pipefail
+          expected=(
+            qa/maturity-scores.yaml
+            docs/maturity/scorecard.md
+            docs/maturity/taxonomy.md
+          )
+          declare -A allowed=()
+          for path in "${expected[@]}"; do
+            allowed["$path"]=1
+          done
+          mapfile -d '' entries < <(find "$STAGING_DIR" -mindepth 1 ! -type d -print0 | sort -z)
+          if [[ "${#entries[@]}" -ne "${#expected[@]}" ]]; then
+            echo "Generated PR artifact must contain exactly ${#expected[@]} files." >&2
+            exit 1
+          fi
+          for entry in "${entries[@]}"; do
+            relative="${entry#"$STAGING_DIR"/}"
+            if [[ -z "${allowed[$relative]+x}" ]]; then
+              echo "Generated PR artifact contains an unexpected path: $relative" >&2
+              exit 1
+            fi
+          done
+          for path in "${expected[@]}"; do
+            source="$STAGING_DIR/$path"
+            if [[ ! -f "$source" || -L "$source" ]]; then
+              echo "Generated PR artifact path must be a regular file: $path" >&2
+              exit 1
+            fi
+          done
+          for directory in selected selected/qa selected/docs selected/docs/maturity; do
+            if [[ ! -d "$directory" || -L "$directory" ]]; then
+              echo "Selected worktree destination must be a real directory: $directory" >&2
+              exit 1
+            fi
+          done
+          for path in "${expected[@]}"; do
+            if [[ ! -f "selected/$path" || -L "selected/$path" ]]; then
+              echo "Selected worktree destination must be a regular file: $path" >&2
+              exit 1
+            fi
+            install -D -m 0644 "$STAGING_DIR/$path" "selected/$path"
+          done
+
+      # Credentialed actions resolve only from the trusted root checkout. selected/ provides the
+      # git source tree and generated files, but cannot shadow either composite action.
+      - name: Open or update generated docs PR
+        if: >-
+          ${{ inputs.publish_pull_request &&
+            github.event_name == 'workflow_dispatch' &&
+            github.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
+            needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
+            needs.validate_selected_ref.outputs.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
+            needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          base-branch: ${{ needs.validate_selected_ref.outputs.publication_base }}
+          head-branch: ${{ needs.validate_selected_ref.outputs.publication_head }}
+          working-directory: selected
+          commit-message: "docs: update maturity scorecard"
+          pr-title: "docs: update maturity scorecard"
+          generated-paths: |
+            qa/maturity-scores.yaml
+            docs/maturity/scorecard.md
+            docs/maturity/taxonomy.md
+          invalidation-paths: ""
+          overlap-policy: fail
+          pr-body: |
+            ## What Problem This Solves
+
+            Keep the release maturity source and rendered docs synchronized with full-taxonomy QA evidence.
+
+            ## Why This Change Was Made
+
+            The maturity workflow generated this update from the selected immutable source and validated QA evidence.
+
+            ## User Impact
+
+            Release maturity documentation reflects the reviewed score source and current evidence.
+
+            ## Evidence
+
+            - Source ref: `${{ inputs.ref }}`
+            - Source SHA: `${{ needs.validate_selected_ref.outputs.selected_revision }}`
+            - QA evidence run: `${{ inputs.qa_evidence_run_id || github.run_id }}`
+            - Strict score validation and maturity docs rendering passed.

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo '[pre-commit] Cannot locate the checkout root. Check the repository and retry.' >&2
+  exit 1
+}
+cd "$ROOT_DIR"
+exec node scripts/pre-commit/guard-staged-content.mjs

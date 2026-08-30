@@ -1,0 +1,18 @@
+{
+  "language": "tr",
+  "tabs": [
+    {
+      "tab": "Baslangic",
+      "groups": [
+        {
+          "group": "Genel bakis",
+          "pages": ["tr/index"]
+        },
+        {
+          "group": "Ilk adimlar",
+          "pages": ["tr/start/getting-started", "tr/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

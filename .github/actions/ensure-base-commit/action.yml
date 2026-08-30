@@ -1,0 +1,26 @@
+name: Ensure base commit
+description: Ensure a shallow checkout has enough history to diff against a base SHA.
+inputs:
+  base-sha:
+    description: Base commit SHA to diff against.
+    required: true
+  fetch-ref:
+    description: Branch or ref to deepen/fetch from origin when base-sha is missing.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Ensure base commit is available
+      shell: bash
+      env:
+        BASE_ACTION_PATH: ${{ github.action_path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        FETCH_REF: ${{ inputs.fetch-ref }}
+      run: |
+        set -euo pipefail
+        python_command=python3
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          python_command=python
+        fi
+        exec "$python_command" -I -S "$BASE_ACTION_PATH/../git-owner/owner.py" \
+          --policy "$BASE_ACTION_PATH/policy.py"

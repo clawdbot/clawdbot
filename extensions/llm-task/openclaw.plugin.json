@@ -1,0 +1,45 @@
+{
+  "id": "llm-task",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "name": "LLM Task",
+  "description": "Generic JSON-only LLM tool for structured tasks callable from workflows.",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "defaultProvider": {
+        "type": "string"
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "defaultAuthProfileId": {
+        "type": "string"
+      },
+      "maxTokens": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "version": "2026.5.21",
+  "contracts": {
+    "tools": [
+      "llm-task"
+    ]
+  },
+  "toolMetadata": {
+    "llm-task": {
+      "optional": true
+    }
+  }
+}

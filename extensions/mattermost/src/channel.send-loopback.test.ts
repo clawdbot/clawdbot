@@ -1,0 +1,237 @@
+// Mattermost tests cover the action-to-REST send path over loopback.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { mattermostPlugin } from "./channel.js";
+import { deliverMattermostReplyPayload } from "./mattermost/reply-delivery.js";
+import { sendMessageMattermost } from "./mattermost/send.js";
+import { setMattermostRuntime } from "./runtime.js";
+
+const CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
+
+vi.mock("./mattermost/runtime-api.js", async () => ({
+  ...(await vi.importActual<typeof import("./mattermost/runtime-api.js")>(
+    "./mattermost/runtime-api.js",
+  )),
+  loadOutboundMediaFromUrl,
+}));
+
+describe("Mattermost send action loopback", () => {
+  it("reuses the inbound provider channel when delivering a direct reply", async () => {
+    const requests: Array<{ path: string; body?: unknown }> = [];
+
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const path = request.url ?? "";
+          requests.push({ path, ...(body ? { body: JSON.parse(body) as unknown } : {}) });
+          response.writeHead(201, { "content-type": "application/json" });
+          if (path === "/api/v4/users/me") {
+            response.end(JSON.stringify({ id: "cccccccccccccccccccccccccc" }));
+            return;
+          }
+          if (path === "/api/v4/channels/direct") {
+            response.end(JSON.stringify({ id: CHANNEL_ID }));
+            return;
+          }
+          response.end(
+            JSON.stringify({
+              id: "post-loopback",
+              channel_id: CHANNEL_ID,
+              message: "prepared direct reply",
+            }),
+          );
+        });
+      },
+      async (baseUrl) => {
+        const core = createPluginRuntimeMock();
+        setMattermostRuntime(core);
+        const cfg = {
+          channels: {
+            mattermost: {
+              botToken: "prepared-inbound-loopback",
+              baseUrl,
+              network: { dangerouslyAllowPrivateNetwork: true },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await deliverMattermostReplyPayload({
+          core,
+          cfg,
+          payload: { text: "prepared direct reply" },
+          channelId: CHANNEL_ID,
+          accountId: "default",
+          textLimit: 4000,
+          tableMode: "off",
+          sendMessage: sendMessageMattermost,
+        });
+
+        expect(result).toMatchObject({
+          outcome: "text",
+          messageIds: ["post-loopback"],
+          visibleReplySent: true,
+        });
+        expect(requests).toEqual([
+          {
+            path: "/api/v4/posts",
+            body: { channel_id: CHANNEL_ID, message: "prepared direct reply" },
+          },
+        ]);
+      },
+    );
+  });
+
+  it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
+    const requests: Array<{ path: string; body: unknown }> = [];
+
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          requests.push({
+            path: request.url ?? "",
+            body: JSON.parse(body) as unknown,
+          });
+          response.writeHead(201, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "post-loopback", channel_id: CHANNEL_ID }));
+        });
+      },
+      async (baseUrl) => {
+        setMattermostRuntime(createPluginRuntimeMock());
+        const cfg = {
+          channels: {
+            mattermost: {
+              botToken: ["loopback", "fixture"].join("-"),
+              baseUrl,
+              network: { dangerouslyAllowPrivateNetwork: true },
+            },
+          },
+        } as OpenClawConfig;
+        const handleAction = mattermostPlugin.actions?.handleAction;
+        if (!handleAction) {
+          throw new Error("Mattermost send action missing");
+        }
+
+        const result = await handleAction({
+          channel: "mattermost",
+          action: "send",
+          params: {
+            to: `channel:${CHANNEL_ID}`,
+            message: "loopback proof",
+            buffer: "",
+            base64: "  ",
+          },
+          cfg,
+          accountId: "default",
+        });
+
+        expect(result.content).toEqual([
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              channel: "mattermost",
+              messageId: "post-loopback",
+              channelId: CHANNEL_ID,
+            }),
+          },
+        ]);
+        expect(requests).toEqual([
+          {
+            path: "/api/v4/posts",
+            body: { channel_id: CHANNEL_ID, message: "loopback proof" },
+          },
+        ]);
+
+        await expect(
+          handleAction({
+            channel: "mattermost",
+            action: "send",
+            params: {
+              to: `channel:${CHANNEL_ID}`,
+              message: "must not send",
+              base64: "cmVwb3J0",
+            },
+            cfg,
+            accountId: "default",
+          }),
+        ).rejects.toThrow("buffer/base64 payloads are not supported");
+        expect(requests).toHaveLength(1);
+      },
+    );
+  });
+
+  it("infers a MIME extension for unnamed uploads", async () => {
+    const uploads: string[] = [];
+
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          if (request.url === "/api/v4/files") {
+            uploads.push(body);
+            response.writeHead(201, { "content-type": "application/json" });
+            response.end(JSON.stringify({ file_infos: [{ id: `file-${uploads.length}` }] }));
+            return;
+          }
+          response.writeHead(201, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "post-loopback", channel_id: CHANNEL_ID }));
+        });
+      },
+      async (baseUrl) => {
+        setMattermostRuntime(createPluginRuntimeMock());
+        loadOutboundMediaFromUrl.mockReset();
+        loadOutboundMediaFromUrl.mockResolvedValueOnce({
+          buffer: Buffer.from("unnamed-image"),
+          contentType: "image/png",
+          kind: "image",
+        });
+        const cfg = {
+          channels: {
+            mattermost: {
+              botToken: "loopback-fixture",
+              baseUrl,
+              network: { dangerouslyAllowPrivateNetwork: true },
+            },
+          },
+        } as OpenClawConfig;
+        const handleAction = mattermostPlugin.actions?.handleAction;
+        if (!handleAction) {
+          throw new Error("Mattermost send action missing");
+        }
+
+        await handleAction({
+          channel: "mattermost",
+          action: "send",
+          params: {
+            to: `channel:${CHANNEL_ID}`,
+            message: "loopback media proof",
+            mediaUrl: "https://media.example.test/unnamed",
+          },
+          cfg,
+          accountId: "default",
+        });
+      },
+    );
+
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toContain('filename="upload.png"');
+    expect(uploads[0]).toContain("Content-Type: image/png");
+  });
+});

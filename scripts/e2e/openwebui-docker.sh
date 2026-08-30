@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# Runs Open WebUI against a Dockerized OpenClaw Gateway and verifies the proxied
+# chat path with a real OpenAI-compatible request.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
+OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}"
+MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB 8192)"
+MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT 1600)"
+# Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
+# compatibility smoke. Callers can still override this explicitly.
+MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.6-luna}"
+PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
+PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"
+PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_GATEWAY_PORT 18789)"
+WEBUI_PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_PORT 8080)"
+TOKEN="openwebui-e2e-$(date +%s)-$$"
+ADMIN_EMAIL="${OPENCLAW_OPENWEBUI_ADMIN_EMAIL:-openwebui-e2e@example.com}"
+ADMIN_PASSWORD="${OPENCLAW_OPENWEBUI_ADMIN_PASSWORD:-OpenWebUI-E2E-Password-$(date +%s)-$$}"
+NET_NAME="openclaw-openwebui-e2e-$$"
+GW_NAME="openclaw-openwebui-gateway-$$"
+OW_NAME="openclaw-openwebui-$$"
+PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS:-900}"
+DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-600s}"
+SMOKE_MODE="${OPENWEBUI_SMOKE_MODE:-${OPENCLAW_OPENWEBUI_SMOKE_MODE:-chat}}"
+
+validate_positive_int() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $label: $value" >&2
+    exit 2
+  fi
+}
+
+validate_positive_int OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS "$PROVIDER_TIMEOUT_SECONDS"
+PROVIDER_TIMEOUT_SECONDS_DECIMAL=$((10#$PROVIDER_TIMEOUT_SECONDS))
+PROBE_FETCH_TIMEOUT_MS="${OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL * 1000 + 60000))}"
+validate_positive_int OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS "$PROBE_FETCH_TIMEOUT_MS"
+DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL + 90))s}"
+
+case "$SMOKE_MODE" in
+  chat | models) ;;
+  *)
+    echo "Unsupported OPENWEBUI_SMOKE_MODE: $SMOKE_MODE" >&2
+    exit 2
+    ;;
+esac
+
+PROFILE_FILE="${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}"
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PROFILE_FILE"
+  set +a
+fi
+
+OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
+if [[ "$OPENAI_API_KEY_VALUE" == "undefined" || "$OPENAI_API_KEY_VALUE" == "null" ]]; then
+  OPENAI_API_KEY_VALUE=""
+fi
+OPENAI_BASE_URL_VALUE="${OPENAI_BASE_URL:-}"
+if [[ "$OPENAI_BASE_URL_VALUE" == "undefined" || "$OPENAI_BASE_URL_VALUE" == "null" ]]; then
+  OPENAI_BASE_URL_VALUE=""
+fi
+if [[ -z "$OPENAI_API_KEY_VALUE" ]]; then
+  echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
+  exit 2
+fi
+
+STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-openwebui-stats.XXXXXX")"
+PROBE_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-openwebui-probe.XXXXXX")"
+STATS_STOP_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-openwebui-stats-stop.XXXXXX")"
+STATS_PIDS=()
+
+cleanup() {
+  rm -f "$STATS_STOP_FILE"
+  for stats_pid in "${STATS_PIDS[@]:-}"; do
+    wait "$stats_pid" 2>/dev/null || true
+  done
+  docker_e2e_docker_cmd rm -f "$OW_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$GW_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd network rm "$NET_NAME" >/dev/null 2>&1 || true
+  rm -f "$STATS_LOG" "$PROBE_LOG"
+}
+trap cleanup EXIT
+
+sample_openwebui_stats_once() {
+  docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$GW_NAME" "$OW_NAME" >>"$STATS_LOG" 2>/dev/null || true
+}
+
+start_openwebui_stats_sampler() {
+  (
+    while [ -e "$STATS_STOP_FILE" ]; do
+      for container_name in "$GW_NAME" "$OW_NAME"; do
+        if docker_e2e_docker_cmd inspect "$container_name" >/dev/null 2>&1; then
+          docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$container_name" >>"$STATS_LOG" 2>/dev/null || true
+        fi
+      done
+      sleep 2
+    done
+  ) &
+  STATS_PIDS+=("$!")
+}
+
+stop_openwebui_stats_samplers() {
+  rm -f "$STATS_STOP_FILE"
+  for stats_pid in "${STATS_PIDS[@]:-}"; do
+    wait "$stats_pid" 2>/dev/null || true
+  done
+  STATS_PIDS=()
+}
+
+assert_openwebui_stats() {
+  if [ -s "$STATS_LOG" ]; then
+    node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" openwebui
+  else
+    echo "Open WebUI Docker stats were not captured" >&2
+    return 1
+  fi
+}
+
+docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
+
+echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
+DOCKER_COMMAND_TIMEOUT="$DOCKER_PULL_TIMEOUT" docker_e2e_docker_cmd pull "$OPENWEBUI_IMAGE" >/dev/null
+
+echo "Creating Docker network..."
+docker_e2e_docker_cmd network create "$NET_NAME" >/dev/null
+
+echo "Starting gateway container..."
+# Harness files are mounted read-only; the app under test comes from /app/dist.
+docker_e2e_harness_mount_args
+docker_e2e_docker_cmd run -d \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+  --name "$GW_NAME" \
+  --network "$NET_NAME" \
+  -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
+  -e "OPENCLAW_OPENWEBUI_MODEL=$MODEL" \
+  -e "OPENCLAW_SKIP_CHANNELS=1" \
+  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
+  -e "OPENCLAW_SKIP_CRON=1" \
+  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  -e "OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=$PROVIDER_TIMEOUT_SECONDS" \
+  -e OPENAI_API_KEY \
+  ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
+  "$IMAGE_NAME" \
+  bash -lc '
+    set -euo pipefail
+    source scripts/lib/openclaw-e2e-instance.sh
+    entry="$(openclaw_e2e_resolve_entrypoint)"
+
+    openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
+    batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
+    OPENCLAW_CONFIG_BATCH_PATH="$batch_file" node scripts/e2e/lib/fixture.mjs openwebui-config "$openai_api_key"
+    node "$entry" config set --batch-file "$batch_file" >/dev/null
+    rm -f "$batch_file"
+    node scripts/e2e/lib/fixture.mjs openwebui-workspace
+    node "$entry" doctor --fix --yes --force >/dev/null
+
+    openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
+  ' >/dev/null
+start_openwebui_stats_sampler
+
+echo "Waiting for gateway HTTP surface..."
+if ! docker_e2e_wait_container_bash "$GW_NAME" 240 1 "OPENCLAW_HTTP_PROBE_BEARER='$TOKEN' node scripts/e2e/lib/openwebui/http-probe.mjs 'http://127.0.0.1:$PORT/v1/models' 200"; then
+  echo "Gateway failed to start"
+  docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
+  exit 1
+fi
+
+echo "Starting Open WebUI container..."
+docker_e2e_docker_cmd run -d \
+  --name "$OW_NAME" \
+  --network "$NET_NAME" \
+  -e ENV=prod \
+  -e WEBUI_NAME="OpenClaw E2E" \
+  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret-key-v1" \
+  -e OFFLINE_MODE=True \
+  -e ENABLE_VERSION_UPDATE_CHECK=False \
+  -e ENABLE_PERSISTENT_CONFIG=False \
+  -e ENABLE_OLLAMA_API=False \
+  -e ENABLE_OPENAI_API=True \
+  -e OPENAI_API_BASE_URLS="http://$GW_NAME:$PORT/v1" \
+  -e OPENAI_API_KEY="$TOKEN" \
+  -e OPENAI_API_KEYS="$TOKEN" \
+  -e RAG_EMBEDDING_MODEL_AUTO_UPDATE=False \
+  -e RAG_RERANKING_MODEL_AUTO_UPDATE=False \
+  -e WEBUI_ADMIN_EMAIL="$ADMIN_EMAIL" \
+  -e WEBUI_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  -e WEBUI_ADMIN_NAME="OpenClaw E2E" \
+  -e ENABLE_SIGNUP=False \
+  -e DEFAULT_MODELS="openclaw/default" \
+  "$OPENWEBUI_IMAGE" >/dev/null
+
+echo "Waiting for Open WebUI..."
+if ! docker_e2e_wait_container_bash_while_running "$OW_NAME" "$GW_NAME" 240 1 "node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$OW_NAME:$WEBUI_PORT/health' 200"; then
+  echo "Open WebUI failed to start"
+  docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  exit 1
+fi
+sample_openwebui_stats_once
+
+echo "Waiting for gateway model endpoint after Open WebUI startup..."
+if ! docker_e2e_wait_container_bash "$GW_NAME" 90 5 "OPENCLAW_HTTP_PROBE_BEARER='$TOKEN' OPENCLAW_HTTP_PROBE_TIMEOUT_MS=8000 node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$GW_NAME:$PORT/v1/models' 200"; then
+  echo "Gateway model endpoint did not stay reachable after Open WebUI startup"
+  docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
+  docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  exit 1
+fi
+sample_openwebui_stats_once
+
+echo "Running Open WebUI -> OpenClaw smoke..."
+set +e
+docker_e2e_docker_cmd exec \
+  -e "OPENWEBUI_BASE_URL=http://$OW_NAME:$WEBUI_PORT" \
+  -e "OPENWEBUI_ADMIN_EMAIL=$ADMIN_EMAIL" \
+  -e "OPENWEBUI_ADMIN_PASSWORD=$ADMIN_PASSWORD" \
+  -e "OPENWEBUI_EXPECTED_NONCE=$PROMPT_NONCE" \
+  -e "OPENWEBUI_PROMPT=$PROMPT" \
+  -e "OPENWEBUI_SMOKE_MODE=$SMOKE_MODE" \
+  -e "OPENWEBUI_MODEL_ATTEMPTS=72" \
+  -e "OPENWEBUI_MODEL_RETRY_MS=5000" \
+  -e "OPENWEBUI_FETCH_TIMEOUT_MS=$PROBE_FETCH_TIMEOUT_MS" \
+  "$GW_NAME" \
+  node /app/scripts/e2e/openwebui-probe.mjs >"$PROBE_LOG" 2>&1 &
+probe_pid="$!"
+wait "$probe_pid"
+probe_status="$?"
+set -e
+
+if [ "$probe_status" -ne 0 ]; then
+  stop_openwebui_stats_samplers
+  cat "$PROBE_LOG" 2>/dev/null || true
+  echo "Open WebUI probe failed; gateway log tail:"
+  docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
+  echo "Open WebUI container logs:"
+  docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  assert_openwebui_stats || true
+  exit 1
+fi
+
+sample_openwebui_stats_once
+stop_openwebui_stats_samplers
+assert_openwebui_stats
+echo "OK"

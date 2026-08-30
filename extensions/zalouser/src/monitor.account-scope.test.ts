@@ -1,0 +1,195 @@
+// Zalouser tests cover monitor.account scope plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
+import {
+  createRawZalouserMessageFromNormalized,
+  waitForZalouserIngressVerdict,
+  withZalouserIngressTestQueue,
+} from "./ingress.test-support.js";
+import { monitorZalouserProvider } from "./monitor.js";
+import { setZalouserRuntime } from "./runtime.js";
+import { createZalouserRuntimeEnv } from "./test-helpers.js";
+import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+
+type ZaloJsModule = typeof import("./zalo-js.js");
+type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
+
+const requireRecord = createRequireRecord("record", "expected-label-record");
+
+describe("zalouser monitor pairing account scoping", () => {
+  it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
+    const readAllowFromStore = vi.fn(
+      async (
+        channelOrParams:
+          | string
+          | {
+              channel?: string;
+              accountId?: string;
+            },
+        _env?: NodeJS.ProcessEnv,
+        accountId?: string,
+      ) => {
+        const scopedAccountId =
+          typeof channelOrParams === "object" && channelOrParams !== null
+            ? channelOrParams.accountId
+            : accountId;
+        return scopedAccountId === "beta" ? [] : ["attacker"];
+      },
+    );
+    const upsertPairingRequest = vi.fn(
+      async (_params: { channel: string; id: string; accountId?: string }) => ({
+        code: "PAIRME88",
+        created: true,
+      }),
+    );
+
+    setZalouserRuntime({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+      channel: {
+        pairing: {
+          readAllowFromStore,
+          upsertPairingRequest,
+          buildPairingReply: vi.fn(() => "pairing reply"),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          isControlCommandMessage: vi.fn(() => false),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const account: ResolvedZalouserAccount = {
+      accountId: "beta",
+      enabled: true,
+      profile: "beta",
+      authenticated: true,
+      config: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+      },
+    };
+
+    const config: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          accounts: {
+            alpha: { dmPolicy: "pairing", allowFrom: [] },
+            beta: { dmPolicy: "pairing", allowFrom: [] },
+          },
+        },
+      },
+    };
+
+    const message: ZaloInboundMessage = {
+      threadId: "chat-1",
+      isGroup: false,
+      senderId: "attacker",
+      senderName: "Attacker",
+      groupName: undefined,
+      timestampMs: Date.now(),
+      msgId: "msg-1",
+      content: "hello",
+      raw: { source: "test" },
+    };
+
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      let resolveListener: ((params: ListenerParams) => void) | undefined;
+      const listenerReady = new Promise<ListenerParams>((resolve) => {
+        resolveListener = resolve;
+      });
+      startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
+        resolveListener?.(listenerParams);
+        return { stop: vi.fn() };
+      });
+      const run = monitorZalouserProvider({
+        account,
+        config,
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        ingressQueue,
+      });
+      try {
+        const listenerParams = await listenerReady;
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        await waitForZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
+      } finally {
+        abortController.abort();
+        await run;
+      }
+    });
+
+    expect(readAllowFromStore).toHaveBeenCalledOnce();
+    const allowStoreParams = requireRecord(
+      readAllowFromStore.mock.calls[0]?.[0],
+      "allow store params",
+    );
+    expect(allowStoreParams.channel).toBe("zalouser");
+    expect(allowStoreParams.accountId).toBe("beta");
+
+    expect(upsertPairingRequest).toHaveBeenCalledOnce();
+    const pairingRequest = requireRecord(
+      upsertPairingRequest.mock.calls[0]?.[0],
+      "pairing request params",
+    );
+    expect(pairingRequest.channel).toBe("zalouser");
+    expect(pairingRequest.id).toBe("attacker");
+    expect(pairingRequest.accountId).toBe("beta");
+    expect(sendMessageZalouserMock).toHaveBeenCalled();
+  });
+});
+
+describe("zalouser monitor lifecycle", () => {
+  it("publishes ready after the listener starts", async () => {
+    setZalouserRuntime({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime);
+    startZaloListenerMock.mockResolvedValueOnce({ stop: vi.fn() });
+    const statusSink = vi.fn();
+
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      const run = monitorZalouserProvider({
+        account: {
+          accountId: "default",
+          enabled: true,
+          profile: "default",
+          authenticated: true,
+          config: {},
+        },
+        config: {},
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        statusSink,
+        ingressQueue,
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(statusSink).toHaveBeenCalledWith({
+            running: true,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        });
+      } finally {
+        abortController.abort();
+        await run;
+      }
+    });
+  });
+});

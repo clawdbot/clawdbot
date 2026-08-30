@@ -1,0 +1,945 @@
+openclaw-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-split-view__drop-container {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view {
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-split-view__column {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 0;
+}
+
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  --chat-surface: var(--bg-content, var(--bg));
+
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active) {
+  filter: saturate(0.45);
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header
+  :is(
+    .chat-pane__nav-toggle,
+    .chat-pane__incognito,
+    openclaw-session-owner-chip,
+    .chat-pane__participants,
+    .chat-pane__presence,
+    .chat-pane__face-switch,
+    .chat-pane__sharing-menu,
+    .chat-pane__draft-indicator,
+    .chat-pane__branches-menu,
+    .chat-pane__gateway-menu,
+    .chat-pane__actions
+  ) {
+  display: none;
+}
+
+.chat-pane-cache {
+  display: grid;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-pane-cache__pane {
+  opacity: 0;
+  grid-area: 1 / 1;
+}
+
+.chat-pane-cache__pane--visible {
+  opacity: 1;
+  z-index: 1;
+}
+
+.chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {
+  display: none;
+}
+
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
+  min-height: 0;
+}
+
+.chat-split-view--narrow .chat-split-view__cell--narrow-hidden,
+.chat-split-view--narrow .chat-split-view__column--narrow-hidden,
+.chat-split-view--narrow resizable-divider {
+  display: none;
+}
+
+.chat-split-view__drop-indicator {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-split-view__drop-indicator--center {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.chat-split-view__drop-indicator-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-split-view__drop-indicator {
+    animation: chat-drop-indicator-in 0.12s ease;
+    transition:
+      left 0.14s ease,
+      top 0.14s ease,
+      width 0.14s ease,
+      height 0.14s ease,
+      opacity 0.12s ease;
+  }
+
+  @keyframes chat-drop-indicator-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+.chat-pane__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  container-type: inline-size;
+  /* 48px centers the 28px actions on the app's shared 24px chrome
+     centerline (sidebar brand row, floating toggles), so split headers
+     line up with the sidebar across the top of the shell. */
+  min-height: 48px;
+  padding: 0 6px 0 12px;
+  background: var(--chat-surface);
+  /* Chrome row, not content: a selectable title would fight the native
+     window drag the macOS app starts from this row. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Identity trail: project, then session. One flex row owns the alignment of
+   every segment, so the 26px project chip and the 12px text segments centre on
+   a single line and a future parent-session segment inherits it for free. */
+.chat-pane__crumbs {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  /* Inter's visible glyph mass sits slightly below the 28px action glyphs even
+     when their CSS boxes share a center. Lift the whole trail as one optical
+     unit so project icon, labels, and separator meet the chrome centerline. */
+  transform: translateY(-1px);
+  /* Both interactive segments pull their 5px hover padding back out of flow, so
+     this gap is the separator's actual optical air on each side. */
+  gap: 6px;
+}
+
+/* These groups become the two mobile identity rows. They stay transparent to
+   the desktop flex trail so its existing one-line geometry is unchanged. */
+.chat-pane__project-row,
+.chat-pane__session-trail {
+  display: contents;
+}
+
+/* Renaming needs the row's spare width, which the trail must pass through:
+   without this the input is trapped inside a shrink-only container. */
+.chat-pane__crumbs:has(.chat-pane__session-title-input) {
+  flex: 1 1 auto;
+}
+
+/* House separator treatment: an aria-hidden glyph tinted with --muted, spacing
+   from the row gap, no size or color of its own beyond matching the title. */
+.chat-pane__crumb-sep {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The title hugs its text so the segments after it stay adjacent (the trail's
+   shared 8px gap provides the spacing); it may shrink with ellipsis
+   when space runs out, and the action row pushes itself to the right edge. */
+.chat-pane__session-title {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.chat-pane__session-title-button,
+.chat-pane__parent-session {
+  /* Hover padding is drawn outside the text box: the plain-span title (catalog
+     and rename-disabled panes) has none, and without the pull-back the same
+     title would start 5px further right the moment renaming is allowed. */
+  padding: 3px 5px;
+  margin-inline: -5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+}
+
+.chat-pane__session-title-button {
+  cursor: text;
+}
+
+.chat-pane__session-title-button:hover,
+.chat-pane__session-title-button:focus-visible,
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  outline: none;
+}
+
+.chat-pane__parent-session {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
+  color: var(--text);
+}
+
+/* Keep nested identity contextual rather than letting it become the header.
+   The two titles share at most half the container after separator spacing. */
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__parent-session,
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__session-title {
+  max-width: min(18ch, calc((50cqw - 20px) / 2));
+}
+
+.chat-pane__session-title-text,
+.chat-pane__parent-session-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__session-title-input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Where supported, the rename input hugs its text too, so the workspace chip
+   tracks the title while typing; elsewhere editing falls back to full width. */
+@supports (field-sizing: content) {
+  .chat-pane__session-title-input {
+    flex: 0 1 auto;
+    field-sizing: content;
+    max-width: min(60ch, 100%);
+  }
+}
+
+.chat-pane__incognito {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-pane__incognito svg,
+.chat-pane__workspace-chip svg {
+  width: 14px;
+  height: 14px;
+  /* Lucide outline icons: without this the paths render browser-default
+     black fill, which reads as a solid dark blob on the chip. */
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Project icons are arbitrary artwork, so they keep their own pixels: matched to
+   the glyph box, contained rather than stretched, and deliberately unstyled —
+   no shadow, plate, or filter. Accepted tradeoff: a favicon that is one flat
+   dark color on transparency loses contrast against a dark chip. Rescuing it
+   unconditionally would cost every normal full-color icon, so if it ever
+   matters in practice the escape hatch is a plate applied conditionally, not a
+   blanket effect here. */
+.chat-pane__workspace-chip .workspace-icon-fallback {
+  display: contents;
+}
+
+.chat-pane__workspace-chip .workspace-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.chat-pane__workspace-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__placement-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__placement-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-pane__placement-menu::part(menu) {
+  width: 250px;
+  padding: 6px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.chat-pane__placement-chip {
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__placement-chip:hover,
+.chat-pane__placement-chip:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__placement-state {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__placement-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 4px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--overlay-border);
+  font-size: 11px;
+}
+
+.chat-pane__placement-facts dt {
+  color: var(--muted);
+}
+
+.chat-pane__placement-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.chat-pane__placement-note {
+  max-width: 320px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: 6px;
+  background: var(--warn-subtle);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.chat-pane__gateway-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__gateway-menu::part(menu) {
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.chat-pane__gateway-menu-item {
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border-radius: var(--menu-item-radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.chat-pane__gateway-chip {
+  display: inline-flex;
+  max-width: 170px;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__gateway-chip:hover,
+.chat-pane__gateway-chip:focus-visible {
+  border-color: var(--muted-strong);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__gateway-health {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.chat-pane__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.chat-pane__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.chat-pane__gateway-chevron,
+.chat-pane__gateway-check {
+  display: inline-flex;
+}
+
+.chat-pane__gateway-chevron svg,
+.chat-pane__gateway-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-pane__gateway-chevron svg {
+  transform: rotate(180deg);
+}
+
+.chat-pane__gateway-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-pane__gateway-primary {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__gateway-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.chat-pane__branches-menu {
+  flex: 0 0 auto;
+}
+
+/* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
+   row, so it keeps the shared 18px action glyph from .btn--icon svg. */
+.chat-pane__branch-active svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane__branch-item {
+  min-width: 260px;
+  max-width: 360px;
+}
+
+.chat-pane__branch-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-pane__branch-headline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__branch-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__branch-active {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
+   size so the two read as one trail and the hierarchy comes from colour alone —
+   the project is --muted, the session --text. Hover and focus reuse the sibling
+   title button's tint, which keeps a visible focus indicator without a border. */
+.chat-pane__workspace-chip {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 6px;
+  /* Hover padding drawn outside the text box, matching the title button, so the
+     icon starts flush at the row and the separator keeps equal air on both
+     sides instead of inheriting only the title's pull-back. */
+  padding: 3px 5px;
+  margin-inline: -5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__workspace-chip:hover,
+.chat-pane__workspace-chip:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__workspace-chip span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__presence {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.chat-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  /* With the title text-hugging, this claims the leftover width so the
+     action cluster stays pinned to the right edge (and doubles as the
+     native window-drag surface between chip and actions). */
+  margin-left: auto;
+}
+
+/* One box model for every action, whatever wraps it. A custom element defaults
+   to display:inline, so as a flex child it blockifies but keeps a text line
+   box, and the descender space under its button drags the glyph off the row
+   centerline: the session menu measured 29.8px tall and 0.9px low against the
+   28px buttons beside it. Keep this selector at single-class specificity so the
+   container queries below can still hide individual actions. */
+.chat-pane__actions > * {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The tooltip wrapper stays out of the box tree so the button it wraps remains
+   the flex item that the rule above measures. */
+.chat-pane__actions > openclaw-tooltip {
+  display: contents;
+}
+
+.chat-pane__actions .chat-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.chat-pane__actions .chat-icon-btn > svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6px;
+}
+
+.chat-pane__actions .chat-tasks-toggle {
+  position: relative;
+}
+
+.chat-tasks-toggle__badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
+}
+
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__sharing-menu::part(menu) {
+  width: 260px;
+  min-width: min(260px, calc(100vw - 24px));
+  max-width: min(260px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-pane__sharing-menu--capped::part(menu) {
+  height: min(420px, 60vh);
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-title {
+  padding: 5px 8px 7px;
+}
+
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-visibility-item[disabled] {
+  opacity: 1;
+  color: var(--muted);
+}
+
+.chat-pane__sharing-members-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-member {
+  gap: 0;
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+.chat-pane__sharing-member-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__sharing-member-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
+}
+
+/* A full split header measures 793px including insets, so secondary controls
+   shed through 800px of container content; restoration then has 8px+ slack.
+   The close action survives at the 320px pane floor. */
+@container (max-width: 800px) {
+  /* Scoped to the actions row so this hide outranks the 0,2,0 icon-button
+     styling rule above; a bare class here silently loses that cascade. */
+  .chat-pane__actions .chat-pane__split-down,
+  .chat-pane__actions .chat-pane__split-right,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__dock-caret,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__gateway-menu,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,
+  .chat-pane__header:has(.chat-pane__close-pane) openclaw-session-owner-chip {
+    display: none;
+  }
+}
+
+@container (max-width: 480px) {
+  .chat-pane__workspace-chip {
+    max-width: none;
+  }
+
+  .chat-pane__workspace-chip span {
+    display: none;
+  }
+
+  /* The project name is gone at this width, so the separator would trail an
+     icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
+    display: none;
+  }
+
+  .chat-pane__presence {
+    display: none;
+  }
+}
+
+.chat-header-session-menu--compact .session-menu__item {
+  flex: 0 0 34px;
+  min-height: 34px;
+}
+
+.chat-header-session-menu__trigger {
+  position: relative;
+}
+
+.chat-header-session-menu__status-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--chat-surface);
+  border-radius: 999px;
+  background: var(--info);
+}
+
+.chat-header-session-menu__status-dot[data-tone="warn"],
+.chat-header-session-menu__status-icon[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.chat-header-session-menu__status-dot[data-tone="warn"] {
+  background: var(--warn);
+}
+
+.chat-header-session-menu__status-dot[data-tone="danger"],
+.chat-header-session-menu__status-icon[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.chat-header-session-menu__status-dot[data-tone="danger"] {
+  background: var(--danger);
+}
+
+.chat-header-session-menu__status-icon[data-tone="info"] {
+  color: var(--info);
+}
+
+.chat-header-session-menu--compact .session-menu__back {
+  z-index: 1;
+  position: sticky;
+  top: 0;
+  background: var(--wa-color-surface-raised);
+}
+
+.chat-header-session-menu--compact .session-menu__chevron {
+  display: inline-flex;
+}
+
+.chat-header-session-menu--compact::part(menu) {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
+.chat-header-session-menu--compact-sharing::part(menu) {
+  height: min(420px, 60vh);
+}
+
+.continue-in-terminal-dialog__card {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.continue-in-terminal-dialog__header h2,
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin: 0;
+}
+
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin-block-start: 6px;
+  color: var(--muted);
+}
+
+.continue-in-terminal-dialog .login-gate__command {
+  min-width: 0;
+}
+
+.continue-in-terminal-dialog .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* Shell layout owns the dynamic physical-left safe edge. Native hosts replace
+   the web-control calculation with their actual window chrome. */
+.shell {
+  --shell-attention-width: 0px;
+  --shell-titlebar-inset: calc(var(--shell-chrome-safe-area-left) + var(--shell-attention-width));
+}
+
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 12px;
+}
+
+html.openclaw-native-macos .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 90px;
+}
+
+html.openclaw-native-nav .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 204px;
+}
+
+html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: calc(
+    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+      var(--shell-chrome-controls-gap) + var(--shell-attention-width)
+  );
+}
+
+/* Apply the safe edge to whichever header occupies the first content row;
+   mobile has a separate topbar row. */
+.shell:not(.shell--mobile-nav)
+  :is(
+    .chat-split-view__column:first-child
+      > .chat-split-view__cell:first-child
+      :is(.chat-main__conversation-column, .chat-pane-primary-column)
+      > .chat-pane__header,
+    .sidebar-region--expanded .side-panel__header
+  ) {
+  padding-left: var(--shell-titlebar-inset);
+}
+
+/* Native macOS desktop shells: the pane header is the window's top surface,
+   so it adopts the app titlebar height (52px injected by
+   DashboardWindowController; the 50px fallback mirrors
+   .macos-titlebar-controls for older app builds). The web 48px default would
+   center the session title/actions 2px above the traffic-light/hosted-button
+   centerline. Drawer layouts instead fold titlebar clearance into their 58px
+   topbar row (layout.mobile.css). */
+html.openclaw-native-macos
+  .shell:not(.shell--mobile-nav)
+  :is(.chat-pane__header, .sidebar-region--expanded .side-panel__header) {
+  min-height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+/* Native macOS: with the nav column collapsed the top-left pane header is the
+   window's top surface, so its content shifts right of the floating window
+   chrome (Safari-style) instead of hiding under it. Traffic lights end at
+   x=78; newer apps (openclaw-native-nav) also float the titlebar accessory
+   (sidebar toggle + back/forward, DashboardWindowController) ending ~x=194.
+   Drawer layouts reserve a 58px topbar row instead (layout.mobile.css). The
+   first column's min-width grows by the extra inset above the 12px base
+   padding: the header's action row cannot
+   shrink, and the cell's overflow:hidden would clip the close/split buttons
+   at the 320px column minimum otherwise. */
+html.openclaw-native-macos
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child {
+  min-width: calc(308px + var(--shell-titlebar-inset));
+}

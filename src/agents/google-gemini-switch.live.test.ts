@@ -1,0 +1,85 @@
+// Live-checks Gemini switching after unsigned tool calls from another provider surface.
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
+import { describe, expect, it } from "vitest";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
+
+const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
+const LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
+
+const describeLive = LIVE && GEMINI_KEY ? describe : describe.skip;
+
+describeLive("gemini live switch", () => {
+  const googleModels = ["gemini-3.1-pro-preview", "gemini-2.5-pro"] as const;
+
+  for (const modelId of googleModels) {
+    it(`handles unsigned tool calls from Antigravity when switching to ${modelId}`, async () => {
+      const now = Date.now();
+      const model: Model<"google-generative-ai"> = {
+        id: modelId,
+        name: modelId,
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 65_536,
+      };
+
+      const res = await completeSimple(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "Reply with ok.",
+              timestamp: now,
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "bash",
+                  arguments: { command: "ls -la" },
+                  // No thoughtSignature: simulates Claude via Antigravity.
+                },
+              ],
+              api: "google-gemini-cli",
+              provider: "google-antigravity",
+              model: "claude-sonnet-4-20250514",
+              usage: makeZeroUsageSnapshot(),
+              stopReason: "stop",
+              timestamp: now,
+            },
+          ],
+          tools: [
+            {
+              name: "bash",
+              description: "Run shell command",
+              parameters: Type.Object({
+                command: Type.String(),
+              }),
+            },
+          ],
+        },
+        {
+          apiKey: GEMINI_KEY,
+          reasoning: "low",
+          maxTokens: 128,
+        },
+      );
+
+      // Preview models can have upstream transient failures; non-preview
+      // coverage still proves unsigned prior tool calls do not poison Gemini.
+      if (modelId.includes("preview") && res.stopReason === "error") {
+        return;
+      }
+      expect(res.stopReason).not.toBe("error");
+    }, 20000);
+  }
+});

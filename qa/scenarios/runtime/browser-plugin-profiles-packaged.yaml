@@ -1,0 +1,37 @@
+title: Packaged browser plugin profiles
+
+scenario:
+  id: browser-plugin-profiles-packaged
+  surface: runtime-tool
+  category: tools.browser-automation
+  coverage:
+    primary:
+      - tools.browser-plugin-service
+      - tools.profiles
+  objective: Verify the packaged Gateway lazily activates the bundled browser plugin, routes authenticated browser CLI requests, and manages a real headless Chromium profile through cleanup.
+  successCriteria:
+    - The functional Docker image runs the packaged dist application and installs the Chromium revision pinned by its packaged playwright-core dependency.
+    - Gateway startup does not eagerly start browser control; the first authenticated browser CLI request starts it exactly once through browser.request.
+    - The CLI creates, lists, and selects a managed profile, then reports its stopped status.
+    - Starting the selected profile headless launches Chromium and exposes a working CDP /json/version endpoint.
+    - Stopping the profile closes CDP and reaps the Chromium child before the profile is deleted.
+    - The profile is absent after deletion, and the Gateway and container stop cleanly.
+  docsRefs:
+    - docs/tools/browser.md
+    - docs/tools/browser-control.md
+    - docs/help/testing.md
+  codeRefs:
+    - extensions/browser/plugin-registration.ts
+    - extensions/browser/src/gateway/browser-request.ts
+    - extensions/browser/src/control-service.ts
+    - extensions/browser/src/browser/profiles-service.ts
+    - scripts/e2e/browser-plugin-profiles-docker.sh
+    - test/e2e/qa-lab/runtime/browser-plugin-profiles-packaged.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/browser-plugin-profiles-packaged.ts
+    summary: Runs a packaged Docker Gateway and real Chromium through the authenticated browser profile lifecycle.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}

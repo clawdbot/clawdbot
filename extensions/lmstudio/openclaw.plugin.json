@@ -1,0 +1,70 @@
+{
+  "id": "lmstudio",
+  "icon": "https://cdn.simpleicons.org/lmstudio",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["lmstudio"],
+  "modelCatalog": {
+    "discovery": {
+      "lmstudio": "refreshable"
+    }
+  },
+  "providerRequest": {
+    "providers": {
+      "lmstudio": {
+        "family": "lmstudio",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "lmstudio": {
+        "external": false
+      }
+    }
+  },
+  "nonSecretAuthMarkers": ["lmstudio-local"],
+  "syntheticAuthRefs": ["lmstudio"],
+  "setup": {
+    "providers": [
+      {
+        "id": "lmstudio",
+        "envVars": ["LM_API_TOKEN"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "lmstudio",
+      "method": "custom",
+      "choiceId": "lmstudio",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect server",
+      "appGuidedSecret": true,
+      "choiceLabel": "LM Studio",
+      "choiceHint": "Connect to a running LM Studio server and use an already loaded model",
+      "icon": "https://cdn.simpleicons.org/lmstudio",
+      "website": "https://lmstudio.ai/download",
+      "optionKey": "lmstudioApiKey",
+      "cliFlag": "--lmstudio-api-key",
+      "cliOption": "--lmstudio-api-key <key>",
+      "cliDescription": "LM Studio API key",
+      "groupId": "lmstudio",
+      "groupLabel": "LM Studio",
+      "groupHint": "Self-hosted open-weight models"
+    }
+  ],
+  "contracts": {
+    "embeddingProviders": ["lmstudio"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

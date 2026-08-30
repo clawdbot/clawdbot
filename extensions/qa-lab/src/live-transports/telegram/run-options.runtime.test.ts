@@ -1,0 +1,28 @@
+// Qa Lab tests cover live transport cli plugin behavior.
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
+
+describe("resolveTelegramQaRunOptions", () => {
+  it("drops blank model refs so live transports can use provider defaults", () => {
+    const options = resolveTelegramQaRunOptions({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "live-frontier",
+      primaryModel: " ",
+      alternateModel: "",
+      listScenarios: true,
+    });
+    expect(options.repoRoot).toBe(path.resolve("/tmp/openclaw-repo"));
+    expect(options.providerMode).toBe("live-frontier");
+    expect(options.primaryModel).toBeUndefined();
+    expect(options.alternateModel).toBeUndefined();
+    expect(options.listScenarios).toBe(true);
+    expect(options.credentialSource).toBe("convex");
+  });
+
+  it("rejects the retired static credential source", () => {
+    expect(() => resolveTelegramQaRunOptions({ credentialSource: "env" })).toThrow(
+      "supports only --credential-source convex",
+    );
+  });
+});

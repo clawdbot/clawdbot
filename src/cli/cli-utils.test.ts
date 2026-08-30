@@ -1,0 +1,295 @@
+// CLI utility tests cover shared command helpers, option parsing, and output formatting.
+import { Command } from "commander";
+import { describe, expect, it, vi } from "vitest";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
+import { registerDnsCli } from "./dns-cli.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
+import { parseByteSize } from "./parse-bytes.js";
+import { parseDurationMs } from "./parse-duration.js";
+import {
+  shouldSkipRespawnForArgv,
+  shouldSkipStartupEnvironmentRespawnForArgv,
+} from "./respawn-policy.js";
+import { waitForever } from "./wait.js";
+
+describe("waitForever", () => {
+  it("keeps the event loop alive (ref'd interval) and returns a pending promise", () => {
+    const unref = vi.fn();
+    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+    try {
+      const promise = waitForever();
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
+      expect(typeof callback).toBe("function");
+      expect(delay).toBe(1_000_000);
+      // Regression guard for the previous `.unref()` bug: an unref'd interval
+      // does NOT keep the event loop alive, so `await waitForever()` would
+      // exit immediately with code 13 ("unsettled top-level await"). The
+      // function must NOT unref the interval.
+      expect(unref).not.toHaveBeenCalled();
+      expect(promise).toBeInstanceOf(Promise);
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+});
+
+describe("runCommandWithRuntime", () => {
+  it.each(
+    [0, 1, 2].flatMap((code) =>
+      [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),
+    ),
+  )(
+    "preserves completed exit $code with custom error handler $customErrorHandler",
+    async ({ code, customErrorHandler }) => {
+      const runtime = { error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn();
+      const outcome = new ExitError(code);
+
+      await expect(
+        runCommandWithRuntime(
+          runtime,
+          async () => {
+            throw outcome;
+          },
+          customErrorHandler ? onError : undefined,
+        ),
+      ).rejects.toBe(outcome);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps cause chains and error codes behind debug intent", async () => {
+    const messages: string[] = [];
+    const exits: number[] = [];
+    const cause = Object.assign(new Error("invalid onRequestStart method"), {
+      code: "UND_ERR_INVALID_ARG",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
+
+    const run = async () =>
+      await runCommandWithRuntime(
+        {
+          error: (message) => messages.push(message),
+          exit: (code) => exits.push(code),
+        },
+        async () => {
+          throw fetchError;
+        },
+      );
+
+    const originalDebug = process.env.OPENCLAW_DEBUG;
+    delete process.env.OPENCLAW_DEBUG;
+    try {
+      await run();
+      process.env.OPENCLAW_DEBUG = "1";
+      await run();
+    } finally {
+      if (originalDebug === undefined) {
+        delete process.env.OPENCLAW_DEBUG;
+      } else {
+        process.env.OPENCLAW_DEBUG = originalDebug;
+      }
+    }
+
+    expect(messages).toEqual([
+      "fetch failed",
+      "fetch failed | invalid onRequestStart method | UND_ERR_INVALID_ARG",
+    ]);
+    expect(exits).toEqual([1, 1]);
+  });
+
+  it("bubbles JSON-mode failures to the process-level owner", async () => {
+    const originalArgv = process.argv;
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
+        applyResolvedCommandOutputMode(true);
+        await expect(
+          runCommandWithRuntime(runtime, async () => {
+            throw new Error("archive missing");
+          }),
+        ).rejects.toThrow("archive missing");
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+});
+
+describe("shouldSkipRespawnForArgv", () => {
+  it.each([
+    { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "-V"] },
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
+    { argv: ["node", "openclaw", "gateway"] },
+    { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
+    { argv: ["node", "openclaw", "gateway", "status"] },
+    {
+      argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
+    },
+    {
+      argv: ["node", "openclaw", "--profile", "server", "gateway", "status", "--json"],
+    },
+  ] as const)("skips respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
+  });
+
+  it.each([
+    { argv: ["node", "openclaw", "status"] },
+    { argv: ["node", "openclaw", "gateway", "call", "health"] },
+  ] as const)("keeps respawn path for argv %j", ({ argv }) => {
+    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
+  });
+
+  it("keeps native hook relay respawn behavior unchanged on Windows", () => {
+    expect(
+      shouldSkipRespawnForArgv(
+        ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        "win32",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
+  it.each([
+    { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
+    { argv: ["node", "openclaw", "gateway"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
+  ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
+  });
+
+  it.each([
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "status"] },
+  ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
+  });
+
+  it("keeps native hook relay startup environment respawn on Windows", () => {
+    expect(
+      shouldSkipStartupEnvironmentRespawnForArgv(
+        ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        "win32",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("dns cli", () => {
+  it("prints setup info (no apply)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    try {
+      const program = new Command();
+      registerDnsCli(program);
+      await program.parseAsync(["dns", "setup", "--domain", "openclaw.internal"], { from: "user" });
+      const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+      expect(output).toContain("DNS setup");
+      expect(output).toContain("openclaw.internal");
+      expect(writeJson).toHaveBeenCalledWith({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { domain: "openclaw.internal." } },
+      });
+    } finally {
+      writeJson.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+    "rejects invalid --domain %j with explicit DNS-name diagnostic",
+    async (domain) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const program = new Command();
+        registerDnsCli(program);
+        await expect(
+          program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+        ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+        const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+        expect(output).not.toContain("No wide-area domain configured");
+        expect(output).not.toContain("DNS setup");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+});
+
+describe("parseByteSize", () => {
+  it.each([
+    ["parses 10kb", "10kb", 10 * 1024],
+    ["parses 1mb", "1mb", 1024 * 1024],
+    ["parses 2gb", "2gb", 2 * 1024 * 1024 * 1024],
+    ["parses shorthand 5k", "5k", 5 * 1024],
+    ["parses shorthand 1m", "1m", 1024 * 1024],
+  ] as const)("%s", (_name, input, expected) => {
+    expect(parseByteSize(input)).toBe(expected);
+  });
+
+  it("uses default unit when omitted", () => {
+    expect(parseByteSize("123")).toBe(123);
+  });
+
+  it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
+    expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
+  });
+  it("keeps the largest safe integer exact", () => {
+    expect(parseByteSize(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+    expect(parseByteSize(`${Number.MAX_SAFE_INTEGER}.1`)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it.each([String(Number.MAX_SAFE_INTEGER + 1), "9007199254740993", "9000000tb"] as const)(
+    "rejects finite-but-unsafe values that would round to a different number: %j",
+    (input) => {
+      expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
+    },
+  );
+});
+
+describe("parseDurationMs", () => {
+  it.each([
+    ["parses bare ms", "10000", 10_000],
+    ["parses seconds suffix", "10s", 10_000],
+    ["parses minutes suffix", "1m", 60_000],
+    ["parses hours suffix", "2h", 7_200_000],
+    ["parses days suffix", "2d", 172_800_000],
+    ["supports decimals", "0.5s", 500],
+    ["parses composite hours+minutes", "1h30m", 5_400_000],
+    ["parses composite with milliseconds", "2m500ms", 120_500],
+  ] as const)("%s", (_name, input, expected) => {
+    expect(parseDurationMs(input)).toBe(expected);
+  });
+
+  it("rejects invalid composite strings", () => {
+    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  });
+
+  it("rejects unsafe millisecond results", () => {
+    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
+  });
+});

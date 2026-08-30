@@ -1,0 +1,132 @@
+wa-select.settings-select::part(combobox) {
+  min-height: var(--settings-control-height);
+  padding-inline: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  cursor: var(--cursor-action);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* [open] is required alongside :focus-within: Chromium does not propagate
+   :focus-within to the host while a slotted option holds focus, so the open
+   state must key off the reflected attribute or the stock ring leaks through. */
+wa-select.settings-select[open]::part(combobox),
+wa-select.settings-select:focus-within::part(combobox) {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+wa-select.settings-select::part(expand-icon) {
+  margin-inline-start: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+}
+
+wa-select.settings-select::part(listbox) {
+  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
+     would let the listbox overflow when the popup has little room to open. */
+  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  padding: 6px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+  color: var(--text);
+}
+
+wa-select.settings-select wa-option {
+  --wa-form-control-activated-color: var(--bg-hover);
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: calc(var(--radius-md) - 4px);
+  font-size: var(--control-ui-text-md);
+  color: var(--text);
+  cursor: var(--cursor-action);
+}
+
+/* Selection stays visible while keyboard focus moves. Text-backed focus ink
+   also remains visible with black/white custom accents. */
+wa-select.settings-select wa-option:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+wa-select.settings-select wa-option:state(selected) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+wa-select.settings-select wa-option::part(checked-icon) {
+  color: color-mix(in srgb, var(--text) 80%, var(--accent));
+}
+
+.picker-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
+}
+
+.picker-select__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.picker-select__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.picker-select__description {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--muted) 80%, var(--text));
+  font-size: 0.75rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.picker-select__option:is(:state(current), :state(selected)) .picker-select__description {
+  color: inherit;
+}
+
+/* The model picker composes the shared picker and loads this same stylesheet. */
+.model-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-picker__provider-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.model-picker__provider-icon.provider-brand-icon--fallback {
+  font-size: 9px;
+}
+
+.model-picker__custom[hidden] {
+  display: none;
+}
+
+/* System colors replace decorative fills/shadows; keep keyboard focus explicit. */
+@media (forced-colors: active) {
+  wa-select.settings-select[open]::part(combobox),
+  wa-select.settings-select:focus-within::part(combobox) {
+    outline: 2px solid SelectedItem;
+    outline-offset: 2px;
+  }
+
+  wa-select.settings-select wa-option:focus-visible {
+    outline: 2px solid SelectedItem;
+  }
+}

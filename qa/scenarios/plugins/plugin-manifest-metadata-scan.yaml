@@ -1,0 +1,26 @@
+title: Plugin manifest authoring contracts
+
+scenario:
+  id: plugin-manifest-metadata-scan
+  surface: plugins
+  category: plugins.authoring-and-packaging-plugins
+  coverage:
+    primary:
+      - plugins.plugin-manifest
+      - plugins.validation-feedback
+  objective: Verify native plugin manifests expose identity, capabilities, and config schema before runtime loading and reject incomplete author metadata.
+  successCriteria:
+    - Metadata scanning preserves plugin identity, channel and provider capabilities, tool ownership, and config schema.
+    - A manifest without an id fails with the canonical identity error.
+    - A manifest without configSchema fails with the canonical schema error.
+  docsRefs:
+    - docs/plugins/building-plugins.md
+    - docs/plugins/manifest.md
+  codeRefs:
+    - src/plugins/manifest.ts
+    - src/plugins/manifest-metadata-scan.ts
+    - src/plugins/manifest-metadata-scan.test.ts
+  execution:
+    kind: vitest
+    path: src/plugins/manifest-metadata-scan.test.ts
+    summary: Run native manifest metadata discovery and fail-fast authoring validation contracts.
