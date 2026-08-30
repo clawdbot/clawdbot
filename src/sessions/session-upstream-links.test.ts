@@ -21,14 +21,15 @@ function upsertLink(
   sessionKey: string,
   catalogId: string,
   database: ReturnType<typeof createDatabaseOptions>,
+  agentId = "main",
 ) {
   upsertSessionUpstreamLink(
     {
       sessionKey,
-      agentId: "main",
+      agentId,
       catalogId,
       hostId: "gateway:local",
-      threadId: `thread-${sessionKey}`,
+      threadId: `thread-${agentId}-${sessionKey}`,
       upstreamKind: catalogId === "claude" ? "claude-cli" : "codex-app-server",
       upstreamRef: { source: sessionKey },
       marker: { offset: 1 },
@@ -134,5 +135,21 @@ describe("session upstream links", () => {
         marker: { offset: 99 },
       }),
     );
+  });
+
+  it("keeps upstream links for same-key sessions owned by different agents", () => {
+    const database = createDatabaseOptions();
+    upsertLink("global", "claude", database, "main");
+    upsertLink("global", "claude", database, "ops");
+    registerSessionStateWatch(
+      { watcherSessionKey: "agent:main:main", targetSessionKey: "global", targetAgentId: "main" },
+      database,
+    );
+    registerSessionStateWatch(
+      { watcherSessionKey: "agent:main:main", targetSessionKey: "global", targetAgentId: "ops" },
+      database,
+    );
+
+    expect(listWatchedSessionUpstreamLinks(database).get("claude")).toHaveLength(2);
   });
 });

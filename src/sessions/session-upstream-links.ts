@@ -260,10 +260,18 @@ export function listWatchedSessionUpstreamLinks(
     // an older runtime is draining; never probe an arbitrary agent's upstream.
     const keyCounts = new Map<string, number>();
     for (const link of links) {
-      keyCounts.set(link.sessionKey, (keyCounts.get(link.sessionKey) ?? 0) + 1);
+      const targetKey = encodeSessionStateWatchTarget({
+        sessionKey: link.sessionKey,
+        agentId: link.agentId,
+      });
+      keyCounts.set(targetKey, (keyCounts.get(targetKey) ?? 0) + 1);
     }
     for (const link of links) {
-      if ((keyCounts.get(link.sessionKey) ?? 0) > 1) {
+      const targetKey = encodeSessionStateWatchTarget({
+        sessionKey: link.sessionKey,
+        agentId: link.agentId,
+      });
+      if ((keyCounts.get(targetKey) ?? 0) > 1) {
         log.warn(
           `skipping ambiguous upstream links for ${link.sessionKey}: multiple agents adopt the same key`,
         );
