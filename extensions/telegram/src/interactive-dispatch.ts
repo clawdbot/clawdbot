@@ -15,6 +15,20 @@ export type TelegramInteractiveHandlerContext = {
   channel: "telegram";
   accountId: string;
   callbackId: string;
+  /**
+   * Telegram update identity, forwarded verbatim from the authoritative
+   * `ctx.update.update_id` of the incoming update (never synthesized).
+   * `null` for synthetic updates or any update lacking a valid `update_id`
+   * (missing, non-numeric, negative, or unsafe-integer values); valid Bot
+   * API callback_query updates always provide a number. Consumers must
+   * treat `null` fail-closed (no synthesis, no substitute value).
+   */
+  updateId: number | null;
+  /**
+   * Telegram message timestamp (Unix seconds), forwarded verbatim from the
+   * authoritative `callbackQuery.message.date` (never synthesized).
+   */
+  messageDate: number;
   conversationId: string;
   parentConversationId?: string;
   senderId?: string;

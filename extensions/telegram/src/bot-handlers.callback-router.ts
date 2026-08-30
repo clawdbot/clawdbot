@@ -39,6 +39,7 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
+import { resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
 import {
   resolveTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
@@ -328,6 +329,8 @@ export function createTelegramCallbackRouter({
           callbackThreadId,
           senderId,
           senderUsername,
+          updateId: resolveTelegramUpdateId(ctx.update),
+          messageDate: callbackMessage.date,
           isGroup,
           isForum,
           storeAllowFrom,

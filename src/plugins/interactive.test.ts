@@ -71,6 +71,8 @@ function createTelegramDispatchParams(params: {
     ctx: {
       accountId: "default",
       callbackId: params.callbackId,
+      updateId: 424242,
+      messageDate: 1710000000,
       conversationId: "-10099:topic:77",
       parentConversationId: "-10099",
       senderId: "user-1",
@@ -470,6 +472,8 @@ describe("plugin interactive handlers", () => {
         const telegramCtx = ctx as TelegramInteractiveHandlerContext;
         expect(telegramCtx.channel).toBe("telegram");
         expect(telegramCtx.conversationId).toBe("-10099:topic:77");
+        expect(telegramCtx.updateId).toBe(424242);
+        expect(telegramCtx.messageDate).toBe(1710000000);
         expect(telegramCtx.callback.namespace).toBe("codex");
         expect(telegramCtx.callback.payload).toBe("resume:thread-1");
         expect(telegramCtx.callback.chatId).toBe("-10099");
