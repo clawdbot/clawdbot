@@ -219,6 +219,21 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
+/**
+ * Renders a message the group's mention gate kept as context instead of
+ * answering. It carries the facts an answered turn would have read, so a
+ * following mention still knows what was said; only kinds whose content lives
+ * entirely in the attachment fall back to naming the kind.
+ */
+export function describeLineMessageForHistory(message: MessageEvent["message"]): string {
+  const text = extractMessageText(message);
+  if (text) {
+    return text;
+  }
+  const fileName = message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+  return fileName ? `<file: ${fileName}>` : `<${message.type}>`;
+}
+
 function extractNativeMediaKind(
   message: MessageEvent["message"],
 ): ChannelInboundMediaInput["kind"] | undefined {
