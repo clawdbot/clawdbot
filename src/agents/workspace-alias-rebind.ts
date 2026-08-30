@@ -214,8 +214,8 @@ export function rebindRepointedWorkspaceAlias(
   ) {
     return "repoint-changed";
   }
-  // eslint-disable-next-line no-warning-comments -- Review policy requires this decision marker.
-  // TODO(review): Link the accepted material persistent-store repair design before merge.
+  // Maintainer decision pending: the accepted material persistent-store repair
+  // design must be linked before merge (tracked in the PR body).
   return runOpenClawStateWriteTransaction((database) => {
     const facts = readRepointedWorkspaceAlias({ filesystem, database });
     if (!facts) {
