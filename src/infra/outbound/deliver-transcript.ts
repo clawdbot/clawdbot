@@ -40,7 +40,8 @@ export async function mirrorDeliveredPayloads(params: {
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
   try {
     const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
-    const writerFence = getOwnedSessionTranscriptWriterFence();
+    // Fence against the mirror destination, not the sending run's own session.
+    const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: mirror.sessionKey });
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       agentId: mirror.agentId,
       sessionKey: mirror.sessionKey,

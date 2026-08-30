@@ -171,7 +171,8 @@ export async function persistInternalSourceReply(params: {
         ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),
         ...mediaBlocks,
       ];
-      const writerFence = getOwnedSessionTranscriptWriterFence();
+      // Fence against the mirror destination, not the sending run's own session.
+      const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
       const appended = await appendAssistantMessageToSessionTranscript({
         agentId: params.agentId,
         sessionKey: params.sessionKey,

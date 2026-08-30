@@ -65,7 +65,11 @@ function contextMatches(params: {
   };
   const contextTarget = normalizeTarget(params.context.sessionTarget);
   const requestedTarget = normalizeTarget(params.sessionTarget);
-  if (params.context.sessionTarget || params.sessionTarget) {
+  // A caller that passes a session target owns the full store identity, so an
+  // unresolvable target never matches. Callers that pass only a session key --
+  // outbound delivery mirrors naming their destination session -- fall through
+  // to session-identity matching instead of inheriting the ambient claim.
+  if (params.sessionTarget !== undefined) {
     return Boolean(
       contextTarget &&
       requestedTarget &&
@@ -85,7 +89,9 @@ function contextMatches(params: {
     return contextSessionFile === sessionFile;
   }
 
-  const contextSessionKey = params.context.sessionKey?.trim();
+  const contextSessionKey = (
+    params.context.sessionTarget?.sessionKey ?? params.context.sessionKey
+  )?.trim();
   const sessionKey = params.sessionKey?.trim();
   return Boolean(contextSessionKey && sessionKey && contextSessionKey === sessionKey);
 }

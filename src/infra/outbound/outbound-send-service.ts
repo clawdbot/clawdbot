@@ -446,7 +446,10 @@ export async function executeSendAction(params: {
             params.mediaUrls ??
             (params.mediaUrl ? [params.mediaUrl] : undefined);
           try {
-            const writerFence = getOwnedSessionTranscriptWriterFence();
+            // Fence against the mirror destination, not the sending run's own session.
+            const writerFence = getOwnedSessionTranscriptWriterFence({
+              sessionKey: params.ctx.mirror.sessionKey,
+            });
             const mirrorResult = await appendAssistantMessageToSessionTranscript({
               agentId: params.ctx.mirror.agentId,
               sessionKey: params.ctx.mirror.sessionKey,
