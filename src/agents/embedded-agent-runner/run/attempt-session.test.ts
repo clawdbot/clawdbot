@@ -289,7 +289,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.input.onSystemPromptChanged = vi.fn();
     const prepared = await prepareEmbeddedAttemptAgentSession(fixture.input);
     let currentToolNames = ["read", "write"];
-    prepared.setPermissionPromptRefresh(() => `Permission tools: ${currentToolNames.join(", ")}`);
+    prepared.setPermissionPromptPreparation(
+      async () => () => `Permission tools: ${currentToolNames.join(", ")}`,
+    );
+    await fixture.activeSession.agent.prepareNextTurn?.(new AbortController().signal);
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("Permission tools: read, write");
 
     // A late prompt hook may narrow tools without supplying a new system prompt.
@@ -320,7 +323,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.activeSession.agent.state.tools = currentTools;
 
     prepared.refreshTools();
-    prepared.setPermissionPromptRefresh((prompt) => `Permission change: read-only\n${prompt}`);
+    prepared.setPermissionPromptPreparation(
+      async () => (prompt) => `Permission change: read-only\n${prompt}`,
+    );
     pending.resolve({
       context: {
         systemPrompt: "old hook prompt",
@@ -382,6 +387,38 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.markCodeModeReconciliationCandidate();
     expect(result.getCodeModeRecoveryCandidate()).toEqual({});
   });
+
+  it.each(["replace", "abort"] as const)(
+    "discards permission prompt preparation after %s",
+    async (closure) => {
+      const fixture = createInput();
+      fixture.input.onSystemPromptChanged = vi.fn();
+      const prepared = await prepareEmbeddedAttemptAgentSession(fixture.input);
+      const pending = createDeferredCore<(prompt: string) => string>();
+      const entered = createDeferredCore();
+      const staleRenderer = vi.fn(() => "stale permission prompt");
+      prepared.setPermissionPromptPreparation(() => {
+        entered.resolve();
+        return pending.promise;
+      });
+      const controller = new AbortController();
+      const nextTurn = fixture.activeSession.agent.prepareNextTurn!(controller.signal);
+      const settled = Promise.allSettled([nextTurn]);
+      await entered.promise;
+      if (closure === "abort") {
+        controller.abort();
+      } else {
+        prepared.setPermissionPromptPreparation(async () => () => "current permission prompt");
+      }
+      pending.resolve(staleRenderer);
+      const [result] = await settled;
+      expect(staleRenderer).not.toHaveBeenCalled();
+      expect(result.status).toBe(closure === "abort" ? "rejected" : "fulfilled");
+      if (closure === "replace") {
+        expect(fixture.activeSession.agent.state.systemPrompt).toBe("current permission prompt");
+      }
+    },
+  );
 
   it("does not install Code Mode outcome handling when the run kept direct tools", async () => {
     const fixture = createInput({ codeModeControlsEnabledForRun: false });

@@ -51,7 +51,7 @@ async function preparePermissionPrompt(isRawModelRun = false) {
       baseUrl: "https://api.openai.com/v1",
     }),
     permissionMode: "full",
-    promptMode: "minimal",
+    promptMode: "full",
     sessionId: "permission-prompt",
     sessionKey: "agent:main:permission-prompt",
     workspaceDir: "/tmp/openclaw",
@@ -84,7 +84,7 @@ async function preparePermissionPrompt(isRawModelRun = false) {
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
   });
-  if (!prepared.refreshSystemPrompt) {
+  if (!prepared.preparePermissionPrompt) {
     throw new Error("Expected a refreshable attempt prompt");
   }
   return {
@@ -92,7 +92,8 @@ async function preparePermissionPrompt(isRawModelRun = false) {
     capabilityToolNames,
     prepared,
     read,
-    refreshSystemPrompt: prepared.refreshSystemPrompt,
+    refreshSystemPrompt: async (prompt: string, refreshedTools: AgentTool[]) =>
+      (await prepared.preparePermissionPrompt!(refreshedTools))(prompt),
     write,
   };
 }
@@ -107,19 +108,22 @@ describe("buildAttemptSystemPrompt", () => {
 
     attempt.permissionMode = "workspace";
     capabilityToolNames.delete("exec");
-    const intermediatePrompt = refreshSystemPrompt(initialPrompt, [read, write]);
+    const currentTools = [read, write];
+    const preparation = prepared.preparePermissionPrompt!(currentTools);
+    expect(prepared.preparePermissionPrompt!(currentTools)).toBe(preparation);
+    const intermediatePrompt = (await preparation)(initialPrompt);
     expect(intermediatePrompt).toContain("- write:");
     expect(intermediatePrompt).not.toContain("- exec:");
 
     attempt.permissionMode = "read-only";
     capabilityToolNames.delete("write");
-    refreshSystemPrompt(intermediatePrompt, [read]);
+    await refreshSystemPrompt(intermediatePrompt, [read]);
     // The delayed hook retained B while the live owner already advanced to C.
     const delayedHookPrompt = prependSystemPromptAdditionAfterCacheBoundary({
       systemPrompt: `Hook prefix\n\n${intermediatePrompt}\n\nHook suffix`,
       systemPromptAddition: "Current runtime addition",
     });
-    const refreshed = refreshSystemPrompt(delayedHookPrompt, [read]);
+    const refreshed = await refreshSystemPrompt(delayedHookPrompt, [read]);
     expect(refreshed).toContain("- read:");
     expect(refreshed).not.toContain("- write:");
     expect(refreshed).not.toContain("- exec:");
@@ -130,17 +134,17 @@ describe("buildAttemptSystemPrompt", () => {
     expect(refreshed).toContain("permissions to read-only");
     expect(refreshed).not.toContain("permissions to workspace");
     expect(refreshed.match(/## Permission change/g)).toHaveLength(1);
-    expect(refreshSystemPrompt(refreshed, [read])).toBe(refreshed);
+    expect(await refreshSystemPrompt(refreshed, [read])).toBe(refreshed);
   });
 
   it("preserves explicit hook overrides while replacing their stale permission notice", async () => {
     const { attempt, read, refreshSystemPrompt } = await preparePermissionPrompt();
     attempt.permissionMode = "workspace";
-    const overridden = refreshSystemPrompt("Use the deliberate hook override.", [read]);
+    const overridden = await refreshSystemPrompt("Use the deliberate hook override.", [read]);
     attempt.permissionMode = "guarded";
-    refreshSystemPrompt(overridden, [read]);
+    await refreshSystemPrompt(overridden, [read]);
     attempt.permissionMode = "read-only";
-    const refreshed = refreshSystemPrompt(overridden, [read]);
+    const refreshed = await refreshSystemPrompt(overridden, [read]);
 
     expect(refreshed).toContain("Use the deliberate hook override.");
     expect(refreshed).not.toContain("## Tooling");
@@ -153,7 +157,7 @@ describe("buildAttemptSystemPrompt", () => {
     const { attempt, prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(true);
     attempt.permissionMode = "read-only";
     expect(prepared.systemPromptText).toBe("");
-    expect(refreshSystemPrompt("", [read])).toBe("");
+    expect(await refreshSystemPrompt("", [read])).toBe("");
   });
 
   it("does not invoke ambient contributors during settled finalization", async () => {

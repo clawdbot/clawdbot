@@ -19,6 +19,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
+import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
@@ -229,23 +230,36 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   input.onSessionCreated(activeSession);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
-  let permissionPromptRefresh: ((prompt: string) => string) | undefined;
+  let preparePermissionPrompt: (() => Promise<(prompt: string) => string>) | undefined;
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
-    const refreshedPrompt = permissionPromptRefresh?.(nextSystemPrompt) ?? nextSystemPrompt;
-    input.onSystemPromptChanged(refreshedPrompt);
-    applySystemPromptToSession(activeSession, refreshedPrompt);
-    return refreshedPrompt;
+    input.onSystemPromptChanged(nextSystemPrompt);
+    applySystemPromptToSession(activeSession, nextSystemPrompt);
+    return nextSystemPrompt;
   };
   const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
   activeSession.agent.prepareNextTurn = async (signal) => {
     const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
-    if (!permissionPromptRefresh) {
+    if (!preparePermissionPrompt) {
       return snapshot;
     }
-    // A permission change can land while prompt/extension hooks await. Apply
-    // the current owner snapshot after those hooks, before the next model call.
+    const runSignal = signal
+      ? AbortSignal.any([signal, input.runAbortSignal])
+      : input.runAbortSignal;
+    let prepare: typeof preparePermissionPrompt;
+    let refresh: (prompt: string) => string;
+    do {
+      runSignal.throwIfAborted();
+      prepare = preparePermissionPrompt;
+      if (!prepare) {
+        return snapshot;
+      }
+      refresh = await raceWithAbortSignal(prepare(), runSignal);
+      // A newer permission selection may supersede an awaited plugin preparation.
+      // Never publish the old renderer or its diagnostics into that generation.
+    } while (prepare !== preparePermissionPrompt);
+    runSignal.throwIfAborted();
     const prompt = snapshot?.context?.systemPrompt ?? activeSession.agent.state.systemPrompt;
-    const refreshedPrompt = setActiveSessionSystemPrompt(prompt);
+    const refreshedPrompt = setActiveSessionSystemPrompt(refresh(prompt));
     return snapshot?.context
       ? {
           ...snapshot,
@@ -313,9 +327,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       activeSession.replaceCustomTools(allCustomTools, sessionToolAllowlist);
       setActiveSessionSystemPrompt(currentPrompt);
     },
-    setPermissionPromptRefresh: (refreshSystemPrompt?: (prompt: string) => string) => {
-      permissionPromptRefresh = refreshSystemPrompt;
-      setActiveSessionSystemPrompt(activeSession.agent.state.systemPrompt);
+    setPermissionPromptPreparation: (prepare?: () => Promise<(prompt: string) => string>) => {
+      preparePermissionPrompt = prepare;
     },
   };
 }

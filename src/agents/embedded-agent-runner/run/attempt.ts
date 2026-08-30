@@ -498,10 +498,10 @@ export async function runEmbeddedAttempt(
             preparedToolCatalog.refreshTools();
             preparedSessionRuntime.agentSession.refreshTools();
             promptToolPolicy.refresh();
-            const refreshSystemPrompt = preparedSystemPrompt.refreshSystemPrompt;
-            preparedSessionRuntime.agentSession.setPermissionPromptRefresh(
-              refreshSystemPrompt
-                ? (prompt) => refreshSystemPrompt(prompt, promptToolPolicy.current.effectiveTools)
+            const preparePermissionPrompt = preparedSystemPrompt.preparePermissionPrompt;
+            preparedSessionRuntime.agentSession.setPermissionPromptPreparation(
+              preparePermissionPrompt
+                ? () => preparePermissionPrompt(promptToolPolicy.current.effectiveTools)
                 : undefined,
             );
             params.permissionChange?.recordApplied(mode);
