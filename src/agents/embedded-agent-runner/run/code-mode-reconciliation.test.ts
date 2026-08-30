@@ -247,4 +247,64 @@ describe("Code Mode recovery", () => {
     prepared.dispose();
     expect(state.mutationAttempt).toBe("available");
   });
+
+  it.each([
+    ["get_cursor_position", false],
+    ["list_windows", true],
+  ])(
+    "keeps computer %s available around one input (observation error: %s)",
+    async (action, fails) => {
+      const unsafe = { action: "key", text: "ENTER" };
+      const state: Extract<CodeModeRecoveryState, { kind: "resume" }> = {
+        kind: "resume",
+        blockedActionKeys: new Set([hashToolCall("computer", unsafe)]),
+        mutationAttempt: "available",
+      };
+      const execute = vi.fn<Parameters<typeof pluginToolWithExecute>[2]>(async () =>
+        jsonResult({}),
+      );
+      const computer = applyCodeModeRecoveryToolSurface({
+        tools: [pluginToolWithExecute("computer", "Computer", execute)],
+        state,
+      })[0]!;
+      const observe = async () => {
+        const prepared = await prepare(computer, { action });
+        expect(prepared.kind).toBe("ready");
+        if (prepared.kind !== "ready") {
+          throw new Error("Observation was blocked");
+        }
+        try {
+          if (fails) {
+            execute.mockRejectedValueOnce(new Error("observation unavailable"));
+          }
+          const result = prepared.execute(() => undefined);
+          if (fails) {
+            await expect(result).rejects.toThrow("observation unavailable");
+          } else {
+            await result;
+          }
+        } finally {
+          prepared.dispose();
+        }
+      };
+      await observe();
+      expect(state.mutationAttempt).toBe("available");
+      expect((await prepare(computer, unsafe)).kind).toBe("immediate");
+      const input = await prepare(computer, { action: "key", text: "ESC" });
+      expect(input.kind).toBe("ready");
+      if (input.kind === "ready") {
+        await input.execute(() => undefined);
+        input.dispose();
+      }
+      expect(state.mutationAttempt).toBe("consumed");
+      await observe();
+      expect(state.mutationAttempt).toBe("consumed");
+      expect((await prepare(computer, { action: "type", text: "later" })).kind).toBe("immediate");
+      expect(execute.mock.calls.map(([, args]) => args)).toEqual([
+        { action },
+        { action: "key", text: "ESC" },
+        { action },
+      ]);
+    },
+  );
 });
