@@ -80,7 +80,9 @@ describe("createDraftStreamLoop", () => {
       releaseFirst = resolve;
     });
     const send = vi.fn(async () => {
-      if (send.mock.calls.length === 1) await first;
+      if (send.mock.calls.length === 1) {
+        await first;
+      }
     });
     const loop = createDraftStreamLoop({
       throttleMs: 1_000,

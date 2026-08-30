@@ -346,15 +346,13 @@ export function createStatusReactionController(params: {
   }
 
   function scheduleEmoji(
-    emoji: string,
+    requestedEmoji: string,
     options: { immediate?: boolean; skipStallReset?: boolean } = {},
   ): void {
     if (!enabled || finished) {
       return;
     }
-    if (!showActivity) {
-      emoji = initialEmoji;
-    }
+    const emoji = showActivity ? requestedEmoji : initialEmoji;
 
     // Skip duplicate sends while still refreshing stall timers for active phases.
     if (emoji === currentEmoji || emoji === pendingEmoji) {

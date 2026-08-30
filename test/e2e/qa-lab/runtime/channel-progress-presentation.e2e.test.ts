@@ -22,7 +22,13 @@ const FINAL_MARKER = "QUIET-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
 const synthesizedDecoration =
   /\p{Extended_Pictographic}|\b(?:Exec|Bash)\b|\btool calls?\b|elapsed/iu;
-type WireWrite = { at: number; method: string; route: string; body: Record<string, unknown> };
+type WireWrite = {
+  at: number;
+  method: string;
+  route: string;
+  body: Record<string, unknown>;
+  accepted?: { id: string; action: string; text: string };
+};
 type CrablineAdapter = Awaited<ReturnType<typeof startOpenClawCrablineAdapter>>;
 
 function parseBody(text: string): Record<string, unknown> {
@@ -61,7 +67,16 @@ async function startPresentationApi(
       const method = request.method ?? "GET";
       // Tokens are synthetic, but evidence never needs authentication fields.
       const { token: _token, ...visibleBody } = body;
-      writes.push({ at: Date.now(), method, route, body: visibleBody });
+      const wire: WireWrite = { at: Date.now(), method, route, body: visibleBody };
+      writes.push(wire);
+      const recordAccepted = (id: string, action: string) => {
+        const message = messages.get(id);
+        wire.accepted = {
+          id,
+          action,
+          text: String(message?.text ?? message?.content ?? "").slice(0, 250),
+        };
+      };
       const reply = (result: unknown, status = 200) => {
         response.writeHead(status, { "content-type": "application/json" });
         response.end(JSON.stringify(result));
@@ -83,6 +98,7 @@ async function startPresentationApi(
             .map((chunk) => String(chunk.text ?? ""))
             .join("");
           messages.set(ts, { ...previous, text: String(previous.text ?? "") + text });
+          recordAccepted(ts, operation);
           reply({ ok: true, channel: body.channel, ts });
           return;
         }
@@ -92,10 +108,12 @@ async function startPresentationApi(
             return;
           }
           messages.set(ts, body);
+          recordAccepted(ts, operation);
           reply({ ok: true, channel: body.channel, ts, message: body });
           return;
         }
         if (operation === "chat.delete") {
+          recordAccepted(ts, operation);
           messages.delete(ts);
           reply({ ok: true, channel: body.channel, ts });
           return;
@@ -119,10 +137,12 @@ async function startPresentationApi(
         if (method === "PATCH") {
           const updated = { ...messages.get(messageId), ...body };
           messages.set(messageId, updated);
+          recordAccepted(messageId, "updated");
           reply(updated);
           return;
         }
         if (method === "DELETE") {
+          recordAccepted(messageId, "deleted");
           messages.delete(messageId);
           response.writeHead(204).end();
           return;
@@ -149,12 +169,14 @@ async function startPresentationApi(
           typeof result.id === "string"
         ) {
           messages.set(result.id, result);
+          recordAccepted(result.id, "sent");
         } else if (
           manifest.provider === "slack" &&
           route.endsWith("chat.postMessage") &&
           typeof result.ts === "string"
         ) {
           messages.set(result.ts, asRecord(result.message));
+          recordAccepted(result.ts, "sent");
         }
       }
       response.writeHead(upstream.status, { "content-type": "application/json" });
@@ -301,6 +323,9 @@ function progressConfig(
         : {
             discord: {
               ...config.channels?.discord,
+              // Crabline emits a fresh guild join with the first input. This proof
+              // owns the ordinary user turn, not the separate welcome-message turn.
+              joinIntro: false,
               ackReaction: "👀",
               streaming,
               commands: { native: false, nativeSkills: false },
@@ -493,6 +518,40 @@ describe("channel progress presentation through an isolated Gateway", () => {
         ),
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
+      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+      await fs.mkdir(evidenceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}-diagnostic.json`),
+        JSON.stringify(
+          {
+            writes: writes.slice(-80).map(({ at, method, route, body, accepted }) => ({
+              at,
+              method,
+              route: route.slice(0, 250),
+              markerFields: Object.entries(body)
+                .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
+                .map(([key]) => key),
+              rendered: Object.fromEntries(
+                ["content", "text", "blocks", "chunks"]
+                  .filter((key) => body[key] !== undefined)
+                  .map((key) => [
+                    key,
+                    String(
+                      typeof body[key] === "string" ? body[key] : JSON.stringify(body[key]),
+                    ).slice(0, 250),
+                  ]),
+              ),
+              ...(accepted ? { accepted } : {}),
+            })),
+            acceptedMessages: [...api.messages].slice(-80).map(([id, message]) => ({
+              id,
+              text: String(message.text ?? message.content ?? "").slice(0, 250),
+            })),
+          },
+          null,
+          2,
+        ),
+      );
       expect(finalWrites()).toHaveLength(1);
       expect(finalMessages()).toHaveLength(1);
       const tasks = writes
@@ -503,8 +562,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(new Set(tasks.map((task) => task.title)).size).toBe(1);
         expect(tasks.at(-1)?.status).toBe("complete");
       }
-      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
         path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}.json`),
         JSON.stringify(
