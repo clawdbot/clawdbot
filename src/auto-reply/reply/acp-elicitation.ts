@@ -56,6 +56,7 @@ export function parseAcpElicitationRequest(
       fallbackMessage: "ACP needs input",
       options: {
         protocolName: "ACP",
+        allowEmptyForm: true,
         minimumChoiceCount: 2,
         booleanLabels: ["True", "False"],
         metadata: {

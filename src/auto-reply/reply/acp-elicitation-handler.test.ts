@@ -223,4 +223,18 @@ describe("ACP elicitation delivery", () => {
     });
     expect(gatewayCallMock).not.toHaveBeenCalled();
   });
+
+  it("accepts an ACP form elicitation with an empty schema instead of declining it", async () => {
+    const { handler } = createFixture();
+
+    const response = handler(formRequest({}), {
+      requestId: "empty-form",
+      signal: new AbortController().signal,
+    });
+
+    await expect(response).resolves.toEqual({
+      action: "accept",
+      content: {},
+    });
+  });
 });
