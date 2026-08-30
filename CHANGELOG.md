@@ -10,7 +10,7 @@ Docs: https://docs.openclaw.ai
 - **Message and session integrity:** preserve queued, imported, streamed, and tool-result messages across retries, hooks, recovery, and channel lifecycle transitions.
 - **Gateway reliability:** close failed HTTP and Responses streams, bound expensive reads and history queries, and settle shutdown work before reporting completion. Thanks @RomneyDa.
 - **Channel delivery:** repair Discord, Matrix, Telegram, Slack, WhatsApp, LINE, Feishu, Zalo, and meeting-plugin edge cases that could lose, corrupt, or stall messages.
-- **Provider and media robustness:** bound provider requests and diagnostics, reject malformed payloads, and preserve valid tool schemas and response lifecycles.
+- **Provider and media robustness:** bound provider requests and diagnostics, reject malformed payloads, and preserve valid tool schemas and response lifecycles. Thanks @RomneyDa.
 
 ### Changes
 
@@ -20,13 +20,13 @@ Docs: https://docs.openclaw.ai
 
 - **Security boundaries:** reject escaped-newline command words, exact-origin mismatches, injected Git option arguments, inherited secret-response identifiers, unsafe browser mutations, and malformed or oversized node payloads.
 - **Delivery and transcript recovery:** keep retry delays accurate, preserve imported messages and plugin-blocked tool results, retain detached admissions, and avoid silently dropping channel actions or recovery work. Thanks @RomneyDa.
-- **Resource and lifecycle safety:** bound catalog, history, media, stderr, API, and provider waits; stop canceled parallel tools; drain channel shutdown; and reject queued worker requests after close.
+- **Resource and lifecycle safety:** bound catalog, history, media, stderr, API, and provider waits; stop canceled parallel tools; drain channel shutdown; and reject queued worker requests after close. Thanks @RomneyDa.
 - **Text and schema correctness:** preserve UTF-16 boundaries across user-visible truncation paths, keep root tool-schema properties, reject non-finite schema values, and report exact UTF-8 write sizes.
 - **Official plugins:** repair message parsing, proxy paths, request timeouts, media handling, privacy-safe logging, and runtime aliases across the npm-published plugin inventory.
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.7.1-2..d430006788d9563aeb13329cc8e88324fde7b03c history: 126 in-range PRs + 0 retained seed-only PRs = 126 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.7.1-2..59d3e7252503d6ecd58de69206de149a020594be history: 126 in-range PRs + 0 retained seed-only PRs = 126 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
