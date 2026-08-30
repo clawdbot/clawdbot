@@ -578,6 +578,10 @@ export async function runCodexAppServerSideQuestion(
           return handleCodexAppServerApprovalRequest({
             method: request.method,
             requestParams: request.params,
+            fileChangeToolParams:
+              request.method === "item/fileChange/requestApproval"
+                ? nativeToolLifecycleProjector?.takeFileChangeApprovalToolParams(request.params)
+                : undefined,
             paramsForRun: sideRunParams,
             threadId: childThreadId,
             turnId,

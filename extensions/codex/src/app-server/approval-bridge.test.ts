@@ -320,6 +320,8 @@ describe("Codex app-server approval bridge", () => {
     "maps file operator decision %s to native %s",
     async (gatewayDecision, nativeDecision) => {
       const params = createParams();
+      const changes = [{ path: "memory/2026-07-29.md", kind: { type: "add" } }];
+
       mockCallGatewayTool
         .mockResolvedValueOnce({ id: `plugin:file-${gatewayDecision}`, status: "accepted" })
         .mockResolvedValueOnce({
@@ -334,6 +336,7 @@ describe("Codex app-server approval bridge", () => {
           itemId: `file-${gatewayDecision}`,
           reason: "update generated output",
         },
+        fileChangeToolParams: { changes },
         paramsForRun: params,
         ...codexTestTurnIds(),
       });
@@ -382,6 +385,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("auto-accepts app-server command approvals in yolo mode without opening plugin approvals", async () => {
     const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -411,6 +418,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("auto-accepts app-server file approvals in yolo mode without opening plugin approvals", async () => {
     const params = createParams();
+    const changes = [{ path: "memory/2026-07-29.md", kind: { type: "add" } }];
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
@@ -418,7 +426,10 @@ describe("Codex app-server approval bridge", () => {
         ...codexTestTurnIds(),
         itemId: "patch-yolo",
         reason: "needs write access",
+        grantRoot: "/workspace/generated",
+        futureApprovalField: "preserved",
       },
+      fileChangeToolParams: { changes },
       paramsForRun: params,
       ...codexTestTurnIds(),
       autoApprove: true,
@@ -426,10 +437,54 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "acceptForSession" });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        params: {
+          ...codexTestTurnIds(),
+          itemId: "patch-yolo",
+          reason: "needs write access",
+          grantRoot: "/workspace/generated",
+          futureApprovalField: "preserved",
+          changes,
+        },
+      }),
+    );
     findApprovalEvent(params, {
       status: "approved",
       reason: "needs write access",
       message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
+  it("fails closed when a file approval has no correlated changes", async () => {
+    const params = createParams();
+    const onNativeToolFailureDisposition = vi.fn();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "patch-missing-correlation",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      autoApprove: true,
+      onNativeToolFailureDisposition,
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith(
+      "patch-missing-correlation",
+      "failed",
+    );
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw could not correlate the Codex file-change approval with its proposed changes.",
     });
   });
 
@@ -2077,6 +2132,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("auto-approves when the expected native hook relay is unavailable in full-auto", async () => {
     const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
     mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
 
     const result = await handleCodexAppServerApprovalRequest({
@@ -2157,6 +2216,9 @@ describe("Codex app-server approval bridge", () => {
         ...codexTestTurnIds(),
         itemId: "patch-native-relay-registered",
         reason: "needs write access",
+      },
+      fileChangeToolParams: {
+        changes: [{ path: "src/native-relay.ts", kind: { type: "update" } }],
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
@@ -2749,6 +2811,9 @@ describe("Codex app-server approval bridge", () => {
         itemId: "patch-1",
         reason: "needs write access",
       },
+      fileChangeToolParams: {
+        changes: [{ path: "src/unavailable.ts", kind: { type: "update" } }],
+      },
       paramsForRun: params,
       ...codexTestTurnIds(),
       onNativeToolFailureDisposition,
@@ -2772,6 +2837,9 @@ describe("Codex app-server approval bridge", () => {
         ...codexTestTurnIds(),
         itemId: "patch-stale",
         reason: "needs write access",
+      },
+      fileChangeToolParams: {
+        changes: [{ path: "src/stale.ts", kind: { type: "update" } }],
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
@@ -2883,6 +2951,9 @@ describe("Codex app-server approval bridge", () => {
         ...codexTestTurnIds(),
         itemId: "patch-sanitized",
         reason: "needs write access\nfor \u001b[31m/tmp\u001b[0m\tplease",
+      },
+      fileChangeToolParams: {
+        changes: [{ path: "/tmp/sanitized", kind: { type: "update" } }],
       },
       paramsForRun: params,
       ...codexTestTurnIds(),

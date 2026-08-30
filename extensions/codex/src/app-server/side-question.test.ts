@@ -1841,10 +1841,10 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(codexHookStateForEvent(hookState, "pre_tool_use")).toEqual({ enabled: false });
   });
 
-  it("forwards side-thread command approvals through the active native hook relay", async () => {
+  it("forwards side-thread command and correlated file approvals through the native relay", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
-    handleCodexAppServerApprovalRequestMock.mockResolvedValueOnce({ decision: "decline" });
+    handleCodexAppServerApprovalRequestMock.mockResolvedValue({ decision: "decline" });
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
       if (method === "thread/fork") {
         const config = (requestParams as { config?: Record<string, unknown> }).config;
@@ -1889,15 +1889,39 @@ describe("runCodexAppServerSideQuestion", () => {
         cwd: "/tmp/workspace",
       },
     });
+    const changes = [{ path: "memory/side.md", kind: { type: "add" } }];
+    client.emit({
+      method: "item/started",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        item: {
+          id: "patch-side",
+          type: "fileChange",
+          changes,
+          status: "inProgress",
+        },
+      },
+    });
+    const fileApprovalResponse = await handleClientRequestWhenReady(client, {
+      id: 43,
+      method: "item/fileChange/requestApproval",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        itemId: "patch-side",
+        reason: "write memory/side.md",
+      },
+    });
     client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
     await expect(run).resolves.toEqual({ text: "Side answer." });
 
     expect(approvalResponse).toEqual({ decision: "decline" });
-    expect(handleCodexAppServerApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(fileApprovalResponse).toEqual({ decision: "decline" });
+    expect(handleCodexAppServerApprovalRequestMock).toHaveBeenCalledTimes(2);
     const approvalArgs = handleCodexAppServerApprovalRequestMock.mock.calls[0]?.[0] as
       | {
           method?: string;
           requestParams?: Record<string, unknown>;
+          fileChangeToolParams?: Record<string, unknown>;
           threadId?: string;
           turnId?: string;
           paramsForRun?: { messageChannel?: string; messageProvider?: string };
@@ -1922,6 +1946,16 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId: relayIdDuringFork,
       allowedEvents: expect.arrayContaining(["pre_tool_use"]),
+    });
+    expect(handleCodexAppServerApprovalRequestMock.mock.calls[1]?.[0]).toMatchObject({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds("side-thread"),
+        itemId: "patch-side",
+        reason: "write memory/side.md",
+      },
+      fileChangeToolParams: { changes },
+      ...codexTestTurnIds("side-thread"),
     });
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),

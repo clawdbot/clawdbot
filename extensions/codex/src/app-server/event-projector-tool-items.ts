@@ -16,7 +16,7 @@ import {
   readNonEmptyString,
   readNonEmptyStringArray,
 } from "./event-projector-values.js";
-import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
 import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
@@ -61,6 +61,10 @@ export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | u
     return sanitizeCodexToolArguments(item.arguments);
   }
   return undefined;
+}
+
+export function fileChangeToolArgs(item: CodexThreadItem): JsonObject {
+  return { changes: itemFileChanges(item) };
 }
 
 export function isCommandBearingToolItem(
@@ -150,7 +154,7 @@ function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
 
 type CodexFileChangeSummary = {
   path: string;
-  kind: unknown;
+  kind: JsonValue;
 };
 
 type CodexTranscriptFileChange = CodexFileChangeSummary & {

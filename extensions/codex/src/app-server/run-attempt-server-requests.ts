@@ -141,6 +141,10 @@ export function createCodexAttemptServerRequestController(
           return await handleCodexAppServerApprovalRequest({
             method: request.method,
             requestParams: request.params,
+            fileChangeToolParams:
+              request.method === "item/fileChange/requestApproval"
+                ? projector?.takeFileChangeApprovalToolParams(request.params)
+                : undefined,
             paramsForRun: params,
             threadId: resourceState.thread.threadId,
             turnId,
