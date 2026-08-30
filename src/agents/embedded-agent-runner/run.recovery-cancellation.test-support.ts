@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -14,6 +15,7 @@ import {
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   type TestRunEmbeddedAgent,
 } from "./run.overflow-compaction.harness.js";
 import {
@@ -141,7 +143,7 @@ describe("recovery cancellation through the public run owner", () => {
         } else {
           expect(onCompactionAccounting).toHaveBeenCalledExactlyOnceWith(
             committed
-              ? { kind: "presentation-only", count: 1, currentContextTokens: 40 }
+              ? { kind: "presentation-only", count: 1, currentContextSnapshot: { tokens: 40 } }
               : undefined,
           );
         }
@@ -401,7 +403,7 @@ describe("recovery cancellation through the public run owner", () => {
     expect(facts).toHaveBeenCalledExactlyOnceWith({
       kind: "durable",
       count: testCase.count,
-      currentContextTokens: testCase.currentContextTokens,
+      currentContextSnapshot: { tokens: testCase.currentContextTokens },
       target: {
         ...runParams.sessionTarget,
         lifecycleRevision: undefined,
@@ -411,6 +413,144 @@ describe("recovery cancellation through the public run owner", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedCompactDirect).not.toHaveBeenCalled();
   });
+
+  it.each(["current", "replaced"] as const)(
+    "finalizes opaque native usage only for its %s writer",
+    async (writer) => {
+      session = await createSharedRunIntegrationSession();
+      const { runParams } = session;
+      const { sessionId, sessionKey, sessionTarget } = runParams;
+      const { createAgentCommandSessionWorkingCopy } =
+        await import("../command/session-helpers.js");
+      const { createCommandCompactionAccounting } =
+        await import("../command/compaction-accounting.js");
+      const { updateSessionStoreAfterAgentRun } = await import("../command/session-store.js");
+      const { SESSION_TOTAL_TOKENS_VERSION } = await import("../../config/sessions/types.js");
+      const { normalizeUsage } = await import("../usage.js");
+      useOpenAIPlatformAuthFixture();
+      const initialEntry = {
+        sessionId,
+        updatedAt: 1,
+        lifecycleRevision: "native-usage-generation",
+        activeWriterRunId: "previous-writer",
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      };
+      await sessionAccessor.replaceSessionEntry(sessionTarget, initialEntry);
+      const { sessionEntry, sessionStore } = createAgentCommandSessionWorkingCopy({
+        sessionKey,
+        sessionEntry: initialEntry,
+        sessionStore: { [sessionKey]: initialEntry },
+      });
+      if (!sessionEntry || !sessionStore) {
+        throw new Error("The command must retain its pre-claim working copy");
+      }
+      const accounting = createCommandCompactionAccounting({
+        sessionStore,
+        persistCounts: true,
+        onDurableFact: () => {},
+        refreshSessionEntry: () => {},
+      });
+      const candidate = accounting.beginCandidate();
+      const assistant = makeAssistantMessageFixture({
+        model: "gpt-5.6-luna",
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "Done." }],
+      });
+      assistant.usage = {
+        ...assistant.usage,
+        input: 3,
+        output: 18,
+        cacheRead: 0,
+        cacheWrite: 13_354,
+        totalTokens: 13_375,
+        contextUsage: { state: "available", promptTokens: 13_357, totalTokens: 13_375 },
+      };
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Done." }]);
+      // Native attempts return usage without the built-in subscription's private events.
+      // Keep admission, writer claim, settlement, and final persistence real.
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          sessionIdUsed: sessionId,
+          assistantTexts: ["Done."],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          attemptUsage: normalizeUsage(assistant.usage),
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...runParams,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        compactionCountOwner: "caller",
+        onCompactionAccounting: candidate.observe,
+      });
+      await candidate.finish(sessionEntry);
+      expect(result.meta.agentMeta?.lastCallUsage?.contextUsage).toEqual({
+        state: "available",
+        promptTokens: 13_357,
+        totalTokens: 13_375,
+      });
+      expect(sessionStore[sessionKey]).toMatchObject({
+        activeWriterRunId: "previous-writer",
+        totalTokens: 0,
+        totalTokensFresh: true,
+      });
+      expect(sessionAccessor.loadSessionEntry(sessionTarget)).toMatchObject({
+        activeWriterRunId: runParams.runId,
+      });
+      if (writer === "replaced") {
+        const { claimAgentSessionWriter } = await import("./run/session-bootstrap.js");
+        await claimAgentSessionWriter({ ...runParams, runId: "replacement-writer" });
+      }
+      const beforeFinalization = sessionAccessor.loadSessionEntry(sessionTarget);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {},
+        agentDir: path.dirname(sessionTarget.storePath),
+        sessionId,
+        sessionKey,
+        storePath: sessionTarget.storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.6-luna",
+        result,
+        compactionAccounting: accounting.fact,
+      });
+
+      const persisted = sessionAccessor.loadSessionEntry({
+        ...sessionTarget,
+        readConsistency: "latest",
+      });
+      if (writer === "replaced") {
+        expect(persisted).toEqual(beforeFinalization);
+        expect(persisted).toMatchObject({ activeWriterRunId: "replacement-writer" });
+      } else {
+        expect(persisted?.totalTokens).toBe(13_357);
+        expect(persisted).toMatchObject({
+          activeWriterRunId: runParams.runId,
+          inputTokens: 3,
+          outputTokens: 18,
+          cacheRead: 0,
+          cacheWrite: 13_354,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        });
+        expect(persisted?.compactionCount).toBeUndefined();
+        expect(accounting.fact).toMatchObject({
+          kind: "durable",
+          count: 0,
+          target: { ...sessionTarget, activeWriterRunId: runParams.runId },
+        });
+      }
+      expect(accounting.fact?.currentContextSnapshot).toBeUndefined();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedCompactDirect).not.toHaveBeenCalled();
+    },
+  );
 
   it("compacts and accounts a fresh persistent run whose first append creates the session row", async () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");

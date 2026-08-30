@@ -224,7 +224,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
               compactionAccounting: {
                 kind: "durable",
                 count: 0,
-                currentContextTokens: 42,
+                currentContextSnapshot: { tokens: 42 },
                 target: {
                   agentId: "main",
                   sessionId: owner.sessionId,
@@ -1502,7 +1502,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         compactionAccounting: {
           kind: "durable",
           count,
-          currentContextTokens: tokens,
+          currentContextSnapshot: { tokens },
           target: {
             agentId: "main",
             sessionId,
@@ -1571,7 +1571,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           compactionAccounting: {
             kind: "durable",
             count: 0,
-            currentContextTokens: 42,
+            currentContextSnapshot: { tokens: 42 },
             target: {
               agentId: "main",
               sessionId,
@@ -1670,7 +1670,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           compactionAccounting: {
             kind: "durable",
             count: 1,
-            currentContextTokens: tokens,
+            currentContextSnapshot: { tokens },
             target: {
               agentId: "main",
               sessionId,

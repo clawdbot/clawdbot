@@ -36,9 +36,9 @@ registerAgentCommandCompactionTestHooks();
 
 async function commitAttemptCompaction(
   params: Parameters<typeof state.runAgentAttemptMock>[0],
-  accounting: Pick<CompactionAccountingFact, "count" | "currentContextTokens"> = {
+  accounting: Pick<CompactionAccountingFact, "count" | "currentContextSnapshot"> = {
     count: 1,
-    currentContextTokens: 42,
+    currentContextSnapshot: { tokens: 42 },
   },
 ) {
   const target = params.sessionTarget;
@@ -219,7 +219,7 @@ describe("agentCommand compaction transcript rotation", () => {
 
   it.each([42, 95_000, 0, undefined])(
     "keeps successor context %s from the private ordered fact, not public snapshots",
-    async (currentContextTokens) => {
+    async (tokens) => {
       const storePath = requireStorePath();
       const rotatedSessionFile = formatSqliteSessionFileMarker({
         agentId: "main",
@@ -228,7 +228,10 @@ describe("agentCommand compaction transcript rotation", () => {
       });
       const usage = { input: 100_000, output: 3_000, cacheRead: 20_000, cacheWrite: 1_000 };
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-        const accepted = await commitAttemptCompaction(params, { count: 1, currentContextTokens });
+        const accepted = await commitAttemptCompaction(params, {
+          count: 1,
+          currentContextSnapshot: { tokens },
+        });
         await appendTranscriptMessage(accepted.sessionTarget, {
           message: { role: "assistant", content: "first answer after rotation", timestamp: 1 },
         });
@@ -270,9 +273,9 @@ describe("agentCommand compaction transcript rotation", () => {
         outputTokens: usage.output,
         cacheRead: usage.cacheRead,
         cacheWrite: usage.cacheWrite,
-        totalTokensFresh: currentContextTokens !== undefined,
+        totalTokensFresh: tokens !== undefined,
       });
-      expect(entry.totalTokens).toBe(currentContextTokens);
+      expect(entry.totalTokens).toBe(tokens);
       await expect(
         loadTranscriptEvents({ agentId: "main", sessionId: "rotated-session", storePath }),
       ).resolves.toContainEqual(
@@ -299,7 +302,7 @@ describe("agentCommand compaction transcript rotation", () => {
       params.onCompactionAccounting?.({
         kind: "durable",
         count: 0,
-        currentContextTokens: 95_000,
+        currentContextSnapshot: { tokens: 95_000 },
         target: {
           ...params.sessionTarget,
           lifecycleRevision: entry.lifecycleRevision,
@@ -355,7 +358,7 @@ describe("agentCommand compaction transcript rotation", () => {
           released = true;
         },
       });
-      await commitAttemptCompaction(params, { count: 2, currentContextTokens: 42 });
+      await commitAttemptCompaction(params, { count: 2, currentContextSnapshot: { tokens: 42 } });
       controller.abort(aborted);
       throw aborted;
     });

@@ -1000,7 +1000,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           params.onCompactionAccounting?.({
             kind: "durable",
             count: 1,
-            currentContextTokens: 40,
+            currentContextSnapshot: { tokens: 40 },
             target: {
               agentId: "main",
               sessionId: sessionEntry.sessionId,
@@ -1529,7 +1529,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       params.onCompactionAccounting?.({
         kind: "durable",
         count: 1,
-        currentContextTokens: 1250,
+        currentContextSnapshot: { tokens: 1250 },
         target: {
           agentId: "main",
           sessionId: sessionEntry.sessionId,

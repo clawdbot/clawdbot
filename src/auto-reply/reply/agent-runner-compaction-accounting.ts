@@ -5,11 +5,11 @@ import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 export function invalidateTurnCompactionContext(compaction: AgentTurnCompaction): void {
   compaction.durable = compaction.durable.map((fact) => ({
     ...fact,
-    currentContextTokens: undefined,
+    currentContextSnapshot: { tokens: undefined },
   }));
 }
 
-/** Fold only observations belonging to the same retained writer; zero counts refresh context. */
+/** Fold same-writer facts; only an ordered snapshot may refresh context. */
 export function recordTurnCompaction(
   compaction: AgentTurnCompaction,
   fact: CompactionAccountingFact,
@@ -36,5 +36,10 @@ export function recordTurnCompaction(
   if (previous) {
     compaction.durable.splice(index, 1);
   }
-  compaction.durable.push({ ...fact, count: (previous?.count ?? 0) + fact.count });
+  // Custody without an observation cannot erase the prior candidate's explicit invalidation.
+  compaction.durable.push({
+    ...fact,
+    count: (previous?.count ?? 0) + fact.count,
+    currentContextSnapshot: fact.currentContextSnapshot ?? previous?.currentContextSnapshot,
+  });
 }

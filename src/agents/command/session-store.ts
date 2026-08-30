@@ -219,8 +219,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   if (!preserveUserFacingRunState) {
-    const totalTokens = params.compactionAccounting
-      ? params.compactionAccounting.currentContextTokens
+    const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
+    const totalTokens = currentContextSnapshot
+      ? currentContextSnapshot.tokens
       : hasUsage
         ? deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens })
         : undefined;
@@ -228,7 +229,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
       next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    } else if (params.compactionAccounting || hasUsage) {
+    } else if (currentContextSnapshot || hasUsage) {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
       next.totalTokensVersion = undefined;
