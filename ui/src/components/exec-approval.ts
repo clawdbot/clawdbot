@@ -2,7 +2,6 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
-import { t } from "../i18n/index.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -11,7 +10,6 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
-  compactApprovalCommand,
   renderExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card.ts";
@@ -25,43 +23,6 @@ type ExecApprovalProps = {
   errors: ReadonlyMap<string, string>;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
-
-function renderApprovalQueueList(params: {
-  queue: readonly ExecApprovalRequest[];
-  activeId: string;
-  onSelect: (approvalId: string) => void;
-}) {
-  const others = params.queue.filter((entry) => entry.id !== params.activeId);
-  if (others.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="exec-approval-list" aria-label=${t("execApproval.otherPending")}>
-      <div class="exec-approval-list__heading">${t("execApproval.otherPending")}</div>
-      ${others.map((entry) => {
-        const command = compactApprovalCommand(entry.request.command);
-        const agent = entry.request.agentId?.trim() || "—";
-        return html`
-          <button
-            class="exec-approval-list__item"
-            type="button"
-            aria-label=${t("execApproval.reviewRequest", { agent, command })}
-            @click=${() => params.onSelect(entry.id)}
-          >
-            <span class="exec-approval-list__agent">${agent}</span>
-            <span class="exec-approval-list__command mono">${command}</span>
-            <openclaw-approval-countdown
-              class="exec-approval-list__expiry"
-              aria-hidden="true"
-              .expiresAtMs=${entry.expiresAtMs}
-              .compact=${true}
-            ></openclaw-approval-countdown>
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
 
 function keyEventComesFromTextEntry(event: KeyboardEvent): boolean {
   return event
@@ -166,24 +127,24 @@ class ExecApproval extends OpenClawLightDomContentsElement {
         @keydown=${(event: KeyboardEvent) => this.handleKeydown(event, active)}
         @modal-cancel=${handleCancel}
       >
-        <div class="exec-approval-modal-stack">
-          ${renderExecApprovalCard({
-            approval: active,
-            busy: props.busy,
-            canGrant: props.canGrant,
-            error: props.errors.get(active.id) ?? null,
-            variant: "modal",
-            queueCount: queue.length,
-            onDecision: props.onDecision,
-          })}
-          ${renderApprovalQueueList({
-            queue,
-            activeId: active.id,
-            onSelect: (approvalId) => {
-              this.selectedApprovalId = approvalId;
-            },
-          })}
-        </div>
+        ${renderExecApprovalCard({
+          approval: active,
+          busy: props.busy,
+          canGrant: props.canGrant,
+          error: props.errors.get(active.id) ?? null,
+          variant: "modal",
+          queue,
+          onDecision: props.onDecision,
+          onSelectApproval: (approvalId) => {
+            this.selectedApprovalId = approvalId;
+            void this.updateComplete.then(() => {
+              const review = this.querySelector<HTMLElement>(".exec-approval-review");
+              if (review) {
+                review.scrollTop = 0;
+              }
+            });
+          },
+        })}
       </openclaw-modal-dialog>
     `;
   }

@@ -16,6 +16,7 @@ let page: Page | undefined;
 const activeSessionKey = "agent:main:main";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "approval-flow");
+const mobileViewport = { height: 667, width: 390 } as const;
 
 function approval(id: string, command: string, createdAtMs: number, sessionKey = activeSessionKey) {
   return {
@@ -140,6 +141,97 @@ suite.define(() => {
     await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
     if (captureUiProof) {
       await currentPage.screenshot({ path: path.join(proofDir, "02-open-queue.png") });
+    }
+  });
+
+  it("keeps every modal decision visible on a short mobile viewport", async () => {
+    if (captureUiProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      hasTouch: true,
+      isMobile: true,
+      reducedMotion: "reduce",
+      viewport: mobileViewport,
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, { sessionKey: activeSessionKey });
+    const command = Array.from(
+      { length: 12 },
+      (_value, index) => `step-${index + 1}: pnpm test ui/src/e2e/approval-flow.e2e.test.ts`,
+    ).join("\n");
+
+    await currentPage.goto(new URL("settings/devices", suite.server?.baseUrl ?? "").href);
+    await gateway.waitForRequest("sessions.list");
+    await gateway.emitGatewayEvent("exec.approval.requested", {
+      ...approval("approval-mobile", command, 1_000),
+      request: {
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+        ask: "always",
+        command,
+        cwd: "/workspace/openclaw",
+        host: "gateway",
+        sessionKey: activeSessionKey,
+      },
+    });
+    for (let index = 2; index <= 23; index += 1) {
+      await gateway.emitGatewayEvent(
+        "exec.approval.requested",
+        approval(`approval-mobile-${index}`, `echo queued-${index}`, index * 1_000),
+      );
+    }
+    await approvalInboxButton(currentPage).waitFor();
+    await currentPage.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("openclaw:approvals-open"));
+    });
+
+    const modal = currentPage.locator("openclaw-modal-dialog .exec-approval-card--modal");
+    await modal.waitFor();
+    await currentPage.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    const decisionButtons = modal.locator(".exec-approval-actions button");
+    expect(await decisionButtons.count()).toBe(2);
+    await modal.evaluate((card) => {
+      const modalRoot = card.closest("openclaw-modal-dialog");
+      const lastQueuedApproval = modalRoot?.querySelector<HTMLElement>(
+        ".exec-approval-list__item:last-child",
+      );
+      for (let element = lastQueuedApproval?.parentElement; element && element !== modalRoot;) {
+        const next = element.parentElement;
+        const overflowY = getComputedStyle(element).overflowY;
+        if (/auto|scroll/.test(overflowY) && element.scrollHeight > element.clientHeight) {
+          element.scrollTop = element.scrollHeight;
+          break;
+        }
+        element = next;
+      }
+    });
+    await currentPage.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        }),
+    );
+    if (captureUiProof) {
+      await currentPage.screenshot({ path: path.join(proofDir, "mobile-modal-actions.png") });
+    }
+    const decisionBounds = await decisionButtons.evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const bounds = button.getBoundingClientRect();
+        return { bottom: bounds.bottom, height: bounds.height, top: bounds.top };
+      }),
+    );
+    for (const bounds of decisionBounds) {
+      expect(bounds.top).toBeGreaterThanOrEqual(0);
+      expect(bounds.bottom).toBeLessThanOrEqual(mobileViewport.height);
+      expect(bounds.height).toBeGreaterThanOrEqual(44);
     }
   });
 

@@ -3333,12 +3333,19 @@ td.data-table-key-col {
   animation: scale-in 0.2s var(--ease-out);
 }
 
-.exec-approval-modal-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.exec-approval-card--modal {
   max-height: calc(100dvh - 48px);
+  overflow: hidden;
+}
+
+.exec-approval-card--modal .exec-approval-review {
+  min-height: 0;
   overflow-y: auto;
+}
+
+.exec-approval-card--modal .exec-approval-command {
+  max-height: none;
+  overflow: visible;
 }
 
 .exec-approval-card--inline {
@@ -3504,6 +3511,10 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.exec-approval-card--modal .exec-approval-actions {
+  flex: none;
 }
 
 .exec-approval-list {
@@ -5226,11 +5237,21 @@ td.data-table-key-col {
     width: 100%;
   }
 
+  .exec-approval-card--modal .exec-approval-actions .btn {
+    min-height: 44px;
+  }
+
   .exec-approval-command {
     font-size: 12px;
     padding: 8px 10px;
     max-height: 40dvh;
     overflow-y: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .exec-approval-card--modal {
+    max-height: 90dvh;
   }
 }
 

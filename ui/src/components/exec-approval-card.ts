@@ -26,10 +26,15 @@ type ExecApprovalCardProps = {
   busy: boolean;
   canGrant: boolean;
   error: string | null;
-  variant: "inline" | "modal";
-  queueCount?: number;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
-};
+} & (
+  | { variant: "inline" }
+  | {
+      variant: "modal";
+      queue: readonly ExecApprovalRequest[];
+      onSelectApproval: (approvalId: string) => void;
+    }
+);
 
 type SidebarApprovalRowProps = {
   approval: ExecApprovalRequest;
@@ -206,9 +211,46 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
     : nothing}`;
 }
 
-export function compactApprovalCommand(command: string): string {
+function compactApprovalCommand(command: string): string {
   const singleLine = command.replace(/\s+/g, " ").trim();
   return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
+}
+
+function renderApprovalQueueList(params: {
+  queue: readonly ExecApprovalRequest[];
+  activeId: string;
+  onSelect: (approvalId: string) => void;
+}) {
+  const others = params.queue.filter((entry) => entry.id !== params.activeId);
+  if (others.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="exec-approval-list" aria-label=${t("execApproval.otherPending")}>
+      <div class="exec-approval-list__heading">${t("execApproval.otherPending")}</div>
+      ${others.map((entry) => {
+        const command = compactApprovalCommand(entry.request.command);
+        const agent = entry.request.agentId?.trim() || "—";
+        return html`
+          <button
+            class="exec-approval-list__item"
+            type="button"
+            aria-label=${t("execApproval.reviewRequest", { agent, command })}
+            @click=${() => params.onSelect(entry.id)}
+          >
+            <span class="exec-approval-list__agent">${agent}</span>
+            <span class="exec-approval-list__command mono">${command}</span>
+            <openclaw-approval-countdown
+              class="exec-approval-list__expiry"
+              aria-hidden="true"
+              .expiresAtMs=${entry.expiresAtMs}
+              .compact=${true}
+            ></openclaw-approval-countdown>
+          </button>
+        `;
+      })}
+    </div>
+  `;
 }
 
 function approvalDecisionLabel(decision: ExecApprovalDecision, kind: ExecApprovalRequest["kind"]) {
@@ -361,50 +403,59 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
     class="exec-approval-card exec-approval-card--${props.variant} exec-approval-card--severity-${severity}"
     data-approval-id=${active.id}
   >
-    <div class="exec-approval-header">
-      <div>
-        <div class="exec-approval-title">${approvalTitle(active)}</div>
-        ${pluginId || agentId
-          ? html`<div class="exec-approval-chips">
-              ${renderChip("plugin", pluginId)} ${renderChip("agent", agentId)}
+    <div class="exec-approval-review">
+      <div class="exec-approval-header">
+        <div>
+          <div class="exec-approval-title">${approvalTitle(active)}</div>
+          ${pluginId || agentId
+            ? html`<div class="exec-approval-chips">
+                ${renderChip("plugin", pluginId)} ${renderChip("agent", agentId)}
+              </div>`
+            : nothing}
+          <openclaw-approval-countdown
+            class="exec-approval-sub exec-approval-countdown"
+            role="timer"
+            .expiresAtMs=${active.expiresAtMs}
+          ></openclaw-approval-countdown>
+        </div>
+        ${props.variant === "modal" && props.queue.length > 1
+          ? html`<div class="exec-approval-queue">
+              ${t("execApproval.pending", { count: String(props.queue.length) })}
             </div>`
           : nothing}
-        <openclaw-approval-countdown
-          class="exec-approval-sub exec-approval-countdown"
-          role="timer"
-          .expiresAtMs=${active.expiresAtMs}
-        ></openclaw-approval-countdown>
       </div>
-      ${(props.queueCount ?? 0) > 1
-        ? html`<div class="exec-approval-queue">
-            ${t("execApproval.pending", { count: String(props.queueCount) })}
+      ${props.variant === "inline" && active.sourceSessionKey
+        ? html`<div class="exec-approval-warning" role="note">
+            ${t("execApproval.requestedBySession", {
+              session: resolveSessionDisplayName(active.sourceSessionKey),
+            })}
           </div>`
         : nothing}
+      ${active.kind === "exec"
+        ? renderExecBody(active.request, props.variant)
+        : renderPluginBody(active, props.variant)}
+      ${active.kind === "exec" && !decisions.includes("allow-always")
+        ? html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`
+        : nothing}
+      ${!props.canGrant
+        ? html`<div
+            class=${grantError ? "exec-approval-error" : "exec-approval-warning"}
+            role=${grantError ? "alert" : "note"}
+          >
+            ${reviewOnlyMessage}
+          </div>`
+        : nothing}
+      ${props.error && !grantError
+        ? html`<div class="exec-approval-error" role="alert">${props.error}</div>`
+        : nothing}
+      ${props.variant === "modal"
+        ? renderApprovalQueueList({
+            queue: props.queue,
+            activeId: active.id,
+            onSelect: props.onSelectApproval,
+          })
+        : nothing}
     </div>
-    ${props.variant === "inline" && active.sourceSessionKey
-      ? html`<div class="exec-approval-warning" role="note">
-          ${t("execApproval.requestedBySession", {
-            session: resolveSessionDisplayName(active.sourceSessionKey),
-          })}
-        </div>`
-      : nothing}
-    ${active.kind === "exec"
-      ? renderExecBody(active.request, props.variant)
-      : renderPluginBody(active, props.variant)}
-    ${active.kind === "exec" && !decisions.includes("allow-always")
-      ? html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`
-      : nothing}
-    ${!props.canGrant
-      ? html`<div
-          class=${grantError ? "exec-approval-error" : "exec-approval-warning"}
-          role=${grantError ? "alert" : "note"}
-        >
-          ${reviewOnlyMessage}
-        </div>`
-      : nothing}
-    ${props.error && !grantError
-      ? html`<div class="exec-approval-error" role="alert">${props.error}</div>`
-      : nothing}
     <div class="exec-approval-actions">
       ${decisions.map((decision) => {
         const label = approvalDecisionLabel(decision, props.approval.kind);

@@ -27,17 +27,23 @@ function approval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalReq
 }
 
 function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = "modal") {
-  render(
-    renderExecApprovalCard({
-      approval: request,
-      busy: false,
-      canGrant: true,
-      error: null,
-      variant,
-      onDecision: vi.fn(),
-    }),
-    container,
-  );
+  const common = {
+    approval: request,
+    busy: false,
+    canGrant: true,
+    error: null,
+    onDecision: vi.fn(),
+  };
+  const props =
+    variant === "modal"
+      ? {
+          ...common,
+          variant,
+          queue: [request],
+          onSelectApproval: vi.fn(),
+        }
+      : { ...common, variant };
+  render(renderExecApprovalCard(props), container);
   return container.querySelector<HTMLElement>(".exec-approval-card");
 }
 

@@ -195,12 +195,18 @@ describe("openclaw-exec-approval", () => {
     expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
       "approval-oldest",
     );
+    const review = container.querySelector<HTMLElement>(".exec-approval-review");
+    if (review) {
+      review.scrollTop = 100;
+    }
     container.querySelector<HTMLButtonElement>(".exec-approval-list__item")?.click();
     await approval.updateComplete;
+    await Promise.resolve();
 
     expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
       "approval-newer",
     );
+    expect(container.querySelector<HTMLElement>(".exec-approval-review")?.scrollTop).toBe(0);
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
   });
 
