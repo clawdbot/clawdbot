@@ -14,12 +14,15 @@ import {
   type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isCompatibleSingletonRewrite,
+  isCompleteToolGroup,
+  projectReplayPayload,
+  type AttemptTranscriptMessage as TranscriptMessage,
+} from "./attempt-transcript-replay.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
 type TranscriptRecorder = NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>;
-type TranscriptMessage =
-  | NonNullable<TranscriptRecorder["message"]>
-  | Extract<AgentMessage, { role: "assistant" | "toolResult" }>;
 type AppendResult =
   | {
       anchor: TranscriptEntryAnchor;
@@ -633,51 +636,6 @@ function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptT
   return { sessionId, sessionKey, storePath, ...(agentId ? { agentId } : {}) };
 }
 
-function readAssistantToolCallIds(message: TranscriptMessage): string[] {
-  return message.role === "assistant"
-    ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
-    : [];
-}
-
-function isCompatibleSingletonRewrite(
-  original: TranscriptMessage,
-  prepared: TranscriptMessage,
-): boolean {
-  // Hooks may redact content, but role and tool topology are journal-owned;
-  // accepting either rewrite would make the canonical replay structurally false.
-  return (
-    original.role === prepared.role &&
-    (original.role !== "assistant" ||
-      JSON.stringify(readAssistantToolCallIds(original)) ===
-        JSON.stringify(readAssistantToolCallIds(prepared)))
-  );
-}
-
-function projectReplayPayload(message: TranscriptMessage): unknown {
-  switch (message.role) {
-    case "user":
-      return { role: message.role, content: message.content };
-    case "assistant":
-      return {
-        role: message.role,
-        content: message.content,
-        api: message.api,
-        model: message.model,
-        provider: message.provider,
-        stopReason: message.stopReason,
-      };
-    case "toolResult":
-      return {
-        role: message.role,
-        content: message.content,
-        isError: message.isError,
-        toolCallId: message.toolCallId,
-        toolName: message.toolName,
-      };
-  }
-  return undefined;
-}
-
 function readIdempotencyKey(message: AgentMessage): string | undefined {
   const key = (message as { idempotencyKey?: unknown }).idempotencyKey;
   return typeof key === "string" && key ? key : undefined;
@@ -691,18 +649,6 @@ function isCurrentJournalIdentity(
   // Current journal keys use a run id or the SDK's unique event id.
   return (
     key === `${params.attempt.runId}:user` || key.startsWith(`copilot-sdk:${params.sdkSessionId}:`)
-  );
-}
-
-function isCompleteToolGroup(messages: TranscriptMessage[], order: string[]): boolean {
-  const [assistant, ...results] = messages;
-  return (
-    assistant?.role === "assistant" &&
-    JSON.stringify(readAssistantToolCallIds(assistant)) === JSON.stringify(order) &&
-    results.length === order.length &&
-    results.every(
-      (message, index) => message.role === "toolResult" && message.toolCallId === order[index],
-    )
   );
 }
 
