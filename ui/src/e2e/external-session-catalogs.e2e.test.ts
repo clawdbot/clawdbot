@@ -433,7 +433,7 @@ suite.define(() => {
   );
 
   it("keeps old Beam links working and opens pretty shares under a non-main default agent", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/beam-share-url");
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/beam-named-share-url");
     await fs.mkdir(artifactDir, { recursive: true });
     const context = await suite.newBrowserContext({
       recordVideo: { dir: artifactDir, size: { width: 1280, height: 720 } },
@@ -441,7 +441,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const fullId = "0123456789abcdef0123456789abcdef";
-    const prettyPath = "/openclaw/beam/0123456789ab";
+    const prettyPath = "/openclaw/beam/pretty-beam-route-0123456789ab";
     const queryPath = `/openclaw/chat/research?catalog=beam&host=gateway&thread=${fullId}`;
     const gateway = await installMockGateway(page, {
       basePath: "/openclaw",
@@ -573,6 +573,14 @@ suite.define(() => {
         path: path.join(artifactDir, "beam-pretty-route.png"),
         fullPage: true,
       });
+
+      // Both previously shared IDs and stale names retain their transcript after a rename.
+      for (const reference of ["0123456789ab", "old-title-0123456789ab"]) {
+        await page.goto(new URL(`/openclaw/beam/${reference}`, suite.server.baseUrl).href);
+        await transcript.waitFor();
+        await assertCatalogOwner();
+        await expect.poll(() => new URL(page.url()).pathname).toBe(prettyPath);
+      }
 
       await page.goto(new URL("/openclaw/chat/other", suite.server.baseUrl).href);
       const beamRow = page.locator("a", { hasText: "Pretty Beam route" }).first();

@@ -198,6 +198,13 @@ export default definePluginEntry({
   one result with no next page; multiple rows or `nextCursor` are explicitly
   ambiguous and never select the first row.
 
+  Pass the title as `displayName` to `buildControlUiCatalogSharePath` from
+  `openclaw/plugin-sdk/session-catalog-runtime` to generate
+  `/<routeSegment>/<title-slug>-<id-prefix>`. It uses the same bounded slug as
+  regular session links. Only the id suffix selects the transcript; the UI
+  refreshes the decorative slug from the catalog row's `name`. Bare-id and
+  stale-title links remain valid, and titles never resolve an ambiguous id.
+
   `routeSegment` must not use the first segment of a built-in Control UI route
   or alias, and it must be unique across active session catalogs. Invalid,
   unsupported, reserved, or multiply owned descriptors fail closed; catalog

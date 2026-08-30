@@ -228,7 +228,7 @@ describe("Beam receiver", () => {
     expect(await first.json()).toEqual({
       ok: true,
       beamId: "0123456789abcdef0123456789abcdef",
-      url: "/beam/0123456789ab",
+      url: "/beam/fix-the-upload-flow-0123456789ab",
     });
     expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
       createdAt: 100,
@@ -236,10 +236,14 @@ describe("Beam receiver", () => {
     });
 
     now = 200;
-    await fetch(endpoint, {
+    const updated = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(sampleUpload({ completed: true })),
+      body: JSON.stringify(sampleUpload({ completed: true, title: "Renamed upload flow" })),
+    });
+    expect(await updated.json()).toMatchObject({
+      beamId: sampleUpload().beamId,
+      url: "/beam/renamed-upload-flow-0123456789ab",
     });
     expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
       createdAt: 100,
@@ -267,7 +271,7 @@ describe("Beam receiver", () => {
     expect(await response.json()).toEqual({
       ok: true,
       beamId: "0123456789abcdef0123456789abcdef",
-      url: "/admin/openclaw/beam/0123456789ab",
+      url: "/admin/openclaw/beam/fix-the-upload-flow-0123456789ab",
     });
   });
 

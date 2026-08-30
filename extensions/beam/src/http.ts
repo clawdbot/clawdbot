@@ -114,6 +114,7 @@ export function createBeamRequestHandler(params: {
         url: buildControlUiCatalogSharePath({
           shareRoute: BEAM_SESSION_SHARE_ROUTE,
           threadId: parsed.value.beamId,
+          displayName: parsed.value.title,
           basePath: params.resolveControlUiBasePath(),
         }),
       });

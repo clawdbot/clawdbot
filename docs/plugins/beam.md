@@ -92,15 +92,18 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 {
   "ok": true,
   "beamId": "0123456789abcdef0123456789abcdef",
-  "url": "/beam/0123456789ab"
+  "url": "/beam/fix-the-upload-flow-0123456789ab"
 }
 ```
 
-The returned URL uses a 12-character lowercase hexadecimal prefix and keeps
-that readable path in the browser while the existing read-only Beam catalog
-renders the transcript. A configured Control UI base path prefixes the route,
-for example `/openclaw/beam/0123456789ab`. Longer prefixes through the full
-32-character Beam id also work.
+The returned URL uses the session title slug followed by a 12-character lowercase
+hexadecimal id prefix, matching regular session links. The id remains authoritative:
+bare-id links and links with an older title still resolve, and the browser replaces
+the name with the current title without adding history. Titles that produce no slug
+use the bare id. A configured Control UI base path prefixes the route, for example
+`/openclaw/beam/fix-the-upload-flow-0123456789ab`. Longer prefixes through the full
+32-character Beam id also work. Update the Beam skill before updating the receiver
+so its response validator accepts named links.
 
 Uploading the same `beamId` updates the existing catalog row. A completed upload sets the row status to `completed`; earlier updates display as `live`.
 
