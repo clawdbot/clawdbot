@@ -14,8 +14,9 @@ const CODE_ESCAPE = "\u0000e";
 const CODE_PLACEHOLDER = "\u0000p";
 
 // Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
+// p and div are included here so attributed opening tags are normalized before block conversion.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
-  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li|p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 
 function stripRemainingHtmlTags(text: string): string {
   let previous: string;
