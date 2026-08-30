@@ -215,11 +215,7 @@ suite.define(() => {
           ),
         )
         .toBe(sessionA);
-      await visiblePane
-        .getByRole("alert")
-        .locator("summary")
-        .getByText(message, { exact: true })
-        .waitFor();
+      await visiblePane.getByRole("alert").getByText(message, { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByText("Stop cloud worker…", { exact: true }).waitFor();
