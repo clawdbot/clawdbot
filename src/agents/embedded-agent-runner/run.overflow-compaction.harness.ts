@@ -1080,9 +1080,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 export async function warmRunOverflowCompactionHarness(
   runEmbeddedAgent: TestRunEmbeddedAgent,
   state: Pick<OpenClawTestState, "workspaceDir">,
-  params?: Partial<
-    Omit<Parameters<typeof runEmbeddedAgent>[0], "compactionCountOwner" | "onCompactionAccounting">
-  >,
+  params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
 ): Promise<void> {
   resetRunOverflowCompactionHarnessMocks();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);

@@ -123,7 +123,6 @@ describe("recovery cancellation through the public run owner", () => {
           owner === "caller"
             ? runEmbeddedAgent({
                 ...runParams,
-                compactionCountOwner: "caller",
                 onCompactionAccounting,
               })
             : runEmbeddedAgent(runParams);
@@ -395,7 +394,6 @@ describe("recovery cancellation through the public run owner", () => {
 
     const result = await runEmbeddedAgent({
       ...runParams,
-      compactionCountOwner: "caller",
       onCompactionAccounting: facts,
     });
 
@@ -485,7 +483,6 @@ describe("recovery cancellation through the public run owner", () => {
         ...runParams,
         provider: "openai",
         model: "gpt-5.6-luna",
-        compactionCountOwner: "caller",
         onCompactionAccounting: candidate.observe,
       });
       await candidate.finish(sessionEntry);

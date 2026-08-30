@@ -318,6 +318,20 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       phase: "preparing_workspace",
     });
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", content: "Done" },
+    });
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "status",
+      phase: "preparing_workspace",
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunStartup).toBeNull();
   });
 
   it("shows startup status until the first chat delta and ignores late status", () => {

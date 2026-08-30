@@ -172,12 +172,19 @@ export function adoptStartedChatRun(
   }
   const adopted = host.chatRunId === runId;
   const adoptedStream = adopted && typeof host.chatStream === "string";
+  if (!adopted) {
+    // Session-scoped activity can arrive before adoption. Retire only the prior
+    // owner so the incoming run keeps its already accepted tools and approvals.
+    reconcileChatRunLifecycle(host, {
+      clearToolStreamForRun: true,
+      clearIndicators: Boolean(host.chatRunId),
+      clearRunStatus: true,
+      requestUpdate: false,
+    });
+    host.chatRunError = null;
+  }
   host.chatRunId = runId;
   setChatRunOwner(host, runId);
-  if (!adopted) {
-    host.chatRunError = null;
-    host.chatRunStartup = null;
-  }
   if (!adoptedStream) {
     host.chatStream = "";
     host.chatStreamStartedAt = startedAt;
@@ -416,9 +423,9 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   if (!runId || host.chatRunStartup?.runId === runId) {
     host.chatRunStartup = null;
   }
-  clearTimer(host.compactionClearTimer);
-  host.compactionClearTimer = null;
-  if (host.compactionStatus) {
+  if (!runId || host.compactionStatus?.runId === runId) {
+    clearTimer(host.compactionClearTimer);
+    host.compactionClearTimer = null;
     host.compactionStatus = null;
   }
   clearTimer(host.fallbackClearTimer);

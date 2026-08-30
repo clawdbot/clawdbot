@@ -2520,6 +2520,117 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
+    { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
+    { agentId: "research", avatar: null, expected: "initials" },
+    { agentId: "research", avatar: "https://example.test/avatar.png", expected: "initials" },
+    { agentId: "research", avatar: "/avatar/research", expected: "initials" },
+    // Same-agent sources wear the current agent's own avatar (fallback logo here).
+    { agentId: "main", avatar: "blob:main-avatar", expected: "assistant" },
+    { agentId: "removed", avatar: "blob:stale-avatar", expected: "glyph" },
+    { agentId: undefined, avatar: null, expected: "glyph" },
+  ])(
+    "renders $expected for forwarded agent $agentId with $avatar",
+    ({ agentId, avatar, expected }) => {
+      const container = document.createElement("div");
+      const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
+        senderSession: { agentId },
+      });
+      const options = {
+        agentId: "main",
+        agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
+        senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
+        assistantAttachmentAuthToken: "test-token",
+      };
+      render(renderTestMessageGroup(group, options), container);
+
+      const image = container.querySelector("img.chat-avatar:not(.chat-avatar--logo)");
+      const initials = container.querySelector<HTMLElement>(".chat-avatar--sender-initials");
+      expect(image !== null).toBe(expected === "image");
+      expect(initials !== null).toBe(expected === "initials");
+      expect(container.querySelector(".chat-avatar--forwarded") !== null).toBe(
+        expected === "glyph",
+      );
+      if (expected === "assistant") {
+        expect(container.querySelector(".chat-avatar")).not.toBeNull();
+      }
+      if (expected === "image") {
+        expect(image?.getAttribute("src")).toBe(avatar);
+        expect(image?.getAttribute("alt")).toBe("Research Agent");
+      }
+      if (expected === "initials") {
+        expect(initials?.textContent?.trim()).toBe("RA");
+        expect(initials?.getAttribute("aria-label")).toBe("Research Agent");
+        expect(initials?.style.background).not.toBe("");
+      }
+    },
+  );
+
+  // Label rules: an agent's main session reads as the agent itself; other
+  // sessions read as the session (titler-resolved), prefixed with the agent
+  // name only when the sender is a different agent.
+  it.each([
+    {
+      name: "another agent's main session labels as that agent",
+      key: "agent:research:main",
+      chipText: "Research Agent",
+      prefix: null,
+      titled: true,
+    },
+    {
+      name: "own main session labels as the local agent",
+      key: "agent:main:main",
+      chipText: "main",
+      prefix: null,
+      titled: true,
+    },
+    {
+      name: "same-agent session leaves the key for the titler",
+      key: "agent:main:bench",
+      chipText: "agent:main:bench",
+      prefix: null,
+      titled: false,
+    },
+    {
+      name: "other-agent session prefixes the agent name",
+      key: "agent:research:bench",
+      chipText: "agent:research:bench",
+      prefix: "Research Agent —",
+      titled: false,
+    },
+  ])("$name", ({ key, chipText, prefix, titled }) => {
+    const container = document.createElement("div");
+    const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
+      senderSession: { sessionKey: key, agentId: key.split(":")[1] },
+    });
+    render(
+      renderTestMessageGroup(group, {
+        agentId: "main",
+        agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
+        mainKey: "main",
+      }),
+      container,
+    );
+
+    const chip = expectElement(
+      container,
+      `a.markdown-session-link[data-session-key="${key}"]`,
+      HTMLAnchorElement,
+    );
+    expect(chip.textContent).toBe(chipText);
+    expect(chip.classList.contains("markdown-session-link--titled")).toBe(titled);
+    const attributionText =
+      container
+        .querySelector(".chat-group--forwarded .chat-reply-attribution")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim() ?? "";
+    if (prefix) {
+      expect(attributionText).toContain(prefix.replace(/\s+/g, " "));
+    } else {
+      expect(attributionText).not.toContain("—");
+    }
+  });
+
+  it.each([
     { senderSession: { agentId: "main" }, label: "Forwarded from main" },
     { senderSession: undefined, label: "Forwarded message" },
     // Non-agent-prefixed keys are not navigable (titler, hovercard, and click
@@ -6070,6 +6181,36 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("admits one full-message load for repeated source projections in a group", () => {
+    const container = document.createElement("div");
+    const previews = ["First projection", "Updated projection"];
+    let loading = false;
+    const onToggleAssistantMessageExpanded = vi.fn(() => {
+      loading = true;
+    });
+    renderAssistantMessages(
+      container,
+      previews.map((text) =>
+        createAssistantMessage(text, {
+          __openclaw: { id: "shared-source", truncated: true },
+        }),
+      ),
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () =>
+          loading ? { status: "loading", revision: 1 } : undefined,
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledTimes(1);
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("shared-source");
+    expect(
+      [...container.querySelectorAll(".chat-text")].map((element) => element.textContent),
+    ).toEqual(previews);
+  });
+
   it.each([
     { state: { status: "error" as const, revision: 2 }, retries: true, label: "bounded error" },
     { state: { status: "error" as const, revision: 6 }, retries: false, label: "exhausted error" },
@@ -6160,8 +6301,9 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
   });
 
-  it("does not render Show more for mirrored message-tool replies", () => {
+  it("does not fetch full content for mirrored message-tool replies", () => {
     const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
     renderAssistantMessage(
       container,
       {
@@ -6173,11 +6315,12 @@ describe("grouped chat rendering", () => {
       {
         sessionKey: "global",
         loadFullAssistantMessage: async () => null,
-        onToggleAssistantMessageExpanded: vi.fn(),
+        onToggleAssistantMessageExpanded,
       },
     );
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+    expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
   });
 
   it("projects oversized history rows through regular and grouped tool bubbles", () => {

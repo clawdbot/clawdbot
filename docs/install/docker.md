@@ -83,6 +83,8 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     docker compose run --rm openclaw-cli dashboard --no-open
     ```
 
+    With a custom `OPENCLAW_GATEWAY_PORT`, replace port `18789` in the printed URL with your host port before opening it in the browser; keep the rest of the URL intact. Dashboard commands inside either container use the internal listener port. [ClawDock](/install/clawdock) remaps the browser URL automatically.
+
   </Step>
 
   <Step title="Configure channels (optional)">
@@ -194,6 +196,7 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | Variable                                        | Purpose                                                                                                           |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_IMAGE`                                | Use a remote image instead of building locally                                                                    |
+| `OPENCLAW_GATEWAY_PORT`                         | Host-published gateway port (default `18789`); both containers keep port `18789` internally                       |
 | `OPENCLAW_IMAGE_APT_PACKAGES`                   | Install extra apt packages during build (space-separated). Legacy alias: `OPENCLAW_DOCKER_APT_PACKAGES`           |
 | `OPENCLAW_IMAGE_PIP_PACKAGES`                   | Install extra Python packages during build (space-separated)                                                      |
 | `OPENCLAW_EXTENSIONS`                           | Compile/package supported selected plugins and install their runtime dependencies (comma- or space-separated ids) |
@@ -216,6 +219,8 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                     |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                           |
 | `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                    |
+
+After changing `.env` or Compose environment settings, run `docker compose up -d openclaw-gateway` to recreate the gateway with the new values. `docker compose restart` does not apply environment changes.
 
 The official image ships no Homebrew. During onboarding, OpenClaw hides brew-only skill dependency installers in a Linux container without `brew`; provide those dependencies through a custom image or install manually. Use `OPENCLAW_IMAGE_APT_PACKAGES` for Debian-packaged dependencies and `OPENCLAW_IMAGE_PIP_PACKAGES` for Python dependencies (runs `python3 -m pip install --break-system-packages` at build time, so pin versions and use only indexes you trust).
 

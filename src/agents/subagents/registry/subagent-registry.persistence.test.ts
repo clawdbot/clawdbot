@@ -38,12 +38,12 @@ import {
   testing,
   activateSubagentRegistry,
   addSubagentRunForTests,
-  clearSubagentRunSteerRestart,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
   registerSubagentRun,
   resetSubagentRegistryForTests,
+  resumeSubagentRun,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -1067,8 +1067,7 @@ describe("subagent registry persistence", () => {
     });
     await removeChildSessionEntry(childSessionKey);
 
-    const changed = clearSubagentRunSteerRestart(runId);
-    expect(changed).toBe(true);
+    resumeSubagentRun(runId);
     await flushQueuedRegistryWork();
 
     expect(announceSpy).not.toHaveBeenCalled();

@@ -5,10 +5,7 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import {
-  releaseChatAttachmentPayloads,
-  cloneChatAttachmentsMetadata,
-} from "./attachment-payload-store.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -98,21 +95,18 @@ export function subscribeChatOutboxProjection(host: ChatQueueScopedSessionHost):
 export function enqueueChatMessage(
   host: ChatQueueScopedSessionHost,
   text: string,
-  attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   localCommand?: { args: string; name: string },
   sender?: SenderIdentity,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
-  const hasAttachments = Boolean(attachments && attachments.length > 0);
-  if (!trimmed && !hasAttachments) {
+  if (!trimmed) {
     return null;
   }
   const item: ChatQueueItem = {
     id: generateUUID(),
     text: trimmed,
     createdAt: Date.now(),
-    attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
     refreshSessions,
     localCommandArgs: localCommand?.args,
     localCommandName: localCommand?.name,
@@ -128,12 +122,10 @@ export function enqueuePendingRunMessage(
   host: ChatQueueScopedSessionHost,
   text: string,
   pendingRunId: string,
-  attachments?: ChatAttachment[],
   sender?: SenderIdentity,
 ) {
   const trimmed = text.trim();
-  const hasAttachments = Boolean(attachments && attachments.length > 0);
-  if (!trimmed && !hasAttachments) {
+  if (!trimmed) {
     return;
   }
   // Local commands join an existing run without a wire chat.send, so this
@@ -142,7 +134,6 @@ export function enqueuePendingRunMessage(
     id: generateUUID(),
     text: trimmed,
     createdAt: Date.now(),
-    attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
     pendingRunId,
     ...(sender ? { sender } : {}),
   };

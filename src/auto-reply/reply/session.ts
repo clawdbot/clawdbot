@@ -293,7 +293,7 @@ function resolveBoundConversationSessionKey(params: {
     return undefined;
   }
   if (params.touch !== false) {
-    getSessionBindingService().touch(binding.bindingId);
+    getSessionBindingService().touch(binding.bindingId, undefined, binding.conversation);
   }
   // Plugins own their target handoff; escaped commands still initialize the core session.
   return isPluginOwnedSessionBindingRecord(binding) ? undefined : binding.targetSessionKey;

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activateSwarmRun,
+  bindSwarmRunReservation,
   enqueueSwarmRun,
   isSwarmRunActive,
+  isSwarmRunWaitingForCapacity,
   holdQueuedSwarmRun,
   releaseSwarmRun,
   removeQueuedSwarmRun,
@@ -60,10 +62,19 @@ describe("swarm scheduler", () => {
       start: start("three"),
       onStartFailure,
     });
+    const owner = {};
+    const waits: boolean[] = [];
+    bindSwarmRunReservation("two", owner, () => {
+      waits.push(isSwarmRunWaitingForCapacity("two", owner));
+    });
 
     await vi.waitFor(() => expect(started).toEqual(["one"]));
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(true);
+    expect(isSwarmRunWaitingForCapacity("two", {})).toBe(false);
     expect(releaseSwarmRun("one")).toBe(true);
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
     await vi.waitFor(() => expect(started).toEqual(["one", "two"]));
+    expect(waits).toEqual([true, false]);
     expect(releaseSwarmRun("two")).toBe(true);
     await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
     expect(onStartFailure).not.toHaveBeenCalled();
@@ -90,12 +101,17 @@ describe("swarm scheduler", () => {
 
     expect(reserve("one")).toBe(true);
     expect(reserve("two")).toBe(true);
+    const owner = {};
+    bindSwarmRunReservation("two", owner);
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
     activate("two");
     await Promise.resolve();
     expect(started).toEqual([]);
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
 
     activate("one");
     await vi.waitFor(() => expect(started).toEqual(["one"]));
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(true);
     expect(releaseSwarmRun("one")).toBe(true);
     await vi.waitFor(() => expect(started).toEqual(["one", "two"]));
   });
@@ -117,8 +133,18 @@ describe("swarm scheduler", () => {
     enqueue("one");
     enqueue("two");
     enqueue("three");
-    expect(removeQueuedSwarmRun("two")).toBe(true);
+    const owner = {};
+    const waits: boolean[] = [];
+    bindSwarmRunReservation("two", owner, () => {
+      waits.push(isSwarmRunWaitingForCapacity("two", owner));
+    });
     await vi.waitFor(() => expect(started).toEqual(["one"]));
+    const hold = holdQueuedSwarmRun("two");
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
+    hold?.release();
+    expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(true);
+    expect(removeQueuedSwarmRun("two")).toBe(true);
+    expect(waits).toEqual([true, false, true, false]);
     releaseSwarmRun("one");
     await vi.waitFor(() => expect(started).toEqual(["one", "three"]));
   });
@@ -324,14 +350,21 @@ describe("swarm scheduler", () => {
     enqueue("one", 2);
     enqueue("two", 2);
     enqueue("three", 2);
+    const owner = {};
+    const waits: boolean[] = [];
+    bindSwarmRunReservation("three", owner, () => {
+      waits.push(isSwarmRunWaitingForCapacity("three", owner));
+    });
     await vi.waitFor(() => expect(started).toEqual(["one", "two"]));
     enqueue("four", 1);
 
     releaseSwarmRun("one");
     await Promise.resolve();
     expect(started).toEqual(["one", "two"]);
+    expect(waits).toEqual([true]);
     releaseSwarmRun("two");
     await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
+    expect(waits).toEqual([true, false]);
   });
 
   it("refreshes the lane limit before rejecting a duplicate reservation", async () => {

@@ -805,7 +805,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
       | [
@@ -1486,7 +1490,11 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
     ]);
     expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-imessage-codex-media",
+      undefined,
+      expect.objectContaining({ channel: "imessage", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -1909,7 +1917,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-escape-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
@@ -1969,7 +1981,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-unknown-slash");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-unknown-slash",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({ content: "/notes keep this with the bound plugin" }),

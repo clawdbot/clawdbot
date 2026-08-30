@@ -318,15 +318,6 @@ function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string
   );
 }
 
-function resolveFollowupContextConfigProvider(params: FollowupRuntimeParams): string {
-  const provider = params.followupRun.run.provider;
-  return resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: resolveFollowupAgentRuntimeId(params),
-    config: params.cfg,
-  });
-}
-
 function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
   if (params.agentHarnessId) {
     return params.agentHarnessId;
@@ -1301,12 +1292,10 @@ export async function runMemoryFlushIfNeeded(params: {
     recordMemoryFlushFailure(error, params, activeSessionEntry);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
-    provider: resolveFollowupContextConfigProvider({
-      cfg: params.cfg,
-      followupRun: params.followupRun,
-      sessionEntry: entry,
-      sessionKey: params.sessionKey,
-      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    provider: resolveContextConfigProviderForRuntime({
+      provider: params.followupRun.run.provider,
+      runtimeId,
+      config: params.cfg,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
@@ -1663,7 +1652,6 @@ export async function runMemoryFlushIfNeeded(params: {
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             abortSignal: deferredLifecycle.signal,
-            compactionCountOwner: "caller",
             onCompactionAccounting: (fact) => {
               if (fact) {
                 recordTurnCompaction(compaction, fact);

@@ -410,7 +410,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           sharingSnapshot.selfUser,
           sharingSnapshot.client?.instanceId,
           key,
-          renderedOwnerIdentity,
+          [
+            ...(renderedOwnerIdentity ? [renderedOwnerIdentity] : []),
+            ...(showOwnerChip ? (row?.participants ?? []).map(({ identity }) => identity) : []),
+          ],
         );
     const ownerViewing = projectPresencePayload(this.presencePayload).users.some(
       (user) =>

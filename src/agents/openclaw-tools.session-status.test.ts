@@ -1033,7 +1033,7 @@ describe("session_status tool", () => {
     expect(sessionEntry.thinkingLevel).toBe("high");
   });
 
-  it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
+  it("resolves sessionKey=current to runSessionKey under explicit tree visibility (#76708)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {
         sessionId: "s-tg-direct",
@@ -1047,8 +1047,10 @@ describe("session_status tool", () => {
       },
     });
 
-    // Default visibility is "tree". The tool is constructed with the Telegram
-    // sandbox key as agentSessionKey but the live run session key as runSessionKey.
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
+
+    // Explicit tree visibility protects the semantic-current alias. The tool uses
+    // the Telegram key as agentSessionKey and the live run key as runSessionKey.
     // semantic-current must be treated as self for visibility purposes.
     const tool = createSessionStatusTool({
       agentSessionKey: "agent:main:telegram:default:direct:1234",
@@ -1266,6 +1268,8 @@ describe("session_status tool", () => {
         status: "running",
       },
     });
+
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
 
     // Same setup but with an explicit key — should NOT bypass visibility.
     const tool = createSessionStatusTool({

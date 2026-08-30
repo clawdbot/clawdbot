@@ -4567,6 +4567,7 @@ server.listen(0, "127.0.0.1", () => {
     const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
       name: string;
       command: string;
+      target_script?: string;
     }>;
     expect(repoE2eRows.map((row) => row.command)).toEqual([
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
@@ -4574,6 +4575,9 @@ server.listen(0, "127.0.0.1", () => {
       "pnpm test:e2e:agent-plugin-gateway",
     ]);
     expect(new Set(repoE2eRows.map((row) => row.name)).size).toBe(9);
+    expect(repoE2eRows.find((row) => row.name === "Agent plugin Gateway")).toMatchObject({
+      target_script: "test:e2e:agent-plugin-gateway",
+    });
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
     expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
     expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
@@ -4588,9 +4592,17 @@ server.listen(0, "127.0.0.1", () => {
     expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
-      run: "${{ matrix.command }}",
-      env: { OPENCLAW_E2E_WORKERS: "2", OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+      env: {
+        OPENCLAW_E2E_WORKERS: "2",
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
+        TARGET_REQUIRED_SCRIPT: "${{ matrix.target_script || '' }}",
+      },
     });
+    const repoE2eRun = repoE2eSteps[repoE2eIndex]?.run;
+    expect(repoE2eRun).toContain("OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+    expect(repoE2eRun).toContain("Selected target does not provide required repo E2E capability");
+    expect(repoE2eRun).toContain("selected target does not provide this newer repo E2E capability");
+    expect(repoE2eRun).toContain("${{ matrix.command }}");
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );
@@ -5962,21 +5974,56 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it.each([[".github/workflows/plugin-clawhub-release.yml", 3]])(
-    "bounds %s git fetches",
-    (workflowPath, expectedFetchCount) => {
-      const source = readFileSync(workflowPath, "utf8");
-      const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+  it("pins plugin publication owners before selected checkout and preserves Git deadlines", () => {
+    const owner = {
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    };
+    const clawhub = parse(readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"));
+    const clawhubSteps = clawhub.jobs.preview_plugins_clawhub.steps as WorkflowStep[];
+    expect(clawhubSteps[0]).toEqual(owner);
+    expect(clawhubSteps[1]?.name).toBe("Checkout");
+    const clawhubBodies = clawhubSteps.map(({ run }) => run ?? "").join("\n");
+    expect(clawhubBodies.match(/timeout=120/gu)).toHaveLength(3);
+    expect(clawhubBodies).not.toMatch(
+      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|checkout)\b/mu,
+    );
+    expect(clawhubBodies).not.toMatch(/backoff\(|for attempt in range/u);
 
-      expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
-      expect(
-        gitFetchLines.every((line) =>
-          line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
-        ),
-        workflowPath,
-      ).toBe(true);
-    },
-  );
+    const npm = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
+    for (const [jobName, checkoutName] of [
+      ["preview_plugins_npm", "Checkout"],
+      ["verify_plugin_npm_preflight", "Checkout trusted npm preflight tooling"],
+      ["publish_plugins_npm", "Checkout trusted publication tooling"],
+    ] as const) {
+      const steps = npm.jobs[jobName].steps as WorkflowStep[];
+      expect(steps[0], jobName).toEqual(owner);
+      expect(steps[1]?.name, jobName).toBe(checkoutName);
+    }
+    const npmBodies = [
+      ...npm.jobs.preview_plugins_npm.steps,
+      ...npm.jobs.verify_plugin_npm_preflight.steps,
+      ...npm.jobs.publish_plugins_npm.steps,
+    ]
+      .map(({ run }: WorkflowStep) => run ?? "")
+      .join("\n");
+    expect(npmBodies.match(/timeout=120/gu)).toHaveLength(5);
+    expect(npmBodies).not.toMatch(
+      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
+    );
+    expect(npmBodies).not.toMatch(/backoff\(|for attempt in range/u);
+    for (const stepName of [
+      "Read exact npm preflight source package",
+      "Read exact npm publication source package",
+    ]) {
+      const step = [
+        ...npm.jobs.verify_plugin_npm_preflight.steps,
+        ...npm.jobs.publish_plugins_npm.steps,
+      ].find(({ name }: WorkflowStep) => name === stepName) as WorkflowStep;
+      expect(step.run, stepName).toContain("git_output(");
+      expect(step.run, stepName).toContain('errors="surrogateescape"');
+    }
+  });
 
   it("pins the Mantis Git owner and preserves distinct terminal ref-validation contracts", () => {
     const action = parse(

@@ -452,7 +452,10 @@ export async function resolveMatrixIngressContent(config: {
   }
   if (_runtimeBindingId) {
     const { getSessionBindingService } = await loadSessionBindingRuntime();
-    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
+    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined, {
+      channel: "matrix",
+      accountId,
+    });
   }
   const preparedTrigger =
     isRoom && historyLimit > 0

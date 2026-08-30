@@ -684,7 +684,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-git-owner.test.ts",
         "test/scripts/ci-linux-git.test.ts",
         "test/scripts/ci-platform-checkout.test.ts",
-        "src/scripts/ci-changed-scope.test.ts",
+        "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     });
@@ -841,13 +841,16 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     {
       changedPath: ".github/workflows/plugin-npm-release.yml",
-      exactTarget: "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+      exactTargets: [
+        "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+        "test/scripts/plugin-release-git-lifecycle.test.ts",
+      ],
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTarget: "test/scripts/install-trufflehog.test.ts",
+      exactTargets: ["test/scripts/install-trufflehog.test.ts"],
     },
-  ])("unions exact owners and references for $changedPath", ({ changedPath, exactTarget }) => {
+  ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
       {
         [changedPath]: "name: fixture\n",
@@ -856,10 +859,25 @@ describe("scripts/test-projects changed-target routing", () => {
       (cwd) => {
         const targets = resolveChangedTestTargetPlan([changedPath], { cwd }).targets;
 
-        expect(targets).toContain(exactTarget);
+        for (const exactTarget of exactTargets) expect(targets).toContain(exactTarget);
         expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
         expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
       },
+    );
+  });
+
+  it("routes ClawHub publication through lifecycle and release workflow proof", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/plugin-clawhub-release.yml"]).targets,
+    ).toEqual(
+      expect.arrayContaining([
+        "test/scripts/ci-git-owner.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/ci-platform-checkout.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/plugin-release-git-lifecycle.test.ts",
+      ]),
     );
   });
 
@@ -916,6 +934,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/validate-release-publish-approval.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     },
@@ -947,8 +966,8 @@ describe("scripts/test-projects changed-target routing", () => {
               "test/scripts/ci-git-owner.test.ts",
               "test/scripts/ci-linux-git.test.ts",
               "test/scripts/ci-platform-checkout.test.ts",
+              "src/scripts/ci-changed-scope.git-owner.test.ts",
               "test/scripts/ci-workflow-guards.test.ts",
-              "src/scripts/ci-changed-scope.test.ts",
             ]
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
@@ -1081,7 +1100,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-git-owner.test.ts",
         "test/scripts/ci-linux-git.test.ts",
         "test/scripts/ci-platform-checkout.test.ts",
-        "src/scripts/ci-changed-scope.test.ts",
+        "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
@@ -1096,7 +1115,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/scripts/ci-git-owner.test.ts",
       "test/scripts/ci-linux-git.test.ts",
       "test/scripts/ci-platform-checkout.test.ts",
-      "src/scripts/ci-changed-scope.test.ts",
+      "src/scripts/ci-changed-scope.git-owner.test.ts",
     ];
     const workflowTargets = new Map([
       [".github/workflows/mantis-discord-smoke.yml", [...packageAcceptanceTargets]],
@@ -4345,7 +4364,10 @@ it.each([
   "test/scripts/openclaw-performance-workflow.test.ts",
   "test/scripts/openclaw-performance-workflow.test-support.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+  "test/scripts/plugin-release-git-lifecycle.test.ts",
   "test/scripts/release-workflow-git-lifecycle.test.ts",
+  ".github/workflows/plugin-clawhub-release.yml",
+  ".github/workflows/plugin-npm-release.yml",
   ".github/actions/publish-generated-pr/action.yml",
   ".github/actions/publish-generated-pr/policy.py",
   ".github/workflows/maturity-scorecard.yml",
@@ -4412,6 +4434,25 @@ it("routes release admission lifecycle ownership through serial native proof", (
   );
   expect(
     buildVitestRunPlans(["test/scripts/release-workflow-git-lifecycle.test.ts"]).map(
+      ({ config }) => config,
+    ),
+  ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+});
+
+it("routes plugin publication lifecycle ownership through serial native proof", () => {
+  expect(
+    resolveChangedTestTargetPlan(["test/scripts/plugin-release-git-lifecycle.test.ts"]).targets,
+  ).toEqual(
+    expect.arrayContaining([
+      "test/scripts/ci-git-owner.test.ts",
+      "test/scripts/ci-linux-git.test.ts",
+      "test/scripts/ci-platform-checkout.test.ts",
+      "test/scripts/plugin-release-git-lifecycle.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ]),
+  );
+  expect(
+    buildVitestRunPlans(["test/scripts/plugin-release-git-lifecycle.test.ts"]).map(
       ({ config }) => config,
     ),
   ).toEqual(["test/vitest/vitest.tooling.config.ts"]);

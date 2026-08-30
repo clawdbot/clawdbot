@@ -391,6 +391,14 @@ export function parseOpaqueLeafEntry(record: unknown):
   };
 }
 
+export function classifySessionFileEntry(rawEntry: FileEntry, sourceVersion: number) {
+  const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
+  const recognized =
+    isIndexedSessionEntry(entry) ||
+    (sourceVersion < CURRENT_SESSION_VERSION && isReadableLegacySessionEntry(entry));
+  return { entry, recognized };
+}
+
 export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   fileEntries: FileEntry[];
   opaqueEntries: Array<{ index: number; record: unknown }>;
@@ -402,20 +410,17 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const header = entries.find((entry) => sessionHeaderSchema.safeParse(entry).success) as
     | SessionHeader
     | undefined;
-  const acceptsLegacyEntries = (header?.version ?? 1) < CURRENT_SESSION_VERSION;
+  const sourceVersion = header?.version ?? 1;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
-    const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
-    if (!hasHeader && sessionHeaderSchema.safeParse(entry).success) {
-      fileEntries.push(entry);
-      fileEntriesByOriginalIndex[originalIndex] = entry;
+    if (!hasHeader && sessionHeaderSchema.safeParse(rawEntry).success) {
+      fileEntries.push(rawEntry);
+      fileEntriesByOriginalIndex[originalIndex] = rawEntry;
       hasHeader = true;
       continue;
     }
-    if (
-      isIndexedSessionEntry(entry) ||
-      (acceptsLegacyEntries && isReadableLegacySessionEntry(entry))
-    ) {
+    const { entry, recognized } = classifySessionFileEntry(rawEntry, sourceVersion);
+    if (recognized) {
       fileEntries.push(entry);
       fileEntriesByOriginalIndex[originalIndex] = entry;
       continue;

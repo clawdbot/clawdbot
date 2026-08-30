@@ -38,9 +38,7 @@ import { renderMessageImages, resolveRenderableMessageImages } from "./chat-mess
 import {
   detectJson,
   jsonSummaryLabel,
-  renderAssistantMessageMarkdown,
-  renderMarkdownText,
-  renderUserMessageMarkdown,
+  renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
@@ -74,19 +72,10 @@ function renderChatIcon(name: string) {
 
 function renderInlineToolCards(
   toolCards: ToolCard[],
-  opts: {
+  opts: Omit<Parameters<typeof renderToolCard>[1], "expanded" | "onToggleExpanded"> & {
     messageKey: string;
-    sessionKey?: string;
-    agentId?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
-    runActive?: boolean;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    showApprovalReviews?: boolean;
   },
 ) {
   return html`
@@ -95,19 +84,11 @@ function renderInlineToolCards(
         const disclosureId = `${opts.messageKey}:toolcard:${index}`;
         const expanded = opts.isToolExpanded?.(disclosureId) ?? false;
         return renderToolCard(card, {
+          ...opts,
           expanded,
-          runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
             : () => undefined,
-          sessionKey: opts.sessionKey,
-          agentId: opts.agentId,
-          onOpenSidebar: opts.onOpenSidebar,
-          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-          embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-          allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-          showApprovalReviews: opts.showApprovalReviews,
         });
       })}
     </div>
@@ -335,10 +316,9 @@ export function renderGroupedMessage(
     .join(" ");
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
-  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
   if (
     !markdown &&
-    !visibleToolCards &&
+    !hasToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
     visibleAttachments.length === 0 &&
@@ -401,7 +381,6 @@ export function renderGroupedMessage(
       ? html`${assistantViewBlocks.map(
           (block) => html`<div class="chat-tool-card__widget-host">
             ${renderToolPreview(block.preview, "chat_message", {
-              onOpenSidebar,
               rawText: block.rawText ?? null,
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               boardProvider: opts.boardProvider,
@@ -473,42 +452,17 @@ export function renderGroupedMessage(
           <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
         </details>`
       : bodyMarkdown
-        ? !isStandaloneToolMessage && normalizedRole === "user"
-          ? renderUserMessageMarkdown(
-              bodyMarkdown,
-              messageKey,
-              opts,
-              markdownRenderOptions,
-              duplicateSuffix,
-            )
-          : !isStandaloneToolMessage && normalizedRole === "assistant"
-            ? renderAssistantMessageMarkdown(
-                bodyMarkdown,
-                opts.isStreaming,
-                opts.assistantMessageDisclosure,
-                markdownRenderOptions,
-                duplicateSuffix,
-                opts.isStreaming ? messageKey : undefined,
-              )
-            : renderMarkdownText(
-                bodyMarkdown,
-                opts.isStreaming,
-                markdownRenderOptions,
-                duplicateSuffix,
-              )
+        ? renderMessageMarkdown(
+            bodyMarkdown,
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
+            duplicateSuffix,
+          )
         : nothing}
     ${hasToolCards
       ? isStandaloneToolMessage && expandsSingleToolCard && singleToolCard
-        ? renderExpandedToolCardContent(
-            singleToolCard,
-            opts.sessionKey,
-            onOpenSidebar,
-            opts.canvasPluginSurfaceUrl,
-            opts.embedSandboxMode ?? "scripts",
-            opts.allowExternalEmbedUrls ?? false,
-            opts.runActive,
-            opts.onOpenWorkspaceFile,
-          )
+        ? renderExpandedToolCardContent(singleToolCard, toolRenderOptions)
         : renderInlineToolCards(toolCards, {
             ...toolRenderOptions,
             showApprovalReviews: isStandaloneToolMessage ? false : undefined,

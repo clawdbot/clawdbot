@@ -8,7 +8,11 @@ import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
-import { resetGatewayWorkAdmission } from "../src/process/gateway-work-admission.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../src/process/gateway-work-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../src/shared/global-singleton.js";
 import {
   type CustomElementTracking,
@@ -483,6 +487,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.unstubAllEnvs();
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
+    // Reject suspended admission waiters before async cleanup. The final reset
+    // reopens admission only after those old waiters have observed this fence.
+    if (isGatewayWorkAdmissionClosed()) {
+      markGatewayRestartDraining();
+    }
     resetOpenClawGlobalRunState();
     resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
@@ -490,14 +499,14 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Lifecycle-owned singletons survive module resets; close them before the next file
     // can observe a previous file's sessions, caches, or registered resources.
     await drainGlobalSingletonLifecycleState();
-    // Finish file-owned teardown before retiring its admission leases and
-    // reopening the shared worker for the next file.
-    resetGatewayWorkAdmission();
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();
     dropTrackedRepoOwnedCustomElements();
     resetSharedDocumentBody();
+    // Gateway admission survives production close. Retire file-owned roots after
+    // runtime cleanup, before another file can inherit their leases or drain fence.
+    resetGatewayWorkAdmission();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
     resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);
