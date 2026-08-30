@@ -30,9 +30,7 @@ const loginSessionMocks = vi.hoisted(() => ({
 vi.mock("./bot-native-commands.runtime.js", () => ({
   ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
-  getAgentScopedMediaLocalRoots: vi.fn(() => []),
   getSessionEntry: loginSessionMocks.getSessionEntry,
-  resolveAgentScopedOutboundMediaAccess: vi.fn(() => ({ localRoots: [] })),
   resolveNativeCommandOutboundMediaRoots: vi.fn(() => []),
   resolveChunkMode: vi.fn(() => "length"),
   resolveThreadSessionKeys: vi.fn(
