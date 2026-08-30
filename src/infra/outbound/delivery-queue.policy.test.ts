@@ -85,7 +85,7 @@ describe("delivery-queue policy", () => {
       if (result.eligible) {
         throw new Error("Expected ineligible retry entry");
       }
-      expect(result.remainingBackoffMs).toBe(600_000);
+      expect(result.remainingBackoffMs).toBe(120_000);
     });
   });
 });
