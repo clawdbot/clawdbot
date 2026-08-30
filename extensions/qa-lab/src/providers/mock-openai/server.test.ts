@@ -812,28 +812,31 @@ describe("qa mock openai server", () => {
     expect(outputItems(body).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it("keeps final-only marker preview deltas separate from the final answer", async () => {
-    const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
-    const response = await expectStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK",
-        ),
-      ],
-    });
+  it.each(["", "@openclaw ", "@sut_bot "])(
+    "keeps final-only marker preview deltas separate from the final answer with prefix %j",
+    async (prefix) => {
+      const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
+      const response = await expectStreamingResponses(server, {
+        input: [
+          makeUserInput(
+            `${prefix}Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK`,
+          ),
+        ],
+      });
 
-    const responseBody = await response.text();
-    const deltaText = responseBody
-      .split("\n")
-      .filter((line) => line.startsWith("data: {"))
-      .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
-      .filter((event) => event.type === "response.output_text.delta")
-      .map((event) => event.delta ?? "")
-      .join("");
-    expect(deltaText).toBe("QA streaming preview in progress");
-    expect(deltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
-    expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
-  });
+      const responseBody = await response.text();
+      const deltaText = responseBody
+        .split("\n")
+        .filter((line) => line.startsWith("data: {"))
+        .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
+        .filter((event) => event.type === "response.output_text.delta")
+        .map((event) => event.delta ?? "")
+        .join("");
+      expect(deltaText).toBe("QA streaming preview in progress");
+      expect(deltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
+      expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
+    },
+  );
 
   it("plans sessions_send for the A2A message-tool mirror proof scenario", async () => {
     const server = await startMockServer();

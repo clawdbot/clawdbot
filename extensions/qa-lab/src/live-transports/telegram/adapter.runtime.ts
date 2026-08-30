@@ -270,7 +270,6 @@ export async function createTelegramQaTransportAdapter(
         sutToken: credentialLease.payload.sutToken,
         testerUserId: credentialLease.payload.testerUserId,
         sutAccountId: accountId,
-        requireMention: options.transportPolicy?.requireGroupMention === true,
       }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForTelegramChannelRunning(gateway, accountId, {
