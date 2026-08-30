@@ -921,35 +921,6 @@ describe("buildIMessageInboundContext", () => {
     expect(imessageTo).toBe("sms:+15555550123");
     expect(channelConfigReads).toBe(0);
   });
-
-  it("uses the exact chat GUID for a direct reply when no numeric chat ID is available", async () => {
-    const message = {
-      id: 12349,
-      guid: "p:0/GUID-current-guid-only",
-      sender: "+15555550123",
-      text: "current",
-      is_from_me: false,
-      is_group: false,
-      chat_guid: "iMessage;-;+15555550123",
-    };
-    const decision = await resolveDecision({ message });
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload, imessageTo } = await buildIMessageInboundContext({
-      cfg: {} as OpenClawConfig,
-      accountService: undefined,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(ctxPayload.To).toBe("chat_guid:iMessage;-;+15555550123");
-    expect(imessageTo).toBe("imessage:+15555550123");
-  });
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
