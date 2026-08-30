@@ -524,7 +524,7 @@ export function handlePageGatewayEvent(
   state: ChatPageHost,
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
-): void | Promise<void> {
+): void {
   if (event.event === "session.approval") {
     const payload = asNullableRecord(event.payload);
     if (!payload || typeof payload.sessionKey !== "string") {
@@ -649,7 +649,8 @@ export function handlePageGatewayEvent(
       }
     };
     if (retirement instanceof Promise) {
-      return retirement.then(finish);
+      void retirement.then(finish);
+      return;
     }
     finish(retirement);
     return;

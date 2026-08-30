@@ -688,9 +688,8 @@ export async function resumeStoredChatOutboxes(
   if (!host.connected || !host.client) {
     return;
   }
-  // Recovery can change credentials on the same client. Refresh the visible
-  // owner even when the new principal has no outboxes to drain.
-  syncVisibleChatQueueProjection(host);
+  // Refresh credential ownership; callers own frame-coalesced rendering.
+  syncVisibleChatQueueProjection(host, { requestUpdate: false });
   await Promise.allSettled(
     listStoredChatOutboxes(host).map((outbox) =>
       scheduleStoredChatOutboxDrain(host, outbox, dependencies),

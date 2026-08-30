@@ -43,6 +43,7 @@ import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import * as chatSendSupport from "./chat-send-support.ts";
 import {
   getPendingChatPickerPatch,
   switchChatFastMode,
@@ -73,6 +74,9 @@ import {
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
+type DeliveredTurnRetirement = Awaited<
+  ReturnType<typeof chatSendSupport.retireDeliveredQueuedUserTurn>
+>;
 
 function clientWithRequest(request: GatewayRequestHandler): NonNullable<ChatHost["client"]> {
   return createTestGatewayClient(request);
@@ -5699,7 +5703,7 @@ describe("handleSendChat", () => {
       let stopInactive = () => {};
       const hydration = createDeferred();
       const pendingReads: Array<ReturnType<typeof outboxPayloadStore.readOutboxPayload>> = [];
-      const pendingTerminals: Promise<void>[] = [];
+      const pendingRetirements: Promise<DeliveredTurnRetirement>[] = [];
       try {
         await handleSendChat(source);
         holdHistory = true;
@@ -5769,12 +5773,21 @@ describe("handleSendChat", () => {
             },
           },
         } as Parameters<typeof handlePageGatewayEvent>[1];
-        const first = handlePageGatewayEvent(asChatPageHost(inactive), event);
-        const second = handlePageGatewayEvent(asChatPageHost(visible), event);
-        pendingTerminals.push(Promise.resolve(first), Promise.resolve(second));
+        const retirementOwner = vi.spyOn(chatSendSupport, "retireDeliveredQueuedUserTurn");
+        expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
+        expect(handlePageGatewayEvent(asChatPageHost(visible), event)).toBeUndefined();
+        expect(retirementOwner).toHaveBeenCalledTimes(2);
+        // Dispatch registers its finish callback before this test observes owner completion.
+        for (const result of retirementOwner.mock.results) {
+          if (result.type !== "return") {
+            throw new Error("Expected the real retirement owner to return normally");
+          }
+          pendingRetirements.push(Promise.resolve(result.value));
+        }
         if (handoff === "live") {
-          expect(first).toBeUndefined();
-          expect(second).toBeUndefined();
+          // The inactive pane pins the handoff; the sending pane owns live retirement.
+          expect(retirementOwner).toHaveNthReturnedWith(1, "retained");
+          expect(retirementOwner).toHaveNthReturnedWith(2, "retired");
           expect(read).not.toHaveBeenCalled();
         } else {
           await waitForFast(() => expect(read).toHaveBeenCalled());
@@ -5805,7 +5818,7 @@ describe("handleSendChat", () => {
           visible.chatStream = "newer run is still streaming";
         }
         hydration.resolve();
-        await Promise.all(pendingTerminals);
+        await Promise.all(pendingRetirements);
         credential?.mockRestore();
         if (handoff === "new-credentials" || handoff === "new-attempt") {
           expect(cleanup).not.toHaveBeenCalled();
@@ -5839,7 +5852,7 @@ describe("handleSendChat", () => {
       } finally {
         hydration.resolve();
         history.resolve(idleChatHistory(sessionKey));
-        await Promise.all(pendingTerminals);
+        await Promise.all(pendingRetirements);
         await Promise.all(pendingReads);
         stopInactive();
         stopVisible();
