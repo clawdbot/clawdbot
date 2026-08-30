@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.snapshot plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPageForTargetId = vi.fn();
@@ -282,7 +283,7 @@ describe("pw-tools-core aria snapshot storage", () => {
 
   it("times out a stalled selector probe without publishing late refs", async () => {
     const mod = await import("./pw-tools-core.snapshot.js");
-    const pendingCount = Promise.withResolvers<number>();
+    const pendingCount = createDeferred<number>();
     const ariaSnapshot = vi.fn(async () => '- button "Late"');
     const page = {
       ...makeAriaSnapshotPage(ariaSnapshot),
@@ -312,7 +313,7 @@ describe("pw-tools-core aria snapshot storage", () => {
 
   it("shares the capture timeout between selector lookup and snapshot", async () => {
     const mod = await import("./pw-tools-core.snapshot.js");
-    const pendingCount = Promise.withResolvers<number>();
+    const pendingCount = createDeferred<number>();
     const ariaSnapshot = vi.fn(async () => '- button "Present"');
     getPageForTargetId.mockResolvedValue({
       ...makeAriaSnapshotPage(ariaSnapshot),
