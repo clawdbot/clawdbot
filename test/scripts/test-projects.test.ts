@@ -1029,7 +1029,27 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/scripts/ci-workflow-guards.test.ts",
     ];
     const workflowTargets = new Map([
-      [".github/workflows/mantis-discord-smoke.yml", packageAcceptanceTargets],
+      [
+        ".github/workflows/mantis-discord-smoke.yml",
+        [
+          ...packageAcceptanceTargets,
+          "test/scripts/ci-git-owner.test.ts",
+          "test/scripts/ci-linux-git.test.ts",
+          "test/scripts/ci-platform-checkout.test.ts",
+          "src/scripts/ci-changed-scope.test.ts",
+        ],
+      ],
+      [
+        ".github/actions/mantis-validate-trusted-ref/action.yml",
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+          ...packageAcceptanceTargets,
+          "test/scripts/ci-git-owner.test.ts",
+          "test/scripts/ci-linux-git.test.ts",
+          "test/scripts/ci-platform-checkout.test.ts",
+          "src/scripts/ci-changed-scope.test.ts",
+        ],
+      ],
       [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],

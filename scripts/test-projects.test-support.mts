@@ -2390,12 +2390,12 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, workflowGuards],
   ],
   [
-    /^\.github\/workflows\/mantis-web-ui-chat-proof\.yml$/u,
+    /^\.github\/(?:workflows\/mantis-web-ui-chat-proof\.yml|actions\/mantis-validate-trusted-ref\/action\.yml)$/u,
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
   [
-    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner)\/|workflows\/(?:workflow-sanity|qa-profile-evidence)\.yml$)/u,
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|mantis-discord-smoke)\.yml$)/u,
     ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
   ],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],

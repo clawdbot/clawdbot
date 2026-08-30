@@ -458,6 +458,8 @@ async function command() {
       );
     }
     fs.writeSync(1, `${args.map((ref) => resolveRef(cwd, ref)).join("\n")}\n`);
+  } else if (operation === "tag" && args[0] === "--points-at") {
+    boundary("tag");
   } else if (operation === "merge-base" && options.mergeBase) {
     boundary("merge-base");
     if (args[0] === "--is-ancestor") {

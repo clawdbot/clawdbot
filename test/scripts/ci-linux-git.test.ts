@@ -658,3 +658,132 @@ posixIt.each(qaGitCases.filter(({ label, reason }) => !reason || label === "main
   },
   55_000,
 );
+
+const mantisReleaseRef = "release/2026.8.1";
+const mantisReleaseFetch = [
+  "fetch",
+  "--no-tags",
+  "origin",
+  `+refs/heads/${mantisReleaseRef}:refs/remotes/origin/${mantisReleaseRef}`,
+];
+const mantisCases = [
+  { label: "candidate main ancestor", shared: true },
+  { label: "baseline before candidate", shared: true, baseline: true },
+  { label: "Discord main ancestor", shared: false },
+  { label: "Discord exact release branch", shared: false, release: true },
+  {
+    label: "Discord release mismatch never consults PRs",
+    shared: false,
+    release: true,
+    mismatch: true,
+  },
+] satisfies {
+  label: string;
+  shared: boolean;
+  baseline?: boolean;
+  release?: boolean;
+  mismatch?: boolean;
+}[];
+
+posixIt.each([
+  ...mantisCases.map((entry) => ({ ...entry, failure: 0 as FetchResult })),
+  ...[true, false].flatMap((shared) =>
+    (["cleanup-failure", 23] satisfies FetchResult[]).map((failure) => ({
+      label: `${shared ? "shared action" : "Discord"} terminal ${failure}`,
+      shared,
+      failure,
+    })),
+  ),
+])(
+  "Mantis ref Git owner drains before trust probes and publication: $label",
+  async (profile) => {
+    const { shared, failure } = profile;
+    const baseline = "baseline" in profile && profile.baseline;
+    const release = "release" in profile && profile.release;
+    const mismatch = "mismatch" in profile && profile.mismatch;
+    const fetches = release ? [qaMainFetch, mantisReleaseFetch] : [qaMainFetch];
+    const report = await runCiGitStep({
+      ...(shared
+        ? ({ action: "mantis-validate-trusted-ref", step: "Validate refs are trusted" } as const)
+        : {
+            workflow: {
+              file: ".github/workflows/mantis-discord-smoke.yml",
+              job: "validate_selected_ref",
+              step: "Validate selected ref",
+            },
+          }),
+      fetchResults: failure ? [failure] : fetches.map(() => 0),
+      realClock: true,
+      poisonPython: true,
+      env: {
+        BASELINE_REF: baseline ? "baseline" : "",
+        CANDIDATE_REF: "candidate",
+        INPUT_REF: release ? mantisReleaseRef : "main",
+      },
+      revisions: {
+        "baseline^{commit}": base,
+        "candidate^{commit}": candidate,
+        [`refs/heads/${mantisReleaseRef}`]: mismatch ? moved : candidate,
+      },
+      mergeBase: { ancestor: !release, revision: base },
+    });
+    const code = failure === "cleanup-failure" ? 125 : failure || (mismatch ? 1 : 0);
+    expect(report.code, report.output).toBe(code);
+    expect(report.readyAttempts).toEqual(fetches.map((_, index) => index + 1));
+    expect(report.fetches.map(({ args }) => args)).toEqual(fetches);
+    expect(
+      report.fetches.every(
+        ({ cwd, configuration }) => cwd === report.workspace && configuration?.length === 0,
+      ),
+    ).toBe(true);
+    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    const probes = failure
+      ? []
+      : [
+          ...(baseline
+            ? [
+                ["rev-parse", "baseline^{commit}"],
+                ["merge-base", "--is-ancestor", base, "refs/remotes/origin/main"],
+              ]
+            : []),
+          ...(shared ? [["rev-parse", "candidate^{commit}"]] : []),
+          ["merge-base", "--is-ancestor", candidate, "refs/remotes/origin/main"],
+          ...(release
+            ? [
+                ["tag", "--points-at", candidate],
+                mantisReleaseFetch,
+                ["rev-parse", `refs/remotes/origin/${mantisReleaseRef}`],
+              ]
+            : []),
+        ];
+    expect(report.commands.map(({ args }) => args)).toEqual([
+      ...(!shared ? [["rev-parse", "HEAD"]] : []),
+      qaMainFetch,
+      ...probes,
+    ]);
+    const reason = release ? "release-branch-head" : "main-ancestor";
+    expect(report.githubOutput).toBe(
+      code !== 0
+        ? ""
+        : shared
+          ? `${baseline ? `baseline_revision=${base}\n` : ""}candidate_revision=${candidate}\n`
+          : `selected_revision=${candidate}\ntrusted_reason=${reason}\n`,
+    );
+    expect(report.githubSummary).toBe(
+      code !== 0
+        ? ""
+        : shared
+          ? `${baseline ? `baseline: \`baseline\`\nbaseline SHA: \`${base}\`\nbaseline trust reason: \`main-ancestor\`\n` : ""}candidate: \`candidate\`\ncandidate SHA: \`${candidate}\`\ncandidate trust reason: \`main-ancestor\`\n`
+          : `Validated ref: \`${release ? mantisReleaseRef : "main"}\`\nResolved SHA: \`${candidate}\`\nTrust reason: \`${reason}\`\n`,
+    );
+    expect(report.githubEnv).toBe("");
+    expect(report.githubPath).toBe("");
+    if (failure === "cleanup-failure") {
+      expect(report.output).toContain("Git ownership/setup failed");
+    }
+    if (mismatch) {
+      expect(report.output).toContain("not trusted for this secret-bearing Mantis run");
+    }
+  },
+  55_000,
+);

@@ -81,7 +81,7 @@ function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { r
 export async function runCiGitStep(options: {
   workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
-  action?: "ensure-base-commit" | "git-owner";
+  action?: "ensure-base-commit" | "git-owner" | "mantis-validate-trusted-ref";
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
@@ -106,6 +106,7 @@ export async function runCiGitStep(options: {
   cancelDuringBackoff?: boolean;
   setupFailure?: "owner" | "python" | "git";
 }) {
+  const externalOwner = options.workflow || options.action === "mantis-validate-trusted-ref";
   const clock = {
     ...options,
     realDrain:
@@ -116,7 +117,7 @@ export async function runCiGitStep(options: {
         parse(readFileSync(`.github/actions/${options.action}/action.yml`, "utf8")) as {
           runs: { steps: (Step & { run: string })[] };
         }
-      ).runs.steps[0]
+      ).runs.steps.find((entry) => (options.step ? entry.name === options.step : entry.run))
     : options.workflow
       ? readWorkflowStep(
           options.workflow === "workflow-sanity"
@@ -131,7 +132,7 @@ export async function runCiGitStep(options: {
           options.job ?? "security-fast",
           options.step ?? (options.job ? "Checkout" : "Prepare Git owner"),
         );
-  if (!step) {
+  if (!step?.run) {
     throw new Error("Missing executable action step");
   }
   let env: Record<string, string>;
@@ -148,7 +149,7 @@ export async function runCiGitStep(options: {
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
-      if (options.workflow) {
+      if (externalOwner) {
         // Workflow bodies follow actions/checkout; selected-source bootstrap must
         // still create its own directory, while later selected steps inherit one.
         for (const directory of [
@@ -210,7 +211,7 @@ export async function runCiGitStep(options: {
           fetchResults: options.fetchResults,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
-          consumers: options.prepare ?? false,
+          consumers: Boolean(options.prepare || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
           baseAvailableAfter: options.baseAvailableAfter,
           invalidRef: options.invalidRef,
@@ -222,7 +223,7 @@ export async function runCiGitStep(options: {
         }),
       );
       let run = renderGitTestClock(step.run, clock);
-      if (options.workflow) {
+      if (externalOwner) {
         const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
           runs: { steps: { run?: string }[] };
         };
@@ -269,7 +270,7 @@ ${run}`;
       expect(result, stderr).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
       expectCiCheckoutCleanup(report);
-      if (options.workflow) {
+      if (externalOwner) {
         for (const directory of new Set([
           workspace,
           ...report.commands

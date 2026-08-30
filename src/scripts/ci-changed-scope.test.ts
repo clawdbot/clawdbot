@@ -402,6 +402,8 @@ describe("detectChangedScope", () => {
     ".github/actions/git-owner/action.yml",
     ".github/workflows/workflow-sanity.yml",
     ".github/workflows/qa-profile-evidence.yml",
+    ".github/actions/mantis-validate-trusted-ref/action.yml",
+    ".github/workflows/mantis-discord-smoke.yml",
     ".github/actions/git-owner/owner.py",
     ".github/actions/ensure-base-commit/action.yml",
     ".github/actions/ensure-base-commit/policy.py",
