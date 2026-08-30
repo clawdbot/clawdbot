@@ -17,7 +17,7 @@ function makeAzureResponsesModel(supportsPromptCacheKey?: boolean) {
     baseUrl: "https://example.openai.azure.com/openai/v1",
     ...(supportsPromptCacheKey === undefined
       ? {}
-      : { compat: { supportsPromptCacheKey } }),
+      : { compat: { supportsPromptCacheKey } as never }),
   });
 }
 
@@ -27,7 +27,7 @@ function makeCustomProxyResponsesModel(supportsPromptCacheKey?: boolean) {
     baseUrl: "https://proxy.example.test/v1",
     ...(supportsPromptCacheKey === undefined
       ? {}
-      : { compat: { supportsPromptCacheKey } }),
+      : { compat: { supportsPromptCacheKey } as never }),
   });
 }
 
