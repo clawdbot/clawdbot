@@ -499,16 +499,28 @@ describe("session state events", () => {
     ).toEqual({ count: 1 });
   });
 
-  it("ignores legacy bare target cursors without an owning agent", () => {
+  it("ignores legacy bare target cursors without an owning agent", async () => {
     const database = createDatabaseOptions();
-    openOpenClawStateDatabase(database)
-      .db.prepare(
+    await createWatcherSession(database);
+    const stateDb = openOpenClawStateDatabase(database).db;
+    const now = Date.now();
+    stateDb
+      .prepare(
         `INSERT INTO session_watch_cursors
          (watcher_session_key, target_session_key, last_seen_sequence, notified_sequence,
           material_sequence, provenance, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(watcher, "global", 0, 0, 0, "explicit", 1);
+      .run(watcher, "global", 0, 0, 0, "explicit", now);
+    const readLegacyCursor = () =>
+      stateDb
+        .prepare(
+          `SELECT last_seen_sequence, notified_sequence, material_sequence
+         FROM session_watch_cursors
+         WHERE watcher_session_key = ? AND target_session_key = ?`,
+        )
+        .get(watcher, "global");
+    const initialCursor = readLegacyCursor();
 
     recordSessionStateEvent(
       eventInput({
@@ -518,13 +530,18 @@ describe("session state events", () => {
         actorType: "human",
         watcherSessionKeys: [],
       }),
-      database,
+      { ...database, now },
     );
 
-    expect(readCursor(database, watcher, "global")).toBeUndefined();
+    expect(initialCursor).toEqual({
+      last_seen_sequence: 0,
+      notified_sequence: 0,
+      material_sequence: 0,
+    });
+    expect(readLegacyCursor()).toEqual(initialCursor);
     expect(peekSystemEventEntries(watcher)).toHaveLength(0);
     acknowledgeSessionStateNotices(watcher, ["global"], database);
-    expect(readCursor(database, watcher, "global")).toBeUndefined();
+    expect(readLegacyCursor()).toEqual(initialCursor);
   });
 
   it("acks only drained session-state entries and ignores ordinary events", async () => {
