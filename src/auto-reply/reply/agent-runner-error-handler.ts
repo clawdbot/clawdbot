@@ -16,6 +16,7 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderBillingReplyCopy,
   renderControlUiAgentFailureCopy,
+  renderFailoverCodeUserCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
 } from "../../agents/failover/user-copy.js";
@@ -481,7 +482,9 @@ export async function handleAgentExecutionError(params: {
         )
       : undefined;
   const externalRunFailureReply =
-    !params.shouldSurfaceToControlUi || externalRunFailureCandidate?.presentation
+    !params.shouldSurfaceToControlUi ||
+    externalRunFailureCandidate?.presentation ||
+    renderFailoverCodeUserCopy(failoverFacts.code)
       ? externalRunFailureCandidate
       : undefined;
   const fallbackText = isBilling

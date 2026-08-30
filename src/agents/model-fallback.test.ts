@@ -805,6 +805,44 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("preserves selected-profile identity in exhausted fallback summaries", async () => {
+    const code = "selected_auth_profile_unavailable";
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("primary selected profile missing", {
+          provider: "openai",
+          model: "gpt-5.5",
+          reason: "auth",
+          status: 401,
+          code,
+        }),
+      )
+      .mockRejectedValueOnce(
+        new FailoverError("fallback selected profile missing", {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          reason: "auth",
+          status: 401,
+          code,
+        }),
+      );
+
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6"]),
+          provider: "openai",
+          model: "gpt-5.5",
+          run,
+        }),
+      ),
+    );
+
+    expect(error).toMatchObject({ reason: "auth", status: 401, code });
+    expect(error.attempts).toMatchObject([{ code }, { code }]);
+  });
+
   it("does not replay CLI max-turn failures on configured fallback models", async () => {
     const failure = new FailoverError(
       "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
