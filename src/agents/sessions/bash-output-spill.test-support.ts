@@ -250,10 +250,12 @@ export async function expectNativeBashSpill(
     try {
       await writeFile(join(root, "release"), "release", { flag: "wx", mode: 0o600 });
     } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
+        throw error;
+      }
     }
     const producer = JSON.parse(
-      await readFile(join(root, "producer.json"), "utf8").catch((error) => {
+      await readFile(join(root, "producer.json"), "utf8").catch((error: unknown) => {
         throw new Error(
           `Missing producer receipt after child status ${result.status}: ${result.stderr}`,
           { cause: error },
