@@ -844,10 +844,15 @@ async function buildCdpRoleSnapshot(params: {
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
-      ...(nth > 0 ? { nth } : {}),
+      nth,
       ...(node.backendDOMNodeId ? { backendDOMNodeId: node.backendDOMNodeId } : {}),
       ...(params.frameId ? { frameId: params.frameId } : {}),
     };
+  }
+  for (const node of tree) {
+    if (node.ref && counts.get(`${node.role.toLowerCase()}:${node.name}`) === 1) {
+      delete refs[node.ref]?.nth;
+    }
   }
 
   const iframeFrameIds = await resolveIframeFrameIds(params.send, tree, params.sessionId);

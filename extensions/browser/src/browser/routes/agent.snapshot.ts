@@ -859,18 +859,17 @@ export function registerBrowserAgentSnapshotRoutes(
               delta: deltaState.delta,
             };
 
+            const cdpRoleWsUrl =
+              plan.refsMode !== "aria" && !plan.selectorValue && !plan.frameSelectorValue
+                ? tab.wsUrl
+                : null;
             let usedCdpRoleSnapshot = false;
             const cdpRoleSnapshot = async (recurseIframes = true) => {
-              if (
-                !tab.wsUrl ||
-                plan.refsMode === "aria" ||
-                plan.selectorValue ||
-                plan.frameSelectorValue
-              ) {
+              if (!cdpRoleWsUrl) {
                 return null;
               }
               const snapshot = await snapshotRoleViaCdp({
-                wsUrl: tab.wsUrl,
+                wsUrl: cdpRoleWsUrl,
                 ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
                 urls: plan.urls,
                 recurseIframes,
@@ -888,15 +887,7 @@ export function registerBrowserAgentSnapshotRoutes(
             };
 
             const pw = pwModule;
-            const cdpFirstPw =
-              pw &&
-              plan.wantsRoleSnapshot &&
-              tab.wsUrl &&
-              plan.refsMode !== "aria" &&
-              !plan.selectorValue &&
-              !plan.frameSelectorValue
-                ? pw
-                : null;
+            const cdpFirstPw = pw && plan.wantsRoleSnapshot && cdpRoleWsUrl ? pw : null;
             const snap = plan.wantsRoleSnapshot
               ? cdpFirstPw
                 ? await cdpRoleSnapshot(false).catch(async () => {

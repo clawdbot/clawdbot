@@ -377,6 +377,48 @@ describe("cdp internal", () => {
   });
 
   describe("snapshotRoleViaCdp", () => {
+    it("keeps zero-based indexes on duplicate role refs", async () => {
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Accessibility.getFullAXTree") {
+          return axTreeResult([
+            {
+              nodeId: "1",
+              role: { value: "RootWebArea" },
+              name: { value: "" },
+              childIds: ["2", "3"],
+            },
+            {
+              nodeId: "2",
+              role: { value: "button" },
+              name: { value: "Save" },
+              childIds: [],
+            },
+            {
+              nodeId: "3",
+              role: { value: "button" },
+              name: { value: "Save" },
+              childIds: [],
+            },
+          ]);
+        }
+        if (msg.method === "Runtime.evaluate") {
+          return runtimeValueResult([]);
+        }
+        return undefined;
+      });
+      wss = server.wss;
+
+      const snap = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        options: { interactive: true },
+      });
+
+      expect(snap.refs).toMatchObject({
+        e1: { role: "button", name: "Save", nth: 0 },
+        e2: { role: "button", name: "Save", nth: 1 },
+      });
+    });
+
     it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {
       const server = await startMockWsServer((msg) => {
         if (msg.method === "Accessibility.getFullAXTree") {
