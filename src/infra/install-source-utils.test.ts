@@ -308,6 +308,24 @@ describe("resolveNpmSpecMetadata", () => {
     });
   });
 
+  it.each(["v2", "2", "2.x"])("preserves the semver-like npm dist-tag %s", async (selector) => {
+    mockPackCommandResult({
+      stdout: JSON.stringify({ ...npmViewMetadata, version: "1.0.0" }),
+    });
+
+    const result = await resolveNpmSpecMetadata({
+      spec: `@openclaw/codex@${selector}`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      metadata: expect.objectContaining({
+        version: "1.0.0",
+        resolvedSpec: "@openclaw/codex@1.0.0",
+      }),
+    });
+  });
+
   it("normalizes nested dist metadata", async () => {
     mockPackCommandResult({
       stdout: JSON.stringify({
