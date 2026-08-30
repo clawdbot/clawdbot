@@ -119,9 +119,9 @@ function isStyleHidden(style: string): boolean {
 }
 
 // The fixed visibility attributes share one grammar; each reader compiles it once per process.
-function createAttributeReader(name: "aria-hidden" | "class" | "hidden" | "style" | "type") {
+function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "style" | "type") {
   const pattern = new RegExp(
-    `(?:^|\\s)${name}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\`]+)))?`,
+    `(?:^|\\s)${attribute}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\`]+)))?`,
     "i",
   );
   return (attrs: string): string | undefined => {
