@@ -166,6 +166,34 @@ describe("web push Gateway reconciliation", () => {
     capability.dispose();
   });
 
+  it("makes actions unavailable when the lazy runtime fails to load", async () => {
+    vi.resetModules();
+    vi.doMock("./web-push.runtime.ts", () => {
+      throw new Error("Web Push runtime unavailable");
+    });
+    const { createWebPushCapability: createCapabilityWithFailedRuntime } =
+      await import("./web-push.ts");
+
+    const capability = createCapabilityWithFailedRuntime(gatewayHarness().gateway);
+    try {
+      await vi.waitFor(() =>
+        expect(capability.snapshot).toMatchObject({
+          supported: false,
+          permission: "unsupported",
+          subscription: "unknown",
+          error: expect.stringContaining("Web Push runtime unavailable"),
+        }),
+      );
+      await capability.run({ kind: "enable" });
+
+      expect(capability.snapshot.loading).toBe(false);
+    } finally {
+      capability.dispose();
+      vi.doUnmock("./web-push.runtime.ts");
+      vi.resetModules();
+    }
+  });
+
   it("keeps subscribers independent when an older listener unsubscribes", async () => {
     const harness = gatewayHarness();
     const capability = createWebPushCapability(harness.gateway);

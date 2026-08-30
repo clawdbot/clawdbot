@@ -16,6 +16,7 @@ import {
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { getUserPreferences } from "../state/user-preferences.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
@@ -51,7 +52,11 @@ function resolveEventWebPushNotification(
       tag: `openclaw-question-${id}`,
     };
   }
-  if (event === "chat" && value.state === "final") {
+  if (
+    event === "chat" &&
+    value.state === "final" &&
+    !isTranscriptOnlyOpenClawAssistantMessage(value.message)
+  ) {
     const runId = normalizeWebPushDisplayLabel(value.runId) ?? "finished";
     return {
       category: "agent-finished",

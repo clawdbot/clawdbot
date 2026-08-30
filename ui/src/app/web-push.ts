@@ -61,7 +61,13 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
           createWebPushCapabilityRuntime({ gateway, publish }),
         )
         .catch((error: unknown) => {
-          publish({ error: formatUiError(error) });
+          publish({
+            supported: false,
+            permission: "unsupported",
+            subscription: "unknown",
+            preferences: null,
+            error: formatUiError(error),
+          });
           return null;
         })
     : null;

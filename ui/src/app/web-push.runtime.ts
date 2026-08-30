@@ -37,6 +37,7 @@ export type WebPushCapabilityPatch = {
   error?: string | null;
   loading?: boolean;
   permission?: NotificationPermission | "unsupported";
+  supported?: boolean;
   subscription?: WebPushSubscriptionState;
   preferences?: WebPushPreferencesResult | null;
 };

@@ -94,6 +94,25 @@ describe("event Web Push classification", () => {
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
+  it("does not treat injected transcript updates as agent completion", async () => {
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+
+    delivery.handleEvent("chat", {
+      state: "final",
+      runId: "inject-message-1",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Injected transcript update" }],
+      },
+    });
+
+    await Promise.resolve();
+    expect(prepareWebPushNotificationSenderMock).not.toHaveBeenCalled();
+    expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+  });
+
   it("sends questions with control characters escaped in durable tags", async () => {
     listDevicePairingMock.mockReturnValue({
       pending: [],
