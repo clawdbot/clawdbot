@@ -43,16 +43,9 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   const windows = params.windowsCleanup;
 
   const schedule = (fn: () => void, delay: number) => {
-    const timer = setTimeout(() => {
-      fn();
-    }, delay);
+    const timer = setTimeout(fn, delay);
     timers.push(timer);
     return timer;
-  };
-  const cancel = (timer: NodeJS.Timeout | undefined) => {
-    if (timer) {
-      clearTimeout(timer);
-    }
   };
   // Cleanup owns only the original PGID; a descendant that calls setsid can escape it.
   const alive = () =>
@@ -162,7 +155,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   };
   const freeze = (nextPrimary: QaPosixCommandPrimary, initialSignal = params.initialSignal) => {
     primary ??= nextPrimary;
-    cancel(executionTimer);
+    clearTimeout(executionTimer);
     // Every terminal path needs a drain bound: an escaped descendant can retain
     // inherited stdio even after the original process group is gone.
     armDrainDeadline();
@@ -170,7 +163,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     settle();
   };
   const armIdle = () => {
-    cancel(drainIdle);
+    clearTimeout(drainIdle);
     drainIdle = schedule(startCleanup, 100);
   };
   const onOutput = () => {
@@ -204,7 +197,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   // `exit` freezes the leader tuple; only `close` can prove stdio drained.
   function onExit(exitCode: number | null, nextSignal: NodeJS.Signals | null) {
     primary ??= { type: "exit", exitCode, signal: nextSignal };
-    cancel(executionTimer);
+    clearTimeout(executionTimer);
     armDrainDeadline();
     armIdle();
     if (cleanupStarted && !cleanupDone && !alive()) {
@@ -213,8 +206,8 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   }
   function onClose() {
     stdioDrained = true;
-    cancel(drainIdle);
-    cancel(drainDeadline);
+    clearTimeout(drainIdle);
+    clearTimeout(drainDeadline);
     if (!cleanupStarted && windows) {
       cleanupDone = true;
     } else if (cleanupStarted && windows?.closeCompletesCleanup) {
