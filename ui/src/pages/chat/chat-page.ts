@@ -36,7 +36,7 @@ import {
   type SplitDropRect,
   type SplitDropZone,
 } from "./split-drop-zone.ts";
-import type { ChatSplitLayout } from "./split-layout-types.ts";
+import type { ChatSplitLayout, SessionSplitHost } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
@@ -54,7 +54,7 @@ import {
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 
-export class ChatPage extends OpenClawLightDomElement {
+export class ChatPage extends OpenClawLightDomElement implements SessionSplitHost {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) data!: SessionChatRouteData;

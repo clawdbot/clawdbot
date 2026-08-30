@@ -4,11 +4,12 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history.ts";
-import type { ChatPage } from "../../pages/chat/chat-page.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
+import type { SessionSplitHost } from "../../pages/chat/split-layout-types.ts";
 import { nativeHistoryMessageIdentity } from "../chat/history-message-identity.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError } from "../format-error.ts";
+import { reserveExternalWindowForDeferredNavigation } from "../open-external-url.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import { showToast } from "../toast.ts";
 import {
@@ -36,7 +37,9 @@ type SessionNavigationTarget<TRouteId extends string> = {
 };
 
 export function canSplitSessionView(): boolean {
-  return document.querySelector<ChatPage>("openclaw-chat-page")?.sessionSplitAvailable === true;
+  return (
+    document.querySelector<SessionSplitHost>("openclaw-chat-page")?.sessionSplitAvailable === true
+  );
 }
 
 export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | undefined): boolean {
@@ -70,25 +73,25 @@ async function copySessionMarkdown<TRouteId extends string>(
     gateway.snapshot.hello === hello;
   const pages: unknown[][] = [];
   const seenCounts = new Map<string, number>();
-  let offset = 0;
-  let snapshot: ChatHistoryResult | undefined;
-  while (true) {
-    const page = await client.request<ChatHistoryResult>("chat.history", {
+  const requestHistory = (offset: number, limit = 1000) =>
+    client.request<ChatHistoryResult>("chat.history", {
       sessionKey: session.key,
       agentId,
-      limit: 1000,
+      limit,
       maxChars: 500_000,
       offset,
     });
+  let offset = 0;
+  let snapshot: ChatHistoryResult | undefined;
+  while (true) {
+    const page = await requestHistory(offset);
     // Offsets are relative to the current tail. Never stitch different sessions,
     // branches, or growing transcripts into a seemingly complete export.
     if (
       !isCurrent() ||
       (session.sessionId && page.sessionId !== session.sessionId) ||
       (snapshot &&
-        (page.sessionId !== snapshot.sessionId ||
-          page.totalMessages !== snapshot.totalMessages ||
-          page.sessionInfo?.activeLeafEntryId !== snapshot.sessionInfo?.activeLeafEntryId))
+        (page.sessionId !== snapshot.sessionId || page.totalMessages !== snapshot.totalMessages))
     ) {
       throw new Error(t("sessionsView.copyTranscriptChanged"));
     }
@@ -114,6 +117,20 @@ async function copySessionMarkdown<TRouteId extends string>(
       throw new Error(t("sessionsView.copyTranscriptChanged"));
     }
     offset = page.nextOffset;
+  }
+  if (pages.length > 1) {
+    // Only tail pages carry the branch marker and history cursor. Re-read the
+    // tail after paging so a branch switch or rewrite cannot mix transcripts.
+    const tail = await requestHistory(0, 1);
+    if (
+      !isCurrent() ||
+      tail.sessionId !== snapshot.sessionId ||
+      tail.totalMessages !== snapshot.totalMessages ||
+      tail.deltaCursor !== snapshot.deltaCursor ||
+      tail.sessionInfo?.activeLeafEntryId !== snapshot.sessionInfo?.activeLeafEntryId
+    ) {
+      throw new Error(t("sessionsView.copyTranscriptChanged"));
+    }
   }
   const assistantName =
     context.agents.state.agentsList?.agents.find((agent) => agent.id === agentId)?.name ??
@@ -177,11 +194,13 @@ export async function runSessionNavigationAction<TRouteId extends string>(
       showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
       return;
     }
-    // The URL is a same-origin session route. Retaining the handle until this
-    // synchronous handoff lets us report popup blocking, then detach the opener.
-    const opened = window.open(href, "_blank", kind === "open-new-window" ? "popup" : undefined);
+    // Reserve an inert page so popup blocking remains observable, and detach
+    // its opener before loading the same-origin session route.
+    const opened = reserveExternalWindowForDeferredNavigation({
+      popup: kind === "open-new-window",
+    });
     if (opened) {
-      opened.opener = null;
+      opened.location.replace(href);
     } else {
       showToast({ message: t("sessionsView.openWindowBlocked") });
     }

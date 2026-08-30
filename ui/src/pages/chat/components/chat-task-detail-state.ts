@@ -1,11 +1,8 @@
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import {
-  CHAT_HISTORY_REQUEST_LIMIT,
-  type ChatHistoryResult,
-  visibleChatHistoryMessages,
-} from "../chat-history.ts";
+import { CHAT_HISTORY_REQUEST_LIMIT, type ChatHistoryResult } from "../chat-history.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
 
