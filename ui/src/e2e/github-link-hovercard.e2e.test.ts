@@ -251,6 +251,10 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "+101");
     await expectText(card, "−12");
     await expectText(card, "3 files");
+    await page.clock.runFor(300);
+    await captureArtifact(page, "github-hovercard-title-tooltip");
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    expect(await pullLink.getAttribute("title")).toBe("");
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
     const pullBox = await card.boundingBox();
@@ -265,6 +269,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "Keep hover previews compact");
     await expectText(card, "octocat");
     await expectText(card, "4 comments");
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
 
@@ -278,6 +283,12 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.getByRole("link", { exact: true, name: "repository" }).hover();
     await page.clock.runFor(300);
     await expect.poll(() => card.count()).toBe(0);
+
+    const fileLink = page.getByRole("link", { name: "SKILL.md" });
+    await fileLink.hover();
+    await expect
+      .poll(() => page.locator("openclaw-tooltip[open]").textContent())
+      .toContain("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
     const missingLink = page.getByRole("link", { name: "missing item" });
     await missingLink.hover();
@@ -297,6 +308,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     await pullLink.focus();
     await expectText(card, "Merged");
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
     await expect
