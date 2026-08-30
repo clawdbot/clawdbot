@@ -24,6 +24,31 @@ const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
+/**
+ * Removes the temporary exec state directory. On Windows the exec's own
+ * session/memory SQLite handle can still be closing when cleanup runs, which
+ * makes `fs.rm` fail with EBUSY/EPERM and turns a successful run into a
+ * failed command. Retry with a short backoff so the process's own shutdown
+ * releases the handle before giving up.
+ */
+async function removeTemporaryStateDir(stateDir: string): Promise<void> {
+  const MAX_ATTEMPTS = 40;
+  const RETRY_DELAY_MS = 1000;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      const retryable = code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+      if (!retryable || attempt >= MAX_ATTEMPTS) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+}
+
 export type AgentExecCliOptions = {
   messageFile?: string;
   cwd?: string;
@@ -781,10 +806,20 @@ export async function agentExecCommand(
   runCleanupStep(() => runtimePaths?.pinRuntimePaths());
   if (temporaryStateDir) {
     try {
-      await fs.rm(temporaryStateDir, { recursive: true, force: true });
+      await removeTemporaryStateDir(temporaryStateDir);
     } catch (error) {
       cleanupError ??= error;
     }
+  }
+  // A cleanup failure (e.g. Windows EBUSY while the exec's own SQLite handle is
+  // still closing) must not turn a successful agent run into a failed command.
+  // The temporary state dir lives under the OS temp dir, so leaving it behind
+  // is harmless; only surface the failure when the run itself already failed.
+  if (cleanupError && commandResult.exitCode === 0) {
+    runtime.error(
+      `Agent exec cleanup warning (state dir not removed): ${formatErrorMessage(cleanupError)}`,
+    );
+    cleanupError = undefined;
   }
   if (cleanupError) {
     const cleanupFailure = new Error(

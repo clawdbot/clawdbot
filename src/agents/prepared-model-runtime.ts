@@ -70,7 +70,9 @@ const log = createSubsystemLogger("agents/prepared-model-runtime");
 // chain, and a timeout here is fatal to gateway startup. Cold builds (plugin
 // metadata + model catalog + stores) legitimately exceed 30s on slow or loaded
 // hosts, so match the 120s startup-grace scale used by channel connect.
-const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 120_000;
+// Local deployment on a loaded Windows host with a full repo checkout observed
+// standalone builds exceeding 120s; raise the bound to 300s for slow hosts.
+const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 300_000;
 let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();
