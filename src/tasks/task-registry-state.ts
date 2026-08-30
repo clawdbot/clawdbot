@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { shouldReplayRestoredTaskTerminalDelivery } from "./task-executor-policy.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import {
   cloneTaskDeliveryState,
@@ -77,9 +78,11 @@ export const controlRuntimeLoader = createLazyPromiseLoader(
   { cacheRejections: true },
 );
 
-let listenerStarter: () => void = () => {};
+let listenerStarter: (taskIds: readonly string[]) => void = () => {};
 
-export function setTaskRegistryListenerStarter(starter: () => void): void {
+export function setTaskRegistryListenerStarter(
+  starter: (taskIds: readonly string[]) => void,
+): void {
   listenerStarter = starter;
 }
 
@@ -496,10 +499,10 @@ export function compareTasksNewestFirst(
   return (right.insertionIndex ?? 0) - (left.insertionIndex ?? 0);
 }
 
-export function restoreTaskRegistryOnce() {
+export function restoreTaskRegistryOnce(): string[] {
   switch (taskRegistryRestoreState.status) {
     case "ready":
-      return;
+      return [];
     case "failed":
       throw taskRegistryRestoreState.error;
     case "restoring":
@@ -509,10 +512,24 @@ export function restoreTaskRegistryOnce() {
   }
   taskRegistryRestoreState = { status: "restoring" };
   try {
-    const restored = getTaskRegistryStore().loadSnapshot();
+    const store = getTaskRegistryStore();
+    const restored = store.loadSnapshot();
     const restoredTasks = new Map<string, TaskRecord>();
+    const restoredDeliveryReplayIds: string[] = [];
     for (const [taskId, task] of restored.tasks.entries()) {
-      restoredTasks.set(taskId, normalizeTaskTimestamps(task));
+      const normalized = normalizeTaskTimestamps(task);
+      const shouldReplayDelivery = shouldReplayRestoredTaskTerminalDelivery(normalized);
+      if (shouldReplayDelivery) {
+        restoredDeliveryReplayIds.push(taskId);
+      }
+      if (shouldReplayDelivery && normalized.deliveryStatus === "session_queued") {
+        // Re-arm only in memory. Disk keeps session_queued until the normal
+        // replay mutation persists the outcome, so a crash before replay is
+        // selected again on the next restore (at-least-once).
+        restoredTasks.set(taskId, { ...normalized, deliveryStatus: "failed" });
+      } else {
+        restoredTasks.set(taskId, normalized);
+      }
     }
     const restoredDeliveryStates = new Map(restored.deliveryStates);
 
@@ -534,6 +551,7 @@ export function restoreTaskRegistryOnce() {
         tasks: snapshotTaskRecords(tasks),
       }));
     }
+    return restoredDeliveryReplayIds;
   } catch (error) {
     clearTaskRegistryMemory();
     const message = formatErrorMessage(error);
@@ -549,8 +567,7 @@ export function restoreTaskRegistryOnce() {
 }
 
 export function ensureTaskRegistryReady(): void {
-  restoreTaskRegistryOnce();
-  listenerStarter();
+  listenerStarter(restoreTaskRegistryOnce());
 }
 
 export function reloadTaskRegistryFromStore(): void {

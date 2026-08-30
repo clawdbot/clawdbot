@@ -2583,72 +2583,162 @@ describe("task-registry", () => {
   });
 
   it("surfaces blocked follow-up once for failed subagent completion delivery", async () => {
-    await withTaskRegistryTempDir(async () => {
-      hoisted.sendMessageMock.mockRejectedValue(new Error("notifychat unavailable"));
+    await withTaskRegistryTempDir(
+      async () => {
+        hoisted.sendMessageMock.mockRejectedValue(new Error("notifychat unavailable"));
+        const ownerKey = "agent:main:main";
+        const expectedTerminalEvent =
+          "Background task blocked: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.";
+        const expectedFollowupEvent =
+          "Task needs follow-up: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.";
 
-      const task = createTaskFixture("subagent", {
-        childSessionKey: "agent:main:subagent:blocked-delivery",
-        requesterOrigin: NOTIFYCHAT_ORIGIN,
-        runId: "run-subagent-blocked",
-        task: "Deliver blocked completion",
-        deliveryStatus: "pending",
-      });
+        const task = createTaskFixture("subagent", {
+          childSessionKey: "agent:main:subagent:blocked-delivery",
+          requesterOrigin: NOTIFYCHAT_ORIGIN,
+          runId: "run-subagent-blocked",
+          task: "Deliver blocked completion",
+          deliveryStatus: "pending",
+        });
 
-      setTaskRunDeliveryStatusByRunId({
-        runId: task.runId!,
-        runtime: "subagent",
-        sessionKey: task.childSessionKey,
-        deliveryStatus: "failed",
-        error: "announce deferred or direct delivery failed",
-      });
-      finalizeSubagentTask(task, {
-        status: "succeeded",
-        endedAt: 250,
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
-      });
+        setTaskRunDeliveryStatusByRunId({
+          runId: task.runId!,
+          runtime: "subagent",
+          sessionKey: task.childSessionKey,
+          deliveryStatus: "failed",
+          error: "announce deferred or direct delivery failed",
+        });
+        finalizeSubagentTask(task, {
+          status: "succeeded",
+          endedAt: 250,
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+        });
 
-      await waitForAssertion(() => {
+        await waitForAssertion(() => {
+          expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "session_queued" });
+          expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+          const followupEvents = peekSystemEvents(ownerKey).filter((event) =>
+            event.startsWith("Task needs follow-up:"),
+          );
+          expect(followupEvents).toHaveLength(1);
+          expect(followupEvents[0]).toBe(expectedFollowupEvent);
+        });
+
+        resetSystemEventsForTest();
+        resetTaskRegistryForTests({ persist: false });
+        setTaskRegistryDeliveryRuntimeForTests({
+          sendMessage: hoisted.sendMessageMock,
+        });
+
+        requireTaskById(task.taskId);
+        await waitForAssertion(() => {
+          expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "session_queued" });
+          expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2);
+          const queuedEvents = peekSystemEvents(ownerKey);
+          expect(countMatching(queuedEvents, (event) => event === expectedTerminalEvent)).toBe(1);
+          expect(
+            countMatching(queuedEvents, (event) => event === expectedFollowupEvent),
+          ).toBe(1);
+        });
+
+        resetSystemEventsForTest();
+
+        const staleWrite = setTaskRunDeliveryStatusByRunId({
+          runId: task.runId!,
+          runtime: "subagent",
+          sessionKey: task.childSessionKey,
+          deliveryStatus: "failed",
+          error: "announce deferred or direct delivery failed",
+        });
+        expectRecordFields(staleWrite[0], { deliveryStatus: "session_queued" });
+
+        finalizeSubagentTask(task, {
+          status: "succeeded",
+          endedAt: 260,
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+        });
+        await maybeDeliverTaskTerminalUpdate(task.taskId);
+
         expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "session_queued" });
-        expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
-        const followupEvents = peekSystemEvents("agent:main:main").filter((event) =>
-          event.startsWith("Task needs follow-up:"),
-        );
-        expect(followupEvents).toHaveLength(1);
-        expect(followupEvents[0]).toBe(
-          "Task needs follow-up: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
-        );
-      });
+        const duplicateEvents = peekSystemEvents(ownerKey);
+        expect(countMatching(duplicateEvents, (event) => event === expectedTerminalEvent)).toBe(0);
+        expect(countMatching(duplicateEvents, (event) => event === expectedFollowupEvent)).toBe(0);
+        expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2);
+      },
+      { durableStore: true },
+    );
+  });
 
-      resetSystemEventsForTest();
+  it("replays failed blocked subagent completion delivery after restart", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        const ownerKey = "agent:main:main";
+        const expectedTerminalEvent =
+          "Background task blocked: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.";
+        const expectedFollowupEvent =
+          "Task needs follow-up: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.";
+        const task = createTaskFixture("subagent", {
+          childSessionKey: "agent:main:subagent:blocked-delivery-replay",
+          requesterOrigin: NOTIFYCHAT_ORIGIN,
+          runId: "run-subagent-blocked-replay",
+          task: "Replay blocked completion delivery",
+          deliveryStatus: "pending",
+          notifyPolicy: "silent",
+        });
 
-      const staleWrite = setTaskRunDeliveryStatusByRunId({
-        runId: task.runId!,
-        runtime: "subagent",
-        sessionKey: task.childSessionKey,
-        deliveryStatus: "failed",
-        error: "announce deferred or direct delivery failed",
-      });
-      expectRecordFields(staleWrite[0], { deliveryStatus: "session_queued" });
+        setTaskRunDeliveryStatusByRunId({
+          runId: task.runId!,
+          runtime: "subagent",
+          sessionKey: task.childSessionKey,
+          deliveryStatus: "failed",
+          error: "announce deferred or direct delivery failed",
+        });
+        finalizeSubagentTask(task, {
+          status: "succeeded",
+          endedAt: 250,
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
+        });
+        await flushAsyncWork();
 
-      finalizeSubagentTask(task, {
-        status: "succeeded",
-        endedAt: 260,
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion delivery failed before reaching the requester: announce deferred or direct delivery failed.",
-      });
-      await maybeDeliverTaskTerminalUpdate(task.taskId);
+        expectRecordFields(requireTaskById(task.taskId), {
+          deliveryStatus: "failed",
+          notifyPolicy: "silent",
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        expect(peekSystemEvents(ownerKey)).toStrictEqual([]);
 
-      expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "session_queued" });
-      expect(
-        countMatching(peekSystemEvents("agent:main:main"), (event) =>
-          event.startsWith("Task needs follow-up:"),
-        ),
-      ).toBe(0);
-      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
-    });
+        updateTaskNotifyPolicyById({
+          taskId: task.taskId,
+          notifyPolicy: "done_only",
+        });
+        expectRecordFields(requireTaskById(task.taskId), {
+          deliveryStatus: "failed",
+          notifyPolicy: "done_only",
+        });
+
+        hoisted.sendMessageMock.mockRejectedValue(new Error("notifychat unavailable"));
+        resetSystemEventsForTest();
+        resetTaskRegistryForTests({ persist: false });
+        setTaskRegistryDeliveryRuntimeForTests({
+          sendMessage: hoisted.sendMessageMock,
+        });
+
+        requireTaskById(task.taskId);
+        await waitForAssertion(() => {
+          expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "session_queued" });
+          expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+          const queuedEvents = peekSystemEvents(ownerKey);
+          expect(countMatching(queuedEvents, (event) => event === expectedTerminalEvent)).toBe(1);
+          expect(countMatching(queuedEvents, (event) => event === expectedFollowupEvent)).toBe(1);
+        });
+      },
+      { durableStore: true },
+    );
   });
 
   it("suppresses blocked follow-up for subagent completion when notify policy is silent", async () => {

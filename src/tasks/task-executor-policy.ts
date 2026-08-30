@@ -115,6 +115,15 @@ export function formatTaskStateChangeMessage(
   return null;
 }
 
+function isReplayableBlockedSubagentTask(task: TaskRecord): boolean {
+  return (
+    task.runtime === "subagent" &&
+    task.status === "succeeded" &&
+    task.terminalOutcome === "blocked" &&
+    task.notifyPolicy !== "silent"
+  );
+}
+
 export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
   if (task.notifyPolicy === "silent") {
     return false;
@@ -122,11 +131,7 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
   if (task.runtime === "subagent" && task.status !== "cancelled") {
     // Subagent lifecycle owns provider-result publication; task delivery only
     // surfaces a required completion after that lifecycle marks delivery blocked.
-    return (
-      task.status === "succeeded" &&
-      task.deliveryStatus === "failed" &&
-      task.terminalOutcome === "blocked"
-    );
+    return isReplayableBlockedSubagentTask(task) && task.deliveryStatus === "failed";
   }
   if (
     task.runtime === "subagent" &&
@@ -140,6 +145,13 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
     return false;
   }
   return task.deliveryStatus === "pending";
+}
+
+export function shouldReplayRestoredTaskTerminalDelivery(task: TaskRecord): boolean {
+  return (
+    isReplayableBlockedSubagentTask(task) &&
+    (task.deliveryStatus === "failed" || task.deliveryStatus === "session_queued")
+  );
 }
 
 export function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {

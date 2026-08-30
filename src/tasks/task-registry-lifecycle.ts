@@ -19,14 +19,27 @@ import {
   restoreTaskRegistryOnce,
   setTaskRegistryListenerStarter,
   setTaskRegistryListenerStop,
+  taskRegistryLog,
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 // Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
 const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
 
-function ensureListener() {
+function replayRestoredTaskTerminalDeliveries(taskIds: readonly string[]) {
+  for (const taskId of taskIds) {
+    void maybeDeliverTaskTerminalUpdate(taskId).catch((error) => {
+      taskRegistryLog.warn("Failed to replay restored task terminal delivery", {
+        taskId,
+        error,
+      });
+    });
+  }
+}
+
+function ensureListener(restoredDeliveryReplayIds: readonly string[]) {
   if (!claimTaskRegistryListenerStart()) {
+    replayRestoredTaskTerminalDeliveries(restoredDeliveryReplayIds);
     return;
   }
   const stop = onAgentEvent((evt) => {
@@ -133,6 +146,7 @@ function ensureListener() {
     }
   });
   setTaskRegistryListenerStop(stop);
+  replayRestoredTaskTerminalDeliveries(restoredDeliveryReplayIds);
 }
 
 setTaskRegistryListenerStarter(ensureListener);
