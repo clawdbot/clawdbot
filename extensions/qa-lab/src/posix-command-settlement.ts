@@ -37,6 +37,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   let drainIdle: NodeJS.Timeout | undefined;
   let drainTimedOut = false;
   let executionTimer: NodeJS.Timeout | undefined;
+  let parentSignal: "SIGINT" | "SIGTERM" | undefined;
   let primary: QaPosixCommandPrimary | undefined;
   let stdioDrained = false;
   const windows = params.windowsCleanup;
@@ -92,7 +93,6 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     if (disposed || !primary || !cleanupDone || !stdioDrained) {
       return;
     }
-    const parentSignal = primary.type === "parent-signal" ? primary.signal : undefined;
     const settlementFailure =
       errors.length > 1 ? new AggregateError(errors, params.settlementFailureMessage) : errors[0];
     dispose();
@@ -238,6 +238,9 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
       process.kill(process.pid, nextSignal);
       return;
     }
+    // The command outcome may already be frozen while descendants drain.
+    // Parent cancellation still has to be re-raised after cleanup.
+    parentSignal ??= nextSignal;
     freeze({ type: "parent-signal", signal: nextSignal }, nextSignal);
   };
   function onParentSigint() {

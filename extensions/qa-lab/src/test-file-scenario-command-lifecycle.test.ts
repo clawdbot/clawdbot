@@ -395,41 +395,64 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     expect(parentHandlers.size).toBe(0);
   });
 
-  it("forwards parent signals, cleans handlers, and preserves interruption details", async () => {
-    createChild();
-    setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
-    let processGroupAlive = true;
-    processKill.mockImplementation((pid, signal) => {
-      if (pid === -42 && signal === "SIGKILL") {
-        processGroupAlive = false;
-      }
-      if (pid === -42 && signal === 0 && !processGroupAlive) {
-        throw Object.assign(new Error("gone"), { code: "ESRCH" });
-      }
-      return true;
-    });
+  it.each([
+    {
+      phase: "running",
+      result: {
+        exitCode: 1,
+        failureMessage: "scenario-command interrupted by SIGTERM",
+        signal: "SIGTERM",
+      },
+    },
+    { phase: "exited", result: { exitCode: 7, signal: null } },
+    {
+      phase: "timed out",
+      result: {
+        exitCode: 1,
+        failureMessage: "scenario-command timed out after 100ms",
+        signal: null,
+      },
+    },
+  ])(
+    "re-raises a parent signal when the command is $phase without changing its outcome",
+    async ({ phase, result }) => {
+      const child = createChild();
+      setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
+      let processGroupAlive = true;
+      processKill.mockImplementation((pid, signal) => {
+        if (pid === -42 && signal === "SIGKILL") {
+          processGroupAlive = false;
+        }
+        if (pid === -42 && signal === 0 && !processGroupAlive) {
+          throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        }
+        return true;
+      });
 
-    const resultPromise = runCommand();
-    const signalHandler = parentHandlers.get("SIGTERM") as
-      | ((signal: ParentSignal) => void)
-      | undefined;
-    expect(signalHandler).toBeDefined();
-    signalHandler?.("SIGTERM");
-    await vi.advanceTimersByTimeAsync(20);
-    const child = spawnMock.mock.results[0]?.value as ChildProcess;
-    child.emit("exit", null, "SIGKILL");
-    child.emit("close", null, "SIGKILL");
-    await vi.advanceTimersByTimeAsync(10);
+      const resultPromise = runCommand(100);
+      if (phase === "exited") {
+        child.emit("exit", 7, null);
+      } else if (phase === "timed out") {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const signalHandler = parentHandlers.get("SIGTERM") as
+        | ((signal: ParentSignal) => void)
+        | undefined;
+      expect(signalHandler).toBeDefined();
+      signalHandler?.("SIGTERM");
+      await vi.advanceTimersByTimeAsync(20);
+      child.emit("exit", null, "SIGKILL");
+      child.emit("close", null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(10);
 
-    await expect(resultPromise).resolves.toEqual({
-      exitCode: 1,
-      failureMessage: "scenario-command interrupted by SIGTERM",
-      signal: "SIGTERM",
-      stdout: "",
-      stderr: "",
-    });
-    expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
-    expect(processKill).toHaveBeenCalledWith(process.pid, "SIGTERM");
-    expect(parentHandlers.size).toBe(0);
-  });
+      await expect(resultPromise).resolves.toEqual({
+        ...result,
+        stdout: "",
+        stderr: "",
+      });
+      expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+      expect(processKill).toHaveBeenCalledWith(process.pid, "SIGTERM");
+      expect(parentHandlers.size).toBe(0);
+    },
+  );
 });
