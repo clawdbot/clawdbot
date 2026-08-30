@@ -113,7 +113,7 @@ export type RuntimeVersionEnv = {
   [key: string]: string | undefined;
 };
 
-export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
 type RuntimeVersionPreference = "env-first" | "runtime-first";
 
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {

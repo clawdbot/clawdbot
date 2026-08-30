@@ -30,12 +30,11 @@ describe("Crabbox capture recovery", () => {
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       let block = false;
-      const initial = createWarmProvider(async ({ argv, options }) => {
-        const isPhase =
-          phase === "create"
-            ? argv[2] === "create"
-            : argv[1] === "run" && options.input?.toString().includes("kill -TERM");
-        if (block && isPhase) {
+      let phaseEntered = false;
+      const initial = createWarmProvider(async ({ argv }) => {
+        const isPhase = phase === "create" ? argv[2] === "create" : argv[1] === "run";
+        if (block && isPhase && !phaseEntered) {
+          phaseEntered = true;
           entered.resolve();
           await release.promise;
           if (fails) {
@@ -118,8 +117,8 @@ describe("Crabbox capture recovery", () => {
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       let block = false;
-      const { provider, calls } = createWarmProvider(async ({ argv, options }) => {
-        if (block && argv[1] === "run" && options.input?.toString().includes("kill -TERM")) {
+      const { provider, calls } = createWarmProvider(async ({ argv }) => {
+        if (block && argv[1] === "run") {
           block = false;
           entered.resolve();
           await release.promise;

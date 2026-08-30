@@ -177,7 +177,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.150.1`):
+with the official plugin (currently `@openai/codex` `0.151.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -322,7 +322,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.150.1`. Explicit custom
+The plugin manages stable Codex app-server `0.151.0`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -451,7 +451,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.150.1` app-server.
+This preview path uses the pinned Codex `0.151.0` app-server.
 
 ```json5
 {
@@ -848,21 +848,18 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.150.1`. A live `model/list`
-probe against the official `0.150.1` app-server returned these public picker
-rows:
+The current bundled harness is `@openai/codex` `0.151.0`. A live `model/list`
+probe against the official `0.151.0` app-server verified this public subset of
+picker rows:
 
-| Model id        | Input modalities | Reasoning efforts               |
-| --------------- | ---------------- | ------------------------------- |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.6`       | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh        |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh        |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh        |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to

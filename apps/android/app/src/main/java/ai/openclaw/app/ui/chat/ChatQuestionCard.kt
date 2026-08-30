@@ -37,6 +37,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import java.text.DateFormat
+import java.util.Date
 
 @Composable
 internal fun ChatQuestionCard(
@@ -72,6 +74,14 @@ internal fun ChatQuestionCard(
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       prompt.record.questions.forEach { question ->
+        if (question.secretStore != null) {
+          SecretStoreConsent(
+            prompt = prompt,
+            question = question,
+            enabled = pending,
+            onDraftChanged = { update -> onDraftChanged(prompt, update) },
+          )
+        }
         QuestionSection(
           question = question,
           draft = draft,
@@ -86,6 +96,61 @@ internal fun ChatQuestionCard(
         nowMs = nowMs,
         onSubmit = onSubmit,
         onSkip = onSkip,
+      )
+    }
+  }
+}
+
+@Composable
+private fun SecretStoreConsent(
+  prompt: ChatQuestionPrompt,
+  question: Question,
+  enabled: Boolean,
+  onDraftChanged: ((ChatQuestionDraft) -> ChatQuestionDraft) -> Unit,
+) {
+  val store = question.secretStore ?: return
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(
+      text = nativeString("Requested by \$agent • \$session", prompt.record.agentId ?: nativeString("Unknown"), prompt.record.sessionKey ?: nativeString("Unknown")),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+    Text(
+      text = nativeString("Stores \$name as \$kind", store.name, if (store.kind == "secret") nativeString("Protected secret") else nativeString("Agent-readable environment")),
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+    )
+    store.reason?.takeIf { it.isNotEmpty() }?.let {
+      Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.text)
+    }
+    question.secretStoreExisting?.let { existing ->
+      val updated = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(existing.updatedAtMs))
+      Text(
+        text = nativeString("Replaces \$name — last updated \$updated", store.name, updated),
+        style = ClawTheme.type.caption,
+        fontWeight = FontWeight.SemiBold,
+        color = ClawTheme.colors.danger,
+      )
+      existing.updatedBy?.let {
+        Text(text = nativeString("Updated by \$name", it), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      }
+    }
+    if (store.kind == "secret") {
+      OutlinedTextField(
+        value = prompt.draft.secretStoreAllowedHostsText ?: store.allowedHosts.orEmpty().joinToString(", "),
+        onValueChange = { value -> onDraftChanged { it.copy(secretStoreAllowedHostsText = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = enabled,
+        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body) },
+        placeholder = { Text(nativeString("api.example.com, uploads.example.com"), style = ClawTheme.type.body) },
+        textStyle = ClawTheme.type.body,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        maxLines = 4,
+      )
+      Text(
+        text = nativeString("Exact hostnames only, separated by commas or spaces. Leave empty for config SecretRefs without proxy use."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
       )
     }
   }

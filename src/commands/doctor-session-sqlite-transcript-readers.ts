@@ -1,31 +1,20 @@
 /** Read-only transcript detection; positive repairs retain exact snapshots. */
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 
 // Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).
 // Queries transcript_events table (schema-stable) instead of sessions table.
 // Returns read-only view of all distinct session IDs with events.
-export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[] {
-  if (!fs.existsSync(sqlitePath)) {
+export function readOnlySqliteTranscriptSessionIds(database: DatabaseSync): string[] {
+  if (!tableExists(database, "transcript_events")) {
     return [];
   }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    if (!tableExists(database, "transcript_events")) {
-      return [];
-    }
-    const rows = database
-      .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id ASC")
-      .all();
-    return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
-  } finally {
-    database?.close();
-  }
+  const rows = database
+    .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id ASC")
+    .all();
+  return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }
 
 function iterateTranscriptRows(database: DatabaseSync, sessionId: string, firstRowOnly = false) {
@@ -47,16 +36,11 @@ type ReadOnlyTranscriptSnapshot =
   | { ok: false; error: unknown };
 
 export function readOnlySqliteTranscriptRepairSnapshot(
-  sqlitePath: string,
+  database: DatabaseSync,
   sessionId: string,
   needsRepair: (event: unknown) => boolean,
 ): ReadOnlyTranscriptSnapshot {
-  if (!fs.existsSync(sqlitePath)) {
-    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
-  }
-  let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     // Unchanged histories retain one payload. Re-read positive candidates in full so
     // malformed siblings and exact-snapshot guards still govern the surgical repair.
     for (const row of iterateTranscriptRows(database, sessionId)) {
@@ -83,24 +67,17 @@ export function readOnlySqliteTranscriptRepairSnapshot(
     return { ok: true, rows: [] };
   } catch (error) {
     return { ok: false, error };
-  } finally {
-    database?.close();
   }
 }
 
 /** Reads exact row metadata for a guarded transcript replacement without opening a writer. */
 export function readOnlySqliteHeaderlessTranscriptSnapshot(
-  sqlitePath: string,
+  database: DatabaseSync,
   sessionId: string,
 ):
   | { ok: true; rows: SqliteTranscriptStorageRow[]; sessionKey?: string }
   | { ok: false; error: unknown } {
-  if (!fs.existsSync(sqlitePath)) {
-    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
-  }
-  let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     // Headers can live at nonzero seq. A current header needs no whole-history read;
     // possible headerless repairs still take and validate the complete exact snapshot.
     for (const row of iterateTranscriptRows(database, sessionId, true)) {
@@ -147,7 +124,5 @@ export function readOnlySqliteHeaderlessTranscriptSnapshot(
     };
   } catch (error) {
     return { ok: false, error };
-  } finally {
-    database?.close();
   }
 }

@@ -203,7 +203,8 @@ function selectLiveModelCatalogRequestApiKey(
   ctx: LiveModelCatalogHeaderContext,
 ): string | undefined {
   return (
-    normalizeLiveModelCatalogRequestApiKey(ctx.discoveryApiKey) ??
+    // Explicit discovery credentials are resolved bytes; only apiKey can be a placeholder.
+    readLiveModelCatalogString(ctx.discoveryApiKey) ??
     normalizeLiveModelCatalogRequestApiKey(ctx.apiKey)
   );
 }

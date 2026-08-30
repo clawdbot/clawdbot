@@ -188,7 +188,6 @@ function makeFixture(options?: { includeSeed?: boolean }) {
 function writeBuild(mirror: string) {
   mkdirSync(path.join(mirror, "dist/control-ui"), { recursive: true });
   const head = git(mirror, "rev-parse", "HEAD");
-  writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
   const gatewayEntrypoint = path.join(mirror, "dist/index.js");
   writeFileSync(gatewayEntrypoint, "// built\n");
   // Snapshot ownership rejects group-writable executables, so fixtures must
@@ -211,6 +210,7 @@ function writeBuild(mirror: string) {
     mkdirSync(path.dirname(outputPath), { recursive: true });
     writeFileSync(outputPath, "// runtime postbuild\n");
   }
+  writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
 }
 
 function fakeCommands(mirror: string) {

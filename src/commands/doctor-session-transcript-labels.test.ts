@@ -324,6 +324,41 @@ describe("doctor SQLite session transcript label migration", () => {
     );
   });
 
+  it("observes later sessions changed while an earlier session is repaired", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const database = seedLegacyLabelTranscript(databaseOptions);
+    const laterSessionId = "z-later-session";
+    seedMessageTranscript(databaseOptions, [{ id: "later-user", content: "unchanged" }], {
+      sessionId: laterSessionId,
+      sessionKey: `agent:main:${laterSessionId}`,
+    });
+    const legacyContent = "Conversation info (untrusted metadata):\n```json\n{}\n```";
+    const transaction = agentDatabase.runOpenClawAgentWriteTransaction;
+    vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction").mockImplementationOnce(
+      (write, options, transactionOptions) => {
+        transaction((db) => {
+          db.db
+            .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
+            .run(
+              JSON.stringify(createMessageEvent({ id: "later-user", content: legacyContent })),
+              laterSessionId,
+            );
+        }, databaseOptions);
+        return transaction(write, options, transactionOptions);
+      },
+    );
+
+    await runTranscriptLabelHealth(state, true);
+
+    expect(
+      findMessageContent(readTranscriptSnapshot(database, laterSessionId).events, "later-user"),
+    ).toContain(`Conversation info: ${INBOUND_CONTEXT_MARKER}`);
+    expect(note).toHaveBeenCalledWith(
+      "- Rewrote legacy inbound-context labels in 2 sessions (2 events).",
+      "Session transcript labels",
+    );
+  });
+
   it("preserves the bare Context header when migrating active-memory blocks", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const legacyContent = [

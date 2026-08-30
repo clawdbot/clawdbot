@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
+import * as processRegistration from "./transport-process-registration.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -17,6 +18,7 @@ describe("Codex app-server websocket transport", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     for (const client of clients) {
       client.close();
@@ -46,6 +48,9 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("can speak JSON-RPC over websocket transport", async () => {
+    const localRegistration = vi
+      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
+      .mockRejectedValue(new Error("local inspection unavailable"));
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     servers.push(server);
     const authHeaders: Array<string | undefined> = [];
@@ -84,6 +89,7 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
     expect(authHeaders).toEqual(["Bearer secret"]);
+    expect(localRegistration).not.toHaveBeenCalled();
   });
 
   it("keeps an idle remote websocket healthy with protocol-level ping frames", async () => {
@@ -289,6 +295,9 @@ describe("Codex app-server websocket transport", () => {
   }, 5_000);
 
   it("can speak JSON-RPC over the canonical unix control socket", async () => {
+    const localRegistration = vi
+      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
+      .mockRejectedValue(new Error("local inspection unavailable"));
     // macOS socket paths must fit sockaddr_un even when the runner nests TMPDIR.
     const tempRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
     const tempDir = await mkdtemp(path.join(tempRoot, "openclaw-codex-unix-"));
@@ -333,6 +342,7 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("thread/list", {})).resolves.toEqual({ data: [] });
     expect(upgradeExtensions).toEqual([undefined]);
+    expect(localRegistration).not.toHaveBeenCalled();
   });
 });
 

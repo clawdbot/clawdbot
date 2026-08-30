@@ -73,6 +73,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   nodePortalCarrier?: WorkerNodePortalCarrier;
   closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   stopNodeEnrollmentWaits?: () => void;
+  closeNodeBootstrapArtifacts?: () => Promise<void>;
   stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -296,7 +297,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
+    prepareNodeBootstrap: options.prepareNodeBootstrap,
     prepareNodeEnrollment: options.prepareNodeEnrollment,
+    closeNodeEnrollment: options.closeNodeEnrollment,
     retireNodeEnrollment: options.retireNodeEnrollment,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
@@ -490,6 +493,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       credentialBroker.clear();
       turnRpc.clear();
       options.liveEvents?.clear();
+      await options.closeNodeBootstrapArtifacts?.();
     }
   };
 

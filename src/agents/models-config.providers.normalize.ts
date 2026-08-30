@@ -1,6 +1,7 @@
 /**
  * Normalizes configured provider model rows for runtime/discovery use.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -17,7 +18,10 @@ import {
   resolveApiKeyFromProfiles,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
-import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
+import {
+  enforceSourceManagedProviderSecrets,
+  normalizeSourceProviderLookup,
+} from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderModelConfig = NonNullable<
@@ -151,8 +155,7 @@ export function normalizeProviders(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
   secretDefaults?: SecretDefaults;
-  sourceProviders?: ModelsConfig["providers"];
-  sourceSecretDefaults?: SecretDefaults;
+  sourceConfigForSecrets?: OpenClawConfig;
   secretRefManagedProviders?: Set<string>;
   manifestPlugins?: ProviderModelNormalizationOptions["manifestPlugins"];
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
@@ -162,6 +165,9 @@ export function normalizeProviders(params: {
     return providers;
   }
   const env = params.env ?? process.env;
+  const sourceProviders = normalizeSourceProviderLookup(
+    params.sourceConfigForSecrets?.models?.providers,
+  );
   let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
   const resolveProfileApiKey = (providerKey: string) => {
     authStore ??= ensureAuthProfileStore(params.agentDir, {
@@ -185,16 +191,36 @@ export function normalizeProviders(params: {
     if (normalizedKey !== key) {
       mutated = true;
     }
+    // Only authored fields inherit loader facts; plugin-discovered inputs keep their own syntax.
+    const sourceProvider = sourceProviders.get(normalizeProviderId(normalizedKey));
+    const source =
+      sourceProvider && params.sourceConfigForSecrets
+        ? {
+            config: params.sourceConfigForSecrets,
+            providerKey: sourceProvider.providerKey,
+          }
+        : undefined;
     let normalizedProvider = provider;
     const normalizedHeaders = normalizeHeaderValues({
       headers: normalizedProvider.headers,
       secretDefaults: params.secretDefaults,
+      source,
     });
     if (normalizedHeaders.mutated) {
       normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
     }
+    const sourceInput =
+      sourceProvider?.providerConfig.apiKey !== undefined
+        ? {
+            config: params.sourceConfigForSecrets,
+            path: `models.providers.${sourceProvider.providerKey}.apiKey`,
+            value: sourceProvider.providerConfig.apiKey,
+            defaults: params.sourceConfigForSecrets?.secrets?.defaults,
+          }
+        : undefined;
     normalizedProvider = normalizeConfiguredProviderApiKey({
       providerKey: normalizedKey,
+      sourceInput,
       provider: normalizedProvider,
       secretDefaults: params.secretDefaults,
       profileApiKey: undefined,
@@ -261,8 +287,7 @@ export function normalizeProviders(params: {
   const normalizedProviders = mutated ? next : providers;
   return enforceSourceManagedProviderSecrets({
     providers: normalizedProviders,
-    sourceProviders: params.sourceProviders,
-    sourceSecretDefaults: params.sourceSecretDefaults,
+    sourceConfigForSecrets: params.sourceConfigForSecrets,
     secretRefManagedProviders: params.secretRefManagedProviders,
   });
 }

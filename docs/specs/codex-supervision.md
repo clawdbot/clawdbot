@@ -229,18 +229,21 @@ The UI navigates to normal Chat with that session key. No canonical harness
 thread exists yet. On the first normal Chat turn, the harness installs the real
 Codex approval, elicitation, event, and delivery handlers, then:
 
-1. Uses the supervision connection to call native `thread/fork` without a model
+1. Uses the supervision connection to call native `thread/fork` with
+   `ephemeral: true` and `excludeTurns: true`, without a model
    or provider override and pin the persisted source snapshot. Codex's current
    `ConfigManager` state selects the model and provider, and the fork response
    reports the actual pair. If the model differs from the last model recorded
-   in the source, Codex emits its normal model-difference warning.
+   in the source, Codex emits its normal model-difference warning. The harness
+   confirms `thread/unsubscribe` on that exact probe and physical connection
+   before creating the canonical thread. The probe is never persisted or archived.
 2. On that same connection, starts the canonical full Codex harness thread with
    `threadSource: "appServer"`, OpenClaw's cwd, policy, config, environment, the
    full OpenClaw harness tool surface, and exactly the model and provider
    returned by the fork for this initial start.
 3. Injects the bounded visible user and assistant history through that
    connection, commits the canonical binding without dropping its supervision
-   scope, runs the turn, and archives the temporary fork.
+   scope, and runs the turn.
 
 Before the first turn, the Chat is a locked pending branch with a visible
 history mirror; afterward, every model turn runs through the canonical Codex

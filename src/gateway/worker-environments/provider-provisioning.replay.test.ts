@@ -241,7 +241,7 @@ describe("worker environment service provision replay", () => {
           setupCode: "setup-code",
           setupId: enrolled.nodeSetupId!,
           openclawVersion: "2026.8.19",
-          packageSpecs: ["openclaw@2026.8.19"],
+          nodeBootstrap: { ...support.NODE_BOOTSTRAP, openclawVersion: "2026.8.19" },
           displayName: "Cloud worker replay",
           waitForDeviceId: async () => await enrollmentConnected.promise,
         };

@@ -637,11 +637,7 @@ export function createCrabboxWorkerProvider(
         }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
-      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
-        enrollment,
-        executionMode,
-        leaseId,
-      });
+      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
         phase: "node enrollment setup",

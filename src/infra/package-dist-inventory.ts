@@ -338,9 +338,15 @@ async function collectRelativeFiles(
 /** Collects package dist files that should be present after install/update publication. */
 export async function collectPackageDistInventory(
   packageRoot: string,
-  options: { onDirectory?: (directoryPath: string) => Promise<void> } = {},
+  options: {
+    onDirectory?: (directoryPath: string) => Promise<void>;
+    packageManifest?: unknown;
+  } = {},
 ): Promise<string[]> {
-  const rules = await collectPackageDistInventoryRulesForRoot(packageRoot);
+  const rules =
+    options.packageManifest === undefined
+      ? await collectPackageDistInventoryRulesForRoot(packageRoot)
+      : collectPackageDistInventoryRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
   return await collectRelativeFiles(
     path.join(packageRoot, "dist"),

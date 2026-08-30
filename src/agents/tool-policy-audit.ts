@@ -6,7 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  */
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SandboxConfig } from "./sandbox/types.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { normalizeToolList, normalizeToolPolicyName, type ToolPolicyLike } from "./tool-policy.js";
 
 // Emits bounded audit logs when tool allow/deny policies remove or block tools.
@@ -46,6 +46,11 @@ function removedToolNamesByRule(params: {
     remainingCounts.set(name, (remainingCounts.get(name) ?? 0) + 1);
   }
 
+  let matchesDeny: ReturnType<typeof createToolPolicyMatcher> | undefined;
+  const fallbackRuleKind =
+    Array.isArray(params.policy.allow) && params.policy.allow.length > 0
+      ? "allow"
+      : toolPolicyRuleKind(params.policy);
   const removed = new Map<ToolPolicyRuleKind, Set<string>>();
   for (const name of normalizedToolNames(params.before)) {
     const remaining = remainingCounts.get(name) ?? 0;
@@ -53,7 +58,10 @@ function removedToolNamesByRule(params: {
       remainingCounts.set(name, remaining - 1);
       continue;
     }
-    const ruleKind = removedToolRuleKind(name, params.policy);
+    matchesDeny ??= createToolPolicyMatcher({
+      deny: Array.isArray(params.policy.deny) ? params.policy.deny : undefined,
+    });
+    const ruleKind = matchesDeny(name) ? fallbackRuleKind : "deny";
     const names = removed.get(ruleKind) ?? new Set<string>();
     names.add(name);
     removed.set(ruleKind, names);
@@ -61,31 +69,13 @@ function removedToolNamesByRule(params: {
   return new Map([...removed].map(([ruleKind, names]) => [ruleKind, [...names].toSorted()]));
 }
 
-function removedToolRuleKind(toolName: string, policy: ToolPolicyLike): ToolPolicyRuleKind {
-  if (
-    Array.isArray(policy.deny) &&
-    policy.deny.length > 0 &&
-    !isToolAllowedByPolicyName(toolName, { deny: policy.deny })
-  ) {
-    return "deny";
-  }
-  if (Array.isArray(policy.allow) && policy.allow.length > 0) {
-    return "allow";
-  }
-  return toolPolicyRuleKind(policy);
-}
-
-function matchedPolicyRuleForTool(params: {
-  toolName: string;
-  policy: ToolPolicyLike;
-  ruleKind: ToolPolicyRuleKind;
-}): string | undefined {
-  if (params.ruleKind === "deny" && Array.isArray(params.policy.deny)) {
-    return params.policy.deny.find(
-      (entry) => !isToolAllowedByPolicyName(params.toolName, { deny: [entry] }),
+function createMatchedPolicyRuleForTool(policy: ToolPolicyLike, ruleKind: ToolPolicyRuleKind) {
+  const rules = ruleKind === "deny" && Array.isArray(policy.deny) ? policy.deny : [];
+  const matchers: ReturnType<typeof createToolPolicyMatcher>[] = [];
+  return (toolName: string) =>
+    rules.find(
+      (entry, index) => !(matchers[index] ??= createToolPolicyMatcher({ deny: [entry] }))(toolName),
     );
-  }
-  return undefined;
 }
 
 function labelForRuleKind(stepLabel: string, ruleKind: ToolPolicyRuleKind): string {
@@ -152,12 +142,9 @@ function matchedPolicyRules(params: {
   tools: readonly string[];
 }): string[] {
   const rules = new Set<string>();
+  const matchRule = createMatchedPolicyRuleForTool(params.policy, params.ruleKind);
   for (const toolName of params.tools) {
-    const rule = matchedPolicyRuleForTool({
-      toolName,
-      policy: params.policy,
-      ruleKind: params.ruleKind,
-    });
+    const rule = matchRule(toolName);
     if (rule) {
       rules.add(sanitizeAuditField(rule));
     }
@@ -227,11 +214,7 @@ export function auditSandboxToolPolicyBlock(params: {
   const configKey = sanitizeAuditField(params.configKey);
   const matchedRule =
     params.policy && params.ruleType === "deny"
-      ? matchedPolicyRuleForTool({
-          toolName: normalizedToolName,
-          policy: params.policy,
-          ruleKind: "deny",
-        })
+      ? createMatchedPolicyRuleForTool(params.policy, "deny")(normalizedToolName)
       : undefined;
   const sanitizedMatchedRule = matchedRule ? sanitizeAuditField(matchedRule) : undefined;
   const matchedRuleSuffix = sanitizedMatchedRule ? `; matched ${sanitizedMatchedRule}` : "";

@@ -96,6 +96,16 @@ describe("buildCopilotPromptGuidance", () => {
     expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");
   });
 
+  it.each([
+    { name: "callable", tools: ["secrets"], disabled: false, discoverable: true },
+    { name: "absent", tools: [], disabled: false, discoverable: false },
+    { name: "disabled", tools: ["secrets"], disabled: true, discoverable: false },
+  ])("gates credential guidance on the $name tool surface", ({ tools, disabled, discoverable }) => {
+    const guidance = buildGuidance({ disableTools: disabled }, tools);
+    expect(guidance?.includes("`secrets`: list metadata first")).toBe(discoverable);
+    expect(guidance).toContain("host-owned masked credential entry");
+  });
+
   it("wraps conversation and subagent context without adding workspace prompt sections", () => {
     expect(buildGuidance({ extraSystemPrompt: "Conversation policy." })).toContain(
       "## Conversation Context\nConversation policy.",

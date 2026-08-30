@@ -1,5 +1,10 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
+import {
+  copyConfigResolutionFacts,
+  restoreConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
@@ -77,6 +82,15 @@ function refreshAuthStore(params: {
 }
 
 async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
+  // Restore the captured pair before discovery, including known-empty facts and shared identity.
+  // Without loader facts, decoded literal strings can be reparsed as references.
+  restoreConfigResolutionFacts(value.input.config, value.configResolutionFacts);
+  if (value.sourceConfigResolutionFacts === value.configResolutionFacts) {
+    copyConfigResolutionFacts(value.input.config, value.sourceConfigForSecrets);
+  } else {
+    restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
+  }
+  setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Transfer its facts and restore only process-local behavior.
@@ -95,6 +109,9 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   }
   const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
     input: value.input,
+    sourceConfigForSecrets: value.sourceConfigForSecrets,
+    configResolutionFacts: value.configResolutionFacts,
+    sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
     authStore: value.authStore,
     providerIds: value.providerIds,
     pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,

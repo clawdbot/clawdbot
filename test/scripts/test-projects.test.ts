@@ -1027,39 +1027,23 @@ describe("scripts/test-projects changed-target routing", () => {
     const packageAcceptanceTargets = [
       "test/scripts/package-acceptance-workflow.test.ts",
       "test/scripts/ci-workflow-guards.test.ts",
+      "test/scripts/ci-git-owner.test.ts",
+      "test/scripts/ci-linux-git.test.ts",
+      "test/scripts/ci-platform-checkout.test.ts",
+      "src/scripts/ci-changed-scope.test.ts",
     ];
     const workflowTargets = new Map([
-      [
-        ".github/workflows/mantis-discord-smoke.yml",
-        [
-          ...packageAcceptanceTargets,
-          "test/scripts/ci-git-owner.test.ts",
-          "test/scripts/ci-linux-git.test.ts",
-          "test/scripts/ci-platform-checkout.test.ts",
-          "src/scripts/ci-changed-scope.test.ts",
-        ],
-      ],
+      [".github/workflows/mantis-discord-smoke.yml", [...packageAcceptanceTargets]],
       [
         ".github/actions/mantis-validate-trusted-ref/action.yml",
-        [
-          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
-          ...packageAcceptanceTargets,
-          "test/scripts/ci-git-owner.test.ts",
-          "test/scripts/ci-linux-git.test.ts",
-          "test/scripts/ci-platform-checkout.test.ts",
-          "src/scripts/ci-changed-scope.test.ts",
-        ],
+        ["test/scripts/mantis-web-ui-chat-proof-workflow.test.ts", ...packageAcceptanceTargets],
       ],
       [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
-        [
-          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
-          "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
-        ],
+        ["test/scripts/mantis-web-ui-chat-proof-workflow.test.ts", ...packageAcceptanceTargets],
       ],
     ]);
 

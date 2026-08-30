@@ -171,9 +171,12 @@ describe("Codex process registration", () => {
     expect(store.lookup("owned")).toEqual(registration);
   });
 
-  it.for(["live", "unreadable command", "exited during inspection"])(
+  it.for(["live", "unreadable command", "exited during inspection", "windows"])(
     "registers only a live child with its command: %s",
     async (mode, ctx) => {
+      if (mode === "windows") {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
       const stdin = new PassThrough();
       const stdout = new PassThrough();
       const stderr = new PassThrough();
@@ -214,7 +217,13 @@ describe("Codex process registration", () => {
       const registered = register(spawned);
       spawned.emit("spawn");
 
-      if (mode === "live") {
+      if (mode === "windows") {
+        await registered;
+        expect(readCodexAppServerProcessSnapshot).not.toHaveBeenCalled();
+        expect(readCodexAppServerProcessCommand).not.toHaveBeenCalled();
+        expect(store.entries()).toEqual([]);
+        expect(kill).not.toHaveBeenCalled();
+      } else if (mode === "live") {
         await registered;
         expect(store.entries().map((entry) => entry.value)).toEqual([
           {
@@ -229,10 +238,6 @@ describe("Codex process registration", () => {
         expect(store.entries()).toEqual([]);
       } else {
         await expect(registered).rejects.toThrow("Cannot register the Codex child process command");
-        expect(kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(
-          [spawned.stdin, spawned.stdout, spawned.stderr].every((stream) => stream.destroyed),
-        ).toBe(true);
         expect(store.entries()).toEqual([]);
       }
     },

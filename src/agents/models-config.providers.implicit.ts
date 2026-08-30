@@ -24,6 +24,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -61,6 +62,7 @@ type ImplicitProviderParams = {
   authStore?: AuthProfileStore;
   config?: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  sourceConfigForSecrets?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -515,15 +517,14 @@ async function runProviderCatalogWithTimeout(
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs ?? undefined;
-  if (!timeoutMs) {
-    return await runProviderCatalog(params);
-  }
-
   const timeoutError = new Error(
     `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    if (!timeoutMs) {
+      return await runProviderCatalog(params);
+    }
     const catalogRun = runProviderCatalog(params);
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
@@ -537,6 +538,10 @@ async function runProviderCatalogWithTimeout(
       }),
     ]);
   } catch (error) {
+    if (isTrustedSecretSurfaceUnavailableError(error)) {
+      params.reportCatalogOutcome?.({ provider: params.provider.id, status: "unavailable" });
+      return undefined;
+    }
     if (error === timeoutError) {
       const message = formatErrorMessage(error);
       params.reportCatalogOutcome?.({
@@ -642,6 +647,10 @@ export async function resolveImplicitProviders(
   // The runtime config has already resolved SecretRefs at its owning boundary.
   // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.
   const discoveryAuthConfig = params.discoveryAuthConfig ?? params.config;
+  const sourceConfigForSecrets = params.providerDiscoveryEntriesOnly
+    ? undefined
+    : (params.sourceConfigForSecrets ?? params.config);
+  const authInputs = [env, getAuthStore, discoveryAuthConfig, sourceConfigForSecrets] as const;
   const context: ImplicitProviderContext = {
     ...params,
     get authStore() {
@@ -649,8 +658,8 @@ export async function resolveImplicitProviders(
     },
     env,
     ...(discoveryScope ? { providerDiscoveryScope: discoveryScope } : {}),
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, discoveryAuthConfig),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, discoveryAuthConfig),
+    resolveProviderApiKey: createProviderApiKeyResolver(...authInputs),
+    resolveProviderAuth: createProviderAuthResolver(...authInputs),
   };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(
@@ -694,6 +703,14 @@ export async function resolveImplicitProviders(
       ]),
     ).values(),
   ];
+  if (
+    params.providerDiscoveryEntriesOnly !== true &&
+    discoveryProviders.some(hasRuntimeProviderCatalog)
+  ) {
+    const { prepareProviderDiscoveryAuth } =
+      await import("./models-config.providers.discovery-auth.runtime.js");
+    Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
+  }
   const preparedStaticResultsByProvider = new Map(
     preparedStaticEntries?.map(({ provider, result }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,

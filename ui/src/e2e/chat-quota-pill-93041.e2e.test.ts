@@ -473,6 +473,15 @@ suite.define(() => {
         assistantAgentId: "main",
         defaultAgentId: "main",
         heldMethods: ["models.authStatus", "agent.identity.get"],
+        // The selected agent's session metrics may not have arrived; its transcript
+        // still identifies which provider's quota belongs in the popover.
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Ready." }],
+            provider: "openai",
+          },
+        ],
         methodResponses: {
           "agent.identity.get": {
             cases: [

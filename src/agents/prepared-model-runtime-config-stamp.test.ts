@@ -149,9 +149,18 @@ describe("prepared model runtime config stamps", () => {
     );
 
     await supplierStarted.promise;
+    const readerSettled = vi.fn();
+    const reader = prepareModelRuntimeSnapshot({
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      config: staleConfig,
+    }).then(readerSettled, readerSettled);
     claimCurrent = false;
     releaseSupplier.resolve();
     await stalePublication;
+    // Losing the external claim must settle readers even if no replacement is scheduled.
+    await vi.waitFor(() => expect(readerSettled).toHaveBeenCalledWith(expect.any(Error)));
+    await reader;
     await refreshPreparedModelRuntimeSnapshots(nextConfig, { gatewayLifecycle: true });
 
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);

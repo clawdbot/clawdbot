@@ -80,6 +80,9 @@ function applyExpectedBuildId(
   if (snapshot.gatewayBuildId === expectedBuildId) {
     return { ...snapshot, expectedBuildId };
   }
+  if (snapshot.gatewayBuildId === undefined) {
+    return { ...snapshot, healthy: false, expectedBuildId };
+  }
   return {
     ...snapshot,
     healthy: false,

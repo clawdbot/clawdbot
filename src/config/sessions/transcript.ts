@@ -15,10 +15,11 @@ import {
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import {
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-  isTranscriptOnlyOpenClawAssistantModel,
+  isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
@@ -101,6 +102,9 @@ type InternalSessionTranscriptDeliveryMirror =
       final: boolean;
       sourceTurnId?: string;
       toolCallId?: string;
+    }
+  | {
+      kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
@@ -123,6 +127,7 @@ export type SessionRecentConversationText = {
 
 type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
+  includeCronDirectDeliveryContext?: boolean;
   limit?: number;
   minTimestampMs?: number;
   role?: "user" | "assistant";
@@ -186,13 +191,6 @@ function parseAssistantTranscriptText(
   };
 }
 
-function isTranscriptOnlyOpenClawAssistantMessage(message: {
-  provider?: unknown;
-  model?: unknown;
-}): boolean {
-  return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
-}
-
 type SessionConversationTranscriptTarget = {
   sqliteScope?: SqliteSessionFileMarker;
 };
@@ -212,6 +210,7 @@ function parseRecentConversationText(
         provenance?: unknown;
         provider?: unknown;
         model?: unknown;
+        openclawDeliveryMirror?: unknown;
         __openclaw?: unknown;
       }
     | undefined;
@@ -222,7 +221,19 @@ function parseRecentConversationText(
   ) {
     return undefined;
   }
-  if (message.role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(message)) {
+  const deliveryMirror = message.openclawDeliveryMirror;
+  const includeCronDirectDeliveryContext =
+    options.includeCronDirectDeliveryContext === true &&
+    deliveryMirror !== null &&
+    typeof deliveryMirror === "object" &&
+    !Array.isArray(deliveryMirror) &&
+    "kind" in deliveryMirror &&
+    deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
+  if (
+    message.role === "assistant" &&
+    isTranscriptOnlyOpenClawAssistantMessage(message) &&
+    !includeCronDirectDeliveryContext
+  ) {
     return undefined;
   }
   const upstreamUserText =
@@ -752,7 +763,8 @@ function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage):
     isRedundantDeliveryMirror(message) &&
     (marker?.kind === "channel-final" ||
       marker?.kind === "channel-final-suppressed" ||
-      marker?.kind === "message-tool-source-reply")
+      marker?.kind === "message-tool-source-reply" ||
+      marker?.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND)
   );
 }
 

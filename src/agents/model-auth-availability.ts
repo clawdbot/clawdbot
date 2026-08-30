@@ -59,6 +59,7 @@ import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
+  resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
@@ -383,10 +384,10 @@ export function createModelAuthAvailabilityResolver(
     ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
   ]);
   const readOnlyAuthConfig = params.cfg;
-  const providerConfig = (provider: string) =>
-    resolveMergedModelProviderConfig(params.cfg, provider);
+  const providerInput = (provider: string) =>
+    resolveProviderConfigSecretInput(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
-    const configured = providerConfig(provider);
+    const { providerConfig: configured } = providerInput(provider);
     const configuredModelId = ref.modelId
       ? normalizeModelIdForProvider(provider, ref.modelId)
       : undefined;
@@ -573,7 +574,7 @@ export function createModelAuthAvailabilityResolver(
     });
   };
   const unprofiledEvaluation = (provider: string, target: AuthTarget): AuthSourceEvaluation => {
-    const configured = providerConfig(provider);
+    const { providerConfig: configured, ref: apiKeyRef } = providerInput(provider);
     if (configured?.auth === "aws-sdk") {
       return {
         availability: modeAllowed(provider, target, "aws-sdk"),
@@ -586,7 +587,6 @@ export function createModelAuthAvailabilityResolver(
       configured?.auth === "api-key" || configured?.auth === "oauth" || configured?.auth === "token"
         ? configured.auth
         : "api-key";
-    const apiKeyRef = coerceSecretRef(apiKey, params.cfg.secrets?.defaults);
     if (!apiKeyRef && hasMalformedSecretInputSyntax(apiKey)) {
       return { availability: false, evidence: "provider-config" };
     }
@@ -860,9 +860,8 @@ export function createModelAuthAvailabilityResolver(
     };
   };
   const directPolicy = (provider: string, target: AuthTarget) => {
-    const configured = providerConfig(provider);
+    const { providerConfig: configured, ref: apiKeyRef } = providerInput(provider);
     const binding = providerBinding(provider);
-    const apiKeyRef = coerceSecretRef(configured?.apiKey, params.cfg.secrets?.defaults);
     const markerUsable =
       binding.kind === "marker" && hasUsableCustomProviderApiKey(params.cfg, provider, env);
     const hasDirectMaterial = binding.kind === "literal" || markerUsable || apiKeyRef !== null;

@@ -56,6 +56,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   authStore?: AuthProfileStore;
   config: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  sourceConfigForSecrets?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
@@ -172,6 +173,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     ...(params.authStore ? { authStore: params.authStore } : {}),
     config: cfg,
     discoveryAuthConfig: context.discoveryAuthConfig,
+    sourceConfigForSecrets: context.sourceConfigForSecrets,
     env,
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
     explicitProviders,
@@ -306,8 +308,7 @@ async function planOpenClawModelsJsonWithDeps(
       agentDir,
       env,
       secretDefaults: cfg.secrets?.defaults,
-      sourceProviders: context.sourceConfigForSecrets.models?.providers,
-      sourceSecretDefaults: context.sourceConfigForSecrets.secrets?.defaults,
+      sourceConfigForSecrets: context.sourceConfigForSecrets,
       secretRefManagedProviders,
       manifestPlugins,
       ...(providerPolicyManifestRegistry
@@ -327,8 +328,7 @@ async function planOpenClawModelsJsonWithDeps(
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,
-      sourceProviders: context.sourceConfigForSecrets.models?.providers,
-      sourceSecretDefaults: context.sourceConfigForSecrets.secrets?.defaults,
+      sourceConfigForSecrets: context.sourceConfigForSecrets,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = filterWritableProviders(secretEnforcedProviders);

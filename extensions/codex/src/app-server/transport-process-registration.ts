@@ -124,45 +124,37 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
   await reapRegisteredCodexAppServerOrphans();
   const store = await openProcessRegistrationStore();
   return async (child) => {
-    try {
-      await once(child, "spawn");
-      const snapshot = await readCodexAppServerProcessSnapshot();
-      const parent = snapshot?.find((row) => row.pid === process.pid);
-      const spawned = snapshot?.find((row) => row.pid === child.pid);
-      if (!parent || !spawned || spawned.ppid !== process.pid) {
-        throw new Error(
-          "Cannot register the Codex child process. Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
-        );
-      }
-      const command = await readCodexAppServerProcessCommand(spawned.pid, Date.now() + 2_000);
-      if (command === undefined || child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(
-          "Cannot register the Codex child process command. Check process command inspection permissions (/proc on Linux, ps on macOS), then retry.",
-        );
-      }
-      const key = randomUUID();
-      // Codex rejects non-initialize requests; no native turn can start before
-      // this synchronous commit. A failed commit closes the uninitialized child.
-      store.register(key, {
-        parent: processIdentity.parse(parent),
-        child: childIdentity.parse({
-          ...spawned,
-          commandFingerprint: fingerprintProcessCommand(command),
-        }),
-      });
-      child.once("exit", () => {
-        try {
-          store.delete(key);
-        } catch {
-          // Leave the durable fact for the next connection to verify and remove.
-        }
-      });
-    } catch (error) {
-      child.kill("SIGKILL");
-      child.stdin.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
-      throw error;
+    await once(child, "spawn");
+    const snapshot = await readCodexAppServerProcessSnapshot();
+    const parent = snapshot?.find((row) => row.pid === process.pid);
+    const spawned = snapshot?.find((row) => row.pid === child.pid);
+    if (!parent || !spawned || spawned.ppid !== process.pid) {
+      throw new Error(
+        "Cannot register the Codex child process. Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
+      );
     }
+    const command = await readCodexAppServerProcessCommand(spawned.pid, Date.now() + 2_000);
+    if (command === undefined || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        "Cannot register the Codex child process command. Check process command inspection permissions (/proc on Linux, ps on macOS), then retry.",
+      );
+    }
+    const key = randomUUID();
+    // Codex rejects non-initialize requests; no native turn can start before
+    // this synchronous commit. A failed commit closes the uninitialized child.
+    store.register(key, {
+      parent: processIdentity.parse(parent),
+      child: childIdentity.parse({
+        ...spawned,
+        commandFingerprint: fingerprintProcessCommand(command),
+      }),
+    });
+    child.once("exit", () => {
+      try {
+        store.delete(key);
+      } catch {
+        // Leave the durable fact for the next connection to verify and remove.
+      }
+    });
   };
 }
