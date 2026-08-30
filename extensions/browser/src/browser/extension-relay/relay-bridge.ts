@@ -856,20 +856,27 @@ export class ExtensionRelayBridge {
     );
   }
 
-  private async handleCdpRequest(client: CdpClientState, request: CdpRequest): Promise<void> {
-    try {
-      if (request.sessionId) {
-        if (this.browserSessions.get(request.sessionId) === client) {
-          await this.handleBrowserScopedRequest(client, request);
-          return;
-        }
-        await this.handleSessionScopedRequest(client, request);
-        return;
-      }
-      await this.handleBrowserScopedRequest(client, request);
-    } catch (err) {
+  private handleCdpRequest(client: CdpClientState, request: CdpRequest): Promise<void> {
+    const session = request.sessionId ? client.sessions.get(request.sessionId) : undefined;
+    const dispatch =
+      request.sessionId && this.browserSessions.get(request.sessionId) !== client
+        ? this.handleSessionScopedRequest(client, request)
+        : this.handleBrowserScopedRequest(client, request);
+    const completed = dispatch.catch((err: unknown) => {
       this.respondError(client, request, err instanceof Error ? err.message : String(err));
+    });
+    if (session && request.method === "Page.getFrameTree") {
+      // Playwright's CRPage installs Runtime listeners after this reply. Worker access
+      // rechecks can delay it past native events; order only this session's Runtime enable.
+      const ready = Promise.all([session.frameTreeRead, completed]).then(() => {});
+      session.frameTreeRead = ready;
+      void ready.then(() => {
+        if (session.frameTreeRead === ready) {
+          session.frameTreeRead = undefined;
+        }
+      });
     }
+    return completed;
   }
 
   private async handleSessionScopedRequest(
@@ -941,9 +948,22 @@ export class ExtensionRelayBridge {
       return;
     }
     if (request.method === "Runtime.disable") {
+      session.runtimeGeneration++;
       runtime.disable(session);
       this.respond(client, request, {});
       return;
+    }
+    if (request.method === "Runtime.enable" && session.frameTreeRead) {
+      // Disable can retire this pending enable while a peer keeps the physical Runtime alive.
+      const generation = session.runtimeGeneration;
+      await session.frameTreeRead;
+      if (
+        !this.clients.has(client) ||
+        client.sessions.get(sessionId) !== session ||
+        session.runtimeGeneration !== generation
+      ) {
+        throw new Error("Runtime session detached or disabled");
+      }
     }
     const send = () =>
       this.sessions.send(

@@ -100,6 +100,10 @@ export async function withConnectedDaemon(
     stateDir: string,
     config: object,
   ) => Promise<{ stop: () => void; done: Promise<unknown> }>,
+  handleCdpCommand?: (
+    command: Record<string, unknown>,
+    send: (message: Record<string, unknown>) => void,
+  ) => void,
 ) {
   await withTempDir("relay-coexistence-", async (dir) => {
     const stateDir = await fs.realpath(dir);
@@ -162,6 +166,10 @@ export async function withConnectedDaemon(
             };
             if (command.type === "ping") {
               extension.send(JSON.stringify({ type: "pong" }));
+              return;
+            }
+            if (command.type === "cdp" && handleCdpCommand) {
+              handleCdpCommand(command, (message) => extension.send(JSON.stringify(message)));
               return;
             }
             if (command.type === "detach" && detachHeld) {
