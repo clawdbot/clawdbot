@@ -176,6 +176,34 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("sessionId=session-123");
   });
 
+  it("includes the configured specialist assignment", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      config: {
+        agents: {
+          entries: {
+            editor: {
+              identity: { name: "Editor" },
+              description: "Owns editorial quality and hands source disputes back to research.",
+            },
+          },
+        },
+      },
+      tools: [],
+      modelDisplay: "test/model",
+      agentId: "editor",
+    });
+
+    expect(prompt).toContain(
+      [
+        "## Agent Assignment",
+        "Agent ID: editor",
+        "Name: Editor",
+        "Specialist scope and handoff boundary: Owns editorial quality and hands source disputes back to research.",
+      ].join("\n"),
+    );
+  });
+
   it("includes Telegram channel context for CLI final replies without core rich guidance", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

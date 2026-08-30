@@ -2247,6 +2247,46 @@ describe("Codex app-server turn input image sanitizing", () => {
     );
   });
 
+  it("projects config assignment per turn without persisting it in thread instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.agentId = "worker";
+    params.config = {
+      agents: {
+        entries: {
+          worker: {
+            identity: { name: "Configured Worker" },
+            description: "Owns configured specialist work.",
+          },
+        },
+      },
+    };
+    const appServer = createAppServerOptions() as never;
+    const threadRequest = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+    });
+    const turnRequest = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer,
+      turnScopedDeveloperInstructions:
+        "IDENTITY.md says Name: Stale File Worker and owns conflicting workspace work.",
+    });
+    const turnInstructions = turnRequest.collaborationMode?.settings.developer_instructions ?? "";
+
+    expect(threadRequest.developerInstructions).not.toContain("## Agent Assignment");
+    expect(turnInstructions).toContain("## Agent Assignment");
+    expect(turnInstructions).toContain("Name: Configured Worker");
+    expect(turnInstructions).toContain(
+      "OpenClaw config is authoritative for agent ID, name, specialist scope, and handoff boundary.",
+    );
+    expect(turnInstructions).toContain("Name: Stale File Worker");
+    expect(turnInstructions.indexOf("Name: Configured Worker")).toBeLessThan(
+      turnInstructions.indexOf("Name: Stale File Worker"),
+    );
+  });
+
   it("places memory collaboration instructions before skills", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",

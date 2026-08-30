@@ -55,6 +55,7 @@ export class AgentSelectionRequiredError extends Error {
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
+  description?: string;
   workspace?: string;
   agentDir?: string;
   model?: AgentEntry["model"];
@@ -339,6 +340,7 @@ export function resolveAgentConfig(
   const agentDefaults = cfg.agents?.defaults;
   return {
     name: readStringValue(entry.name),
+    description: readStringValue(entry.description),
     workspace: readStringValue(entry.workspace),
     agentDir: readStringValue(entry.agentDir),
     model:

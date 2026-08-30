@@ -1,4 +1,7 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildAgentAssignmentPrompt,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -181,6 +184,7 @@ function buildTurnScopedCollaborationInstructions(
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
+    buildAgentAssignmentPrompt({ config: params.config, agentId: params.agentId }),
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
     options.skillsCollaborationInstructions,

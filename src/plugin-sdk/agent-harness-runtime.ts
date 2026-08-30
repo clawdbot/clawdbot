@@ -280,6 +280,7 @@ export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,
 } from "../agents/delegation-guidance.js";
+export { buildAgentAssignmentPrompt } from "../agents/agent-assignment-prompt.js";
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
 export { buildCredentialSafetyPrompt } from "../agents/transcript-credential-safety.js";

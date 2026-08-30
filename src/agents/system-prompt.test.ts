@@ -269,6 +269,18 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
+  it("preserves the prompt-mode-none output when no agent assignment exists", () => {
+    expect(
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode: "none",
+        runtimeInfo: { model: "openai/gpt-test" },
+      }),
+    ).toBe(
+      "You are a personal assistant running inside OpenClaw.\nCurrent model identity: openai/gpt-test. Model question: answer this current-run value.",
+    );
+  });
+
   it("preserves required visible-source message-tool guidance in minimal prompts", () => {
     const requiredMessageGuidance = "Current source visible reply MUST use `message(action=send)`";
 

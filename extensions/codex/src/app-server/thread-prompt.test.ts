@@ -57,6 +57,26 @@ function buildInstructions(overrides: Partial<EmbeddedRunAttemptParams> = {}): s
   });
 }
 
+describe("buildDeveloperInstructions agent assignment", () => {
+  it("keeps assignment out of thread-lifetime instructions", () => {
+    expect(
+      buildInstructions({
+        agentId: "worker",
+        config: {
+          agents: {
+            entries: {
+              worker: {
+                identity: { name: "Worker" },
+                description: "Owns bounded specialist work.",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toContain("## Agent Assignment");
+  });
+});
+
 describe("buildDeveloperInstructions delegation guidance", () => {
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();

@@ -7,6 +7,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
+import { buildAgentAssignmentPrompt } from "./agent-assignment-prompt.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import { resolveOwnerDisplaySetting } from "./owner-display.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -83,5 +84,6 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   return buildAgentSystemPrompt({
     ...renderParams,
     ...configParams,
+    agentAssignmentPrompt: buildAgentAssignmentPrompt({ config, agentId }),
   });
 }

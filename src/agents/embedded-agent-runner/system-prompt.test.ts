@@ -33,6 +33,45 @@ describe("buildEmbeddedSystemPrompt", () => {
     clearMemoryPluginState();
   });
 
+  it("includes the configured specialist assignment", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        agents: {
+          entries: {
+            writer: {
+              identity: { name: "Writer" },
+              description: "Drafts approved work and hands final review to the editor.",
+            },
+          },
+        },
+      },
+      agentId: "writer",
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        agentId: "writer",
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      userTimezone: "UTC",
+      userDate: "2026-01-05",
+    });
+
+    expect(prompt).toContain(
+      [
+        "## Agent Assignment",
+        "Agent ID: writer",
+        "Name: Writer",
+        "Specialist scope and handoff boundary: Drafts approved work and hands final review to the editor.",
+      ].join("\n"),
+    );
+  });
+
   it("forwards provider prompt contributions into the embedded prompt", () => {
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",

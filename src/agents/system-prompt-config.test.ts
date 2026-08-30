@@ -20,7 +20,118 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
   });
 }
 
+const assignmentCases = [
+  {
+    agentId: "main",
+    agentName: "Coordinator",
+    description: "Coordinates work and hands specialist execution to the matching agent.",
+  },
+  {
+    agentId: "research",
+    agentName: "Researcher",
+    description: "Investigates evidence and hands implementation to the owning specialist.",
+  },
+  {
+    agentId: "editor",
+    agentName: "Editor",
+    description: "Owns editorial quality and hands source disputes back to research.",
+  },
+  {
+    agentId: "writer",
+    agentName: "Writer",
+    description: "Drafts approved work and hands final review to the editor.",
+  },
+  {
+    agentId: "code-ops",
+    agentName: "Code Operations",
+    description: "Owns implementation and hands product decisions to the coordinator.",
+  },
+] as const;
+
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each(assignmentCases)(
+    "projects the $agentId agent's factual assignment",
+    ({ agentId, agentName, description }) => {
+      const prompt = buildPrompt(
+        {
+          agents: {
+            entries: {
+              [agentId]: { identity: { name: agentName }, description },
+            },
+          },
+        },
+        agentId,
+      );
+
+      expect(prompt).toContain(
+        [
+          "## Agent Assignment",
+          "OpenClaw config is authoritative for agent ID, name, specialist scope, and handoff boundary.",
+          `Agent ID: ${agentId}`,
+          `Name: ${agentName}`,
+          `Specialist scope and handoff boundary: ${description}`,
+        ].join("\n"),
+      );
+    },
+  );
+
+  it("keeps the selected assignment in prompt mode none", () => {
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config: {
+        agents: {
+          entries: {
+            worker: {
+              identity: { name: "Worker" },
+              description: "Handles bounded specialist work.",
+            },
+          },
+        },
+      },
+      agentId: "worker",
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+    });
+
+    expect(prompt).toContain(
+      "## Agent Assignment\nOpenClaw config is authoritative for agent ID, name, specialist scope, and handoff boundary.\nAgent ID: worker\nName: Worker",
+    );
+    expect(prompt).toContain(
+      "Specialist scope and handoff boundary: Handles bounded specialist work.",
+    );
+  });
+
+  it("keeps config assignment authoritative over conflicting workspace identity", () => {
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config: {
+        agents: {
+          entries: {
+            worker: {
+              identity: { name: "Configured Worker" },
+              description: "Owns configured specialist work.",
+            },
+          },
+        },
+      },
+      agentId: "worker",
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/IDENTITY.md",
+          content: "Name: Stale File Worker\nScope: Owns conflicting workspace work.",
+        },
+      ],
+    });
+
+    expect(prompt).toContain(
+      "OpenClaw config is authoritative for agent ID, name, specialist scope, and handoff boundary.",
+    );
+    expect(prompt).toContain("Name: Configured Worker");
+    expect(prompt).toContain("Name: Stale File Worker");
+    expect(prompt.indexOf("Name: Configured Worker")).toBeLessThan(
+      prompt.indexOf("Name: Stale File Worker"),
+    );
+  });
+
   it.each([
     {
       name: "prefers delegation in the canonical main session",

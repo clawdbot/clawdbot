@@ -782,6 +782,7 @@ export function appendModelIdentitySystemPrompt(params: {
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
+  agentAssignmentPrompt?: string;
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
@@ -850,9 +851,12 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   if (promptMode === "none") {
-    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
-      .filter(Boolean)
-      .join("\n");
+    const promptSections = [
+      "You are a personal assistant running inside OpenClaw.",
+      params.agentAssignmentPrompt,
+      modelIdentityLine,
+    ].filter(Boolean);
+    return promptSections.join(params.agentAssignmentPrompt ? "\n\n" : "\n");
   }
 
   const acpEnabled = params.acpEnabled === true;
@@ -1164,6 +1168,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
+    agentAssignmentPrompt: params.agentAssignmentPrompt,
     promptMode,
     promptSurface,
     toolLines,
@@ -1208,6 +1213,8 @@ export function buildAgentSystemPrompt(params: {
     const lines = [
       "You are a personal assistant running inside OpenClaw.",
       "",
+      params.agentAssignmentPrompt,
+      params.agentAssignmentPrompt ? "" : undefined,
       ...(includeToolGuidance
         ? [
             "## Tooling",

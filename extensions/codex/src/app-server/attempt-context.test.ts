@@ -238,6 +238,9 @@ describe("Codex app-server attempt context", () => {
         path.join(executionDir, "AGENTS.md"),
       );
       expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
+      expect(context.turnScopedDeveloperInstructions).toContain(
+        "OpenClaw Agent Assignment remains authoritative for agent ID, name, specialist scope, and handoff boundary.",
+      );
       expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
       expect(context.memoryToolRouted).toBe(true);
       expect(context.promptContext).toBeUndefined();

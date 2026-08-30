@@ -796,7 +796,7 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     files,
     header: "## OpenClaw Agent Soul",
     preamble:
-      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. They may define personality, working style, and human context. OpenClaw Agent Assignment remains authoritative for agent ID, name, specialist scope, and handoff boundary.",
     wrapperTag: "AGENT_SOUL",
   });
 }
