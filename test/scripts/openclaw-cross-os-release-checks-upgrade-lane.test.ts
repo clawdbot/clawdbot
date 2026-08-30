@@ -1,10 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   ensureLocalNpmShim: vi.fn(),
+  ensureDevUpdateGitInstall: vi.fn(),
   installPackageSpec: vi.fn(),
   installTarballPackage: vi.fn(),
   readInstalledMetadata: vi.fn(),
@@ -13,11 +15,15 @@ const mocks = vi.hoisted(() => ({
   runBundledPluginPostinstall: vi.fn(),
   runDashboardSmoke: vi.fn(),
   runModelsSet: vi.fn(),
-  runOnboard: vi.fn(),
+  runInstalledModelsSet: vi.fn(),
+  runInstallerSmoke: vi.fn(),
+  resolveInstallerTargetVersion: vi.fn(),
+  runCommand: vi.fn(),
   runOpenClaw: vi.fn(),
   startGateway: vi.fn(),
   stopGateway: vi.fn(),
   waitForGateway: vi.fn(),
+  verifyFreshShellCommand: vi.fn(),
 }));
 
 vi.mock("../../scripts/lib/cross-os-release-checks/install.ts", async (importOriginal) => ({
@@ -39,7 +45,6 @@ vi.mock("../../scripts/lib/cross-os-release-checks/runtime.ts", async (importOri
   runAgentTurn: mocks.runAgentTurn,
   runDashboardSmoke: mocks.runDashboardSmoke,
   runModelsSet: mocks.runModelsSet,
-  runOnboard: mocks.runOnboard,
   runOpenClaw: mocks.runOpenClaw,
   startGateway: mocks.startGateway,
   waitForGateway: mocks.waitForGateway,
@@ -50,11 +55,33 @@ vi.mock("../../scripts/lib/cross-os-release-checks/process.ts", async (importOri
     typeof import("../../scripts/lib/cross-os-release-checks/process.ts")
   >()),
   stopGateway: mocks.stopGateway,
+  runCommand: mocks.runCommand,
+  runCommandInvocation: (invocation: { command: string; args: string[] }, options: unknown) =>
+    mocks.runCommand(invocation.command, invocation.args, options),
 }));
 
-import { runUpgradeLane } from "../../scripts/lib/cross-os-release-checks/lanes.ts";
+vi.mock("../../scripts/lib/cross-os-release-checks/installed.ts", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../scripts/lib/cross-os-release-checks/installed.ts")
+  >()),
+  ensureDevUpdateGitInstall: mocks.ensureDevUpdateGitInstall,
+  resolveInstallerTargetVersion: mocks.resolveInstallerTargetVersion,
+  runInstalledAgentTurn: mocks.runAgentTurn,
+  runInstalledCli: mocks.runOpenClaw,
+  runInstalledModelsSet: mocks.runInstalledModelsSet,
+  runInstallerSmoke: mocks.runInstallerSmoke,
+  startManualGatewayFromInstalledCli: mocks.startGateway,
+  verifyFreshShellCommand: mocks.verifyFreshShellCommand,
+  waitForInstalledGateway: mocks.waitForGateway,
+}));
 
-const { createTempDir } = createScriptTestHarness();
+import {
+  runDevUpdateSuite,
+  runFreshLane,
+  runUpgradeLane,
+} from "../../scripts/lib/cross-os-release-checks/lanes.ts";
+
+const { createTempDir, trackTempDir } = createScriptTestHarness();
 
 const candidate = {
   candidateTgz: "/tmp/openclaw-candidate.tgz",
@@ -72,6 +99,9 @@ function upgradeParams() {
     baselineTgz: "",
     build: candidate,
     candidateUrl: "http://127.0.0.1:49951/openclaw-candidate.tgz",
+    ref: "main",
+    sourceSha: candidate.sourceSha,
+    runDiscordRoundtrip: false,
     companions: [],
     logsDir,
     providerConfig: {
@@ -84,7 +114,6 @@ function upgradeParams() {
     providerSecretValue: "secret",
   };
 }
-
 function arrangeSuccessfulLane() {
   mocks.installPackageSpec.mockResolvedValue(undefined);
   mocks.installTarballPackage.mockResolvedValue(undefined);
@@ -96,7 +125,12 @@ function arrangeSuccessfulLane() {
     commit: candidate.sourceSha,
   });
   mocks.runBundledPluginPostinstall.mockResolvedValue(undefined);
-  mocks.runOnboard.mockResolvedValue(undefined);
+  mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+  mocks.runOpenClaw.mockResolvedValue({ exitCode: 0, stdout: "{}", stderr: "" });
+  mocks.resolveInstallerTargetVersion.mockResolvedValue("2026.7.1");
+  mocks.runInstallerSmoke.mockImplementation(async ({ lane }) => trackTempDir(lane.rootDir));
+  mocks.verifyFreshShellCommand.mockResolvedValue({ cliPath: join(logsDir, "openclaw") });
+  mocks.ensureDevUpdateGitInstall.mockResolvedValue({ cliPath: join(logsDir, "openclaw") });
   mocks.runModelsSet.mockResolvedValue(undefined);
   mocks.startGateway.mockResolvedValue({
     child: {},
@@ -110,9 +144,10 @@ function arrangeSuccessfulLane() {
   mocks.runAgentTurn.mockResolvedValue({ exitCode: 0, stdout: "OK", stderr: "" });
 }
 
-describe("cross-OS packaged upgrade lane evidence", () => {
+describe("cross-OS manual gateway lane evidence", () => {
   beforeEach(() => {
     logsDir = createTempDir("openclaw-upgrade-lane-test-");
+    mocks.ensureLocalNpmShim.mockImplementation(({ rootDir }) => trackTempDir(rootDir));
   });
 
   afterEach(() => {
@@ -120,6 +155,75 @@ describe("cross-OS packaged upgrade lane evidence", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
+  });
+
+  describe.each([
+    ["fresh", runFreshLane],
+    ["upgrade", runUpgradeLane],
+    ["dev-update", runDevUpdateSuite],
+  ] as const)("%s gateway port ownership", (_name, runLane) => {
+    it.each(["success", "onboard", "models-set"] as const)(
+      "holds the configured port through setup and releases it after %s",
+      async (outcome) => {
+        arrangeSuccessfulLane();
+        let port = 0;
+        const phases: string[] = [];
+        mocks.runCommand.mockImplementation(async (_command, args: string[]) => {
+          if (args.includes("onboard")) {
+            port = Number(args[args.indexOf("--gateway-port") + 1]);
+            phases.push("onboard");
+            expect(await probeBind(port)).toBe("EADDRINUSE");
+            if (outcome === "onboard") {
+              throw new Error("injected onboard failure");
+            }
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        });
+        mocks.runModelsSet.mockImplementation(async ({ lane }) => {
+          expect(lane.gatewayPort).toBe(port);
+          phases.push("models-set");
+          expect(await probeBind(port)).toBe("EADDRINUSE");
+          if (outcome === "models-set") {
+            throw new Error("injected models-set failure");
+          }
+        });
+        mocks.runInstalledModelsSet.mockImplementation(() =>
+          mocks.runModelsSet({ lane: { gatewayPort: port } }),
+        );
+        mocks.startGateway.mockImplementation(async ({ lane }) => {
+          expect(lane.gatewayPort).toBe(port);
+          phases.push("start-gateway");
+          expect(await probeBind(port)).toBe("available");
+          return {
+            child: {},
+            closeLog: vi.fn(),
+            launchLogOffset: 0,
+            logPath: join(logsDir, "gateway.log"),
+            waitForClose: vi.fn(),
+          };
+        });
+
+        const result = await runLane(upgradeParams()).catch((error: unknown) => ({
+          status: "fail",
+          error: String(error),
+        }));
+
+        if (outcome === "success") {
+          expect(result, JSON.stringify(result)).toMatchObject({ status: "pass" });
+          expect(phases).toEqual(["onboard", "models-set", "start-gateway"]);
+        } else {
+          expect(result).toMatchObject({ status: "fail" });
+          expect(result, JSON.stringify(result)).toHaveProperty(
+            "error",
+            expect.stringContaining(`injected ${outcome} failure`),
+          );
+          expect(mocks.startGateway).not.toHaveBeenCalled();
+        }
+        // Failure cleanup and the spawn boundary both relinquish the same port.
+        expect(port).toBeGreaterThan(0);
+        expect(await probeBind(port)).toBe("available");
+      },
+    );
   });
 
   it("records bounded evidence when the supported Windows timeout fallback succeeds", async () => {
@@ -210,3 +314,11 @@ describe("cross-OS packaged upgrade lane evidence", () => {
     expect(JSON.stringify(result)).not.toContain("npm install");
   });
 });
+
+async function probeBind(port: number): Promise<string> {
+  const server = createServer();
+  return await new Promise((resolve) => {
+    server.once("error", (error: NodeJS.ErrnoException) => resolve(error.code ?? error.message));
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve("available")));
+  });
+}
