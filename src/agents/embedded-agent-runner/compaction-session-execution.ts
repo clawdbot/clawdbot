@@ -520,10 +520,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 (_signal, resetTimeout) => {
                   resetCompactionTimeout = resetTimeout;
                   setCompactionSafeguardCancellation(compactionSessionManager, undefined);
-                  return resolveEffectiveCompactionMode(params.config) === "default" &&
-                    trigger !== "manual"
-                    ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
-                    : activeSession.compact(params.customInstructions);
+                  const requestState = trigger === "overflow" ? ("unresolved" as const) : undefined;
+                  if (trigger === "manual") {
+                    return activeSession.compact(params.customInstructions);
+                  }
+                  return resolveEffectiveCompactionMode(params.config) === "default"
+                    ? activeSession[agentSessionAutomaticCompaction](
+                        params.customInstructions,
+                        requestState,
+                      )
+                    : activeSession[agentSessionAutomaticCompaction](
+                        params.customInstructions,
+                        requestState,
+                        "none",
+                      );
                 },
                 compactionTimeoutMs,
                 {
