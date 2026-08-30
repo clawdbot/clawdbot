@@ -40,7 +40,7 @@ import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { normalizeProxyIp } from "./proxy-ip.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
-import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
+import type { CallRecord, NormalizedEvent, PlaybackOutcome, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
@@ -1048,6 +1048,8 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
+      // Outcome of whichever playback delivered the reply; a hangup needs one.
+      let finalPlayback: PlaybackOutcome | undefined;
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
@@ -1065,6 +1067,9 @@ export class VoiceCallWebhookServer {
         onEarlyText: async (text) => {
           this.logger.info(`Early AI response queued ${callId} chars=${text.length}`);
           const speakResult = await this.manager.speak(callId, text, { listenAfterPlayback: true });
+          if (speakResult.success) {
+            finalPlayback = speakResult.playback;
+          }
           return speakResult.success;
         },
       });
@@ -1076,7 +1081,22 @@ export class VoiceCallWebhookServer {
 
       if (result.text && !result.deliveredEarly) {
         this.logger.info(`AI response delivered ${callId} chars=${result.text.length}`);
-        await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
+        const speakResult = await this.manager.speak(callId, result.text, {
+          listenAfterPlayback: !result.endCall,
+        });
+        if (!speakResult.success) {
+          this.logger.warn(`Final reply playback failed ${callId}: ${speakResult.error}`);
+          return;
+        }
+        finalPlayback = speakResult.playback;
+      }
+
+      if (result.endCall) {
+        // No playback outcome means the reply carried no audio, so nothing can be truncated.
+        this.logger.info(
+          `Agent requested hangup for call ${callId} (playback=${finalPlayback ?? "none"})`,
+        );
+        this.manager.endCallAfterPlayback(callId, "Agent hangup", finalPlayback);
       }
     } catch (err) {
       this.logger.error(`Auto-response error: ${String(err)}`);

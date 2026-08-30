@@ -364,7 +364,7 @@ describe("voice-call outbound helpers", () => {
 
     await expect(
       speak(ctx as never, "call-1", "hello", { listenAfterPlayback: true }),
-    ).resolves.toEqual({ success: true });
+    ).resolves.toEqual({ success: true, playback: "unconfirmed" });
     expect(transitionStateMock).toHaveBeenCalledWith(call, "speaking");
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
@@ -381,6 +381,7 @@ describe("voice-call outbound helpers", () => {
     await expect(speak(ctx as never, "call-1", "hello again")).resolves.toEqual({
       success: false,
       error: "tts failed",
+      playback: "unconfirmed",
     });
     expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
   });
@@ -411,6 +412,7 @@ describe("voice-call outbound helpers", () => {
 
     await expect(continueCall(ctx as never, "call-1", "hello")).resolves.toEqual({
       success: false,
+      playback: "unconfirmed",
       error: "Telephony TTS queue is full for stream; maxPending=8",
     });
 
@@ -440,7 +442,10 @@ describe("voice-call outbound helpers", () => {
       storePath: "/tmp/voice-call.json",
     };
 
-    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({
+      success: true,
+      playback: "unconfirmed",
+    });
 
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
@@ -467,6 +472,7 @@ describe("voice-call outbound helpers", () => {
       providerCallIdMap: new Map([["provider-1", "call-1"]]),
       provider: { name: "twilio", playTts },
       initialMessageInFlight: new Set(),
+      pendingHangupTimers: new Map(),
       config: {
         outbound: { notifyHangupDelaySec: Number.MAX_SAFE_INTEGER },
         tts: { provider: "openai", providers: { openai: { voice: "alloy" } } },
@@ -511,7 +517,10 @@ describe("voice-call outbound helpers", () => {
       storePath: "/tmp/voice-call.json",
     };
 
-    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({
+      success: true,
+      playback: "unconfirmed",
+    });
 
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
@@ -545,7 +554,10 @@ describe("voice-call outbound helpers", () => {
       storePath: "/tmp/voice-call.json",
     };
 
-    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({
+      success: true,
+      playback: "unconfirmed",
+    });
 
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
@@ -669,7 +681,7 @@ describe("voice-call outbound helpers", () => {
         "missing",
         "hello",
       ),
-    ).resolves.toEqual({ success: false, error: "Call not found" });
+    ).resolves.toEqual({ success: false, error: "Call not found", playback: "unconfirmed" });
 
     await expect(
       endCall(

@@ -15,6 +15,7 @@ import {
   type CallId,
   type CallRecord,
   type OutboundCallOptions,
+  type PlaybackOutcome,
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
@@ -51,6 +52,7 @@ type SpeakContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "pendingHangupTimers"
   | "endCallOperations"
 >;
 
@@ -64,6 +66,7 @@ type ConversationContext = Pick<
   | "activeTurnCalls"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "pendingHangupTimers"
   | "initialMessageInFlight"
   | "endCallOperations"
 >;
@@ -278,15 +281,22 @@ export type SpeakOptions = {
   listenAfterPlayback?: boolean;
 };
 
+export type SpeakResult = {
+  success: boolean;
+  error?: string;
+  /** What happened to this playback; "unconfirmed" when the provider cannot tell. */
+  playback: PlaybackOutcome;
+};
+
 export async function speak(
   ctx: SpeakContext,
   callId: CallId,
   text: string,
   options?: SpeakOptions,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<SpeakResult> {
   const connected = requireConnectedCall(ctx, callId);
   if (!connected.ok) {
-    return { success: false, error: connected.error };
+    return { success: false, error: connected.error, playback: "unconfirmed" };
   }
   const { call, providerCallId, provider } = connected;
 
@@ -305,7 +315,7 @@ export async function speak(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
     const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
-    await provider.playTts({
+    const playbackResult = await provider.playTts({
       callId,
       providerCallId,
       text,
@@ -316,12 +326,12 @@ export async function speak(
     addTranscriptEntry(call, "bot", text);
     persistCallRecord(ctx.storePath, call);
 
-    return { success: true };
+    return { success: true, playback: playbackResult?.playback ?? "unconfirmed" };
   } catch (err) {
     // A failed playback should not leave the call stuck in speaking state.
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);
-    return { success: false, error: formatErrorMessage(err) };
+    return { success: false, error: formatErrorMessage(err), playback: "unconfirmed" };
   }
 }
 
@@ -365,6 +375,79 @@ export async function sendDtmf(
   } catch (err) {
     return { success: false, error: formatErrorMessage(err) };
   }
+}
+
+/** Drop a grace-period hangup that has not fired yet. */
+export function cancelPendingHangup(
+  ctx: Pick<CallManagerContext, "pendingHangupTimers">,
+  callId: CallId,
+  reason: string,
+): void {
+  const timer = ctx.pendingHangupTimers.get(callId);
+  if (!timer) {
+    return;
+  }
+  clearTimeout(timer);
+  ctx.pendingHangupTimers.delete(callId);
+  console.log(`[voice-call] Cancelled pending hangup for call ${callId} (${reason})`);
+}
+
+/**
+ * Hang up once the final reply has reached the caller.
+ *
+ * The decision follows what actually happened to that playback, not what the
+ * provider is capable of. A carrier-confirmed drain ends the call at once. An
+ * unobserved playback keeps the configured notify grace so closing words are not
+ * cut off, and that pending hangup is cancelled if the caller speaks again during
+ * the grace. A cancelled playback (caller barge-in) keeps the line open because
+ * the caller took the floor. Passing no outcome means nothing was played, so
+ * there is nothing to truncate and the call ends immediately.
+ */
+export function scheduleHangupAfterPlayback(
+  ctx: SpeakContext,
+  callId: CallId,
+  label: string,
+  playback: PlaybackOutcome | undefined,
+): void {
+  const call = ctx.activeCalls.get(callId);
+  if (!call || TerminalStates.has(call.state)) {
+    return;
+  }
+  if (playback === "cancelled") {
+    console.log(`[voice-call] ${label}: playback interrupted, keeping call ${callId} open`);
+    return;
+  }
+  const hangUp = async () => {
+    ctx.pendingHangupTimers.delete(callId);
+    const currentCall = ctx.activeCalls.get(callId);
+    if (!currentCall || TerminalStates.has(currentCall.state)) {
+      return;
+    }
+    const endResult = await endCall(ctx, callId, { reason: "hangup-bot" });
+    if (!endResult.success) {
+      console.warn(
+        `[voice-call] ${label} failed to hang up call ${callId}: ${endResult.error ?? "unknown error"}`,
+      );
+    }
+  };
+
+  if (playback !== "unconfirmed") {
+    const why = playback === "confirmed" ? "playback drained" : "nothing to play";
+    console.log(`[voice-call] ${label}: ${why}, hanging up call ${callId}`);
+    void hangUp();
+    return;
+  }
+
+  cancelPendingHangup(ctx, callId, "superseded");
+  const delaySec = ctx.config.outbound.notifyHangupDelaySec;
+  const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
+  console.log(`[voice-call] ${label}: auto-hangup in ${delaySec}s for call ${callId}`);
+  ctx.pendingHangupTimers.set(
+    callId,
+    setTimeout(() => {
+      void hangUp();
+    }, delayMs),
+  );
 }
 
 export async function speakInitialMessage(
@@ -412,23 +495,7 @@ export async function speakInitialMessage(
     }
 
     if (mode === "notify") {
-      const delaySec = ctx.config.outbound.notifyHangupDelaySec;
-      const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
-      console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-      setTimeout(() => {
-        void (async () => {
-          const currentCall = ctx.activeCalls.get(call.callId);
-          if (currentCall && !TerminalStates.has(currentCall.state)) {
-            console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-            const endResult = await endCall(ctx, call.callId);
-            if (!endResult.success) {
-              console.warn(
-                `[voice-call] Notify mode failed to hang up call ${call.callId}: ${endResult.error ?? "unknown error"}`,
-              );
-            }
-          }
-        })();
-      }, delayMs);
+      scheduleHangupAfterPlayback(ctx, call.callId, "Notify mode", result.playback);
     } else if (
       mode === "conversation" &&
       ctx.provider &&

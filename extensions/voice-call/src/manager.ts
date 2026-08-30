@@ -10,8 +10,10 @@ import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
   initiateCall as initiateCallWithContext,
+  scheduleHangupAfterPlayback as scheduleHangupAfterPlaybackWithContext,
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
+  type SpeakResult,
   speakInitialMessage as speakInitialMessageWithContext,
   type SpeakOptions,
 } from "./manager/outbound.js";
@@ -32,6 +34,7 @@ import {
   type EndReason,
   type NormalizedEvent,
   type OutboundCallOptions,
+  type PlaybackOutcome,
 } from "./types.js";
 import { resolveUserPath } from "./utils.js";
 
@@ -88,6 +91,7 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private pendingHangupTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
 
   /**
@@ -307,11 +311,7 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(
-    callId: CallId,
-    text: string,
-    options?: SpeakOptions,
-  ): Promise<{ success: boolean; error?: string }> {
+  async speak(callId: CallId, text: string, options?: SpeakOptions): Promise<SpeakResult> {
     return speakWithContext(this.getContext(), callId, text, options);
   }
 
@@ -346,6 +346,13 @@ export class CallManager {
     return endCallWithContext(this.getContext(), callId, options);
   }
 
+  /**
+   * End an active call once its last reply has finished playing to the caller.
+   */
+  endCallAfterPlayback(callId: CallId, label: string, playback: PlaybackOutcome | undefined): void {
+    scheduleHangupAfterPlaybackWithContext(this.getContext(), callId, label, playback);
+  }
+
   private getContext(): CallManagerContext {
     return {
       activeCalls: this.activeCalls,
@@ -361,6 +368,7 @@ export class CallManager {
       endCallOperations: this.endCallOperations,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
+      pendingHangupTimers: this.pendingHangupTimers,
       initialMessageInFlight: this.initialMessageInFlight,
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);

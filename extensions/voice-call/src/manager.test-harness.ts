@@ -266,6 +266,7 @@ export function createEventManagerHarness() {
       endCallOperations: new Map(),
       transcriptWaiters: new Map(),
       maxDurationTimers: new Map(),
+      pendingHangupTimers: new Map(),
       initialMessageInFlight: new Set(),
       ...overrides,
     };

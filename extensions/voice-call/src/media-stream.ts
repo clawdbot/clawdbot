@@ -84,7 +84,7 @@ type TtsQueueEntry = {
 };
 
 type PendingPlaybackMark = {
-  settle: (error?: Error, ignoreLateAck?: boolean) => void;
+  settle: (error?: Error, ignoreLateAck?: boolean, acknowledged?: boolean) => void;
 };
 
 type StreamSendResult = {
@@ -704,13 +704,18 @@ export class MediaStreamHandler {
     });
   }
 
-  /** Send a completion mark and wait until Twilio reports that buffered playback reached it. */
+  /**
+   * Send a completion mark and wait until Twilio reports that buffered playback reached it.
+   *
+   * Resolves `true` only when the carrier acknowledged the mark. A local timeout
+   * resolves `false` so callers can tell real playback completion from a guess.
+   */
   async sendMarkAndWait(
     streamSid: string,
     name: string,
     audioDurationMs: number,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     signal.throwIfAborted();
     const marks = this.getPendingPlaybackMarks(streamSid);
     if (marks.has(name)) {
@@ -719,11 +724,11 @@ export class MediaStreamHandler {
     this.ignoredPlaybackMarks.get(streamSid)?.delete(name);
 
     let pending!: PendingPlaybackMark;
-    const acknowledgement = new Promise<void>((resolve, reject) => {
+    const acknowledgement = new Promise<boolean>((resolve, reject) => {
       const timeout = setTimeout(
         () => {
           console.warn(`[MediaStream] Playback mark timed out; continuing stream=${streamSid}`);
-          pending.settle();
+          pending.settle(undefined, false, false);
         },
         Math.max(1, audioDurationMs + PLAYBACK_MARK_TIMEOUT_GRACE_MS),
       );
@@ -736,7 +741,7 @@ export class MediaStreamHandler {
         pending.settle(reason, true);
       };
       pending = {
-        settle: (error, ignoreLateAck = false) => {
+        settle: (error, ignoreLateAck = false, acknowledged = true) => {
           if (marks.get(name) !== pending) {
             return;
           }
@@ -752,7 +757,7 @@ export class MediaStreamHandler {
           if (error) {
             reject(error);
           } else {
-            resolve();
+            resolve(acknowledged);
           }
         },
       };

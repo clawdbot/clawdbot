@@ -14,7 +14,9 @@ type CallLifecycleContext = Pick<
   CallManagerContext,
   "activeCalls" | "providerCallIdMap" | "storePath"
 > &
-  Partial<Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers">>;
+  Partial<
+    Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "pendingHangupTimers">
+  >;
 
 /** Remove a provider-call mapping only when it still points at this call. */
 function removeProviderCallMapping(
@@ -53,6 +55,11 @@ export function finalizeCall(params: {
 
   if (ctx.maxDurationTimers) {
     clearMaxDurationTimer({ maxDurationTimers: ctx.maxDurationTimers }, call.callId);
+  }
+  const pendingHangup = ctx.pendingHangupTimers?.get(call.callId);
+  if (pendingHangup) {
+    clearTimeout(pendingHangup);
+    ctx.pendingHangupTimers?.delete(call.callId);
   }
   if (ctx.transcriptWaiters) {
     rejectTranscriptWaiter(

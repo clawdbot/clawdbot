@@ -10,7 +10,7 @@ import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
-import { endCall } from "./outbound.js";
+import { cancelPendingHangup, endCall } from "./outbound.js";
 import {
   appendCallReplayKey,
   releaseRejectedProviderCall,
@@ -35,6 +35,7 @@ type EventContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "pendingHangupTimers"
   | "endCallOperations"
   | "onCallAnswered"
   | "streamSessionIssuer"
@@ -346,6 +347,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
             result = { kind: "ignored" };
             break;
           }
+          // Fresh caller speech supersedes any grace-period hangup from the last turn.
+          cancelPendingHangup(ctx, activeCall.callId, "caller resumed");
           addTranscriptEntry(activeCall, "user", event.transcript);
           result = {
             kind: "final-speech",
