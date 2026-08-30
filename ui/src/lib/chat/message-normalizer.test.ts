@@ -677,6 +677,23 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it.each([
+      "file:///tmp/caf%C3%A9%20image.png",
+      "FILE:///tmp/caf%C3%A9%20image.png",
+      "FILE:/tmp/caf%C3%A9%20image.png",
+      "file://localhost/tmp/caf%C3%A9%20image.png",
+    ])("keeps the original file URL in displayed attachments: %s", (url) => {
+      expect(
+        normalizeMessage({ role: "assistant", content: `Caption\nMEDIA:${url}` }).content,
+      ).toEqual([
+        { type: "text", text: "Caption" },
+        {
+          type: "attachment",
+          attachment: { url, kind: "image", label: "caf%C3%A9%20image.png", mimeType: "image/png" },
+        },
+      ]);
+    });
+
     it("keeps spaced local filenames together instead of leaking suffix text", () => {
       const result = normalizeMessage({
         role: "assistant",

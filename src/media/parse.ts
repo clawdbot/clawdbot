@@ -18,7 +18,7 @@ import { parseAudioTag } from "./audio-tags.js";
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
-  /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:\/\/|~|\/|[a-z]:[\\/])/iu;
+  /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
 
 export function isRelativeAssistantMediaReference(url: string): boolean {
   const trimmed = url.trim();
@@ -46,7 +46,7 @@ type SplitMediaFromOutputOptions = {
 
 const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
-/** Converts file URLs into plain local paths before downstream media validation. */
+// Classify spelling only; preserve file URLs in output so native loaders own decoding and access.
 function normalizeMediaSource(src: string): string {
   return src.replace(FILE_URL_PREFIX_RE, "");
 }
@@ -177,6 +177,7 @@ function isValidMedia(
   candidate: string,
   opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
 ) {
+  candidate = normalizeMediaSource(candidate);
   if (!candidate) {
     return false;
   }
@@ -645,10 +646,9 @@ export function splitMediaFromOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = normalizeMediaSource(cleanCandidate(part));
-        if (
-          isValidMedia(candidate, unwrapped || /\s/.test(part) ? { allowSpaces: true } : undefined)
-        ) {
+        const candidate = cleanCandidate(part);
+        const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
+        if (isValidMedia(candidate, { allowSpaces })) {
           media.push(candidate);
           hasValidMedia = true;
           foundMediaToken = true;
@@ -670,7 +670,7 @@ export function splitMediaFromOutput(
         looksLikeLocalPath
       ) {
         // A single valid split plus invalid leftovers can be one local path containing spaces.
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const fallback = cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
@@ -680,7 +680,7 @@ export function splitMediaFromOutput(
       }
 
       if (!hasValidMedia && !unwrapped && /\s/.test(payloadValue)) {
-        const spacedFallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const spacedFallback = cleanCandidate(payloadValue);
         if (isValidMedia(spacedFallback, { allowSpaces: true, allowBareFilename: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
           hasValidMedia = true;
@@ -690,7 +690,7 @@ export function splitMediaFromOutput(
       }
 
       if (!hasValidMedia) {
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const fallback = cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;
