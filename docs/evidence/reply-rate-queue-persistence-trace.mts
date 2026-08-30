@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,11 +32,18 @@ try {
 
   console.log("Querying sqlite database directly:");
   console.log(
-    `$ sqlite3 ${dbPath} "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';"`,
+    `$ sqlite3 "${dbPath}" -json "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';"`,
   );
 
-  const sqliteCmd = `sqlite3 ${dbPath} -json "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';"`;
-  const result = execSync(sqliteCmd, { cwd: root, encoding: "utf8" });
+  const result = execFileSync(
+    "sqlite3",
+    [
+      dbPath,
+      "-json",
+      "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';",
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
   console.log(result);
 } catch (e) {
   console.error("Trace failed", e);

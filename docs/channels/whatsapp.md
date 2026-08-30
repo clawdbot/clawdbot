@@ -676,8 +676,8 @@ Example:
 ## Probabilistic Reply Rate (`replyRate`)
 
 You can configure WhatsApp to intentionally and probabilistically drop inbound
-messages before they trigger an agent turn. This is useful for simulating human
-non-response.
+direct messages before they trigger an agent turn. This is useful for simulating human
+non-response. This setting applies only to direct messages and does not suppress group traffic.
 
 - Set `replyRate` to a decimal between `0` and `1`. A rate of `1` (or omitted)
   always admits the message; `0` always drops it; `0.35` drops it 65% of the
