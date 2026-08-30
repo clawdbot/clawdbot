@@ -3,17 +3,33 @@ import {
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
-import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
+import type { Api, Model, ModelCostTier, ModelThinkingLevel, Usage } from "./types.js";
+
+function selectCostTier(
+  tiers: ModelCostTier[] | undefined,
+  inputTokens: number,
+): ModelCostTier | undefined {
+  if (!tiers || tiers.length === 0) {
+    return undefined;
+  }
+  const tier = tiers.find((candidate) => {
+    const [start, end] = candidate.range;
+    return inputTokens >= start && (end === undefined || inputTokens < end);
+  });
+  return tier ?? tiers.at(-1);
+}
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+  const tier = selectCostTier(model.cost.tieredPricing, usage.input);
+  const rates = tier ?? model.cost;
   const cacheWrite1h = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));
   const cacheWrite5m = usage.cacheWrite - cacheWrite1h;
-  usage.cost.input = (model.cost.input / 1000000) * usage.input;
-  usage.cost.output = (model.cost.output / 1000000) * usage.output;
-  usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * usage.cacheRead;
+  usage.cost.input = (rates.input / 1000000) * usage.input;
+  usage.cost.output = (rates.output / 1000000) * usage.output;
+  usage.cost.cacheRead = (rates.cacheRead / 1000000) * usage.cacheRead;
   usage.cost.cacheWrite =
-    (model.cost.cacheWrite * cacheWrite5m + model.cost.input * 2 * cacheWrite1h) / 1000000;
+    (rates.cacheWrite * cacheWrite5m + rates.input * 2 * cacheWrite1h) / 1000000;
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
   return usage.cost;

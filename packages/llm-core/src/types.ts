@@ -657,6 +657,16 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
+/** Per-million-token pricing for one input-token range. */
+export type ModelCostTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Half-open input-token interval; an omitted end denotes the final tier. */
+  range: [number, number] | [number];
+};
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
@@ -676,6 +686,7 @@ export interface Model<TApi extends Api = Api> {
     output: number; // $/million tokens
     cacheRead: number; // $/million tokens
     cacheWrite: number; // $/million tokens
+    tieredPricing?: ModelCostTier[];
   };
   contextWindow?: number;
   /**
