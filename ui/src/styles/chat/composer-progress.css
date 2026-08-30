@@ -233,8 +233,7 @@
   gap: 8px;
   margin: 0;
   padding: 8px 10px;
-  border-bottom: 1px solid
-    color-mix(in srgb, var(--chat-composer-hairline) 60%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--chat-composer-hairline) 60%, transparent);
   color: var(--text);
 }
 
