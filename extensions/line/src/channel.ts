@@ -10,12 +10,16 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
+import {
+  listLineDirectoryGroupsFromConfig,
+  listLineDirectoryPeersFromConfig,
+} from "./directory-config.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
@@ -109,7 +113,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
         hint: "<userId|groupId|roomId>",
       },
     },
-    directory: createEmptyChannelDirectoryAdapter(),
+    directory: createChannelDirectoryAdapter({
+      listPeers: async (params) => await listLineDirectoryPeersFromConfig(params),
+      listGroups: async (params) => await listLineDirectoryGroupsFromConfig(params),
+    }),
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
