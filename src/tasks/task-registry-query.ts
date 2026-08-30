@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
@@ -132,7 +133,7 @@ function heapifyWorstTaskFirst(heap: TaskRecord[]): void {
   }
 }
 
-export function listTaskRecordPage(params: {
+export async function listTaskRecordPage(params: {
   offset: number;
   limit: number;
   statuses?: readonly TaskStatus[];
@@ -141,7 +142,7 @@ export function listTaskRecordPage(params: {
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
   filter?: (task: Readonly<TaskRecord>) => boolean;
-}): { tasks: TaskRecord[]; hasMore: boolean } {
+}): Promise<{ tasks: TaskRecord[]; hasMore: boolean }> {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
@@ -152,7 +153,20 @@ export function listTaskRecordPage(params: {
   const window: TaskRecord[] = [];
   let matchingCount = 0;
   let heapReady = false;
+  let scannedCount = 0;
+  // Freeze the scan length so tasks appended while this request yields cannot
+  // extend one bounded page request indefinitely.
+  const scanLimit = tasks.size;
   for (const task of tasks.values()) {
+    if (scannedCount >= scanLimit) {
+      break;
+    }
+    scannedCount += 1;
+    // Yield large scans in small deterministic slices so task history cannot
+    // monopolize the Gateway event loop while other requests are waiting.
+    if (scannedCount % 32 === 0) {
+      await yieldToEventLoop();
+    }
     if (
       (statuses && !statuses.has(task.status)) ||
       !taskMatchesAgent(task, agentId, params.cfg) ||
@@ -178,6 +192,9 @@ export function listTaskRecordPage(params: {
       window[0] = task;
       siftWorstTaskDown(window, 0);
     }
+  }
+  if (params.offset >= matchingCount) {
+    return { tasks: [], hasMore: false };
   }
   const selected = window.toSorted(compareTaskPageOrder).slice(params.offset);
   return {

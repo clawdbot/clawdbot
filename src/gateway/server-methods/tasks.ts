@@ -62,7 +62,7 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond, context, client }) => {
+  "tasks.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
@@ -101,7 +101,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // The ledger pages by last activity so an old long-running task that just
     // finished still surfaces first. Selection stays inside the registry so
     // only the bounded wire page pays for defensive record cloning.
-    const page = listTaskRecordPage({
+    const page = await listTaskRecordPage({
       offset: cursor,
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
