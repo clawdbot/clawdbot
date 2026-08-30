@@ -3956,10 +3956,10 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls).toEqual([
-      ["chat.history", { sessionKey: "main", limit: 100 }],
+      ["chat.history", { sessionKey: "main", limit: 400 }],
       [
         "chat.history",
-        { sessionKey: "main", limit: 100, inputRunIds: ["same-session-pending-run"] },
+        { sessionKey: "main", limit: 400, inputRunIds: ["same-session-pending-run"] },
       ],
     ]);
     expect(state.chatMessages).toEqual([pending]);
