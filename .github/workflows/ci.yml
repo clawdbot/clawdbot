@@ -1839,7 +1839,21 @@ jobs:
       - *platform_checkout_step
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          set -euo pipefail
+          brew install xcodegen swiftlint
+          swiftformat_version="0.62.1"
+          swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$swiftformat_archive" \
+            "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+          [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" == "7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a" ]]
+          mkdir -p "$swift_tools_dir"
+          unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+          chmod +x "$swift_tools_dir/swiftformat"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
@@ -1987,7 +2001,23 @@ jobs:
           install-bun: "false"
 
       - name: Install iOS Swift tooling
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          set -euo pipefail
+          brew install xcodegen swiftlint
+          swiftformat_version="0.62.1"
+          swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$swiftformat_archive" \
+            "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+          [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" == "7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a" ]]
+          mkdir -p "$swift_tools_dir"
+          unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+          chmod +x "$swift_tools_dir/swiftformat"
+          swiftformat_link="$(brew --prefix)/bin/swiftformat"
+          ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
 
       - name: Build iOS app
         run: pnpm ios:build
