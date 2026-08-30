@@ -13,7 +13,7 @@ type ProjectSeedScriptInput = {
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
 export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
   return `set -eu
-node <<'OPENCLAW_PROJECT_SEED'
+node <<'PROJECT_SEED_SCRIPT'
 const fs = require("node:fs");
 const fsp = fs.promises;
 const path = require("node:path");
@@ -102,5 +102,5 @@ const ownedDirectory = (parent, target) => {
     process.stdout.write(JSON.stringify({ ready: true }));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });
-OPENCLAW_PROJECT_SEED`;
+PROJECT_SEED_SCRIPT`;
 }

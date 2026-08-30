@@ -97,11 +97,14 @@ describe("Crabbox project snapshot provisioning", () => {
     expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(2);
   });
 
-  it.each(["setup", "readiness"] as const)(
+  it.each(["grant", "setup", "readiness"] as const)(
     "preserves runtime %s failure ownership without starting capture or enrollment",
     async (failure) => {
       const events: string[] = [];
       const { options, observe } = projectOptions(events);
+      if (failure === "grant") {
+        options.prepareNodeRuntime.mockRejectedValueOnce(new Error("runtime grant failed"));
+      }
       let installed = false;
       const { provider, calls } = createWarmProvider((call) => {
         observe(call);
@@ -120,7 +123,7 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(
-        failure === "setup" ? 1 : 0,
+        failure === "readiness" ? 0 : 1,
       );
       expect(listCrabboxWarmImages().every((image) => !image.capture)).toBe(true);
       if (failure === "readiness") {
@@ -128,6 +131,54 @@ describe("Crabbox project snapshot provisioning", () => {
           listCrabboxWarmImages()[0]?.allocations[operationLeaseId(`runtime-${failure}`)],
         ).toMatchObject({ phase: "prepared", choice: { kind: "cold" } });
       }
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "fences a runtime grant that will %s after project ownership changes",
+    async (outcome) => {
+      const events: string[] = [];
+      const controller = new AbortController();
+      const { options, observe } = projectOptions(events, controller);
+      const { provider, calls } = createWarmProvider(observe);
+      let current = true;
+      const closed = new DOMException("Project owner changed", "AbortError");
+      options.project.assertCurrent = () => {
+        if (!current) {
+          controller.abort(closed);
+        }
+        controller.signal.throwIfAborted();
+      };
+      options.prepareNodeRuntime.mockImplementationOnce(async () => {
+        current = false;
+        expect(controller.signal.aborted).toBe(false);
+        if (outcome === "reject") {
+          throw closed;
+        }
+        return {
+          nodeBootstrap: createNodeBootstrapFixture(),
+          signal: new AbortController().signal,
+        };
+      });
+
+      await expect(
+        provider.provision(PROFILE, `stale-grant-${outcome}`, options),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+      });
+
+      expect(events).not.toContain("runtime-install");
+      expect(calls.some(({ argv }) => argv[1] === "stop" || argv[2] === "create")).toBe(false);
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(listCrabboxWarmImages()[0]).toMatchObject({
+        allocations: {
+          [operationLeaseId(`stale-grant-${outcome}`)]: {
+            phase: "prepared",
+            choice: { kind: "cold" },
+          },
+        },
+      });
+      expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
     },
   );
 

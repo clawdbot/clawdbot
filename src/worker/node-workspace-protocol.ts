@@ -187,9 +187,9 @@ export function parseNodeWorkerWorkspaceExecInput(
             direction,
             token,
             manifestRef: manifestRef as string,
-            ...(value.transfer.seedKey === undefined
-              ? {}
-              : { seedKey: value.transfer.seedKey as string }),
+            ...(typeof value.transfer.seedKey === "string"
+              ? { seedKey: value.transfer.seedKey }
+              : {}),
             ...(value.transfer.attachments === true ? { attachments: true } : {}),
           }
         : { direction: "upload", token, baseManifestRef: baseManifestRef as string };

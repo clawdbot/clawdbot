@@ -68,10 +68,7 @@ export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): numbe
   );
 }
 
-export function resolveCrabboxWarmImageProfileKey(
-  profile: CrabboxProfile,
-  projectKey?: string,
-): string {
+function resolveCrabboxWarmImageProfileKey(profile: CrabboxProfile, projectKey?: string): string {
   return createHash("sha256")
     .update(
       JSON.stringify({

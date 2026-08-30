@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   WorkerProviderError,
@@ -454,24 +455,16 @@ export function createCrabboxWorkerProvider(
               assertCurrent: project.assertCurrent,
             },
             async () => {
+              if (!options?.prepareNodeRuntime) {
+                throw new Error("Crabbox project snapshots require node runtime preparation");
+              }
+              const runtime = await options.prepareNodeRuntime();
+              project.assertCurrent();
+              const setup = createCrabboxNodeRuntimeSetup({
+                nodeBootstrap: runtime.nodeBootstrap,
+                leaseId,
+              });
               try {
-                let runtime;
-                try {
-                  if (!options?.prepareNodeRuntime) {
-                    throw new Error("Crabbox project snapshots require node runtime preparation");
-                  }
-                  runtime = await options.prepareNodeRuntime();
-                } catch (error) {
-                  project.signal.throwIfAborted();
-                  return await failProvisionAfterCleanup(
-                    { ...context, id: leaseId, stopLease },
-                    error,
-                  );
-                }
-                const setup = createCrabboxNodeRuntimeSetup({
-                  nodeBootstrap: runtime.nodeBootstrap,
-                  leaseId,
-                });
                 inspectedParams.inspect = await runProvisionSetupAndWaitReady({
                   ...inspectedParams,
                   phase: "node runtime preparation",
@@ -491,7 +484,8 @@ export function createCrabboxWorkerProvider(
             },
           );
         } catch (error) {
-          project.signal.throwIfAborted();
+          // The runtime grant has a separate abort signal; revalidate the project owner.
+          project.assertCurrent();
           if (preparationFailed) {
             throw error;
           }
@@ -614,7 +608,9 @@ export function createCrabboxWorkerProvider(
       }
       await stopLease(context);
       if (captureError) {
-        throw captureError instanceof Error ? captureError : new Error(String(captureError));
+        throw captureError instanceof Error
+          ? captureError
+          : new Error(coerceErrorMessage(captureError));
       }
     },
   };

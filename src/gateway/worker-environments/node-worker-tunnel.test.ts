@@ -79,7 +79,7 @@ describe("node worker tunnel manager", () => {
     const rawManifest = serializeWorkerWorkspaceManifest(manifest);
     const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
     const nodeTransport = transport();
-    nodeTransport.invoke = vi.fn(async ({ command, params }) => {
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async ({ command, params }) => {
       if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
         return { ok: true, payloadJSON: "null" };
       }
@@ -120,6 +120,7 @@ describe("node worker tunnel manager", () => {
         }),
       };
     });
+    nodeTransport.invoke = invoke;
     const transfer = {
       prepareSync: vi.fn(async () => ({
         snapshot: { manifest, manifestRef, rawManifest, root: localPath },
@@ -149,9 +150,9 @@ describe("node worker tunnel manager", () => {
     ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
 
     if (syncPath === "prepared-project") {
-      const commands = vi
-        .mocked(nodeTransport.invoke)
-        .mock.calls.map(([call]) => call.params as NodeWorkerWorkspaceExecInput);
+      const commands = invoke.mock.calls.map(
+        ([call]) => call.params as NodeWorkerWorkspaceExecInput,
+      );
       expect(
         commands.some(
           (command) => command.argv.includes("clone") || command.argv.includes("fetch"),
