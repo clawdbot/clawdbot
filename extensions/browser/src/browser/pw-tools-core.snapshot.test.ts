@@ -280,6 +280,61 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(page.evaluate).toHaveBeenCalledOnce();
   });
 
+  it("times out a stalled selector probe without publishing late refs", async () => {
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pendingCount = Promise.withResolvers<number>();
+    const ariaSnapshot = vi.fn(async () => '- button "Late"');
+    const page = {
+      ...makeAriaSnapshotPage(ariaSnapshot),
+      locator: vi.fn(() => ({ count: () => pendingCount.promise, ariaSnapshot })),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+    vi.useFakeTimers();
+    try {
+      const promise = mod.snapshotRoleViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        selector: "#present",
+        timeoutMs: 750,
+      });
+      const rejected = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(750);
+      await rejected;
+      pendingCount.resolve(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ariaSnapshot).not.toHaveBeenCalled();
+      expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+      expect(page.off).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares the capture timeout between selector lookup and snapshot", async () => {
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pendingCount = Promise.withResolvers<number>();
+    const ariaSnapshot = vi.fn(async () => '- button "Present"');
+    getPageForTargetId.mockResolvedValue({
+      ...makeAriaSnapshotPage(ariaSnapshot),
+      locator: () => ({ count: () => pendingCount.promise, ariaSnapshot }),
+    });
+    vi.useFakeTimers();
+    try {
+      const promise = mod.snapshotRoleViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        selector: "#present",
+        timeoutMs: 750,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      pendingCount.resolve(1);
+      await promise;
+      expect(ariaSnapshot).toHaveBeenCalledWith({ timeout: 250 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stores frame-scoped refs with the exact captured frame", async () => {
     const ariaSnapshot = vi.fn(async () => '- button "Save"');
     const frame = { id: "frame-1", locator: vi.fn(() => ({ ariaSnapshot })) };

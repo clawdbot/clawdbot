@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateUtf16Safe, withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
@@ -218,24 +218,9 @@ export async function snapshotAriaViaPlaywright(opts: {
       };
     },
   });
-  const res = (await (ariaTimeoutMs === undefined
-    ? collectAxTree
-    : (() => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error(`Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`));
-          }, ariaTimeoutMs);
-          timer.unref?.();
-        });
-        return Promise.race([collectAxTree, timeout]).finally(() => {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        });
-      })())) as {
-    nodes?: RawAXNode[];
-  };
+  const res = await withTimeout(collectAxTree, ariaTimeoutMs ?? 0, {
+    message: `Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`,
+  });
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
   const formatted = formatAriaSnapshot(nodes, limit);
   await storeAriaSnapshotRefsViaPlaywright({
@@ -444,16 +429,20 @@ export async function snapshotRoleViaPlaywright(opts: {
     page,
     frame: frame ?? page.mainFrame(),
     run: async (isFrameCurrent) => {
-      const locator = frame
-        ? selector
-          ? frame.locator(selector)
-          : frame.locator(":root")
-        : selector
-          ? page.locator(selector)
-          : page.locator(":root");
-      const selectorMatched = !selector || (await locator.count()) > 0;
+      const snapshotScope = frame ?? page;
+      const locator = snapshotScope.locator(selector || ":root");
+      const captureDeadline = performance.now() + ariaSnapshotTimeout;
+      // Count has no timeout; both capture stages share one budget before refs are published.
+      const selectorMatched =
+        !selector ||
+        (await withTimeout(locator.count(), ariaSnapshotTimeout, "Role snapshot selector")) > 0;
       const ariaSnapshot = selectorMatched
-        ? await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout })
+        ? await locator.ariaSnapshot({
+            // A zero Playwright timeout disables its deadline.
+            timeout: selector
+              ? Math.max(1, captureDeadline - performance.now())
+              : ariaSnapshotTimeout,
+          })
         : "";
       const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
       return await finalizeRoleSnapshotViaPlaywright({
