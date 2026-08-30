@@ -359,7 +359,7 @@ describe("worker launch descriptor", () => {
     ).toThrow("invalid worker launch descriptor");
     const { nodeId, ...computerFields } = descriptor.assignment.computer;
     const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
-    for (const computer of [
+    for (const candidateComputer of [
       undefined,
       { ...descriptor.assignment.computer, gatewayUrl: "ws://other" },
       { ...descriptor.assignment.computer, nodeId: "" },
@@ -368,7 +368,7 @@ describe("worker launch descriptor", () => {
       expect(() =>
         parseWorkerLaunchDescriptor({
           ...descriptor,
-          assignment: { ...descriptor.assignment, computer },
+          assignment: { ...descriptor.assignment, computer: candidateComputer },
         }),
       ).toThrow("invalid worker launch descriptor");
     }
