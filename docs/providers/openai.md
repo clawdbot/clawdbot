@@ -1015,6 +1015,13 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     ChatGPT OAuth profile created by
     `openclaw models auth login --provider openai`.
 
+    The enabled OpenAI plugin starts its browser session broker automatically,
+    including when you sign in after the Gateway has started. No separate Talk
+    provider configuration or Platform API key is required for this browser
+    path. The broker opens a provider session only when you start Talk; signing
+    in does not open the microphone or start a voice session. Returning to the
+    browser after sign-in refreshes the chat microphone's readiness.
+
     The two browser paths expose the same Talk session contract but keep
     credentials on different sides of the trust boundary. Platform auth mints
     an ephemeral client secret and the browser exchanges SDP directly with
