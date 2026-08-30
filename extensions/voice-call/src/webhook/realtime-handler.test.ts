@@ -2412,100 +2412,118 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("preserves the predecessor when replacement closes with error during creation", async () => {
-    const callbacks: RealtimeBridgeRequest[] = [];
-    const oldTriggerGreeting = vi.fn();
-    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-      callbacks.push(request);
-      if (callbacks.length === 1) {
-        return makeBridge({ triggerGreeting: oldTriggerGreeting });
-      }
-      request.onTranscript?.("user", "Failed ", false);
-      request.onClose?.("error");
-      throw new Error("replacement bridge failed");
-    });
-    const processEvent = vi.fn();
-    const endCall = vi.fn(async () => ({ success: true }));
-    const sharedCallSid = "CA-transcript-rollback";
-    const call = makeCallRecord(sharedCallSid);
-    const handler = makeHandler(undefined, {
-      manager: {
-        getCallByProviderCallId: vi.fn(() => call),
-        processEvent,
-        endCall,
-      },
-      realtimeProvider: makeRealtimeProvider(createBridge),
-    });
-    const oldServer = await startRealtimeServer(handler);
-    let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
-    let oldWs: WebSocket | undefined;
-
-    try {
-      oldWs = await connectWs(oldServer.url);
-      oldWs.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-transcript-rollback-old", callSid: sharedCallSid },
-        }),
-      );
-      await waitForRealtimeTest(() => {
-        expect(callbacks).toHaveLength(1);
+  it.each(["completed", "error", "throw"] as const)(
+    "keeps the predecessor after replacement creation closes: %s",
+    async (outcome) => {
+      const callbacks: RealtimeBridgeRequest[] = [];
+      const oldTriggerGreeting = vi.fn();
+      const replacementConnect = vi.fn(async () => {});
+      const replacementClose = vi.fn(() => {
+        callbacks[1]?.onTranscript?.("user", "Failed teardown transcript", true);
+        callbacks[1]?.onClose?.("error");
+        if (outcome === "error") {
+          throw new Error("replacement close failed");
+        }
       });
-      callbacks[0]?.onTranscript?.("user", "Old ", false);
+      const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+        callbacks.push(request);
+        if (callbacks.length === 1) {
+          return makeBridge({ triggerGreeting: oldTriggerGreeting });
+        }
+        request.onTranscript?.("user", "Failed ", false);
+        request.onClose?.(outcome === "completed" ? "completed" : "error");
+        request.onTranscript?.("user", "Closed before adoption", true);
+        if (outcome === "throw") {
+          throw new Error("replacement bridge failed");
+        }
+        return makeBridge({ connect: replacementConnect, close: replacementClose });
+      });
+      const processEvent = vi.fn();
+      const endCall = vi.fn(async () => ({ success: true }));
+      const sharedCallSid = "CA-transcript-rollback";
+      const call = makeCallRecord(sharedCallSid);
+      const handler = makeHandler(undefined, {
+        manager: {
+          getCallByProviderCallId: vi.fn(() => call),
+          processEvent,
+          endCall,
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      });
+      const oldServer = await startRealtimeServer(handler);
+      let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
+      let oldWs: WebSocket | undefined;
 
-      replacementServer = await startRealtimeServer(handler);
-      const replacementWs = await connectWs(replacementServer.url);
       try {
-        replacementWs.send(
+        oldWs = await connectWs(oldServer.url);
+        oldWs.send(
           JSON.stringify({
             event: "start",
-            start: { streamSid: "MZ-transcript-rollback-new", callSid: sharedCallSid },
+            start: { streamSid: "MZ-transcript-rollback-old", callSid: sharedCallSid },
           }),
         );
         await waitForRealtimeTest(() => {
-          expect(createBridge).toHaveBeenCalledTimes(2);
+          expect(callbacks).toHaveLength(1);
         });
+        callbacks[0]?.onTranscript?.("user", "Old ", false);
 
-        expect(handler.speak(call.callId, "Continue the existing call.")).toEqual({
-          success: true,
-        });
-        expect(oldTriggerGreeting).toHaveBeenCalledWith("Continue the existing call.");
-        expect(endCall).not.toHaveBeenCalled();
-        expect(
-          processEvent.mock.calls
-            .map(([event]) => event as NormalizedEvent)
-            .filter((event) => event.type === "call.ended"),
-        ).toHaveLength(0);
+        replacementServer = await startRealtimeServer(handler);
+        const replacementWs = await connectWs(replacementServer.url);
+        try {
+          const replacementClosed = waitForClose(replacementWs);
+          replacementWs.send(
+            JSON.stringify({
+              event: "start",
+              start: { streamSid: "MZ-transcript-rollback-new", callSid: sharedCallSid },
+            }),
+          );
+          await replacementClosed;
+          expect(replacementConnect).not.toHaveBeenCalled();
+          expect(replacementClose).toHaveBeenCalledTimes(outcome === "throw" ? 0 : 1);
+          callbacks[1]?.onClose?.("error");
+          callbacks[1]?.onTranscript?.("user", "Late failed replacement", true);
 
-        callbacks[0]?.onTranscript?.("user", "caller", true);
-        await waitForRealtimeTest(() => {
+          expect(handler.speak(call.callId, "Continue the existing call.")).toEqual({
+            success: true,
+          });
+          expect(oldTriggerGreeting).toHaveBeenCalledWith("Continue the existing call.");
+          expect(endCall).not.toHaveBeenCalled();
           expect(
             processEvent.mock.calls
               .map(([event]) => event as NormalizedEvent)
-              .filter((event) => event.type === "call.speech")
-              .map((event) => (event.type === "call.speech" ? event.transcript : undefined)),
-          ).toEqual(["Old caller"]);
-        });
+              .filter((event) => event.type === "call.ended"),
+          ).toHaveLength(0);
+
+          callbacks[0]?.onTranscript?.("user", "caller", true);
+          await waitForRealtimeTest(() => {
+            expect(
+              processEvent.mock.calls
+                .map(([event]) => event as NormalizedEvent)
+                .filter((event) => event.type === "call.speech")
+                .map((event) => (event.type === "call.speech" ? event.transcript : undefined)),
+            ).toEqual(["Old caller"]);
+          });
+        } finally {
+          if (
+            replacementWs.readyState !== WebSocket.CLOSED &&
+            replacementWs.readyState !== WebSocket.CLOSING
+          ) {
+            replacementWs.close();
+          }
+        }
       } finally {
         if (
-          replacementWs.readyState !== WebSocket.CLOSED &&
-          replacementWs.readyState !== WebSocket.CLOSING
+          oldWs &&
+          oldWs.readyState !== WebSocket.CLOSED &&
+          oldWs.readyState !== WebSocket.CLOSING
         ) {
-          replacementWs.close();
+          oldWs.close();
         }
+        await replacementServer?.close();
+        await oldServer.close();
       }
-    } finally {
-      if (
-        oldWs &&
-        oldWs.readyState !== WebSocket.CLOSED &&
-        oldWs.readyState !== WebSocket.CLOSING
-      ) {
-        oldWs.close();
-      }
-      await replacementServer?.close();
-      await oldServer.close();
-    }
-  });
+    },
+  );
 
   it("cleans provisional transcript state when initial bridge creation fails", async () => {
     const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
@@ -2550,7 +2568,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("keeps provisional transcript ownership across synchronous provider close", async () => {
+  it("discards provisional transcript ownership after synchronous provider close", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
       callbacks = request;
@@ -2570,6 +2588,7 @@ describe("RealtimeCallHandler path routing", () => {
     const ws = await connectWs(server.url);
 
     try {
+      const closed = waitForClose(ws);
       ws.send(
         JSON.stringify({
           event: "start",
@@ -2579,18 +2598,11 @@ describe("RealtimeCallHandler path routing", () => {
           },
         }),
       );
-      await waitForRealtimeTest(() => {
-        expect(createBridge).toHaveBeenCalledOnce();
-      });
+      await closed;
       callbacks?.onTranscript?.("user", "Still listening", true);
-      await waitForRealtimeTest(() => {
-        expect(processEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            transcript: "Still listening",
-            type: "call.speech",
-          }),
-        );
-      });
+      expect(processEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "call.speech" }),
+      );
     } finally {
       if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
         ws.close();
