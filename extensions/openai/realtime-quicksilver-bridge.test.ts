@@ -89,7 +89,7 @@ function createHarness(params?: {
   const bridge = new OpenAIQuicksilverVoiceBridge({
     providerConfig: {},
     model: "gpt-live-1-codex",
-    voice: "marin",
+    voice: "spruce",
     instructions: "Use delegation for real work.",
     audioFormat:
       params?.audioFormat === "g711_ulaw"
@@ -141,7 +141,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       type: "session.update",
       session: {
         instructions: "Use delegation for real work.",
-        audio: { output: { voice: "marin" } },
+        audio: { output: { voice: "spruce" } },
         delegation: { type: "client" },
       },
     });

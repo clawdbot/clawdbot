@@ -4,6 +4,30 @@
 const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 
 export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1-codex", "gpt-live-1-boulder-alpha"] as const;
+// Codex realtime V3 uses the V1 voice family for WebRTC and direct WebSocket sessions.
+export const OPENAI_GPT_LIVE_VOICES = [
+  "arbor",
+  "breeze",
+  "cove",
+  "ember",
+  "juniper",
+  "maple",
+  "sol",
+  "spruce",
+  "vale",
+] as const;
+export type OpenAIGptLiveVoice = (typeof OPENAI_GPT_LIVE_VOICES)[number];
+export const OPENAI_GPT_LIVE_DEFAULT_VOICE: OpenAIGptLiveVoice = "cove";
+
+export function resolveOpenAIQuicksilverVoice(value: unknown): OpenAIGptLiveVoice {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (OPENAI_GPT_LIVE_VOICES.includes(normalized as OpenAIGptLiveVoice)) {
+      return normalized as OpenAIGptLiveVoice;
+    }
+  }
+  return OPENAI_GPT_LIVE_DEFAULT_VOICE;
+}
 
 export function isOpenAIGptLiveModel(model: string | undefined): boolean {
   if (!model) {
