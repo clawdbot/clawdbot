@@ -8,6 +8,7 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { registerStatusSummarySessionRowCases } from "./status.summary.test-support.js";
@@ -225,27 +226,7 @@ describe("getStatusSummary", () => {
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    statusSummaryMocks.taskRegistrySummary = {
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    };
+    statusSummaryMocks.taskRegistrySummary = createEmptyTaskRegistrySummary();
     statusSummaryMocks.taskRegistryReadOnlyState = "ready";
     statusSummaryMocks.inspectableTasks = [];
     statusSummaryMocks.taskAuditFindings = [
@@ -301,24 +282,27 @@ describe("getStatusSummary", () => {
       statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
 
-  it("includes runtimeVersion in the status payload", async () => {
-    const summary = await getStatusSummary();
+  it.each([true, false])(
+    "keeps public summary fields with includeSensitive=%s",
+    async (includeSensitive) => {
+      const summary = await getStatusSummary({ includeSensitive });
 
-    expect(summary.runtimeVersion).toBe("2026.3.8");
-    expect(summary.heartbeat.defaultAgentId).toBe("main");
-    expect(summary.heartbeat.agents).toEqual([
-      {
-        agentId: "main",
-        enabled: true,
-        every: "30m",
-        everyMs: 1_800_000,
-        waitingForRoute: true,
-      },
-    ]);
-    expect(summary.channelSummary).toEqual(["ok"]);
-    expect(summary.tasks.active).toBe(0);
-    expect(summary.taskAudit.warnings).toBe(1);
-  });
+      expect(summary.runtimeVersion).toBe("2026.3.8");
+      expect(summary.heartbeat.defaultAgentId).toBe("main");
+      expect(summary.heartbeat.agents).toEqual([
+        {
+          agentId: "main",
+          enabled: true,
+          every: "30m",
+          everyMs: 1_800_000,
+          waitingForRoute: true,
+        },
+      ]);
+      expect(summary.channelSummary).toEqual(["ok"]);
+      expect(summary.tasks).toEqual(statusSummaryMocks.taskRegistrySummary);
+      expect(summary.taskAudit.warnings).toBe(1);
+    },
+  );
 
   // waitingForRoute must follow the session the runner actually reads
   // (heartbeat.session when set), not always the agent main session.
@@ -365,7 +349,7 @@ describe("getStatusSummary", () => {
     expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(waitingForRoute);
   });
 
-  it("redacts collected session details when sensitive output is disabled", async () => {
+  it("skips session model discovery and projection when sensitive output is disabled", async () => {
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
       {
         sessionKey: "agent:main:main",
@@ -381,7 +365,11 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary({ includeSensitive: false });
 
-    expect(summary.sessions).toMatchObject({
+    expect(statusSummaryRuntime.waitForContextWindowCacheLoad).not.toHaveBeenCalled();
+    expect(statusSummaryRuntime.resolveConfiguredStatusModelRef).not.toHaveBeenCalled();
+    expect(statusSummaryRuntime.resolveSessionRuntime).not.toHaveBeenCalled();
+    expect(statusSummaryMocks.resolveProviderStaticModel).not.toHaveBeenCalled();
+    expect(summary.sessions).toEqual({
       paths: [],
       count: 1,
       defaults: { model: null, contextTokens: null },
