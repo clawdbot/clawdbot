@@ -651,7 +651,7 @@ export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
           scan += 1;
           continue;
         }
-        if (candidate && codeDepth === 0) {
+        if (candidate && codeDepth === 0 && depth === 1) {
           recordDetailsSummaryTag(summaryState, candidate);
         }
         if (candidate && candidate.name === tag.name && codeDepth === 0) {

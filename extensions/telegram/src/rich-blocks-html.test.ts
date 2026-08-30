@@ -121,6 +121,57 @@ describe("block HTML islands", () => {
     expect(block.blocks).toEqual([{ type: "paragraph", text: "Body" }]);
   });
 
+  it("binds summary ranges to their direct details container", () => {
+    const block = single(
+      "<details><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></details>",
+    );
+    expect(block).toMatchObject({ type: "details", summary: "Details" });
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["details"]);
+    const inner = block.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
+  it("discovers details inside a top-level raw blockquote", () => {
+    const block = single(
+      "<blockquote><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></blockquote>",
+    );
+    expect(block.type).toBe("blockquote");
+    if (block.type !== "blockquote") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["details"]);
+    const inner = block.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
+  it("discovers details inside a top-level raw list", () => {
+    const block = single(
+      "<ul><li><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></li></ul>",
+    );
+    expect(block.type).toBe("list");
+    if (block.type !== "list") {
+      return;
+    }
+    expect(block.items).toHaveLength(1);
+    const inner = block.items[0]?.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
   it("keeps same-offset tables before nested <details>", () => {
     const block = single(
       [

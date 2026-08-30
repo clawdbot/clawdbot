@@ -45,6 +45,8 @@ type TelegramHtmlContainerIsland = {
   block: TelegramHtmlContainerRichBlock;
 };
 
+type TelegramDetailsOwnerBlock = TelegramDetailsRichBlock | TelegramHtmlContainerRichBlock;
+
 type TelegramHtmlTag = {
   start: number;
   end: number;
@@ -143,6 +145,13 @@ function collectNestedHtmlContainerBlocks(
   return result;
 }
 
+function blocksInsideOwner(block: TelegramDetailsOwnerBlock): InputRichBlock[] {
+  if (block.type === "list") {
+    return block.items.flatMap((item) => item.blocks);
+  }
+  return block.blocks;
+}
+
 export function rebuildTelegramHtmlContainer(
   block: TelegramHtmlContainerRichBlock,
   detailsByBlock: ReadonlyMap<InputRichBlock, TelegramDetailsRichBlock>,
@@ -206,7 +215,7 @@ function findNestedHtml(
   tags: readonly TelegramHtmlTag[],
   outerOpenIndex: number,
   outerCloseIndex: number,
-  outerBlock: TelegramDetailsRichBlock,
+  outerBlock: TelegramDetailsOwnerBlock,
 ): NestedHtmlScan {
   const matches: Array<
     { start: number; end: number; bodyRanges: Array<{ start: number; end: number }> } | undefined
@@ -346,7 +355,8 @@ function findNestedHtml(
     (match): match is { start: number; end: number; name: "blockquote" | "ol" | "ul" } =>
       match !== undefined,
   );
-  const nestedBlocks = collectNestedDetailsBlocks(outerBlock.blocks);
+  const ownerBlocks = blocksInsideOwner(outerBlock);
+  const nestedBlocks = collectNestedDetailsBlocks(ownerBlocks);
   const result: TelegramDetailsHtmlIsland[] = [];
   if (nestedBlocks.length === spans.length) {
     for (let index = 0; index < spans.length; index += 1) {
@@ -357,7 +367,7 @@ function findNestedHtml(
       }
     }
   }
-  const nestedContainers = collectNestedHtmlContainerBlocks(outerBlock.blocks);
+  const nestedContainers = collectNestedHtmlContainerBlocks(ownerBlocks);
   const containers: TelegramHtmlContainerIsland[] = [];
   if (nestedContainers.length === containerSpans.length) {
     for (let index = 0; index < containerSpans.length; index += 1) {
@@ -403,25 +413,40 @@ export function collectTelegramDetailsStructuralIslands(
 
   for (const island of islands) {
     const block = island.blocks.length === 1 ? island.blocks[0] : undefined;
-    if (block?.type !== "details" || island.detailsBodyRanges === undefined) {
+    const owner =
+      block?.type === "details" && island.detailsBodyRanges !== undefined
+        ? block
+        : block?.type === "blockquote" || block?.type === "list"
+          ? block
+          : undefined;
+    if (!owner) {
       continue;
     }
-    result.push({
-      kind: "details",
-      start: start + island.start,
-      end: start + island.end,
-      bodyRanges: island.detailsBodyRanges.map((range) => ({
-        start: start + range.start,
-        end: start + range.end,
-      })),
-      block,
-    });
     const openIndex = openIndexes.get(island.start);
     const closeIndex = closeIndexes.get(island.end);
     if (openIndex === undefined || closeIndex === undefined || closeIndex <= openIndex) {
       continue;
     }
-    const nested = findNestedHtml(tags, openIndex, closeIndex, block);
+    const nested = findNestedHtml(tags, openIndex, closeIndex, owner);
+    if (owner.type === "details") {
+      result.push({
+        kind: "details",
+        start: start + island.start,
+        end: start + island.end,
+        bodyRanges: island.detailsBodyRanges!.map((range) => ({
+          start: start + range.start,
+          end: start + range.end,
+        })),
+        block: owner,
+      });
+    } else if (nested.details.length > 0) {
+      result.push({
+        kind: "html-container",
+        start: start + island.start,
+        end: start + island.end,
+        block: owner,
+      });
+    }
     for (const nestedDetail of nested.details) {
       if (startsInsideCode(nestedDetail.start)) {
         continue;
