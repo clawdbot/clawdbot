@@ -974,7 +974,9 @@ describe("skill workshop proposals", () => {
   it("rejects and quarantines proposals without touching active skills", async (ctx) => {
     // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
     vi.useFakeTimers({ toFake: ["Date"] });
-    ctx.onTestFinished(() => vi.useRealTimers());
+    ctx.onTestFinished(() => {
+      vi.useRealTimers();
+    });
     vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
