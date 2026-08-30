@@ -1,6 +1,9 @@
 import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
+import {
+  resolveSettledTurnFinalizationText,
+  RetryableSettledTurnFinalizationAttemptError,
+} from "../../harness/settled-turn-finalization-result.js";
 import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
@@ -28,6 +31,9 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
+// A tool-free finalizer may need to reread a large settled context before its first event.
+// Bound this operation without mutating provider request/idle-timeout policy.
+const DEFAULT_SETTLED_FINALIZATION_TIMEOUT_MS = 300_000;
 type TerminalPreparationBase = Omit<
   TerminalPreparationInput,
   | "attempt"
@@ -105,13 +111,32 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
   );
   try {
-    const finalization = await runPreparedSettledTurnFinalization({
-      attempt: input.finalization.preparedAttempt,
-      settledAttempt: initial.attempt,
-      harness: input.finalization.harness,
-      prompt,
-      noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
-    });
+    const runFinalization = async () =>
+      await runPreparedSettledTurnFinalization({
+        attempt: input.finalization.preparedAttempt,
+        settledAttempt: initial.attempt,
+        harness: input.finalization.harness,
+        prompt,
+        noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
+      });
+    let finalization;
+    try {
+      finalization = await runFinalization();
+    } catch (error) {
+      if (
+        !(error instanceof RetryableSettledTurnFinalizationAttemptError) ||
+        input.finalization.preparedAttempt.abortSignal?.aborted
+      ) {
+        throw error;
+      }
+      mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, error.attempt.attemptUsage);
+      mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, error.attempt);
+      log.warn(
+        `settled-turn finalization hit a transient provider failure: runId=${runParams.runId} ` +
+          `sessionId=${runParams.sessionId} provider=${errorContext.provider}/${errorContext.model} — retrying once`,
+      );
+      finalization = await runFinalization();
+    }
     attempt = finalization.attempt;
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
     mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
@@ -183,9 +208,14 @@ async function runPreparedSettledTurnFinalization(input: {
   noteLaneTaskProgress: () => void;
 }): Promise<{ outcome: "answered" | "empty"; attempt: EmbeddedRunAttemptWithReceiptEvidence }> {
   return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
+    const finalizationDeadline = AbortSignal.timeout(DEFAULT_SETTLED_FINALIZATION_TIMEOUT_MS);
+    const abortSignal = input.attempt.abortSignal
+      ? AbortSignal.any([input.attempt.abortSignal, finalizationDeadline])
+      : finalizationDeadline;
     const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
+        abortSignal,
         operation: "settled-tool-finalization",
         prompt: input.prompt,
         disableTools: true,

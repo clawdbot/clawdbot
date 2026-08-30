@@ -5,6 +5,7 @@ import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-o
 import {
   assertSettledTurnFinalizationResult,
   projectSettledTurnFinalizationAttemptResult,
+  RetryableSettledTurnFinalizationAttemptError,
 } from "./settled-turn-finalization-result.js";
 import type { AgentHarnessSettledTurnFinalizationResult } from "./types.js";
 
@@ -135,11 +136,93 @@ describe("assertSettledTurnFinalizationResult", () => {
     });
   });
 
-  it("rejects a failed full attempt even when it contains visible assistant text", () => {
+  it("marks a prompt failure without a completed assistant as retryable", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("Internal server error") },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow(RetryableSettledTurnFinalizationAttemptError);
+  });
+
+  it("does not retry a long-window rate limit", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("HTTP 429: quota exceeded; Retry-After: 3600 seconds"),
+          },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow("did not complete successfully");
+  });
+
+  it("retries a short-window rate limit", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("HTTP 429: too many requests; Retry-After: 2 seconds"),
+          },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow(RetryableSettledTurnFinalizationAttemptError);
+  });
+
+  it("does not retry a non-transient prompt failure", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("invalid API key") },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow("did not complete successfully");
+  });
+
+  it("does not retry a failed full attempt that contains a completed assistant", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(
         successfulAttempt({
           terminal: { kind: "failed", source: "prompt", error: new Error("provider failed") },
+        }),
+      ),
+    ).toThrow("did not complete successfully");
+  });
+
+  it("does not retry an idle timeout that reported capability activity", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+          currentAttemptCompletedAssistant: undefined,
+          toolMetas: [{ toolName: "write" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        }),
+      ),
+    ).toThrow("reported capability activity");
+  });
+
+  it("does not retry an idle Codex app-server failure with unsafe replay state", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+          currentAttemptCompletedAssistant: undefined,
+          codexAppServerFailure: {
+            kind: "turn_completion_idle_timeout",
+            transport: "stdio",
+            replaySafe: false,
+            replayBlockedReason: "potential_side_effect",
+          },
         }),
       ),
     ).toThrow("did not complete successfully");

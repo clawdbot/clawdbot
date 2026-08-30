@@ -1,11 +1,29 @@
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { classifyFailoverSignal } from "../failover/classify.js";
+import {
+  extractFailoverHttpStatus,
+  hasTransientRetryEvidence,
+  shouldRetryFailoverSignal,
+} from "../failover/retry-evidence.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
+
+/** Carries a capability-free transient finalizer attempt into its one safe retry. */
+export class RetryableSettledTurnFinalizationAttemptError extends Error {
+  readonly attempt: AgentHarnessAttemptResult;
+
+  constructor(attempt: AgentHarnessAttemptResult) {
+    super("Settled-turn finalization hit a transient provider failure");
+    this.name = "RetryableSettledTurnFinalizationAttemptError";
+    this.attempt = attempt;
+  }
+}
 
 const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistant",
@@ -22,6 +40,17 @@ function assistantContainsToolCall(
   return assistant.content.some(
     (block) => block !== null && typeof block === "object" && block.type === "toolCall",
   );
+}
+
+function isRetryableFinalizerPromptFailure(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  const status = extractFailoverHttpStatus(message);
+  const signal = { message, ...(status === undefined ? {} : { status }) };
+  return shouldRetryFailoverSignal({
+    classification: classifyFailoverSignal(signal),
+    hasTransientEvidence: hasTransientRetryEvidence(signal),
+    signal,
+  });
 }
 
 /**
@@ -80,18 +109,7 @@ export function projectSettledTurnFinalizationAttemptResult(
 ): AgentHarnessSettledTurnFinalizationResult {
   const terminal =
     "terminal" in result ? result.terminal : normalizeAgentRunAttemptTerminal(result);
-  if (
-    terminal.kind !== "ok" ||
-    (result.compactionCount ?? 0) > 0 ||
-    result.promptTimeoutOutcome ||
-    result.preflightRecovery ||
-    result.beforeAgentFinalizeRevisionReason ||
-    result.codexAppServerFailure ||
-    result.cloudCodeAssistFormatError
-  ) {
-    throw new Error("Settled-turn finalization attempt did not complete successfully");
-  }
-  if (
+  const hasCapabilityActivity =
     result.toolMetas.length > 0 ||
     result.itemLifecycle.startedCount > 0 ||
     result.itemLifecycle.completedCount > 0 ||
@@ -117,9 +135,31 @@ export function projectSettledTurnFinalizationAttemptResult(
     result.hasToolMediaBlockReply ||
     result.lastToolError ||
     (result.successfulCronAdds ?? 0) > 0 ||
-    result.yieldDetected
-  ) {
+    result.yieldDetected;
+  if (hasCapabilityActivity) {
     throw new Error("Settled-turn finalization attempt reported capability activity");
+  }
+  if (
+    (result.compactionCount ?? 0) > 0 ||
+    result.promptTimeoutOutcome ||
+    result.preflightRecovery ||
+    result.beforeAgentFinalizeRevisionReason ||
+    result.codexAppServerFailure ||
+    result.cloudCodeAssistFormatError
+  ) {
+    throw new Error("Settled-turn finalization attempt did not complete successfully");
+  }
+  if (
+    !result.currentAttemptCompletedAssistant &&
+    ((terminal.kind === "timeout" && terminal.source === "idle") ||
+      (terminal.kind === "failed" &&
+        terminal.source === "prompt" &&
+        isRetryableFinalizerPromptFailure(terminal.error)))
+  ) {
+    throw new RetryableSettledTurnFinalizationAttemptError(result);
+  }
+  if (terminal.kind !== "ok") {
+    throw new Error("Settled-turn finalization attempt did not complete successfully");
   }
   const assistant = result.currentAttemptCompletedAssistant;
   if (!assistant) {

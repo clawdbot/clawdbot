@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { RetryableSettledTurnFinalizationAttemptError } from "../../harness/settled-turn-finalization-result.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -8,6 +9,7 @@ import {
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { resolveLlmIdleTimeoutMs } from "./llm-idle-timeout.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
@@ -128,6 +130,7 @@ function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
         workspaceDir: "/tmp/openclaw-test",
         prompt: "finish the task",
         timeoutMs: 60_000,
+        model: {},
       },
       harness: {
         id: "test-harness",
@@ -149,8 +152,13 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     backendMocks.runSettledFinalization.mockReset();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("replaces a settled failed-tool warning with failure-honest final output", async () => {
     const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
     const finalAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
     });
@@ -163,7 +171,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       },
     });
 
-    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
 
     expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
     const [preparedAttempt, settledAttempt] =
@@ -175,6 +183,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       suppressNextUserMessagePersistence: true,
       initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
     });
+    expect(preparedAttempt.model).toBe(input.finalization.preparedAttempt.model);
+    expect(preparedAttempt.model).not.toHaveProperty("requestTimeoutMs");
+    expect(preparedAttempt.abortSignal).toBeInstanceOf(AbortSignal);
     expect(settledAttempt).toBe(attempt);
     expect(result.finalizationOutcome).toBe("answered");
     expect(result.prepared.payloadsWithToolMedia).toEqual([
@@ -206,6 +217,74 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       message: "post-processing error",
       fatalForCron: true,
     });
+  });
+
+  it("preserves an explicit provider request timeout for finalization", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.model = { requestTimeoutMs: 45_000 } as never;
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "Final answer." }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: { assistant: finalAssistant, usage: finalAssistant.usage },
+    });
+
+    await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization.mock.calls[0]?.[0]).toMatchObject({
+      model: { requestTimeoutMs: 45_000 },
+    });
+  });
+
+  it("bounds finalization separately while preserving the local post-event idle exemption", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    const parent = new AbortController();
+    const deadline = new AbortController();
+    input.finalization.preparedAttempt.abortSignal = parent.signal;
+    input.finalization.preparedAttempt.model = {
+      provider: "custom-local",
+      id: "local-model",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    } as never;
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    backendMocks.runSettledFinalization.mockImplementationOnce(async (preparedAttempt) => {
+      expect(preparedAttempt.model).not.toHaveProperty("requestTimeoutMs");
+      expect(
+        resolveLlmIdleTimeoutMs({
+          modelRequestTimeoutMs: (preparedAttempt.model as { requestTimeoutMs?: number })
+            .requestTimeoutMs,
+          model: {
+            baseUrl: preparedAttempt.model.baseUrl,
+            id: preparedAttempt.modelId,
+            provider: preparedAttempt.provider,
+          },
+        }),
+      ).toBe(0);
+      return await new Promise((resolve, reject) => {
+        preparedAttempt.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            const reason = preparedAttempt.abortSignal?.reason;
+            reject(
+              reason instanceof Error ? reason : new Error("finalizer aborted", { cause: reason }),
+            );
+          },
+          { once: true },
+        );
+      });
+    });
+
+    const resultPromise = prepareTerminalWithSettledTurnFinalization(input);
+    await vi.waitFor(() => expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce());
+    deadline.abort(new DOMException("finalizer deadline", "TimeoutError"));
+    const result = await resultPromise;
+
+    expect(timeoutSpy).toHaveBeenCalledWith(300_000);
+    expect(parent.signal.aborted).toBe(false);
+    expect(result.finalizationOutcome).toBe("failed");
   });
 
   it("preserves the settled runtime context window through isolated finalization", async () => {
@@ -263,5 +342,34 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
+  });
+
+  it("retries one transient capability-free provider failure and accounts for it", async () => {
+    const attempt = settledFailedAttempt();
+    const failedAttempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: { input: 10, output: 2, total: 12 },
+      assistantTurns: 1,
+    });
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "Recovered final answer." }],
+    });
+    backendMocks.runSettledFinalization
+      .mockRejectedValueOnce(new RetryableSettledTurnFinalizationAttemptError(failedAttempt))
+      .mockResolvedValueOnce({
+        outcome: "answered",
+        result: { assistant: finalAssistant, usage: finalAssistant.usage },
+      });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({
+      text: "Recovered final answer.",
+    });
+    expect(result.prepared.agentMeta).toMatchObject({ assistantTurns: 3 });
+    expect(result.prepared.agentMeta?.usage).toMatchObject({ input: 10, output: 2 });
   });
 });
