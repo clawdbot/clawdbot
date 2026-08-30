@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
 import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -263,9 +264,7 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       : undefined,
 });
 
-// OpenRouter provider routing preferences (`compat.openRouterRouting`); mirrors the
-// `OpenRouterRouting` interface in packages/llm-core/src/types.ts.
-const OpenRouterRoutingPercentileCutoffsSchema = z
+const RoutingPercentileCutoffsSchema = z
   .object({
     p50: z.number().optional(),
     p75: z.number().optional(),
@@ -278,7 +277,7 @@ const OpenRouterRoutingSchema = z
   .object({
     allow_fallbacks: z.boolean().optional(),
     require_parameters: z.boolean().optional(),
-    data_collection: z.union([z.literal("deny"), z.literal("allow")]).optional(),
+    data_collection: z.enum(["deny", "allow"]).optional(),
     zdr: z.boolean().optional(),
     enforce_distillable_text: z.boolean().optional(),
     order: z.array(z.string()).optional(),
@@ -291,7 +290,7 @@ const OpenRouterRoutingSchema = z
         z
           .object({
             by: z.string().optional(),
-            partition: z.union([z.string(), z.null()]).optional(),
+            partition: z.string().nullable().optional(),
           })
           .strict(),
       ])
@@ -306,22 +305,16 @@ const OpenRouterRoutingSchema = z
       })
       .strict()
       .optional(),
-    preferred_min_throughput: z
-      .union([z.number(), OpenRouterRoutingPercentileCutoffsSchema])
-      .optional(),
-    preferred_max_latency: z
-      .union([z.number(), OpenRouterRoutingPercentileCutoffsSchema])
-      .optional(),
-  })
+    preferred_min_throughput: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+    preferred_max_latency: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+  } satisfies Record<keyof OpenRouterRouting, z.ZodType>)
   .strict();
 
-// Vercel AI Gateway routing preferences (`compat.vercelGatewayRouting`); mirrors the
-// `VercelGatewayRouting` interface in packages/llm-core/src/types.ts.
 const VercelGatewayRoutingSchema = z
   .object({
     only: z.array(z.string()).optional(),
     order: z.array(z.string()).optional(),
-  })
+  } satisfies Record<keyof VercelGatewayRouting, z.ZodType>)
   .strict();
 
 const ModelCompatSchema = z
@@ -362,7 +355,7 @@ const ModelCompatSchema = z
     sendSessionIdHeader: z.boolean().optional(),
     supportsEagerToolInputStreaming: z.boolean().optional(),
     supportsLongCacheRetention: z.boolean().optional(),
-  })
+  } satisfies Record<keyof ModelCompatConfig, z.ZodType>)
   .strict()
   .optional();
 type AssertAssignable<_Left extends _Right, _Right> = true;
@@ -370,29 +363,6 @@ const modelCompatSchemaContract: [
   AssertAssignable<z.infer<typeof ModelCompatSchema>, ModelCompatConfig | undefined>,
   AssertAssignable<ModelCompatConfig | undefined, z.infer<typeof ModelCompatSchema>>,
 ] = [] as never;
-
-// The assignability contract above cannot see a key that the schema is *missing*:
-// TypeScript's structural assignability lets a type with extra optional properties
-// be assigned to one without them (excess-property checking only applies to object
-// literals), so both directions hold even while the schema drops keys the type
-// declares. Compare key sets instead — this fails to compile the moment either side
-// gains a key the other lacks.
-type AssertNever<_T extends never> = true;
-const modelCompatKeyContract: [
-  AssertNever<
-    Exclude<
-      keyof NonNullable<ModelCompatConfig>,
-      keyof NonNullable<z.infer<typeof ModelCompatSchema>>
-    >
-  >,
-  AssertNever<
-    Exclude<
-      keyof NonNullable<z.infer<typeof ModelCompatSchema>>,
-      keyof NonNullable<ModelCompatConfig>
-    >
-  >,
-] = [] as never;
-void modelCompatKeyContract;
 void modelCompatSchemaContract;
 const ConfiguredProviderRequestTlsSchema = z
   .object({
