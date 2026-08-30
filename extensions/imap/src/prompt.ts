@@ -20,8 +20,7 @@ export function renderImapPrompt(
     ...(attachments.length ? [`Attachments: ${attachments.join(", ")}`] : []),
     ...(body ? [body] : []),
   ].join("\n");
-  const bytes = Buffer.from(text);
-  if (bytes.byteLength <= account.maxBytes && !sourceTruncated) {
+  if (Buffer.byteLength(text) <= account.maxBytes && !sourceTruncated) {
     return text;
   }
   const marker = "\n[truncated: email content exceeded the configured byte limit]";
