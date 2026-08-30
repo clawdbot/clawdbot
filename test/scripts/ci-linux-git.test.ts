@@ -1303,3 +1303,288 @@ posixIt.each(["Clone publish repo", "Commit publish repo sync"])(
   },
   55_000,
 );
+
+const agentGate = "Gate trusted main activity and hourly cadence";
+const agentCommit = "Commit docs updates";
+const agentFetch = ["fetch", "--no-tags", "origin", "main"];
+const agentPush = [
+  "push",
+  "https://x-access-token:fixture-docs-agent-token@github.com/fixture/checkout.git",
+  "HEAD:main",
+];
+const agentCommitCommands = [
+  ["diff", "--quiet"],
+  ["config", "user.name", "openclaw-docs-agent[bot]"],
+  ["config", "user.email", "openclaw-docs-agent[bot]@users.noreply.github.com"],
+  ["add", "docs", "README.md", "CHANGELOG.md"],
+  ["commit", "--no-verify", "-m", "docs: refresh documentation"],
+];
+const agentOutput = (reviewBase = base) =>
+  `run_agent=true\nbase_sha=${candidate}\nreview_base_sha=${reviewBase}\nreview_head_sha=${candidate}\n`;
+
+function runDocsAgent(step: string, options: Partial<Parameters<typeof runCiGitStep>[0]> = {}) {
+  return runCiGitStep({
+    ...options,
+    workflow: { file: ".github/workflows/docs-agent.yml", job: "update-docs", step },
+    fetchResults: options.fetchResults ?? [],
+    poisonPython: true,
+    env: {
+      EVENT_NAME: "workflow_run",
+      WORKFLOW_HEAD_SHA: candidate,
+      GITHUB_RUN_ID: "123",
+      GITHUB_TOKEN: "",
+      BASE_SHA: candidate,
+      ...options.env,
+    },
+    revisions: { "origin/main": candidate, [`${candidate}^`]: base, ...options.revisions },
+  });
+}
+
+posixIt.each([0, 128, 125, 143])(
+  "Docs Agent manual gate owns HEAD and parent before exact outputs (parent=%s)",
+  async (code) => {
+    const report = await runDocsAgent(agentGate, {
+      env: { EVENT_NAME: "workflow_dispatch" },
+      commandResults: { "rev-parse HEAD": { code: 0 }, [`rev-parse ${candidate}^`]: { code } },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([
+      ["rev-parse", "HEAD"],
+      ["rev-parse", `${candidate}^`],
+    ]);
+    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expect(report.githubOutput).toBe(agentOutput(code === 0 ? base : candidate));
+  },
+  55_000,
+);
+
+posixIt.each([23, 125, 143, "hang"] satisfies FetchResult[])(
+  "Docs Agent gate drains failed fetch before retry, remote read, gh and output (%s)",
+  async (failure) => {
+    const report = await runDocsAgent(agentGate, { fetchResults: [failure, 0] });
+    expect(report.code, report.output).toBe(0);
+    expect(report.fetches.map(({ args }) => args)).toEqual([agentFetch, agentFetch]);
+    expect(backoffs(report)).toEqual([2]);
+    expect(report.output).toContain("Fetch attempt 1 failed; retrying.");
+    expect(report.githubOutput).toBe(agentOutput());
+    expect(report.commands.filter(({ tool }) => tool === "gh").map(({ args }) => args)).toEqual([
+      [
+        "api",
+        "--method",
+        "GET",
+        "repos/fixture/checkout/actions/workflows/docs-agent.yml/runs",
+        "-f",
+        "branch=main",
+        "-f",
+        "event=workflow_run",
+        "-f",
+        "per_page=100",
+      ],
+    ]);
+  },
+  55_000,
+);
+
+posixIt.each([false, true])(
+  "Docs Agent gate stops before gh/output/retry on fatal cleanup (cancel=%s)",
+  async (cancel) => {
+    const report = await runDocsAgent(agentGate, {
+      fetchResults: cancel ? ["hang"] : ["cleanup-failure"],
+      ...(cancel ? { scenario: "cancel-SIGTERM", cooperativeTrees: true, realClock: true } : {}),
+    });
+    expect(report.code, report.output).toBe(cancel ? 143 : 125);
+    expect(gitArgs(report)).toEqual([agentFetch]);
+    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expect(report.githubOutput).toBe("");
+    expect(backoffs(report)).toEqual([]);
+    expect(report.output).not.toContain("retrying");
+  },
+  55_000,
+);
+
+posixIt(
+  "Docs Agent superseded gate drains before false output without gh",
+  async () => {
+    const report = await runDocsAgent(agentGate, { revisions: { "origin/main": moved } });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([agentFetch, ["rev-parse", "origin/main"]]);
+    expect(report.githubOutput).toBe("run_agent=false\n");
+    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expect(report.output).toContain(
+      `CI run is superseded by ${moved}; skipping docs agent for ${candidate}.`,
+    );
+  },
+  55_000,
+);
+
+posixIt.each([
+  { probe: 128, parent: 0, code: 0, reviewBase: base },
+  { probe: 128, parent: 128, code: 0, reviewBase: candidate },
+  { probe: 0, parent: 0, code: 0, reviewBase: moved },
+  { probe: "cleanup-failure", parent: 0, code: 125, reviewBase: "" },
+  { probe: 128, parent: "cleanup-failure", code: 125, reviewBase: "" },
+] satisfies { probe: FetchResult; parent: FetchResult; code: number; reviewBase: string }[])(
+  "Docs Agent review base only falls back after ordinary Git failure ($probe/$parent)",
+  async ({ probe, parent, code, reviewBase }) => {
+    const report = await runDocsAgent(agentGate, {
+      workflowRuns: [
+        {
+          id: 122,
+          created_at: "2026-08-28T20:00:00Z",
+          status: "completed",
+          conclusion: "success",
+          head_sha: moved,
+        },
+      ],
+      commandResults: {
+        [`cat-file -e ${moved}^{commit}`]: { code: probe },
+        [`rev-parse ${candidate}^`]: { code: parent },
+      },
+    });
+    expect(report.code, report.output).toBe(code);
+    expect(gitArgs(report)).toEqual([
+      agentFetch,
+      ["rev-parse", "origin/main"],
+      ["cat-file", "-e", `${moved}^{commit}`],
+      ...(probe === 128 ? [["rev-parse", `${candidate}^`]] : []),
+    ]);
+    expect(report.githubOutput).toBe(code === 0 ? agentOutput(reviewBase) : "");
+    expect(report.commands.filter(({ tool }) => tool === "gh")).toHaveLength(1);
+    expect(backoffs(report)).toEqual([]);
+  },
+  55_000,
+);
+
+posixIt(
+  "Docs Agent no-change commit owns diff before successful exit",
+  async () => {
+    const report = await runDocsAgent(agentCommit, {
+      commandResults: { "diff --quiet": { code: 0 } },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([["diff", "--quiet"]]);
+    expect(report.output).toBe("No docs changes.\n");
+  },
+  55_000,
+);
+
+posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+  "Docs Agent commit drains diff before config/commit and failed fetch before retry (%s)",
+  async (failure) => {
+    const report = await runDocsAgent(agentCommit, {
+      commandResults: { "diff --quiet": { code: failure === 125 ? 125 : 1 } },
+      fetchResults: [failure, 0],
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([...agentCommitCommands, agentFetch, agentFetch, agentPush]);
+    expect(backoffs(report)).toEqual([2]);
+    expect(report.output).toContain("Fetch attempt 1 failed; retrying.");
+    expect(report.output).not.toContain("fixture-docs-agent-token");
+  },
+  55_000,
+);
+
+posixIt.each([false, true])(
+  "Docs Agent push failure drains before owned read and retry/stale success (advanced=%s)",
+  async (advanced) => {
+    const report = await runDocsAgent(agentCommit, {
+      pushResults: [143, 0],
+      revParseResult: 0,
+      revisions: { "origin/main": advanced ? moved : candidate },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([
+      ...agentCommitCommands,
+      agentFetch,
+      agentPush,
+      ["rev-parse", "origin/main"],
+      ...(advanced ? [] : [agentFetch, agentPush]),
+    ]);
+    expect(backoffs(report)).toEqual(advanced ? [] : [2]);
+    expect(report.output).toContain(
+      advanced
+        ? `main advanced from ${candidate} to ${moved}; skipping stale docs update.`
+        : "Docs update attempt 1 failed; retrying.",
+    );
+  },
+  55_000,
+);
+
+posixIt.each(["diff", "config", "commit", "fetch", "push", "read"])(
+  "Docs Agent commit cleanup failure at %s is terminal before retry/stale success",
+  async (operation) => {
+    const index = operation === "diff" ? 0 : operation === "config" ? 1 : 4;
+    const report = await runDocsAgent(agentCommit, {
+      commandResults: ["diff", "config", "commit"].includes(operation)
+        ? { [agentCommitCommands[index]!.join(" ")]: { code: "cleanup-failure" } }
+        : {},
+      fetchResults: operation === "fetch" ? ["cleanup-failure"] : [],
+      pushResults: operation === "push" ? ["cleanup-failure"] : operation === "read" ? [23] : [],
+      revParseResult: operation === "read" ? "cleanup-failure" : undefined,
+      revisions: { "origin/main": moved },
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(gitArgs(report)).toEqual(
+      ["diff", "config", "commit"].includes(operation)
+        ? agentCommitCommands.slice(0, index + 1)
+        : [
+            ...agentCommitCommands,
+            agentFetch,
+            ...(operation === "fetch" ? [] : [agentPush]),
+            ...(operation === "read" ? [["rev-parse", "origin/main"]] : []),
+          ],
+    );
+    expect(backoffs(report)).toEqual([]);
+    expect(report.output).not.toMatch(/retrying|skipping stale|No docs changes/u);
+  },
+  55_000,
+);
+
+posixIt.each(["gate", "commit fetch", "commit push"])(
+  "Docs Agent %s preserves five attempts and terminal backoff contract",
+  async (phase) => {
+    const gate = phase === "gate";
+    const report = await runDocsAgent(gate ? agentGate : agentCommit, {
+      fetchResults: phase === "commit push" ? [] : Array<FetchResult>(5).fill(23),
+      pushResults: phase === "commit push" ? Array<FetchResult>(5).fill(23) : [],
+    });
+    expect(report.code, report.output).toBe(1);
+    expect(report.fetches).toHaveLength(5);
+    expect(report.pushes).toHaveLength(phase === "commit push" ? 5 : 0);
+    expect(backoffs(report)).toEqual(gate ? [2, 4, 6, 8] : [2, 4, 6, 8, 10]);
+    const diagnostic = phase === "commit push" ? "Docs update" : "Fetch";
+    expect(report.output.match(/(?:Fetch|Docs update) attempt \d failed; retrying\./gu)).toEqual(
+      (gate ? [1, 2, 3, 4] : [1, 2, 3, 4, 5]).map(
+        (attempt) => `${diagnostic} attempt ${attempt} failed; retrying.`,
+      ),
+    );
+    expect(
+      report.output
+        .trim()
+        .endsWith(
+          gate
+            ? "Failed to fetch main after retries."
+            : "Failed to push docs updates after retries.",
+        ),
+    ).toBe(true);
+  },
+  55_000,
+);
+
+const agentProducers = [
+  ["ls-files", "--others", "--exclude-standard"],
+  ["diff", "--name-status", "--diff-filter=AD"],
+  ["diff", "--name-only"],
+];
+posixIt.each(agentProducers.map((args, index) => ({ args, index })))(
+  "Docs Agent enforcement stops on failed producer $args before consuming partial output",
+  async ({ args, index }) => {
+    const report = await runDocsAgent("Enforce existing-docs-only patch", {
+      commandResults: { [args.join(" ")]: { code: 23, output: "src/forbidden.ts\n" } },
+    });
+    expect(report.code, report.output).toBe(23);
+    expect(gitArgs(report)).toEqual(agentProducers.slice(0, index + 1));
+    expect(report.output).not.toContain("forbidden");
+  },
+  55_000,
+);
