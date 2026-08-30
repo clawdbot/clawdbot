@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   computeSandboxConfigHash,
@@ -184,13 +184,6 @@ beforeAll(async () => {
   }));
   ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch, PODMAN_SANDBOX_ENGINE } =
     await import("./docker.js"));
-});
-
-afterAll(() => {
-  vi.doUnmock("./registry.js");
-  vi.doUnmock("../../process/exec.js");
-  vi.doUnmock("../../runtime.js");
-  vi.resetModules();
 });
 
 function createSandboxConfig(

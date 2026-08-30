@@ -1,6 +1,6 @@
 // Docker image tests cover sandbox image inspection and actionable setup errors
 // without invoking a real Docker daemon.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
@@ -112,11 +112,6 @@ beforeAll(async () => {
   resolvePodmanSandboxRuntimeInfo = dockerModule.resolvePodmanSandboxRuntimeInfo;
   validateSandboxContainerEngineTarget = dockerModule.validateSandboxContainerEngineTarget;
   podmanSandboxEngine = dockerModule.PODMAN_SANDBOX_ENGINE;
-});
-
-afterAll(() => {
-  vi.doUnmock("../../process/exec.js");
-  vi.resetModules();
 });
 
 beforeEach(() => {
