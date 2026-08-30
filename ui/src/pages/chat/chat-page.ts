@@ -64,6 +64,10 @@ export class ChatPage extends OpenClawLightDomElement {
   @state() private mergedChrome = false;
   @state() private dropIndicator: DropIndicator | null = null;
 
+  get sessionSplitAvailable(): boolean {
+    return !this.narrow && Boolean(this.data?.sessionKey?.trim());
+  }
+
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.sessions,
