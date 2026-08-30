@@ -122,10 +122,23 @@ summary: handles formats: pdf and docx
     const result = parseFrontmatterBlockResult(`---
 name: sample-skill
 read_when: signals: user announcing a conversion task
-metadata: [broken
+metadata: owner: value
 ---`);
 
-    expect(result.issues[0]).toMatchObject({ code: "BAD_INDENT" });
+    expect(result.issues[0]).toMatchObject({ code: "BLOCK_AS_IMPLICIT_KEY" });
+  });
+
+  it("preserves valid structured siblings when pure-text fields are normalized", () => {
+    const result = parseFrontmatterBlockResult(`---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+metadata:
+  openclaw:
+    emoji: beaker
+---`);
+
+    expect(result.frontmatter.metadata).toBe('{"openclaw":{"emoji":"beaker"}}');
+    expect(result.issues).toEqual([]);
   });
 
   it("does not rewrite valid sibling values when recovering a malformed field", () => {

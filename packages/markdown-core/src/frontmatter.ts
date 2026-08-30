@@ -1,6 +1,6 @@
 // Markdown Core module implements frontmatter behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMap, isNode, parseDocument } from "yaml";
+import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
 
@@ -80,24 +80,22 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
-// Pure-text scalar fields whose inline values may legitimately contain a
-// colon+space. Restoring them keeps legacy single-line frontmatter loadable
-// without loosening strict parsing for structured fields like `metadata`.
 const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
 
-// Recover only the field whose value actually triggers BLOCK_AS_IMPLICIT_KEY,
-// located via the YAML error position. Valid sibling scalars (quoted values
-// with escape sequences, commented values) are not rewritten, preserving
-// their YAML decode semantics.
 function normalizeFreeformFieldAtError(block: string): string {
   const doc = parseDocument(block, { schema: "core", prettyErrors: false });
-  if (doc.errors.length === 0 || !isMap(doc.contents)) {
+  if (!isMap(doc.contents)) {
     return block;
   }
-  const error = doc.errors.find(
-    (candidate) => candidate.code === "BLOCK_AS_IMPLICIT_KEY" && candidate.pos?.[0] !== undefined,
+  const error = doc.errors.find((candidate) => candidate.pos?.[0] !== undefined);
+  // Aliases fail during toJS without adding a document error position.
+  const descriptionAlias = doc.contents.items.find(
+    (candidate) =>
+      isScalar(candidate.key) && candidate.key.value === "description" && isAlias(candidate.value),
   );
-  const pos = error?.pos?.[0];
+  const pos =
+    error?.pos?.[0] ??
+    (isNode(descriptionAlias?.key) ? descriptionAlias.key.range?.[0] : undefined);
   if (pos === undefined) {
     return block;
   }
@@ -105,15 +103,22 @@ function normalizeFreeformFieldAtError(block: string): string {
   const lineEnd = block.indexOf("\n", pos);
   const end = lineEnd === -1 ? block.length : lineEnd;
   const line = block.slice(lineStart, end);
-  // Match unquoted, double-quoted, and single-quoted freeform keys. Current
-  // main recovers all three for `description`; preserve that compatibility.
   const match = line.match(/^(?:([\w-]+)|"([\w-]+)"|'([\w-]+)'):\s*(.*)$/);
   const keyName = match?.[1] ?? match?.[2] ?? match?.[3];
-  if (!keyName || !FREEFORM_TEXT_FIELDS.has(keyName)) {
-    return block;
-  }
   const rawValue = match?.[4]?.trim();
-  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue) || !rawValue.includes(": ")) {
+  const isTopLevelField = doc.contents.items.some(
+    (pair) => isScalar(pair.key) && pair.key.value === keyName && pair.key.range?.[0] === lineStart,
+  );
+  // Keep shipped description recovery; other text fields only recover colon-rich parser errors.
+  const recoverColonRichText = error?.code === "BLOCK_AS_IMPLICIT_KEY" && rawValue?.includes(": ");
+  if (
+    !keyName ||
+    !rawValue ||
+    !FREEFORM_TEXT_FIELDS.has(keyName) ||
+    !isTopLevelField ||
+    (keyName !== "description" && !recoverColonRichText) ||
+    /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)
+  ) {
     return block;
   }
   const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
