@@ -67,7 +67,7 @@ export async function resolveAgentExecPrompt(
       if (file === "-" || !(error instanceof Error) || !("code" in error)) {
         throw error;
       }
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = error.code;
       if (code === "ENOENT") {
         throw new Error(`Message file not found: ${file}`, { cause: error });
       }
@@ -117,7 +117,7 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
         }),
       ),
     },
-  } as OpenClawConfig;
+  };
 }
 
 function buildExecRunOverlay(params: {
@@ -143,7 +143,7 @@ function buildExecRunOverlay(params: {
     // This process exits after one turn, so live skill invalidation cannot be
     // observed and would leave Chokidar retaining the otherwise-finished CLI.
     skills: { load: { watch: false } },
-  } as OpenClawConfig;
+  };
 }
 
 /**
@@ -223,9 +223,8 @@ export function buildExecRunConfig(params: {
 }): OpenClawConfig {
   const opts = params.opts ?? {};
   const base = stripInheritedAgentLocations(params.base);
-  const withDefaults = mergeDeep(buildExecConfigDefaults(), base) as OpenClawConfig;
   return mergeDeep(
-    withDefaults,
+    mergeDeep(buildExecConfigDefaults(), base),
     buildExecRunOverlay({ base, cwd: params.cwd, opts }),
-  ) as OpenClawConfig;
+  ) as OpenClawConfig; // SAFETY: Merging three typed configs preserves the OpenClawConfig shape.
 }
