@@ -423,8 +423,8 @@ describe("resolveCurrentTurnImages", () => {
       expect(result.images).toEqual([
         expect.objectContaining({ type: "image", mimeType: "image/png" }),
       ]);
-      expect(result.historyImageNotes).toContain("Recent image 1 from Ada");
-      expect(result.historyImageNotes).toContain("attached as media");
+      expect(result.historyImages).toHaveLength(1);
+      expect(result.historyImages?.[0]).toMatchObject({ sender: "Ada", messageId: "m-kept" });
     });
   });
 
@@ -464,7 +464,7 @@ describe("resolveCurrentTurnImages", () => {
       });
 
       expect(result.images).toEqual([{ type: "image", data: "current", mimeType: "image/png" }]);
-      expect(result.historyImageNotes).toBeUndefined();
+      expect(result.historyImages).toBeUndefined();
     });
   });
 
@@ -476,7 +476,7 @@ describe("resolveCurrentTurnImages", () => {
 
     expect(vi.mocked(resolveAgentTurnAttachments)).not.toHaveBeenCalled();
     expect(result.images).toBeUndefined();
-    expect(result.historyImageNotes).toBeUndefined();
+    expect(result.historyImages).toBeUndefined();
   });
 
   it("hydrates only current image facts missing prompt descriptions", async () => {

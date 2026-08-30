@@ -132,12 +132,18 @@ export function appendRecentHistoryImageContext(params: {
     .join("\n\n");
 }
 
-/** Attach inherited-image provenance to a turn prompt so the model can place them. */
+/**
+ * Attach inherited-image provenance to a turn prompt so the model can place them.
+ *
+ * Renders from the retained images themselves rather than a pre-rendered block, so
+ * the notes are numbered against the set the turn actually carries: a collected
+ * batch renumbers across its merged images instead of restarting per queued turn.
+ */
 export function withRecentHistoryImageNotes(
   prompt: string,
-  images: { historyImageNotes?: string },
+  images: { historyImages?: readonly RecentInboundHistoryImage[] },
 ): string {
-  return images.historyImageNotes
-    ? [prompt, images.historyImageNotes].filter((part) => part.trim().length > 0).join("\n\n")
+  return images.historyImages?.length
+    ? appendRecentHistoryImageContext({ promptText: prompt, images: [...images.historyImages] })
     : prompt;
 }

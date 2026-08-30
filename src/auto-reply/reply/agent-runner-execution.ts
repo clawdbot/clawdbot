@@ -231,7 +231,7 @@ async function executeAgentTurnInternalWithRetryState(
           mediaImageLayout: internalFollowupRun.mediaImageLayout,
           // Provenance travels with the images it explains; a queued turn that
           // drops it hands the model an image it cannot place.
-          historyImageNotes: internalFollowupRun.historyImageNotes,
+          historyImages: internalFollowupRun.historyImages,
         }
       : await agentTurnTiming.measure("current_turn_images", () =>
           resolveCurrentTurnImages({

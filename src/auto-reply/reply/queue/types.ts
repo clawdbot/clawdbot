@@ -38,6 +38,7 @@ import type { ReplyPayload } from "../../reply-payload.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
+import type { RecentInboundHistoryImage } from "../history-media.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
@@ -102,8 +103,8 @@ export type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
   /** Admission-owned layout; fact indexes are relative to this run's media array. */
   mediaImageLayout?: MediaImageLayout;
-  /** Provenance for images inherited from room history, appended to the prompt. */
-  historyImageNotes?: string;
+  /** Images inherited from room history, carried with the provenance they need. */
+  historyImages?: RecentInboundHistoryImage[];
 };
 
 export type FollowupRun = {

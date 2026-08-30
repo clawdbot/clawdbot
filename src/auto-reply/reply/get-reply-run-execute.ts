@@ -383,7 +383,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
-    historyImageNotes: currentTurnImages.historyImageNotes,
+    historyImages: currentTurnImages.historyImages,
     mediaImageLayout: promptMediaImageLayout,
     media: promptMediaForRun,
     // Originating channel for reply routing.

@@ -102,7 +102,17 @@ describe("followup prompt metadata carrier", () => {
       ...createQueueTestRun({ prompt: "what was in that photo?", messageId: "steer-notes" }),
       images: [{ type: "image", data: "kept-png", mimeType: "image/png" }],
       imageOrder: ["inline"],
-      historyImageNotes: "[Recent image 1 from Ada, message m-kept, attached as media.]",
+      historyImages: [
+        {
+          path: "/openclaw-test/m-kept.png",
+          contentType: "image/png",
+          sender: "Ada",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
+          messageId: "m-kept",
+        },
+      ],
     };
     const operation = createReplyOperation({
       sessionKey: key,
@@ -146,9 +156,11 @@ describe("followup prompt metadata carrier", () => {
         }),
       ).resolves.toBe("handled");
 
-      expect(injected).toEqual([
-        "what was in that photo?\n\n[Recent image 1 from Ada, message m-kept, attached as media.]",
-      ]);
+      // The steer path renders provenance from the retained image itself.
+      expect(injected).toHaveLength(1);
+      expect(injected[0]).toContain("what was in that photo?");
+      expect(injected[0]).toContain("[Recent image 1 from Ada");
+      expect(injected[0]).toContain("message m-kept");
     } finally {
       operation.complete();
     }

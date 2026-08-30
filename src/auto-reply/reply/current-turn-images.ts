@@ -21,7 +21,7 @@ import {
   hasInboundHistoryMedia,
   resolveAgentTurnAttachments,
 } from "./agent-turn-attachments.js";
-import { appendRecentHistoryImageContext } from "./history-media.js";
+import type { RecentInboundHistoryImage } from "./history-media.js";
 
 type CurrentImageAttachment = MediaAttachment & { path: string };
 
@@ -39,8 +39,8 @@ export type CurrentTurnImages = {
   unresolvedSourceIndexes?: number[];
   /** Admission-owned slot-to-media identity used by later runtime adapters. */
   mediaImageLayout?: MediaImageLayout;
-  /** Provenance for images this turn inherited from room history, appended to the prompt. */
-  historyImageNotes?: string;
+  /** Images this turn inherited from room history, carried with the provenance they need. */
+  historyImages?: RecentInboundHistoryImage[];
 };
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
@@ -200,14 +200,12 @@ export async function resolveCurrentTurnImages(params: {
     }
     const merged = resolveMergedTurnImages(entries);
     // Without provenance an inherited image reads as this turn's own attachment.
-    const historyImageNotes =
+    // The images travel intact so later carriers can identify and renumber them;
+    // rendering here would freeze positions that a collected batch has to redo.
+    const withHistory =
       resolved.recentHistoryImages.length > 0
-        ? appendRecentHistoryImageContext({
-            promptText: "",
-            images: resolved.recentHistoryImages,
-          })
-        : undefined;
-    const withHistory = historyImageNotes ? Object.assign(merged, { historyImageNotes }) : merged;
+        ? Object.assign(merged, { historyImages: resolved.recentHistoryImages })
+        : merged;
     return unresolvedSourceIndexes.length > 0
       ? Object.assign(withHistory, { unresolvedSourceIndexes })
       : withHistory;

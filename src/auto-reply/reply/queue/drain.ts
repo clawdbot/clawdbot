@@ -431,57 +431,69 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
   return `---\nQueued #${idx + 1}${senderSuffix}\n${prompt}`.trim();
 }
 
+/** Identity of a retained image, stable across the history windows that re-read it. */
+function historyImageIdentity(image: { messageId?: string; path: string }): string {
+  return [image.messageId ?? "", image.path].join("\0");
+}
+
 function collectQueuedPromptMedia(
   items: FollowupRun[],
 ): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
-  Pick<
-    InternalFollowupRun,
-    "currentTurnImagesPrepared" | "mediaImageLayout" | "historyImageNotes"
-  > {
+  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout" | "historyImages"> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
   const mediaImageSlots: MediaImageLayout["slots"] = [];
   const suppressedFactIndexes: number[] = [];
-  // Retained-history images and the notes that place them are collected as one
-  // group. A turn only inherits history images when it brought none of its own,
-  // so such an item's images are all retained ones and the pair can be taken or
-  // skipped whole rather than split. The batch reuses the per-turn limit, so a
-  // collected turn never carries more retained images than a single turn could,
-  // and a burst that resolved the same room twice contributes them once.
-  const historyImageNoteBlocks: string[] = [];
-  const seenHistoryNotes = new Set<string>();
-  let historyImageBudget = RECENT_HISTORY_IMAGE_LIMIT;
+  // Retained images and their provenance travel together, selected per image.
+  // Identity is the image, never its rendered note: a note carries its position in
+  // the history window, so the same image re-read from a grown window renders
+  // differently and text equality would call it new, filling the budget with
+  // duplicates and dropping whatever arrived last. The batch reuses the per-turn
+  // limit, so a collected turn never carries more retained images than one turn could.
+  const historyImages: NonNullable<InternalFollowupRun["historyImages"]> = [];
+  const seenHistoryImages = new Set<string>();
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
     const internalItem = item as InternalFollowupRun;
-    const historyNoteLines = (internalItem.historyImageNotes?.trim() ?? "")
-      .split("\n")
-      .filter((line) => line.trim().length > 0);
-    // Every image on a history-carrying item is a retained one, so its images and
-    // notes are taken or dropped together: a partly seen item would otherwise re-send
-    // bytes whose note was deduplicated away, leaving the prompt unable to place them.
-    const isHistoryItem = historyNoteLines.length > 0;
-    const skipHistoryItem =
-      isHistoryItem &&
-      (historyNoteLines.length > historyImageBudget ||
-        historyNoteLines.some((line) => seenHistoryNotes.has(line)));
-    if (skipHistoryItem) {
+    const itemHistoryImages = internalItem.historyImages ?? [];
+    // A retained image already carried by an earlier item in this batch is dropped,
+    // but the rest of that item still travels: successive turns re-read a growing
+    // window, so skipping a partly-seen item whole would discard the newest image.
+    const takenHistoryIndexes = itemHistoryImages.flatMap((image, index) =>
+      seenHistoryImages.has(historyImageIdentity(image)) ? [] : [index],
+    );
+    // Provenance and payload are index-aligned only when every image is a retained
+    // one, which is what a history-carrying turn produces; anything else is left
+    // whole rather than split against an alignment this cannot verify.
+    const alignedHistoryItem =
+      itemHistoryImages.length > 0 && item.images?.length === itemHistoryImages.length;
+    const historyBudget = RECENT_HISTORY_IMAGE_LIMIT - historyImages.length;
+    const keptHistoryIndexes = alignedHistoryItem
+      ? takenHistoryIndexes.slice(0, Math.max(0, historyBudget))
+      : [];
+    if (itemHistoryImages.length > 0 && keptHistoryIndexes.length === 0) {
       if (item.media) {
         media.push(...item.media);
       }
       continue;
     }
-    if (item.images) {
-      images.push(...item.images);
-    }
-    if (item.imageOrder) {
-      imageOrder.push(...item.imageOrder);
-    }
+    const keepsEveryImage = itemHistoryImages.length === 0;
+    const itemImages = keepsEveryImage
+      ? (item.images ?? [])
+      : keptHistoryIndexes.flatMap((index) => item.images?.[index] ?? []);
+    const itemImageOrder = keepsEveryImage
+      ? (item.imageOrder ?? [])
+      : keptHistoryIndexes.flatMap((index) => item.imageOrder?.[index] ?? []);
+    images.push(...itemImages);
+    imageOrder.push(...itemImageOrder);
     if (currentTurnImagesPrepared) {
-      const itemSlots: MediaImageLayout["slots"] =
+      const allSlots: MediaImageLayout["slots"] =
         internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+      const itemSlots: MediaImageLayout["slots"] = keepsEveryImage
+        ? allSlots
+        : keptHistoryIndexes.flatMap((index) => allSlots[index] ?? []);
       mediaImageSlots.push(
         ...itemSlots.map((slot) =>
           slot.factIndex === undefined
@@ -498,12 +510,12 @@ function collectQueuedPromptMedia(
     if (item.media) {
       media.push(...item.media);
     }
-    if (historyNoteLines.length > 0) {
-      for (const line of historyNoteLines) {
-        seenHistoryNotes.add(line);
+    for (const index of keptHistoryIndexes) {
+      const image = itemHistoryImages[index];
+      if (image) {
+        seenHistoryImages.add(historyImageIdentity(image));
+        historyImages.push(image);
       }
-      historyImageBudget -= historyNoteLines.length;
-      historyImageNoteBlocks.push(historyNoteLines.join("\n"));
     }
   }
   const mediaImageLayout =
@@ -516,9 +528,7 @@ function collectQueuedPromptMedia(
     ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
-    ...(historyImageNoteBlocks.length > 0
-      ? { historyImageNotes: historyImageNoteBlocks.join("\n") }
-      : {}),
+    ...(historyImages.length > 0 ? { historyImages } : {}),
   };
 }
 
