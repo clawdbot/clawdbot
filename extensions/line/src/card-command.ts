@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LINE_CARD_COMMAND_METADATA } from "./card-command-metadata.js";
+import { LINE_CARD_COMMAND_METADATA } from "../card-command-metadata.js";
 import {
   createActionCard,
   createImageCard,

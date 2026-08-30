@@ -5,7 +5,7 @@ import {
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { LINE_CARD_COMMAND_METADATA } from "./src/card-command-metadata.js";
+import { LINE_CARD_COMMAND_METADATA } from "./card-command-metadata.js";
 
 type RegisteredLineCardCommand = OpenClawPluginCommandDefinition;
 
