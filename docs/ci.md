@@ -120,6 +120,17 @@ pull-request head:
 node scripts/watch-pr-ci.mjs <pr-number> <full-head-sha>
 ```
 
+Maintainer GitHub helpers use the external `gh` on the caller's unchanged
+`PATH`, so that route owns credentials, filtering, and any native delegation.
+“Plain” means normalized terminal output: helpers do not discover native
+installations, extract default-route tokens, or retry a refusal through another
+binary. `OPENCLAW_GH_BIN` is an explicit operator-owned override for supporting
+callers; choose it only when its authentication and protections are appropriate.
+PATH-based read helpers, including this watcher, ignore that override.
+Authoritative REST reads request revalidation with `Cache-Control: max-age=0`
+and supply concrete repository paths. Writer identity comes from the authenticated
+GraphQL viewer, not a relay's REST caller profile.
+
 The default `rollup` mode waits for the attached CI workflow to succeed and
 for the remaining rollup checks to finish without failures. Supersession stays
 within workflow identity; `Auto response` is excluded from the wait.
