@@ -3,8 +3,10 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { CHANNEL_INGRESS_RETENTION_DEFAULTS } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createIngressEffectOnce } from "openclaw/plugin-sdk/ingress-effect-once";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   getRuntimeConfigSnapshot,
@@ -65,6 +67,8 @@ type QueuedSlackMessageOptions = IngressSlackMessageOptions & {
 const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+const SLACK_PRE_DISPATCH_DROP_RECEIPT_EFFECT = "pre-dispatch-drop-receipt-v1";
+const SLACK_PRE_DISPATCH_DROP_RECEIPT_STATE_PLUGIN_ID = "slack-pre-dispatch-drop-receipt";
 
 function isRetryableSlackInboundError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
@@ -133,6 +137,16 @@ export function createSlackMessageHandler(params: {
           `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
         ),
     });
+  const preDispatchDropReceiptOnce = createIngressEffectOnce({
+    pluginId: SLACK_PRE_DISPATCH_DROP_RECEIPT_STATE_PLUGIN_ID,
+    namespacePrefix: JSON.stringify(["slack", account.accountId]),
+    ttlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
+    stateMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedMaxEntries,
+    onDiskError: (error) =>
+      ctx.runtime.error?.(
+        `slack pre-dispatch drop receipt persistence failed: ${formatErrorMessage(error)}`,
+      ),
+  });
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -323,17 +337,34 @@ export function createSlackMessageHandler(params: {
                   },
                 });
                 if (!prepared) {
-                  ctx.logger.info(
-                    {
-                      provider: "slack",
-                      accountId: account.accountId,
-                      channelId: last.message.channel,
-                      messageTs: last.message.ts,
-                      source: last.opts.source,
-                      reason: dropReason ?? "unknown",
-                    },
-                    "Slack inbound message dropped before dispatch",
-                  );
+                  const recordReceipt = async () => {
+                    ctx.logger.info(
+                      {
+                        provider: "slack",
+                        accountId: account.accountId,
+                        channelId: last.message.channel,
+                        messageTs: last.message.ts,
+                        source: last.opts.source,
+                        reason: dropReason ?? "unknown",
+                      },
+                      "Slack inbound message dropped before dispatch",
+                    );
+                  };
+                  const receiptReplayKey = buildSlackMessageDispatchReplayKey({
+                    accountId: ctx.accountId,
+                    channelId: last.message.channel,
+                    ts: last.message.ts,
+                    teamId: last.opts.eventScope?.teamId,
+                  });
+                  if (receiptReplayKey) {
+                    await preDispatchDropReceiptOnce.runOnce({
+                      eventId: receiptReplayKey,
+                      effect: SLACK_PRE_DISPATCH_DROP_RECEIPT_EFFECT,
+                      run: recordReceipt,
+                    });
+                  } else {
+                    await recordReceipt();
+                  }
                   if (visibleDrop) {
                     // The gate already produced a sender-visible notice. Commit the
                     // logical claim so a later message/app_mention twin cannot repeat it.

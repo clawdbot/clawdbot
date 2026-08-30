@@ -398,8 +398,7 @@ export type SlackInboundDropReason =
   | "other-mention"
   | "missing-mention"
   | "empty-content"
-  | "final-route-denied"
-  | "missing-reply-target";
+  | "final-route-denied";
 
 type SlackMentionMetadata = {
   mentionedUserIds: string[];
@@ -1863,9 +1862,6 @@ export async function prepareSlackMessage(params: {
   // round-trip for the normal reply path while keeping persisted routing
   // metadata user-scoped for later session deliveries.
   const replyTarget = `channel:${message.channel}`;
-  if (!replyTarget) {
-    return drop("missing-reply-target");
-  }
 
   if (preflightAudioTranscript) {
     await sendSlackPreflightAudioTranscriptEcho({
