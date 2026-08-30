@@ -609,7 +609,6 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(startEvent.sessionKey).toBe("agent:main:main");
   expect(startEvent.sessionId).toBe("sess-main");
   expect(startEvent.resumedFrom).toBe("sess-main");
-  expect(startEvent.reason).toBe("new");
   expect(startContext.sessionId).toBe(startEvent.sessionId);
   expect(startContext.sessionKey).toBe("agent:main:main");
   expect(startContext.agentId).toBe("main");
@@ -752,7 +751,6 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expect(endEvent.nextSessionKey).toBe(startEvent.sessionKey);
   expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
-  expect(startEvent.reason).toBe("new");
   expect(startEvent.sessionId).toBeTypeOf("string");
   expect(startEvent.sessionId).not.toBe("");
   expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
@@ -887,7 +885,6 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
     expect(endEvent.reason).toBe("new");
     expect(startEvent.sessionKey).toBe("agent:main:main");
     expect(startEvent.resumedFrom).toBe("sess-parent-dms");
-    expect(startEvent.reason).toBe("new");
   } finally {
     testState.sessionConfig = undefined;
   }

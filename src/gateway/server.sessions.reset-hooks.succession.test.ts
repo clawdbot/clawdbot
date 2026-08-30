@@ -92,9 +92,9 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  const startEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionStart);
-  expect(startEvent.sessionKey).toBe(result.payload?.key);
-  expect(startEvent.reason).toBeUndefined();
+  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
+    result.payload?.key,
+  );
 });
 
 test("sessions.create accepts an explicit successor with a minted dashboard key", async () => {
@@ -112,9 +112,9 @@ test("sessions.create accepts an explicit successor with a minted dashboard key"
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.nextSessionKey).toBe(result.payload?.key);
   expect(endEvent.reason).toBe("new");
-  const startEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionStart);
-  expect(startEvent.sessionKey).toBe(result.payload?.key);
-  expect(startEvent.reason).toBe("new");
+  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
+    result.payload?.key,
+  );
 });
 
 test("sessions.create rejects an explicit successor fork", async () => {

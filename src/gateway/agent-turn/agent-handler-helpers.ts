@@ -217,7 +217,6 @@ export function emitAgentSendSessionLifecycleTransition(
     sessionKey: transition.sessionKey,
     sessionId: transition.sessionId,
     resumedFrom: transition.previousSessionId,
-    reason: transition.previousEndReason,
     storePath: transition.storePath,
     sessionFile: transition.sessionFile,
     agentId: transition.agentId,

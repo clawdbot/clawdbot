@@ -792,8 +792,6 @@ export type PluginHookSessionStartEvent = {
   sessionId: string;
   sessionKey?: string;
   resumedFrom?: string;
-  /** Predecessor-boundary reason when this start replaces a prior session. */
-  reason?: PluginHookSessionEndReason;
 };
 
 export type PluginHookSessionEndReason =
