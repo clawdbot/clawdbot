@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -10,11 +11,16 @@ import path from "node:path";
 import { expect } from "vitest";
 import { parse } from "yaml";
 import {
+  ciCheckoutFixture,
   expectCiCheckoutCleanup,
   readCiCheckoutStep,
   renderGitTestClock,
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
+import {
+  prepareGeneratedPublisherFixture,
+  type GeneratedPublisherOptions,
+} from "./generated-publisher.test-support.js";
 
 type Step = {
   name?: string;
@@ -88,7 +94,13 @@ function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { r
 export async function runCiGitStep(options: {
   workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
-  action?: "ensure-base-commit" | "git-owner" | "mantis-validate-trusted-ref";
+  action?:
+    | "ensure-base-commit"
+    | "git-owner"
+    | "mantis-validate-trusted-ref"
+    | "publish-generated-pr";
+  publisher?: GeneratedPublisherOptions & { baseChangePath?: "a" | "b" | null };
+  gitFault?: { match: string; occurrence?: number; code: FetchResult | "cancel"; output?: string };
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
@@ -128,13 +140,18 @@ export async function runCiGitStep(options: {
   cancelDuringBackoff?: boolean;
   setupFailure?: "owner" | "python" | "git";
 }) {
+  const maturity =
+    typeof options.workflow === "object" &&
+    options.workflow.file === ".github/workflows/maturity-scorecard.yml";
   const docsPublish =
     typeof options.workflow === "object" &&
     options.workflow.file === ".github/workflows/docs-sync-publish.yml";
   const docsAgent =
     typeof options.workflow === "object" &&
     options.workflow.file === ".github/workflows/docs-agent.yml";
-  const externalOwner = options.workflow || options.action === "mantis-validate-trusted-ref";
+  const publisher = options.action === "publish-generated-pr";
+  const externalOwner =
+    options.workflow || options.action === "mantis-validate-trusted-ref" || publisher;
   const clock = {
     ...options,
     realDrain:
@@ -164,11 +181,23 @@ export async function runCiGitStep(options: {
     throw new Error("Missing executable action step");
   }
   let env: Record<string, string>;
+  let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
   return withCiCheckoutFixture(
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
       env = stepEnvironment(step, {
+        PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
+        CONTENTS_TOKEN: "fixture-contents",
+        HEAD_BRANCH: "automation/locale",
+        BASE_BRANCH: "main",
+        COMMIT_MESSAGE: "fixture",
+        PR_TITLE: "fixture",
+        PR_BODY: "fixture",
+        GENERATED_PATHS: "generated",
+        INVALIDATION_PATHS: "source",
+        OVERLAP_POLICY: "defer",
+        AUTO_MERGE: "false",
         BASE_SHA: base,
         BASE_REF: "main",
         FETCH_REF: "fixture-base",
@@ -177,6 +206,23 @@ export async function runCiGitStep(options: {
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
+      if (publisher) {
+        publisherFixture = prepareGeneratedPublisherFixture(
+          root,
+          options.publisher?.baseChangePath ?? null,
+          options.publisher,
+          "workspace",
+        );
+        env = {
+          ...env,
+          ...publisherFixture.env,
+          ...options.env,
+          PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
+          GITHUB_STEP_SUMMARY: path.join(root, "github-summary"),
+          FAKE_REAL_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),
+        };
+        delete env.PATH;
+      }
       if (docsAgent) {
         env.GITHUB_TOKEN = "fixture-docs-agent-token";
         env.GH_TOKEN = "";
@@ -201,7 +247,9 @@ export async function runCiGitStep(options: {
         // still create its own directory, while later selected steps inherit one.
         for (const directory of [
           workspace,
-          ...(step["working-directory"] ? [path.join(workspace, step["working-directory"])] : []),
+          ...(!publisher && step["working-directory"]
+            ? [path.join(workspace, step["working-directory"])]
+            : []),
         ]) {
           mkdirSync(path.join(directory, ".git"), { recursive: true });
           writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
@@ -216,11 +264,38 @@ export async function runCiGitStep(options: {
       for (const action of ["git-owner", "ensure-base-commit"]) {
         mkdirSync(path.join(actions, action), { recursive: true });
         const name = action === "git-owner" ? "owner.py" : "policy.py";
-        const source = renderGitTestClock(
+        let source = renderGitTestClock(
           readFileSync(`.github/actions/${action}/${name}`, "utf8"),
           clock,
         );
+        if (action === "git-owner" && (publisher || maturity)) {
+          source = source.replace(
+            "def main():",
+            `def fixture_file_boundary(event, args):
+    names = {os.environ["GITHUB_OUTPUT"]: "output", os.environ["GITHUB_STEP_SUMMARY"]: "summary",
+             os.path.join(os.environ["RUNNER_TEMP"], "generated-pr-push.log"): "push-log"}
+    if event == "open" and args[0] in names:
+        subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                        "observe", os.environ["TMPDIR"], "linux:configured", names[args[0]]], check=True)
+
+sys.addaudithook(fixture_file_boundary)
+
+
+def main():`,
+          );
+        }
         writeFileSync(path.join(actions, action, name), source);
+      }
+      if (publisher) {
+        mkdirSync(path.join(actions, "publish-generated-pr"), { recursive: true });
+        writeFileSync(
+          path.join(actions, "publish-generated-pr/policy.py"),
+          renderGitTestClock(
+            readFileSync(".github/actions/publish-generated-pr/policy.py", "utf8"),
+            clock,
+          ),
+        );
+        env.PUBLISH_ACTION_PATH = path.join(actions, "publish-generated-pr");
       }
       const protectedFile = path.join(
         env.CHECKOUT_KIND === "clawhub" ? workspace : root,
@@ -252,9 +327,13 @@ export async function runCiGitStep(options: {
         path.join(root, "fixture-options.json"),
         JSON.stringify({
           env,
+          publisher: publisherFixture
+            ? { git: env.FAKE_REAL_GIT, gh: path.join(publisherFixture.fakeBin, "gh") }
+            : undefined,
+          gitFault: options.gitFault,
           revisions,
           mergeBase: options.mergeBase,
-          workingDirectory: step["working-directory"],
+          workingDirectory: publisher ? undefined : step["working-directory"],
           fetchResults: options.fetchResults,
           cloneResults: options.cloneResults,
           worktreeResults: options.worktreeResults,
@@ -266,6 +345,7 @@ export async function runCiGitStep(options: {
           workflowRuns: options.workflowRuns,
           docsAgent,
           docsPublish,
+          maturity,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
           consumers: Boolean(options.prepare || externalOwner),
@@ -369,8 +449,17 @@ ${run}`;
         );
         expect(readOutput("github-output")).toBe(`owner-path=${ownerPath}\n`);
       }
+      const authHeaderPresent = publisher
+        ? execFileSync(env.FAKE_REAL_GIT!, ["-C", workspace, "config", "--local", "--list"], {
+            encoding: "utf8",
+          }).includes("http.https://github.com/.extraheader=")
+        : false;
       return {
         ...report,
+        authHeaderPresent,
+        initialBranch: publisherFixture?.initialBranch,
+        publication: publisherFixture?.inspect(report.output, false),
+        pushLog: readOutput("runner-temp/generated-pr-push.log"),
         workspace,
         githubOutput: readOutput("github-output"),
         githubEnv: readOutput("github-env"),

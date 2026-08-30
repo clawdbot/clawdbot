@@ -399,6 +399,10 @@ describe("detectChangedScope", () => {
   });
 
   it.each([
+    ".github/actions/publish-generated-pr/action.yml",
+    ".github/actions/publish-generated-pr/policy.py",
+    ".github/workflows/maturity-scorecard.yml",
+    "test/scripts/generated-publisher.test-support.ts",
     ".github/actions/git-owner/action.yml",
     ".github/workflows/workflow-sanity.yml",
     ".github/workflows/qa-profile-evidence.yml",

@@ -82,7 +82,7 @@ def run_git(`,
       "deadline is not None and time.monotonic() >= deadline",
       "deadline is not None and fetch_clock() >= deadline",
     )
-    .replace(/\btimeout=(?:30|120)(?=[,)])/gu, "timeout=2")
+    .replace(/\btimeout=(?:30|60|120)(?=[,)])/gu, "timeout=2")
     .replace(
       /retry_at = time\.monotonic\(\) \+ [^\n]+/u,
       'print(f"fixture backoff: {seconds}", flush=True)\n    retry_at = time.monotonic() + 0.05',
