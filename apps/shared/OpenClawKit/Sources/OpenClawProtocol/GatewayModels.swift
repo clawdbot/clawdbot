@@ -5523,6 +5523,15 @@ public struct SessionCatalog: Codable, Sendable {
         self.hosts = hosts
         self.error = error
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case capabilities
+        case shareroute = "shareRoute"
+        case hosts
+        case error
+    }
 }
 
 public struct SessionCatalogTranscriptItem: Codable, Sendable {

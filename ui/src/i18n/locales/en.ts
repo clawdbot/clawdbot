@@ -5370,7 +5370,6 @@ export const en: TranslationMap = {
       notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
       goToMain: "Go to main session",
       viewSessions: "View sessions",
-      catalogShareNotFound: "{catalog} session {shortId} was not found.",
       catalogShareUnavailable: "This shared session route is unavailable.",
       catalogShareInvalid: "This {catalog} share URL is invalid.",
     },

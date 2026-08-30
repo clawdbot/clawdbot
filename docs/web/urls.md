@@ -199,7 +199,7 @@ paths, and the removed desktop and dashboard query forms are not accepted.
 `/focus` and unsupported `/focus/*` targets show an error without the ordinary
 application shell. They do not open a normal application route.
 
-### Beam share URLs
+## Beam share URLs
 
 Beam uploads return a dedicated share path such as:
 
@@ -216,7 +216,7 @@ New URLs use the first 12 lowercase hexadecimal characters of the 32-character
 Beam id. Twelve characters provide 48 bits; against Beam's 500-row retention
 bound, the probability that any pair shares that prefix is about 1 in 2.26
 billion. Resolution still never assumes uniqueness: exactly one retained row
-must match. A missing prefix shows an unavailable-session error, while an
+must match. A missing prefix shows session recovery links, while an
 ambiguous prefix shows the matching rows and asks for a longer id. Any longer
 lowercase hexadecimal prefix through the full 32-character id is accepted.
 Uppercase, non-hexadecimal, shorter, longer, and extra-segment forms are invalid.

@@ -321,7 +321,7 @@ suite.define(() => {
     },
   );
 
-  it("opens and refreshes a base-path Beam share without replacing its pretty URL", async () => {
+  it("keeps old Beam links working and opens pretty shares under a non-main default agent", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/beam-share-url");
     await fs.mkdir(artifactDir, { recursive: true });
     const context = await suite.newBrowserContext({
@@ -331,8 +331,10 @@ suite.define(() => {
     const page = await context.newPage();
     const fullId = "0123456789abcdef0123456789abcdef";
     const prettyPath = "/openclaw/beam/0123456789ab";
+    const queryPath = `/openclaw/chat/research?catalog=beam&host=gateway&thread=${fullId}`;
     const gateway = await installMockGateway(page, {
       basePath: "/openclaw",
+      defaultAgentId: "research",
       featureMethods: [
         "chat.metadata",
         "chat.startup",
@@ -340,6 +342,8 @@ suite.define(() => {
         "sessions.catalog.read",
       ],
       methodResponses: {
+        // Beam rows live in the plugin catalog, not the native session store.
+        "sessions.describe": { session: null },
         "sessions.catalog.list": {
           catalogs: [
             {
@@ -380,11 +384,40 @@ suite.define(() => {
       },
     });
 
+    const assertCatalogOwner = async () => {
+      await expect
+        .poll(() =>
+          page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible").evaluateAll((panes) =>
+            panes.map((pane) => {
+              const chat = pane as HTMLElement & {
+                sessionKey: string;
+                state: { assistantAgentId: string };
+              };
+              return { sessionKey: chat.sessionKey, agentId: chat.state.assistantAgentId };
+            }),
+          ),
+        )
+        .toEqual([
+          { sessionKey: `agent:research:catalog:beam:gateway:${fullId}`, agentId: "research" },
+        ]);
+    };
+
     try {
-      const response = await page.goto(new URL(prettyPath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
+      const queryResponse = await page.goto(new URL(queryPath, suite.server.baseUrl).href);
+      expect(queryResponse?.status()).toBe(200);
       const transcript = page.getByText("The pretty route stayed put.", { exact: true });
       await transcript.waitFor();
+      expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(queryPath);
+      await assertCatalogOwner();
+      await page.screenshot({
+        path: path.join(artifactDir, "beam-query-route.png"),
+        fullPage: true,
+      });
+
+      const response = await page.goto(new URL(prettyPath, suite.server.baseUrl).href);
+      expect(response?.status()).toBe(200);
+      await transcript.waitFor();
+      await assertCatalogOwner();
       expect(new URL(page.url()).pathname).toBe(prettyPath);
       expect(new URL(page.url()).search).toBe("");
       await page
@@ -402,11 +435,12 @@ suite.define(() => {
         (request) => (request.params as { search?: string } | undefined)?.search,
       );
       expect(resolution?.params).toEqual({
-        agentId: "main",
+        agentId: "research",
         search: "0123456789ab",
         limitPerHost: 2,
       });
       expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
+        agentId: "research",
         catalogId: "beam",
         hostId: "gateway",
         threadId: fullId,
@@ -414,6 +448,7 @@ suite.define(() => {
 
       await page.reload();
       await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
+      await assertCatalogOwner();
       expect(new URL(page.url()).pathname).toBe(prettyPath);
       expect(new URL(page.url()).search).toBe("");
 
@@ -422,6 +457,7 @@ suite.define(() => {
       await beamRow.waitFor();
       await beamRow.click();
       await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
+      await assertCatalogOwner();
       expect(new URL(page.url()).pathname).toBe(prettyPath);
       expect(new URL(page.url()).search).toBe("");
       await page.screenshot({

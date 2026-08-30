@@ -245,15 +245,7 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
   if (routePath.startsWith("/dashboard/")) {
     return "dashboard";
   }
-  if (
-    exactRouteIdFromPath(routePath) ||
-    agentRouteFromPath(normalizedPath, normalizedBasePath) ||
-    workboardBoardIdFromPath(normalizedPath, normalizedBasePath) ||
-    memoryTabFromPath(normalizedPath, normalizedBasePath) ||
-    pluginsHubTabFromPath(normalizedPath, normalizedBasePath)
-  ) {
-    return null;
-  }
+  // The shared matcher reserves every built-in route and document namespace.
   const catalogShare = matchControlUiCatalogSharePath({
     pathname: normalizedPath,
     basePath: normalizedBasePath,

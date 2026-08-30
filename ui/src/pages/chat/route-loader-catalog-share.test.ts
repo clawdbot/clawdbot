@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
@@ -27,6 +26,8 @@ function catalogContext(
       subscribe: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
+    agentSelection: { state: { selectedId: "research" } },
+    sessions: { state: { result: null } },
   } as unknown as ApplicationContext;
 }
 
@@ -85,11 +86,7 @@ describe("catalog share route resolution", () => {
       ),
     ).resolves.toMatchObject({
       kind: "session",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "external",
-        hostId: "gateway",
-        threadId: fullId,
-      }),
+      sessionKey: `agent:research:catalog:external:gateway:${fullId}`,
     });
   });
 
@@ -110,11 +107,7 @@ describe("catalog share route resolution", () => {
 
     expect(loaded).toMatchObject({
       kind: "session",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "beam",
-        hostId: "gateway",
-        threadId: fullId,
-      }),
+      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
       agentId: "research",
       face: "chat",
     });
@@ -163,8 +156,9 @@ describe("catalog share route resolution", () => {
         new AbortController().signal,
       ),
     ).resolves.toMatchObject({
-      kind: "route-error",
-      message: "Beam session aaaaaaaaaaaa was not found.",
+      kind: "missing-session",
+      currentSessionHref: "/chat/research",
+      sessionsHref: "/sessions",
     });
 
     await expect(

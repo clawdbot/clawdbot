@@ -231,7 +231,7 @@ describe("Beam terminal retry policy", () => {
         clientIp: `capacity-test-${requestNumber}`,
         scopes: ["operator.write"],
       }),
-      resolveControlUiTarget: () => ({ agentId: "main" }),
+      resolveControlUiBasePath: () => "",
     });
     const server = createServer((request, response) => {
       requestNumber += 1;

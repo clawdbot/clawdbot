@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
+  CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
@@ -111,6 +112,7 @@ describe("Dynamic route startup bridge", () => {
     const reservedRouteSegments = [
       ...new Set([
         "focus",
+        ...Object.values(CONTROL_UI_DOCUMENT_ROUTE_PATHS).map((path) => path.slice(1)),
         ...APP_ROUTE_IDS.flatMap((routeId) => {
           const definition = routePageSpec(routeId);
           return [definition.path, ...(definition.aliases ?? [])]
@@ -147,6 +149,8 @@ describe("Dynamic route startup bridge", () => {
       "/plugins/diffs/view/id/token",
       "/beam/0123456789a",
       "/beam/not-valid",
+      "/approve/0123456789ab",
+      "/ask/0123456789ab",
     ]) {
       expect(routeIdFromPath(pathname)).toBeNull();
     }

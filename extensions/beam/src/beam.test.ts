@@ -303,7 +303,7 @@ describe("Beam mirror receiver boundary", () => {
       createBeamRequestHandler({
         store,
         resolveClient: writeClient,
-        resolveControlUiTarget: mainControlUiTarget,
+        resolveControlUiBasePath: rootControlUiBasePath,
       }),
       (requestNumber, req, res) => {
         const status = requestNumber === 2 ? 503 : 200;

@@ -12,6 +12,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
+import { missingSessionRouteData } from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
@@ -105,12 +106,7 @@ export async function loadCatalogShareRouteFromLocation(
       };
     }
     if (matches.length === 0) {
-      return routeError(
-        t("chat.sessionRoute.catalogShareNotFound", {
-          catalog: catalog.label,
-          shortId: target.shortId,
-        }),
-      );
+      return missingSessionRouteData(context, "chat", agentId);
     }
     const session = matches[0];
     if (!session) {
@@ -127,11 +123,10 @@ export async function loadCatalogShareRouteFromLocation(
     }
     return {
       kind: "session",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: catalog.id,
-        hostId: shareRoute.hostId,
-        threadId: session.threadId,
-      }),
+      sessionKey: buildCatalogSessionKey(
+        { catalogId: catalog.id, hostId: shareRoute.hostId, threadId: session.threadId },
+        agentId,
+      ),
       agentId,
       draft: undefined,
       face: "chat",

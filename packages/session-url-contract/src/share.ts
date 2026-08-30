@@ -3,16 +3,18 @@ import { normalizeControlUiBasePath } from "./grammar.js";
 
 const LOWERCASE_HEX_RE = /^[0-9a-f]+$/u;
 const CATALOG_SHARE_ROUTE_SEGMENT_RE = /^[a-z][a-z0-9-]*$/u;
-const CATALOG_SHARE_PATH_CANDIDATE_RE = /^[a-z0-9]{12,}$/iu;
+const CATALOG_SHARE_PATH_RE = /^([a-z][a-z0-9-]*)\/([a-zA-Z0-9]{12,})$/u;
 
 // This stable contract is shared by URL producers and consumers. The Control UI
 // route-table test keeps it aligned with every built-in path and alias.
-export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS = Object.freeze([
+export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.freeze([
   "activity",
   "agents",
   "ai-agents",
   "appearance",
+  "approve",
   "apps",
+  "ask",
   "automation",
   "automations",
   "channels",
@@ -44,9 +46,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS = Object.freeze([
   "usage",
   "workboard",
   "worktrees",
-] as const);
-
-const CONTROL_UI_RESERVED_ROUTE_SEGMENT_SET = new Set<string>(CONTROL_UI_RESERVED_ROUTE_SEGMENTS);
+]);
 
 export type ControlUiCatalogShareRoute = {
   kind: "thread-id-prefix";
@@ -80,7 +80,7 @@ export function isControlUiCatalogShareRouteSegment(value: string): boolean {
 }
 
 export function isControlUiReservedRouteSegment(value: string): boolean {
-  return CONTROL_UI_RESERVED_ROUTE_SEGMENT_SET.has(value.toLowerCase());
+  return CONTROL_UI_RESERVED_ROUTE_SEGMENTS.includes(value.toLowerCase());
 }
 
 export function matchControlUiCatalogSharePath(params: {
@@ -92,21 +92,13 @@ export function matchControlUiCatalogSharePath(params: {
   if (!params.pathname.startsWith(prefix)) {
     return null;
   }
-  const [routeSegment, ...idSegments] = params.pathname.slice(prefix.length).split("/");
-  const shortId = idSegments[0];
-  if (
-    !routeSegment ||
-    !isControlUiCatalogShareRouteSegment(routeSegment) ||
-    isControlUiReservedRouteSegment(routeSegment) ||
-    idSegments.length !== 1 ||
-    !shortId ||
-    !CATALOG_SHARE_PATH_CANDIDATE_RE.test(shortId)
-  ) {
+  const match = CATALOG_SHARE_PATH_RE.exec(params.pathname.slice(prefix.length));
+  if (!match || isControlUiReservedRouteSegment(match[1])) {
     return null;
   }
   return {
-    routeSegment,
-    shortId,
+    routeSegment: match[1],
+    shortId: match[2],
   };
 }
 
