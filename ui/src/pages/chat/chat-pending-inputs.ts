@@ -87,12 +87,13 @@ export function readChatInputRunIds(state: ChatState): string[] {
     readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
   );
   const runIds = [
-    ...projection.entries
-      .filter((entry) => entry.pending && entry.identity?.role === "user")
-      .map((entry) => entry.pendingRunId),
-    ...state.chatQueue
-      .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
-      .map((item) => item.sendRunId),
+    ...projection.entries.map(
+      (entry) => entry.pending && entry.identity?.role === "user" && entry.pendingRunId,
+    ),
+    ...state.chatQueue.map(
+      (item) =>
+        ((item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed") && item.sendRunId,
+    ),
   ];
   return [
     ...new Set(
@@ -116,10 +117,9 @@ export function applyChatPendingInputs(
     before: options.before,
     loading: false,
   });
-  const acceptedRunIds = new Set([
-    ...(page?.items.flatMap((item) => (item.runId ? [item.runId] : [])) ?? []),
-    ...(options.consumptions?.map((item) => item.runId) ?? []),
-  ]);
+  const acceptedRunIds = new Set(
+    [...(page?.items ?? []), ...(options.consumptions ?? [])].map((item) => item.runId),
+  );
   // The server owns accepted input even after an interruption. Retiring the
   // outbox copy prevents reconnect from silently submitting it a second time.
   for (const item of state.chatQueue) {

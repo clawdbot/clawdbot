@@ -216,14 +216,12 @@ async function readCurrentStoredChatHistory(
   }
   syncVisibleChatQueueProjection(host);
   const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
+  const inputRunId =
+    !item.sessionId || item.sessionId === historySessionId ? item.sendRunId : undefined;
   const acceptedPendingInput =
-    item.sendRunId &&
-    (!item.sessionId || item.sessionId === historySessionId) &&
-    history.pendingInputs?.items.some((input) => input.runId === item.sendRunId);
+    inputRunId && history.pendingInputs?.items.some((input) => input.runId === inputRunId);
   const consumedInput =
-    item.sendRunId &&
-    (!item.sessionId || item.sessionId === historySessionId) &&
-    history.inputConsumptions?.some((input) => input.runId === item.sendRunId);
+    inputRunId && history.inputConsumptions?.some((input) => input.runId === inputRunId);
   // Gateway chat run IDs equal client idempotency keys; terminal-event retirement
   // uses the same delivery proof, even before the transcript marker is persisted.
   if (

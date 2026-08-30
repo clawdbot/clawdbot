@@ -713,20 +713,16 @@ export async function admitChatSend(params: {
         finishPendingInput = finish;
       },
       assertWorkAdmissionCurrent: () => {
-        if (
-          gatewayWorkAdmissionRetains === 0 ||
-          lifecycleGeneration !== getAgentEventLifecycleGeneration()
-        ) {
-          throw new Error("Chat admission ended; submit a new turn.");
-        }
         const queued = context.chatQueuedTurns.get(clientRunId);
         // Collect retires source cancellation while retaining the original
         // admission until the aggregate commits or settles.
         if (
-          activeRunAbort.controller.signal.aborted &&
-          !(queued?.controller === activeRunAbort.controller && queued.abortable === false)
+          gatewayWorkAdmissionRetains === 0 ||
+          lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+          (activeRunAbort.controller.signal.aborted &&
+            !(queued?.controller === activeRunAbort.controller && queued.abortable === false))
         ) {
-          throw new Error("Chat admission was cancelled; submit a new turn.");
+          throw new Error("Chat admission ended or was cancelled; submit a new turn.");
         }
       },
       restartSafeAdmission,

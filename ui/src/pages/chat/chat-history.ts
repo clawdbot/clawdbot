@@ -1690,7 +1690,15 @@ export async function loadChatHistory(
     : undefined;
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const inputRunIds = readChatInputRunIds(state);
-  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}\u0000${JSON.stringify(inputRunIds)}`;
+  const requestKeyPrefix = JSON.stringify([
+    connectionEpoch,
+    method,
+    sessionKey,
+    requestAgentId ?? "",
+    CHAT_HISTORY_REQUEST_LIMIT,
+    inputRunIds,
+  ]);
+  const requestKey = `${requestKeyPrefix}${requestModeKey}`;
   const inFlight = requests.historyLoad;
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
@@ -1719,6 +1727,7 @@ export async function loadChatHistory(
     method,
     deltaCursor,
     inputRunIds,
+    requestKeyPrefix,
   ).then((result) => {
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
@@ -1930,6 +1939,7 @@ async function loadChatHistoryUncached(
   method: "chat.history" | "chat.startup",
   deltaCursor: string | undefined,
   inputRunIds: string[],
+  requestKeyPrefix: string,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1957,7 +1967,7 @@ async function loadChatHistoryUncached(
   setChatError(state, null);
   try {
     const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
-    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}\u0000${JSON.stringify(inputRunIds)}`;
+    const requestKey = `${requestKeyPrefix}${requestModeKey}`;
     let response = await requestSharedChatHistory(
       client,
       requestKey,
@@ -1981,7 +1991,7 @@ async function loadChatHistoryUncached(
     }
     if (isChatHistoryCursorResult(response) && response.kind === "reset") {
       clearCachedChatDeltaCursor(state, sessionKey, requestAgentId);
-      const pageRequestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000page\u0000${JSON.stringify(inputRunIds)}`;
+      const pageRequestKey = `${requestKeyPrefix}page`;
       response = await requestSharedChatHistory(
         client,
         pageRequestKey,
