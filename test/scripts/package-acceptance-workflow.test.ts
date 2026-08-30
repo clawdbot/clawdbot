@@ -1741,10 +1741,12 @@ describe("package acceptance workflow", () => {
     );
   });
 
-  it("allows Docker-only recovery for beta and extended-stable releases", () => {
+  it("allows Docker-only recovery for beta, stable, and extended-stable releases", () => {
     for (const release of [
       { distTag: "beta", tag: "v2026.8.1-beta.2" },
       { distTag: "extended-stable", tag: "v2026.7.33" },
+      { distTag: "latest", tag: "v2026.8.1" },
+      { distTag: "latest", tag: "v2026.12.32-1" },
     ]) {
       const result = runReleasePublishInputValidation({
         PUBLISH_DOCKER_ONLY: "true",
@@ -1755,16 +1757,41 @@ describe("package acceptance workflow", () => {
       expect(result.status, result.stderr).toBe(0);
     }
 
-    const latest = runReleasePublishInputValidation({
-      PUBLISH_DOCKER_ONLY: "true",
-      PUBLISH_OPENCLAW_NPM: "false",
-      RELEASE_NPM_DIST_TAG: "latest",
-      RELEASE_TAG: "v2026.8.1",
-    });
-    expect(latest.status).toBe(1);
-    expect(latest.stderr).toContain(
-      "publish_docker_only supports already-published beta or extended-stable releases only",
-    );
+    for (const tag of [
+      "v2026.8.1-alpha.1",
+      "v2026.8.1-beta.1",
+      "v2026.7.33",
+      "v2026.7.33-1",
+      "v2026.13.1",
+      "v2026.08.1",
+      "v2026.8.01",
+      "v2026.8.1-0",
+    ]) {
+      const result = runReleasePublishInputValidation({
+        PUBLISH_DOCKER_ONLY: "true",
+        PUBLISH_OPENCLAW_NPM: "false",
+        RELEASE_NPM_DIST_TAG: "latest",
+        RELEASE_TAG: tag,
+      });
+      expect(result.status, tag).toBe(1);
+    }
+    const rejectedInputs: Record<string, string>[] = [
+      { PUBLISH_OPENCLAW_NPM: "true" },
+      { PREFLIGHT_RUN_ID: "" },
+      { FULL_RELEASE_VALIDATION_RUN_ID: "", FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "" },
+      { RELEASE_NPM_DIST_TAG: "alpha", RELEASE_TAG: "v2026.8.1-alpha.1" },
+    ];
+    for (const overrides of rejectedInputs) {
+      expect(
+        runReleasePublishInputValidation({
+          PUBLISH_DOCKER_ONLY: "true",
+          PUBLISH_OPENCLAW_NPM: "false",
+          RELEASE_NPM_DIST_TAG: "latest",
+          RELEASE_TAG: "v2026.8.1",
+          ...overrides,
+        }).status,
+      ).toBe(1);
+    }
 
     const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
     const input = workflow.on?.workflow_dispatch?.inputs?.publish_docker_only as
@@ -1775,7 +1802,7 @@ describe("package acceptance workflow", () => {
       verifyJob,
       "Verify exact npm and selector readback matches preflight bytes",
     );
-    expect(input?.description).toContain("beta or extended-stable");
+    expect(input?.description).toContain("beta, stable, or extended-stable");
     expect(verifyStep.env?.RELEASE_NPM_DIST_TAG).toBe("${{ inputs.npm_dist_tag }}");
     expect(verifyStep.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
     expect(verifyStep.run).not.toContain("npm view openclaw@extended-stable version");

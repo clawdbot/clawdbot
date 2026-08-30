@@ -611,11 +611,11 @@ gh workflow run openclaw-release-publish.yml \
 
 Include `plugin_sdk_api_acknowledgement` only when the npm preflight's Plugin SDK API report contains changes.
 
-If a beta package is already published but its container images are missing,
-do not rerun npm or plugin publication. Reuse the immutable beta tag plus its
+If a beta or regular stable package is already published but its container images are missing,
+do not rerun npm or plugin publication. Reuse the immutable release tag plus its
 successful npm preflight and Full Release Validation evidence through the
 Docker-only recovery path. The workflow rechecks the exact npm version, the
-`beta` selector, and the published tarball digest before building containers:
+selected npm dist-tag, and the published tarball digest before building containers:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
@@ -628,6 +628,13 @@ gh workflow run openclaw-release-publish.yml \
   -f publish_openclaw_npm=false \
   -f publish_docker_only=true
 ```
+
+For regular stable recovery, use the same command with `tag=vYYYY.M.PATCH` and
+`npm_dist_tag=latest`. Only regular stable tags (patches 1–32, including correction
+suffixes) are accepted for `latest`; extended-stable recovery retains its own
+selector. Recovery builds the canonical versioned images without republishing
+npm packages or plugins, dispatching native releases, or finalizing the GitHub
+release. Existing approval and provenance checks still apply.
 
 Stable publish to the default beta dist-tag:
 
@@ -745,7 +752,7 @@ readback confirms that every exact package and `extended-stable` tag converged.
 - `windows_node_installer_digests`: candidate-approved compact JSON map of the current Windows installer names to their pinned `sha256:` digests; required for stable OpenClaw publish
 - `npm_telegram_run_id`: optional successful `NPM Telegram Beta E2E` run id to include in final release evidence
 - `npm_dist_tag`: npm target tag for the OpenClaw package, one of `alpha`, `beta`, `latest`, or `extended-stable`
-- `publish_docker_only`: beta or extended-stable recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selected dist-tag, and tarball digest before invoking Docker publication.
+- `publish_docker_only`: beta, regular stable (`latest`), or extended-stable recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selected dist-tag, and tarball digest before invoking Docker publication.
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only for focused plugin-only repair work with `publish_openclaw_npm=false`
 - `plugins`: comma-separated `@openclaw/*` package names when `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the workflow as a plugin-only repair orchestrator
