@@ -7,6 +7,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import {
   gt as gtSemver,
   satisfies as satisfiesSemver,
+  valid as validSemver,
   validRange as validSemverRange,
 } from "semver";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -93,9 +94,22 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
     // npm view output order tracks publication, not SemVer (a backport can be
     // published after a higher release), so pick the max satisfying version.
     let best: { entry: unknown; version: string } | undefined;
+    // Exact selector mismatches are contract failures, not transient metadata
+    // reads. Preserve the strongest observed nonmatching entry so the caller
+    // can emit the same hard drift diagnostic for npm 12 array output that npm
+    // <=11 object output already reports.
+    let exactDrift: { entry: unknown; version: string } | undefined;
+    const trackExactDrift = isExactSemverVersion(constraint.selector);
     for (const entry of entries) {
       const version = normalizeOptionalString(entry.version);
-      if (!version || !satisfiesSemver(version, constraint.range)) {
+      if (!version) {
+        continue;
+      }
+      if (!satisfiesSemver(version, constraint.range)) {
+        const normalizedVersion = trackExactDrift ? validSemver(version) : null;
+        if (normalizedVersion && (!exactDrift || gtSemver(normalizedVersion, exactDrift.version))) {
+          exactDrift = { entry, version: normalizedVersion };
+        }
         continue;
       }
       if (!best || gtSemver(version, best.version)) {
@@ -103,8 +117,9 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
       }
     }
     // A recognized range with no satisfying entry must fail the metadata read
-    // rather than silently resolve outside the requested constraint.
-    return best?.entry;
+    // rather than silently resolve outside the requested constraint. Exact
+    // versions keep one mismatched entry only to produce the hard drift error.
+    return best?.entry ?? exactDrift?.entry;
   }
   return entries.at(-1);
 }
