@@ -93,12 +93,10 @@ export function resolveProviderRawConfig(params: {
   const providerIds = params.configuredProviderId
     ? [params.providerId, params.configuredProviderId]
     : [...(params.providerAliases ?? []).toReversed(), params.providerId];
-  return providerIds.reduce<Record<string, unknown>>(
-    (config, providerId) => ({
-      ...config,
-      ...readProviderConfig(params.providerConfigs, providerId),
-    }),
-    {},
+  return Object.fromEntries(
+    providerIds.flatMap((providerId) =>
+      Object.entries(readProviderConfig(params.providerConfigs, providerId) ?? {}),
+    ),
   );
 }
 

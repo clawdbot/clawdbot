@@ -19,6 +19,18 @@ describe("plugin-sdk provider-selection-runtime", () => {
     { id: "second", autoSelectOrder: 2, configured: true },
   ];
 
+  it("preserves JSON config keys without invoking prototype setters", () => {
+    const rawConfig = JSON.parse('{"__proto__":{"marker":"config-value"},"constructor":"literal"}');
+    const resolved = resolveProviderRawConfig({
+      providerId: "canonical",
+      providerConfigs: { canonical: rawConfig },
+    });
+
+    expect(Object.getPrototypeOf(resolved)).toBe(Object.prototype);
+    expect(Object.hasOwn(resolved, "__proto__")).toBe(true);
+    expect(resolved).toEqual(rawConfig);
+  });
+
   it("selects an explicit provider when it exists", () => {
     const selection = selectConfiguredOrAutoProvider({
       configuredProviderId: " second ",
