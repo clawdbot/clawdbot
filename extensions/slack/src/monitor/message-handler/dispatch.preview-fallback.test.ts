@@ -50,7 +50,6 @@ class TestSlackStreamNotDeliveredError extends Error {
 let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
-let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
 let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions: GetReplyOptions | undefined;
 let capturedDispatchReplyFromConfig: unknown;
@@ -452,7 +451,6 @@ async function dispatchNativeProgressScenario(params: {
 }) {
   mockedNativeStreaming = true;
   mockedSlackStreamingMode = "progress";
-  mockedSlackDraftMode = "status_final";
   mockedDispatchSequence =
     params.finalPayload === undefined ? [] : [{ kind: "final", payload: params.finalPayload }];
   mockedReplyOptionEvents = params.events;
@@ -945,13 +943,9 @@ vi.mock("../../sent-thread-cache.js", () => ({
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
-vi.mock("../../stream-mode.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../stream-mode.js")>()),
-  resolveSlackStreamingConfig: () => ({
-    mode: mockedSlackStreamingMode,
-    nativeStreaming: mockedNativeStreaming,
-    draftMode: mockedSlackDraftMode,
-  }),
+vi.mock("../../streaming-compat.js", () => ({
+  resolveSlackStreamingMode: () => mockedSlackStreamingMode,
+  resolveSlackNativeStreaming: () => mockedNativeStreaming,
 }));
 
 vi.mock("../../streaming.js", () => ({
@@ -1180,7 +1174,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "append";
     mockedPinnedMainDmOwner = undefined;
     capturedReplyOptions = undefined;
     capturedDispatchReplyFromConfig = undefined;
@@ -2170,7 +2163,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [];
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [
       { kind: "tool_start", name: "exec" },
       { kind: "item", itemKind: "analysis", title: "Reasoning" },
@@ -2197,7 +2189,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [];
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [
       { kind: "tool_start", name: "exec" },
       { kind: "reasoning", text: "<think>Checking </think>", isReasoningSnapshot: true },
@@ -2224,7 +2215,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [];
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [
       {
         kind: "reasoning",
@@ -2249,7 +2239,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [];
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [
       {
         kind: "reasoning",
@@ -2303,7 +2292,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       { kind: "item", progressText: "tool one" },
@@ -2325,7 +2313,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [
       { kind: "item", progressText: "tool one" },
@@ -2377,7 +2364,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     // Final reply lands, but terminalizing the card into its completed state fails.
     finalizeSlackPreviewEditMock.mockRejectedValueOnce(new Error("card edit failed"));
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
 
@@ -2399,7 +2385,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -2451,7 +2436,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [
       { kind: "item", progressText: "tool one" },
@@ -2481,7 +2465,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [
       {
@@ -2525,7 +2508,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
       finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
       mockedSlackStreamingMode = "progress";
-      mockedSlackDraftMode = "status_final";
       mockedDispatchSequence = [{ kind: "final", payload: { text: finalText } }];
       mockedReplyOptionEvents = [
         {
@@ -2559,7 +2541,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     deliverRepliesMock.mockRejectedValueOnce(new Error("final send failed"));
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
 
@@ -2588,7 +2569,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: "tool failed", isError: true } }];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
 
@@ -2612,7 +2592,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
     mockedDispatchError = new Error("agent dispatch failed");
@@ -2639,7 +2618,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(failedDraft).mockReturnValueOnce(silentDraft);
     finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
     mockedAgentRunTerminalOutcome = "failed";
@@ -3532,7 +3510,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       vi.useFakeTimers();
       mockedNativeStreaming = true;
       mockedSlackStreamingMode = "progress";
-      mockedSlackDraftMode = "status_final";
       mockedReplyOptionEvents = [
         { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
         { kind: "reasoning", text: "Checking the Slack handler", isReasoningSnapshot: true },
@@ -3708,7 +3685,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
     mockedNativeStreaming = true;
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [
       {
         kind: "tool_start",
@@ -3762,7 +3738,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
     mockedNativeStreaming = true;
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [{ kind: "item", progressText: "first tool" }];
     mockedDispatchSequence = [
       { kind: "final", payload: { text: "first answer" } },
@@ -3889,7 +3864,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       { kind: "item", progressText: "tool one" },
@@ -3913,7 +3887,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [{ kind: "item", progressText: "first turn" }];
 
     await dispatchPreparedSlackMessage(
@@ -3936,7 +3909,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [{ kind: "item", progressText: "first turn" }];
 
     await dispatchPreparedSlackMessage(
@@ -3959,7 +3931,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedReplyOptionEvents = [{ kind: "item", progressText: "first turn" }];
     mockedDispatchSequence = [
       { kind: "queued_followup" },
@@ -3984,7 +3955,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "silent turn" }];
 
@@ -4004,7 +3974,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "silent turn" }];
 
@@ -4034,7 +4003,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       { kind: "partial", text: "first chunk" },
@@ -4056,7 +4024,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedReplyOptionEvents = [
       { kind: "partial", text: "first chunk" },
       { kind: "assistant_start" },
@@ -4074,7 +4041,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "partial", text: "first reply" }];
 
@@ -4089,7 +4055,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4117,7 +4082,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4145,7 +4109,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
   it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
 
     await dispatchPreparedSlackMessage(
@@ -4162,7 +4125,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4219,7 +4181,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4248,7 +4209,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4282,7 +4242,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     const firstPreamble = "Checking the previous conversation before replying.";
     const latestPreamble =
@@ -4337,7 +4296,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedNativeStreaming = true;
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [
       {
@@ -4416,7 +4374,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedReplyOptionEvents = [
       {
@@ -4452,7 +4409,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4498,7 +4454,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4542,7 +4497,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4569,7 +4523,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       { kind: "reasoning", text: "Reading" },
@@ -4591,7 +4544,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       { kind: "reasoning", text: "Checking the first path" },
@@ -4621,7 +4573,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -4660,7 +4611,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       { kind: "item", progressText: "tool one" },
@@ -4682,7 +4632,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
   it("suppresses standalone Slack tool progress when partial preview lines are disabled", async () => {
     mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
 
     await dispatchPreparedSlackMessage(
