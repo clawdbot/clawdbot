@@ -2878,6 +2878,55 @@ describe("Claude session catalog", () => {
     expect(replaced).toBe(true);
   });
 
+  it("reports a partial catalog when a Desktop metadata read ends early", async () => {
+    const home = await createHome();
+    const desktopDir = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code-sessions",
+      "account",
+      "workspace",
+    );
+    const filePath = path.join(desktopDir, "local_active.json");
+    await fs.mkdir(desktopDir, { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ cliSessionId: "desktop-race", sessionId: "local-race" }),
+    );
+
+    const open = fs.open.bind(fs);
+    let readCalls = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === filePath) {
+        const realRead = handle.read.bind(handle);
+        Object.defineProperty(handle, "read", {
+          configurable: true,
+          value: (buffer: Buffer, offset: number, length: number, position: number) => {
+            readCalls += 1;
+            if (readCalls === 1) {
+              return { bytesRead: 0, buffer };
+            }
+            return realRead(buffer, offset, length, position);
+          },
+        });
+      }
+      return handle;
+    });
+
+    const page = await listLocalClaudeSessionPage({}, home);
+    expect(page).toMatchObject({
+      sessions: [],
+      error: {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: expect.stringContaining("changed while being read"),
+      },
+    });
+    expect(readCalls).toBe(1);
+  });
+
   it("preserves catalog JSON across short descriptor reads", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");

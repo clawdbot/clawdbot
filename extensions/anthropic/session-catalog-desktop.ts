@@ -135,6 +135,7 @@ async function readDesktopMetadata(
   homeDir: string,
   forceRefresh?: boolean,
   budget?: CatalogJsonReadBudget,
+  onIoFailure?: () => void,
 ): Promise<{
   available: boolean;
   customGroups: Map<string, string>;
@@ -165,6 +166,7 @@ async function readDesktopMetadata(
         }
         const raw = await readJsonFile(filePath, {
           budget,
+          onIoFailure,
           ...(reservedBytes !== undefined ? { reservedBytes } : {}),
         });
         if (!isRecord(raw)) {
@@ -210,6 +212,7 @@ export async function readDesktopOverlay(
   homeDir: string,
   forceRefresh?: boolean,
   budget?: CatalogJsonReadBudget,
+  onIoFailure?: () => void,
 ): Promise<DesktopOverlay> {
   const entry = desktopOverlays.get(homeDir);
   if (entry?.refreshing) {
@@ -217,7 +220,7 @@ export async function readDesktopOverlay(
       return entry.overlay;
     }
     await entry.overlay;
-    return readDesktopOverlay(homeDir, forceRefresh, budget);
+    return readDesktopOverlay(homeDir, forceRefresh, budget, onIoFailure);
   }
   const dirty = entry?.watch?.takeDirty();
   // Groups live in Local Storage outside this watch. Keep the 60s Desktop refresh even
@@ -246,7 +249,7 @@ export async function readDesktopOverlay(
       current.watch = undefined;
       return emptyDesktopOverlay;
     }
-    return readDesktopMetadata(homeDir, forceRefresh, budget);
+    return readDesktopMetadata(homeDir, forceRefresh, budget, onIoFailure);
   })().finally(() => {
     current.refreshing = false;
   });

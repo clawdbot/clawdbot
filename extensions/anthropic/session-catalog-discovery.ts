@@ -576,9 +576,12 @@ async function readMergedClaudeSessions(
   const budget = createCatalogJsonReadBudget();
   const snapshot = await readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options);
   const cli = await readCliScan(snapshot, options.forceRefresh, budget);
+  let desktopReadFailed = false;
   const desktop =
     options.includeDesktop !== false
-      ? await readDesktopOverlay(homeDir, options.forceRefresh, budget)
+      ? await readDesktopOverlay(homeDir, options.forceRefresh, budget, () => {
+          desktopReadFailed = true;
+        })
       : emptyDesktopOverlay;
   let overlays = mergedScans.get(cli);
   if (!overlays) {
@@ -592,7 +595,8 @@ async function readMergedClaudeSessions(
   }
   const skippedFiles = Math.max(cli.budget.skippedFiles, budget.skippedFiles);
   const racedFiles = Math.max(cli.budget.racedFiles, budget.racedFiles);
-  const complete = cli.context.complete && skippedFiles === 0 && racedFiles === 0;
+  const complete =
+    cli.context.complete && !desktopReadFailed && skippedFiles === 0 && racedFiles === 0;
   const error = complete
     ? undefined
     : {
