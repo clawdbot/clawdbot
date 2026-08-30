@@ -49,10 +49,7 @@ type PromptSubmissionSession = {
 
 type PromptActiveSession = (
   prompt: string,
-  options?: {
-    images?: ImageContent[];
-    preflightResult?: (submitted: boolean) => void;
-  },
+  options?: Parameters<AgentSession["prompt"]>[1],
 ) => Promise<void>;
 
 type SteeringLease = {
@@ -65,7 +62,11 @@ type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
-    "promptCacheKey" | "sessionId" | "sessionKey" | "userTurnTranscriptRecorder"
+    | "promptCacheKey"
+    | "sessionId"
+    | "sessionKey"
+    | "skipPreparedUserTurnMessage"
+    | "userTurnTranscriptRecorder"
   >;
   activeSession: PromptSubmissionSession;
   appendContext?: string;
@@ -89,6 +90,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  const userTurnRecorder = attempt.userTurnTranscriptRecorder;
+  const persistedUserIdempotencyKey =
+    attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
+      ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
+      : undefined;
   const normalizedReplayMessages = normalizeAssistantReplayContent(activeSession.messages);
   if (normalizedReplayMessages !== activeSession.messages) {
     activeSession.agent.state.messages = normalizedReplayMessages;
@@ -162,6 +168,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   try {
     if (input.runtimeOnly) {
       await input.promptActiveSession(input.transcriptPrompt, {
+        ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
         preflightResult: armModelPromptTransform,
       });
     } else {
@@ -172,6 +179,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       try {
         await input.promptActiveSession(input.transcriptPrompt, {
           ...(input.images.length > 0 ? { images: input.images } : {}),
+          ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
           preflightResult: armModelPromptTransform,
         });
       } finally {

@@ -238,6 +238,18 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         await this.checkCompaction(lastAssistant, false);
       }
 
+      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const activeTail = this.agent.state.messages.at(-1);
+      if (
+        persistedUserIdempotencyKey &&
+        activeTail?.role === "user" &&
+        activeTail.idempotencyKey === persistedUserIdempotencyKey
+      ) {
+        // Compaction can restore the durable current user after the runner removed its replay.
+        // The prompt below supplies that exact turn, so keep one provider-visible copy.
+        this.agent.state.messages = this.agent.state.messages.slice(0, -1);
+      }
+
       // Build messages array (custom message if any, then user message)
       messages = [];
 
