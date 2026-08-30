@@ -550,6 +550,31 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("dead-letters a stored row of an unrecognized shape without retry", async () => {
+    // A reader must treat a row it cannot name as permanently bad, not as work to
+    // retry. That is what keeps one unreadable row from holding up the lane's
+    // posts behind it, and it is the property a downgrade relies on when it meets
+    // a row a newer process wrote.
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "row-unknown-shape",
+        { version: 1, receivedAt: 1 } as MattermostIngressPayload,
+        { receivedAt: 1, laneKey: "channel:channel-1" },
+      );
+      const dispatch = vi.fn();
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect(
+          (await queue.enqueue("row-unknown-shape", {} as MattermostIngressPayload)).kind,
+        ).toBe("failed");
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("dead-letters a persisted authorless post without using broadcast recipient identity", async () => {
     await withQueue(async (queue) => {
       await queue.enqueue(

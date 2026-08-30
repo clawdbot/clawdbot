@@ -243,10 +243,22 @@ export function createMattermostIngressMonitor(options: {
         event.kind === "posted"
           ? { receivedAt, rawEvent: event.rawEvent }
           : { receivedAt, interaction: event.interaction },
-      deserialize: (body) =>
-        "rawEvent" in body
-          ? { kind: "posted", rawEvent: body.rawEvent }
-          : { kind: "interaction", interaction: body.interaction },
+      // Stored bytes become a typed event here, so a row naming neither shape is
+      // rejected now. Letting it through would surface later as a plain TypeError,
+      // which the drain reads as retryable — one unreadable row would then hold up
+      // every post queued behind it in the same lane.
+      deserialize: (body) => {
+        if ("rawEvent" in body) {
+          return { kind: "posted", rawEvent: body.rawEvent };
+        }
+        if (!("interaction" in body) || !isRecord(body.interaction)) {
+          throw new MattermostIngressPermanentError(
+            "invalid-event",
+            "Mattermost ingress row names neither a posted event nor an interaction.",
+          );
+        }
+        return { kind: "interaction", interaction: body.interaction };
+      },
       encode: ({ body }) => ({ version: MATTERMOST_INGRESS_PAYLOAD_VERSION, ...body }),
 
       decode: (payload) => ({
