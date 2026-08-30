@@ -348,8 +348,6 @@ export type EmbeddedRunAttemptResult = {
    * dynamic-tool output. Core validates this as a subset of toolMediaUrls.
    */
   hostOwnedToolMediaUrls?: string[];
-  /** @internal Exact built-in tool media whose contract requires source delivery. */
-  toolAutoDeliveryMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
   hasToolMediaBlockReply?: boolean;

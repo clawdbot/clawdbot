@@ -14,6 +14,7 @@ import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
+import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
@@ -387,7 +388,6 @@ export function completeEmbeddedAttemptResult(
     heartbeatToolResponse,
     lastToolError,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
-    toolAutoDeliveryMediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
     hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
@@ -481,8 +481,6 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
-    toolAutoDeliveryMediaUrls:
-      toolAutoDeliveryMediaUrls.length > 0 ? toolAutoDeliveryMediaUrls : undefined,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
     hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
@@ -497,8 +495,12 @@ export function completeEmbeddedAttemptResult(
     yieldDetected: state.yieldDetected || undefined,
     yieldAcknowledgment: state.yieldAcknowledgment,
   };
+  const resultWithAutoDeliveryMedia =
+    toolAutoDeliveryMediaUrls.length > 0
+      ? markCoreTtsAttemptResult(result, toolAutoDeliveryMediaUrls)
+      : result;
   return finalizeEmbeddedAttempt({
-    result,
+    result: resultWithAutoDeliveryMedia,
     trajectoryRecorder: input.trajectoryRecorder,
     deferredLifecycleOwner: input.deferredLifecycleOwner,
     synthesizedPayloadCount,

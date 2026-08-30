@@ -1,6 +1,8 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -72,6 +74,7 @@ function attemptResult(
 async function prepareAttempt(input: {
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
   currentAttemptCompletedAssistant?: AssistantMessage;
+  sourceReplyDeliveryMode?: "message_tool_only";
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -84,6 +87,9 @@ async function prepareAttempt(input: {
       prompt: "hi",
       trigger: "user",
       timeoutMs: 60_000,
+      ...(input.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
+        : {}),
     },
     attempt: input.attempt,
     currentAttemptCompletedAssistant: input.currentAttemptCompletedAssistant,
@@ -103,6 +109,59 @@ async function prepareAttempt(input: {
 describe("prepareEmbeddedRunTerminal", () => {
   beforeEach(() => {
     payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
+  });
+
+  it.each([
+    {
+      name: "core-attested delivered media",
+      attestedMediaUrls: ["/tmp/reply.opus"],
+      forgePublicField: false,
+      expectedMarkedMedia: ["/tmp/reply.opus"],
+    },
+    {
+      name: "an external harness field",
+      attestedMediaUrls: [],
+      forgePublicField: true,
+      expectedMarkedMedia: [],
+    },
+    {
+      name: "core-attested but non-delivered media",
+      attestedMediaUrls: ["/tmp/other.opus"],
+      forgePublicField: false,
+      expectedMarkedMedia: [],
+    },
+  ])("accepts only $name for source-suppression delivery", async (testCase) => {
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" },
+    ]);
+    const attempt = attemptResult({
+      toolMediaUrls: ["/tmp/reply.opus"],
+      toolAudioAsVoice: true,
+      toolTrustedLocalMedia: true,
+    });
+    if (testCase.attestedMediaUrls.length > 0) {
+      markCoreTtsAttemptResult(attempt, testCase.attestedMediaUrls);
+    }
+    if (testCase.forgePublicField) {
+      Reflect.set(attempt, "toolAutoDeliveryMediaUrls", ["/tmp/reply.opus"]);
+    }
+
+    const prepared = await prepareAttempt({
+      attempt,
+      sourceReplyDeliveryMode: "message_tool_only",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+    const markedMedia = (prepared.payloadsWithToolMedia ?? []).filter(
+      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    );
+
+    expect(markedMedia.flatMap((payload) => payload.mediaUrls ?? [])).toEqual(
+      testCase.expectedMarkedMedia,
+    );
+    expect(markedMedia.every((payload) => !payload.text)).toBe(true);
   });
 
   it.each(["error", "aborted"] as const)(

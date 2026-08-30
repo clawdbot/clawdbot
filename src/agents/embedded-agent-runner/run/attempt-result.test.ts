@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -330,15 +331,21 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+    const autoDeliveryResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+    });
     expect(
-      completeResult({ toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"] }).toolAutoDeliveryMediaUrls,
+      getCoreTtsAttemptResultMediaUrls(autoDeliveryResult, autoDeliveryResult.toolMediaUrls),
     ).toEqual(["/tmp/reply.opus"]);
+    const alreadySentResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+      messagingToolSentMediaUrls: ["/tmp/reply.opus"],
+    });
     expect(
-      completeResult({
-        toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
-        messagingToolSentMediaUrls: ["/tmp/reply.opus"],
-      }).toolAutoDeliveryMediaUrls,
-    ).toBeUndefined();
+      getCoreTtsAttemptResultMediaUrls(alreadySentResult, alreadySentResult.toolMediaUrls),
+    ).toEqual([]);
   });
 
   it("projects the latest MCP App channel view without result data", () => {

@@ -5,6 +5,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { markCoreTtsAttemptResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   attemptTerminal,
   type AttemptFailureSource,
@@ -188,7 +189,7 @@ export function buildCodexAttemptResult(
   const toolAutoDeliveryMediaUrls = input.toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
     (url) => !sentMediaUrls.has(url.trim()),
   );
-  return {
+  const result = {
     terminal: attemptTerminal.normalize({
       aborted: input.aborted,
       promptError,
@@ -222,10 +223,6 @@ export function buildCodexAttemptResult(
     hostOwnedToolMediaUrls: input.generatedMediaProjection.buildHostOwnedMediaUrls(
       input.toolTelemetry,
     ),
-    toolAutoDeliveryMediaUrls:
-      toolAutoDeliveryMediaUrls && toolAutoDeliveryMediaUrls.length > 0
-        ? toolAutoDeliveryMediaUrls
-        : undefined,
     toolAudioAsVoice: input.toolTelemetry.toolAudioAsVoice,
     successfulCronAdds: input.toolTelemetry.successfulCronAdds,
     acceptedSessionSpawns: input.toolTelemetry.acceptedSessionSpawns,
@@ -248,4 +245,7 @@ export function buildCodexAttemptResult(
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
   };
+  return toolAutoDeliveryMediaUrls && toolAutoDeliveryMediaUrls.length > 0
+    ? markCoreTtsAttemptResult(result, toolAutoDeliveryMediaUrls)
+    : result;
 }

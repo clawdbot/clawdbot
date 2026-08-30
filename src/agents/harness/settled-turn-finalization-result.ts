@@ -112,7 +112,6 @@ export function projectSettledTurnFinalizationAttemptResult(
     result.heartbeatToolResponse ||
     (result.toolMediaUrls?.length ?? 0) > 0 ||
     (result.hostOwnedToolMediaUrls?.length ?? 0) > 0 ||
-    (result.toolAutoDeliveryMediaUrls?.length ?? 0) > 0 ||
     result.toolAudioAsVoice ||
     result.toolTrustedLocalMedia ||
     result.hasToolMediaBlockReply ||

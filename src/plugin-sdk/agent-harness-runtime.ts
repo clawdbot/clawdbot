@@ -233,7 +233,6 @@ export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../agents/embedded-agent-tool-media.js";
-export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export {
   extractToolErrorMessage,
   sanitizeToolResult,
