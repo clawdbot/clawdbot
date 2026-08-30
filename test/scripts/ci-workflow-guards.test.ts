@@ -4598,8 +4598,11 @@ server.listen(0, "127.0.0.1", () => {
         TARGET_REQUIRED_SCRIPT: "${{ matrix.target_script || '' }}",
       },
     });
-    expect(repoE2eSteps[repoE2eIndex]?.run).toContain("selected target does not provide");
-    expect(repoE2eSteps[repoE2eIndex]?.run).toContain("${{ matrix.command }}");
+    const repoE2eRun = repoE2eSteps[repoE2eIndex]?.run;
+    expect(repoE2eRun).toContain("OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+    expect(repoE2eRun).toContain("Selected target does not provide required repo E2E capability");
+    expect(repoE2eRun).toContain("selected target does not provide this newer repo E2E capability");
+    expect(repoE2eRun).toContain("${{ matrix.command }}");
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );

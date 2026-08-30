@@ -1107,6 +1107,10 @@ jobs:
             const packageJson = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
             if (typeof packageJson.scripts?.[process.argv[1]] !== "string") process.exit(1);
           ' "$TARGET_REQUIRED_SCRIPT"; then
+            if [[ "$OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" != "1" ]]; then
+              echo "::error::Selected target does not provide required repo E2E capability: $TARGET_REQUIRED_SCRIPT."
+              exit 1
+            fi
             echo "::notice::Skipping $TARGET_REQUIRED_SCRIPT: selected target does not provide this newer repo E2E capability."
             exit 0
           fi
