@@ -153,13 +153,27 @@ fixtures but excludes the expensive `sqlite-volume` scenario. Use
 
 The `sqlite-volume` scenario combines configured Matrix, Discord, and Telegram
 plugin/channel state with 4,800 sessions, 23,890 transcript events, and 2,200
-cron crawl jobs by default. It verifies exact JSONL-to-SQLite and cron migration,
-legacy archival, database integrity, a second idempotent Doctor run, and Gateway
-startup. Scale it with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
+cron crawl jobs by default. For baselines that expose the plugin-state SDK, it
+uses that installed SDK to create the released shared database and write 512
+permanent records across two namespaces, then checks that every stored value
+and timestamp survives. Older baselines without that API explicitly report
+this part as not applicable. It also seeds account-scoped pairing requests and
+allowlists, plus workspace identity, instructions, and memory files. It verifies
+exact JSONL-to-SQLite and cron migration, legacy archival, database integrity,
+account isolation, and workspace contents immediately after the update, before
+any standalone Doctor repair can hide an incomplete migration. It then reads
+sampled conversations through Gateway RPC, runs an idempotent Doctor pass, and
+repeats the history and preservation checks after a Gateway restart.
+
+This is a package-update test inside Docker. It does not prove container image
+replacement or background update campaigns; see [Updating](/install/updating)
+for those separate entry points. A required plugin capability consent remains
+an explicit recovery step and is recorded in the survivor summary.
+
+Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. The default Doctor budgets are 120
-seconds for migration and 60 seconds for the idempotent pass; override them with
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS` and
+`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. The default budget for the
+idempotent Doctor pass is 60 seconds; override it with
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` on slower hosts.
 
 Full update migration is intentionally separate from Full Release CI. Use the
