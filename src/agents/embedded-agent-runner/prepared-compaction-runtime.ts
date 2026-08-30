@@ -477,6 +477,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         ? resolveChannelReactionGuidance({
             cfg: params.config,
             channel: runtimeChannel,
+            chatType: params.chatType,
             accountId: params.agentAccountId,
           })
         : undefined;
