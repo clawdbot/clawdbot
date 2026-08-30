@@ -76,7 +76,6 @@ import {
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   readAndCloseControlUiFile,
-  readAndCloseControlUiFileText,
   resolveControlUiHtmlEncoding,
   resolveOpenedControlUiRepresentation,
   respondControlUiNotAcceptable,
@@ -1043,7 +1042,7 @@ export async function handleControlUiHttpRequest(
           fs.closeSync(safeFile.fd);
         }
       }
-      const body = await readAndCloseControlUiFileText(safeFile.fd);
+      const body = (await readAndCloseControlUiFile(safeFile)).toString("utf8");
       await serveResolvedIndexHtml(
         req,
         res,
@@ -1087,7 +1086,7 @@ export async function handleControlUiHttpRequest(
         fs.closeSync(representation.bodyFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
+    const body = await readAndCloseControlUiFile(representation.bodyFile);
     await serveControlUiAsset(res, representation.contentPath, body, {
       immutable: immutableAsset,
       encoding: representation.encoding,
@@ -1129,7 +1128,7 @@ export async function handleControlUiHttpRequest(
         fs.closeSync(safeIndex.fd);
       }
     }
-    const body = await readAndCloseControlUiFileText(safeIndex.fd);
+    const body = (await readAndCloseControlUiFile(safeIndex)).toString("utf8");
     await serveResolvedIndexHtml(
       req,
       res,

@@ -111,6 +111,53 @@ afterEach(async () => {
 });
 
 describe("agent execution respects prepared secret owners", () => {
+  it("reads active config without copying reload-only plugin metadata", async () => {
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { defaults: { workspace: "/fixture/workspace" } },
+    };
+    const facts = createConfigResolutionFacts([]);
+    setConfigResolutionFacts(config, facts);
+    const manifestRegistry = {
+      plugins: [
+        {
+          id: "refresh-context-fixture",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "bundled" as const,
+          rootDir: "/fixture/plugin",
+          source: "/fixture/plugin/index.js",
+          manifestPath: "/fixture/plugin/openclaw.plugin.json",
+        },
+      ],
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      includeAuthStoreRefs: false,
+      manifestRegistry,
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+    const active = getActiveSecretsRuntimeConfigSnapshot();
+    const revision = getRuntimeConfigSnapshotMetadata()?.revision;
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    const result = await resolveAgentRuntimeConfig(runtime);
+
+    expect(result.cfg).toBe(active?.config);
+    expect(result.loadedRaw).toBe(result.cfg);
+    expect(result.sourceConfig).toEqual(config);
+    expect(result.sourceConfig).not.toBe(active?.sourceConfig);
+    expect(getConfigResolutionFacts(result.sourceConfig)).toBe(facts);
+    result.sourceConfig.agents!.defaults!.workspace = "/fixture/changed-by-caller";
+    expect(active?.sourceConfig.agents?.defaults?.workspace).toBe("/fixture/workspace");
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(revision);
+    expect(clone).not.toHaveBeenCalledWith(manifestRegistry);
+  });
+
   it.each(["reply", "agent"] as const)(
     "%s starts with a healthy provider while an unrelated explicit provider ref is cold",
     async (entry) => {
