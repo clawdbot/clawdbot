@@ -8,6 +8,10 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import type {
+  SubagentAdminKillResult,
+  TaskRegistryControlRuntime,
+} from "../../../tasks/task-registry-control.types.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
@@ -540,30 +544,10 @@ export async function killControlledSubagentRun(params: {
   );
 }
 
-type SubagentAdminKillResult =
-  | { found: false; killed: false }
-  | {
-      found: true;
-      killed: boolean;
-      runId: string;
-      sessionKey: string;
-      cascadeKilled: number;
-      cascadeLabels?: string[];
-      targetState?: ReturnType<typeof resolveSubagentKillTargetState>;
-      error?: string;
-    };
-
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */
-export async function killSubagentRunAdmin(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-  expectedRunId?: string;
-  expectedGeneration?: number;
-  expectedOwnerKey?: string;
-  /** Consume the result synchronously while its exact run ownership is still held. */
-  onResult?: (result: SubagentAdminKillResult) => undefined;
-}): Promise<SubagentAdminKillResult> {
+export async function killSubagentRunAdmin(
+  params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
+): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
     if (params.onResult?.(result) !== undefined) {
       throw new TypeError("Subagent cancellation publication must be synchronous.");

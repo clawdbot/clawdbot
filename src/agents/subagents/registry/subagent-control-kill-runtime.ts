@@ -17,10 +17,8 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import {
-  SUBAGENT_KILL_TASK_ERROR,
-  type DetachedTaskTerminalState,
-} from "../../../tasks/detached-task-runtime-contract.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import type { SubagentKillTargetState } from "../../../tasks/task-registry-control.types.js";
 import { isCurrentSubagentRun } from "./subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
@@ -38,10 +36,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const subagentKillRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
 );
-
-type SubagentKillTargetState =
-  | { state: "finalizing" }
-  | { state: "terminal"; task: DetachedTaskTerminalState };
 
 export function resolveSubagentKillTargetState(
   entry: SubagentRunRecord,
