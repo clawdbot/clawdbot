@@ -131,6 +131,14 @@ const selectedGlobalSessions = {
   ],
 };
 
+const workGlobalSession = {
+  ...selectedGlobalSessions.sessions[0],
+  agentId: "work",
+  sessionId: "session:work:global",
+  contextTokens: 300_000,
+  totalTokens: 90_000,
+};
+
 const claudeSubscriptionAuthStatus = {
   ts: baseTime,
   providers: [
@@ -496,7 +504,17 @@ suite.define(() => {
               { match: { agentId: "work" }, response: agentAuthStatus("work") },
             ],
           },
-          "sessions.list": selectedGlobalSessions,
+          "sessions.list": {
+            // Static rows seed Main; response cases never seed canonical fixture state.
+            ...selectedGlobalSessions,
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: { ...selectedGlobalSessions, sessions: [workGlobalSession] },
+              },
+              { response: selectedGlobalSessions },
+            ],
+          },
           // A Work main alias resolves to Work's canonical global history on
           // the Gateway; it must not borrow the Main-owned list projection.
           "chat.startup": {
@@ -505,14 +523,8 @@ suite.define(() => {
                 match: { sessionKey: "agent:work:main", agentId: "work" },
                 response: {
                   messages: [],
-                  sessionId: "session:work:global",
-                  sessionInfo: {
-                    ...selectedGlobalSessions.sessions[0],
-                    agentId: "work",
-                    sessionId: "session:work:global",
-                    contextTokens: 300_000,
-                    totalTokens: 90_000,
-                  },
+                  sessionId: workGlobalSession.sessionId,
+                  sessionInfo: workGlobalSession,
                 },
               },
             ],
