@@ -199,20 +199,20 @@ function shouldSuppressSaturatedSession(ownerKey: string, requestKey: string): b
   return false;
 }
 
-function discardQueuedBurst(headOwnerKey: string): void {
-  if (queue.size === 0) {
+function discardQueuedOwner(ownerKey: string): void {
+  let discarded = false;
+  for (const [key, item] of queue) {
+    if (item.ownerKey === ownerKey) {
+      queue.delete(key);
+      discarded = true;
+    }
+  }
+  if (!discarded) {
     return;
   }
-  // Every discarded pane must share the cooldown. Otherwise its next ordinary
-  // repaint immediately reconstructs the backlog that this failure terminated.
-  const ownerKeys = new Set([headOwnerKey]);
-  for (const item of queue.values()) {
-    ownerKeys.add(item.ownerKey);
-  }
-  queue.clear();
-  for (const ownerKey of ownerKeys) {
-    saturateSession(ownerKey, null);
-  }
+  // Cool down only the failed owner. Other sessions can resolve through a
+  // different utility model and must retain their independently queued work.
+  saturateSession(ownerKey, null);
 }
 
 function countSessionWork(ownerKey: string): number {
@@ -424,7 +424,7 @@ async function flushTitleQueue(generation: number): Promise<void> {
       }
     }
     if (!changed) {
-      discardQueuedBurst(head.ownerKey);
+      discardQueuedOwner(head.ownerKey);
       return;
     }
     notifyTitlesChanged();
@@ -437,7 +437,7 @@ async function flushTitleQueue(generation: number): Promise<void> {
     for (const item of batch) {
       storeFailure(item.key);
     }
-    discardQueuedBurst(head.ownerKey);
+    discardQueuedOwner(head.ownerKey);
   } finally {
     for (const item of batch) {
       if (pendingKeys.get(item.key) === item) {

@@ -454,7 +454,7 @@ describe("title fetch batching", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("settles unusable title responses without draining queued backlog", async () => {
+  it("settles unusable title responses without discarding another session", async () => {
     vi.useFakeTimers();
     const responses: unknown[] = [
       undefined,
@@ -463,11 +463,22 @@ describe("title fetch batching", () => {
       new Error("gateway unavailable"),
     ];
     for (const [caseIndex, response] of responses.entries()) {
-      const request = vi.fn(async () => {
-        if (response instanceof Error) {
-          throw response;
+      const request = vi.fn(async (_method: string, params: unknown) => {
+        const requestParams = params as {
+          sessionKey: string;
+          items: Array<{ id: string }>;
+        };
+        if (requestParams.sessionKey === "agent:a:main") {
+          if (response instanceof Error) {
+            throw response;
+          }
+          return response;
         }
-        return response;
+        return {
+          titles: Object.fromEntries(
+            requestParams.items.map((item) => [item.id, "Other session title"]),
+          ),
+        };
       });
       const client = { request } as unknown as GatewayBrowserClient;
       configureToolTitleFetcher({
@@ -483,20 +494,17 @@ describe("title fetch batching", () => {
         client,
         sessionKey: "agent:b:main",
       });
-      getToolCallTitle("bash", {
+      const otherSessionArgs = {
         command: `pnpm test ui/src/pages/chat --unusable-${caseIndex}-other-session`,
-      });
-      await vi.advanceTimersByTimeAsync(250);
+      };
+      getToolCallTitle("bash", otherSessionArgs);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(
+        request.mock.calls.map((call) => (call[1] as { sessionKey: string }).sessionKey),
+      ).toEqual(["agent:a:main", "agent:b:main"]);
+      expect(getToolCallTitle("bash", otherSessionArgs)).toBe("Other session title");
       expect(vi.getTimerCount()).toBe(0);
-      configureToolTitleFetcher({
-        client,
-        sessionKey: "agent:b:main",
-      });
-      getToolCallTitle("bash", {
-        command: `pnpm test ui/src/pages/chat --unusable-follow-up-${caseIndex}`,
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(2);
       configureToolTitleFetcher({ client: null, sessionKey: null });
     }
   });
