@@ -1172,7 +1172,6 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
 
-  let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let streamedAssistantText = "";
@@ -1287,11 +1286,6 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      if (!wroteRole) {
-        wroteRole = true;
-        writeAssistantRoleChunk(res, streamIdentity);
-      }
-
       sawAssistantDelta = true;
       writeAssistantContentChunk(res, {
         ...streamIdentity,
@@ -1348,7 +1342,6 @@ export async function handleOpenAiHttpRequest(
     releaseStreamRootWork();
   });
 
-  wroteRole = true;
   writeAssistantRoleChunk(res, streamIdentity);
 
   void (async () => {
@@ -1398,10 +1391,6 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        if (!wroteRole) {
-          wroteRole = true;
-          writeAssistantRoleChunk(res, streamIdentity);
-        }
         if (!sawAssistantDelta) {
           // Final payloads own held prose; snapshots may replace provisional deltas.
           const commentary =
@@ -1425,11 +1414,6 @@ export async function handleOpenAiHttpRequest(
       }
 
       if (!sawAssistantDelta) {
-        if (!wroteRole) {
-          wroteRole = true;
-          writeAssistantRoleChunk(res, streamIdentity);
-        }
-
         const content =
           resolveAgentResponseCommentary(result) ||
           bufferedReplaceableAssistantContent ||
