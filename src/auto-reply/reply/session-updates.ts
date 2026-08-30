@@ -239,6 +239,9 @@ export async function incrementCompactionCount(params: {
     InternalSessionEntry,
     "sessionId" | "lifecycleRevision" | "activeWriterRunId"
   >;
+  transcriptByteCompactionLatch?: NonNullable<
+    InternalSessionEntry["transcriptByteCompactionLatch"]
+  >;
   authorize?: () => boolean;
 }): Promise<number | undefined> {
   const { sessionStore, sessionKey, storePath, authorize } = params;
@@ -257,7 +260,7 @@ export async function incrementCompactionCount(params: {
   };
   const incrementBy = Math.max(0, params.amount ?? 1);
   const tokensAfter = resolveNonNegativeTokenCount(params.tokensAfter);
-  const update = (current: InternalSessionEntry): Partial<SessionEntry> | null => {
+  const update = (current: InternalSessionEntry): Partial<InternalSessionEntry> | null => {
     if (
       !(authorize?.() ?? true) ||
       current.sessionId !== expected.sessionId ||
@@ -267,8 +270,9 @@ export async function incrementCompactionCount(params: {
       return null;
     }
     // The writer-serialized row owns the count, not the caller's pre-await cache.
-    const patch: Partial<SessionEntry> = {
+    const patch: Partial<InternalSessionEntry> = {
       compactionCount: (current.compactionCount ?? 0) + incrementBy,
+      transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
       updatedAt: params.now ?? Date.now(),
       ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
     };
