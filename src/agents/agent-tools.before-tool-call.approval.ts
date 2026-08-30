@@ -39,20 +39,21 @@ import { callGatewayTool } from "./tools/gateway.js";
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 const log = createSubsystemLogger("agents/tools");
 
-/**
- * Terminal denial feedback for plugin approvals. Mirrors the exec-approval
- * denied follow-up semantics (bash-tools.exec-approval-followup.ts) so the
- * agent treats a user denial as final: the tool call did not run, the approval
- * request is closed and cannot be re-approved (the agent must not mention
- * approval commands), and the call must not be retried. If the user still
- * wants the action, a new tool call triggers a fresh approval request.
- */
-const PLUGIN_APPROVAL_DENIED_REASON = [
-  "Denied by user. The tool call did not run.",
-  "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
-  "Do not run the tool call again or ask the user to approve it again.",
-  "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
-].join("\n");
+function pluginApprovalDeniedOutcome(baseParams: unknown): HookOutcome {
+  return {
+    blocked: true,
+    kind: "failure",
+    disposition: "blocked",
+    deniedReason: "plugin-approval",
+    reason: [
+      "Denied by user. The tool call did not run.",
+      "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
+      "Do not run the tool call again or ask the user to approve it again.",
+      "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
+    ].join("\n"),
+    params: baseParams,
+  };
+}
 
 function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): number {
   if (
@@ -246,14 +247,7 @@ async function requestPluginToolApproval(params: {
         };
       }
       if (resolution === PluginApprovalResolutions.DENY) {
-        return {
-          blocked: true,
-          kind: "failure",
-          disposition: "blocked",
-          deniedReason: "plugin-approval",
-          reason: PLUGIN_APPROVAL_DENIED_REASON,
-          params: params.baseParams,
-        };
+        return pluginApprovalDeniedOutcome(params.baseParams);
       }
       // Veto carries the plugin-supplied reason; plain timeouts record a
       // timed_out failure disposition for the audit ledger.
@@ -409,14 +403,7 @@ async function requestPluginToolApproval(params: {
       };
     }
     if (resolution === PluginApprovalResolutions.DENY) {
-      return {
-        blocked: true,
-        kind: "failure",
-        disposition: "blocked",
-        deniedReason: "plugin-approval",
-        reason: PLUGIN_APPROVAL_DENIED_REASON,
-        params: params.baseParams,
-      };
+      return pluginApprovalDeniedOutcome(params.baseParams);
     }
     const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
     const timeoutReason =
