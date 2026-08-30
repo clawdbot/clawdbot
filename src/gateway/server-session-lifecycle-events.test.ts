@@ -38,7 +38,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
   });
 
-  it("projects swarm phase and log payload fields", () => {
+  it.each(["phase", "log"] as const)("projects swarm %s payload fields", (kind) => {
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
@@ -50,15 +50,15 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionKey: "agent:main:main",
       reason: "swarm-note",
       swarmGroupId: "swarm:agent:main:main:run-1",
-      kind: "phase",
+      kind,
       text: "Research",
-    } as never);
+    });
 
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       expect.objectContaining({
         swarmGroupId: "swarm:agent:main:main:run-1",
-        kind: "phase",
+        kind,
         text: "Research",
       }),
       new Set(["conn-1"]),

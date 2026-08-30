@@ -166,15 +166,19 @@ public enum OpenClawChatGatewayRequests {
 
     public static func resolveQuestion(
         id: String,
-        answers: [String: [String]]) -> OpenClawChatGatewayRequest
+        answers: [String: [String]],
+        secretStoreAllowedHosts: [String]? = nil) -> OpenClawChatGatewayRequest
     {
-        let values = answers.mapValues(AnyCodable.init)
+        var params: [String: AnyCodable] = [
+            "id": AnyCodable(id),
+            "answers": AnyCodable(["answers": answers]),
+        ]
+        if let secretStoreAllowedHosts {
+            params["secretStoreAllowedHosts"] = AnyCodable(secretStoreAllowedHosts)
+        }
         return OpenClawChatGatewayRequest(
             method: "question.resolve",
-            params: [
-                "id": AnyCodable(id),
-                "answers": AnyCodable(values),
-            ],
+            params: params,
             timeoutMs: self.mutationTimeoutMs)
     }
 

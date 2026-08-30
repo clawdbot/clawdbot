@@ -24,7 +24,7 @@ function fixture() {
   onTestFinished(() => bridge.dispose());
   const enabled = new Set<string>();
   const held: number[] = [];
-  let hold = false;
+  let heldMethod: string | undefined;
   let accessAllowed = true;
   let contextOffset = -10;
   const extension = wireExtension(bridge, (msg) => {
@@ -51,13 +51,13 @@ function fixture() {
             msg.sessionId,
           );
         }
-        if (hold) {
-          held.push(msg.seq);
-          return null;
-        }
       }
       if (msg.method === "Runtime.disable") {
         enabled.delete(key);
+      }
+      if (msg.method === heldMethod) {
+        held.push(msg.seq);
+        return null;
       }
     }
     return { type: "result", seq: msg.seq, result: {} };
@@ -136,11 +136,11 @@ function fixture() {
     revokeAccess: () => {
       accessAllowed = false;
     },
-    hold: () => {
-      hold = true;
+    hold: (method = "Runtime.enable") => {
+      heldMethod = method;
     },
     release: () => {
-      hold = false;
+      heldMethod = undefined;
       for (const seq of held.splice(0)) {
         extension.handlers.onMessage(JSON.stringify({ type: "result", seq, result: {} }));
       }
@@ -739,7 +739,9 @@ describe("relay logical Runtime subscriptions", () => {
       const f = fixture();
       const client = f.client();
       const root = await client.attach();
-      await f.client().attach();
+      const peer = f.client();
+      const peerRoot = await peer.attach();
+      await peer.request("Runtime.enable", peerRoot);
       expect(
         (await client.request("Runtime.addBinding", root, { name: "relayBinding" })).error,
       ).toBeUndefined();
@@ -754,12 +756,157 @@ describe("relay logical Runtime subscriptions", () => {
         method: "Runtime.bindingCalled",
         params,
       });
+      expect(
+        peer.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toEqual([]);
       await client.request("Target.detachFromTarget", undefined, { sessionId: root });
       const before = client.socket.frames().length;
       f.event("Runtime.bindingCalled", params);
       expect(client.socket.frames()).toHaveLength(before);
     },
   );
+
+  it.each(["Runtime.removeBinding", "Target.detachFromTarget", "socket close"])(
+    "preserves a peer's same-name binding after %s and removes the final native registration",
+    async (operation) => {
+      const f = fixture();
+      const first = f.client();
+      const firstRoot = await first.attach();
+      const second = f.client();
+      const secondRoot = await second.attach();
+      const observer = f.client();
+      const observerRoot = await observer.attach();
+      const name = "sharedBinding";
+      for (const [client, root] of [
+        [first, firstRoot],
+        [second, secondRoot],
+      ] as const) {
+        expect((await client.request("Runtime.addBinding", root, { name })).error).toBeUndefined();
+      }
+      await observer.request("Runtime.removeBinding", observerRoot, { name });
+      expect(f.commands("Runtime.removeBinding")).toHaveLength(0);
+      if (operation === "socket close") {
+        first.handlers.onClose();
+        await flush();
+      } else if (operation === "Target.detachFromTarget") {
+        await first.request(operation, undefined, { sessionId: firstRoot });
+      } else {
+        await first.request(operation, firstRoot, { name });
+      }
+      expect(f.commands("Runtime.removeBinding")).toHaveLength(0);
+      const params = { name, payload: "still-owned", executionContextId: 1 };
+      f.event("Runtime.bindingCalled", params);
+      expect(
+        first.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toEqual([]);
+      expect(
+        observer.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toEqual([]);
+      expect(
+        second.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toEqual([{ sessionId: secondRoot, method: "Runtime.bindingCalled", params }]);
+      await second.request("Runtime.removeBinding", secondRoot, { name });
+      expect(f.commands("Runtime.removeBinding").map((frame) => frame.params)).toEqual([{ name }]);
+      f.event("Runtime.bindingCalled", params);
+      expect(
+        second.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each([false, true])(
+    "cleans up a native add admitted after logical close (peer owns same name=%s)",
+    async (sameName) => {
+      const f = fixture();
+      const first = f.client();
+      const firstRoot = await first.attach();
+      const second = f.client();
+      const secondRoot = await second.attach();
+      const name = "pendingBinding";
+      if (sameName) {
+        await second.request("Runtime.addBinding", secondRoot, { name });
+      }
+      f.hold("Runtime.addBinding");
+      const pending = first.send("Runtime.addBinding", firstRoot, { name });
+      await flush();
+      first.handlers.onClose();
+      f.release();
+      await flush();
+      expect(first.socket.frames().find((frame) => frame.id === pending)).toBeUndefined();
+      expect(f.commands("Runtime.removeBinding")).toHaveLength(sameName ? 0 : 1);
+      const params = { name, payload: "after-close", executionContextId: 1 };
+      f.event("Runtime.bindingCalled", params);
+      expect(
+        first.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toEqual([]);
+      expect(
+        second.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toHaveLength(sameName ? 1 : 0);
+    },
+  );
+
+  it.each(["Runtime.addBinding", "Runtime.removeBinding"])(
+    "preserves acknowledged binding ownership when native %s fails",
+    async (method) => {
+      const f = fixture();
+      const client = f.client();
+      const root = await client.attach();
+      const name = "failedBinding";
+      if (method === "Runtime.removeBinding") {
+        await client.request("Runtime.addBinding", root, { name });
+      }
+      f.hold(method);
+      const pending = client.send(method, root, { name });
+      await flush();
+      f.extension.handlers.onMessage(
+        JSON.stringify({
+          type: "error",
+          seq: f.commands(method).at(-1)!.seq,
+          message: "native binding command failed",
+        }),
+      );
+      await flush();
+      expect(client.socket.frames().find((frame) => frame.id === pending)?.error).toBeDefined();
+      f.release();
+      f.event("Runtime.bindingCalled", { name, payload: "failure", executionContextId: 1 });
+      expect(
+        client.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toHaveLength(method === "Runtime.removeBinding" ? 1 : 0);
+      expect((await client.request(method, root, { name })).error).toBeUndefined();
+      f.event("Runtime.bindingCalled", { name, payload: "retry", executionContextId: 1 });
+      expect(
+        client.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("keeps a replacement physical session independent of pending retired bindings", async () => {
+    const f = fixture();
+    const client = f.client();
+    const root = await client.attach();
+    const name = "retiredBinding";
+    f.hold("Runtime.addBinding");
+    client.send("Runtime.addBinding", root, { name });
+    await flush();
+    f.extension.handlers.onMessage(
+      JSON.stringify({ type: "detached", tabId: 1, reason: "revoked" }),
+    );
+    f.release();
+    await flush();
+    const next = await client.attach();
+    expect(next).not.toBe(root);
+    const params = { name, payload: "replacement", executionContextId: 11 };
+    f.event("Runtime.bindingCalled", params);
+    expect(
+      client.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+    ).toEqual([]);
+    await client.request("Runtime.addBinding", next, { name });
+    f.event("Runtime.bindingCalled", params);
+    expect(
+      client.socket.frames().filter((frame) => frame.method === "Runtime.bindingCalled"),
+    ).toEqual([{ sessionId: next, method: "Runtime.bindingCalled", params }]);
+    expect(f.commands("Runtime.removeBinding")).toHaveLength(0);
+  });
 
   it("keeps a concurrent admission alive when another enable for the same logical owner fails", async () => {
     const f = fixture();

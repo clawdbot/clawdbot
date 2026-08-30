@@ -3,8 +3,9 @@ import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
+import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, type BeamStoredSession } from "./types.js";
+import { BEAM_HOST_ID, BEAM_SESSION_SHARE_ROUTE, type BeamStoredSession } from "./types.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -31,6 +32,9 @@ function transcriptItems(session: BeamStoredSession): SessionCatalogTranscriptIt
     type: item.type,
     text: item.text,
     timestamp: session.updatedAt,
+    ...(item.type === "userMessage" && session.uploaderProfileId
+      ? { sender: { identity: { type: "profile" as const, id: session.uploaderProfileId } } }
+      : {}),
   }));
 }
 
@@ -77,7 +81,8 @@ function transcriptPage(
   const end = Math.min(items.length, Math.max(0, cursor?.end ?? items.length));
   const start = Math.max(0, end - limit);
   return {
-    items: items.slice(start, end),
+    // Uploads are chronological; catalog pages expose newest items first.
+    items: items.slice(start, end).toReversed(),
     ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
   };
 }
@@ -86,12 +91,24 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
   return {
     id: "beam",
     label: "Beam",
+    shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {
       const search = params.search?.trim().toLowerCase();
+      const shareId =
+        search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
       const sessions = (await store.list())
-        .filter((session) => !search || searchableText(session).includes(search))
-        .toSorted((left, right) => right.receivedAt - left.receivedAt);
+        .filter(
+          (session) =>
+            !search ||
+            (shareId
+              ? session.beamId.startsWith(shareId)
+              : searchableText(session).includes(search)),
+        )
+        .toSorted(
+          (left, right) =>
+            right.receivedAt - left.receivedAt || left.beamId.localeCompare(right.beamId),
+        );
       const offset = cursorOffset(params.cursors?.[BEAM_HOST_ID]);
       const limit = boundedLimit(params.limitPerHost);
       const page = sessions.slice(offset, offset + limit);

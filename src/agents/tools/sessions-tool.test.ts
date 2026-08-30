@@ -207,9 +207,9 @@ describe("sessions tool", () => {
             "named icon: braces, book, monitor, bot, kanban, coins",
           ),
         },
-        category: {
+        group: {
           anyOf: [{ type: "string" }, { type: "null" }],
-          description: expect.stringContaining("This assigns one session"),
+          description: expect.stringContaining("creates the group"),
         },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
@@ -1035,7 +1035,7 @@ describe("sessions tool", () => {
       tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
-        category: "Private",
+        group: "Private",
         expectedSessionId: "other-session",
         archived: true,
       }),

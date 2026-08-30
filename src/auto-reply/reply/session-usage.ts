@@ -18,7 +18,8 @@ import {
   type SessionSystemPromptReport,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -96,17 +97,21 @@ function estimateSessionRunCostUsd(params: {
 
 /** Persists usage accounting and selected runtime metadata to the session store. */
 export async function persistSessionUsageUpdate(params: {
+  agentId?: string;
   storePath?: string;
   sessionKey?: string;
-  expectedSession?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  sessionStore?: Record<string, SessionEntry>;
+  expectedSession?: Pick<
+    InternalSessionEntry,
+    "sessionId" | "lifecycleRevision" | "activeWriterRunId"
+  >;
+  authorize?: () => boolean;
   cfg?: OpenClawConfig;
   agentDir?: string;
   usage?: NormalizedUsage;
   /**
-   * Usage from the last individual API call (not accumulated). When provided,
-   * this is used for `totalTokens` instead of the accumulated `usage` so that
-   * context-window utilization reflects the actual current context size rather
-   * than the sum of input tokens across all API calls in the run.
+   * Usage from the last individual API call (not accumulated). Supplies context
+   * only when no chronology-qualified currentContextSnapshot was observed.
    */
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
@@ -121,16 +126,18 @@ export async function persistSessionUsageUpdate(params: {
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   clearCliSessionBinding?: boolean;
-  compactionTokensAfter?: number;
+  /** Presence overrides usage inference; undefined tokens explicitly mean current context is unknown. */
+  currentContextSnapshot?: { tokens: number | undefined };
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
   logLabel?: string;
 }): Promise<void> {
-  const { storePath, sessionKey } = params;
+  const { agentId, storePath, sessionKey, sessionStore, authorize } = params;
   if (!storePath || !sessionKey) {
     return;
   }
+  const expectedSession = params.expectedSession ? { ...params.expectedSession } : undefined;
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
   const cfg = params.cfg ?? getRuntimeConfig();
@@ -143,29 +150,29 @@ export async function persistSessionUsageUpdate(params: {
   const hasUsableLastCallUsage =
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
   const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
-  const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
-  const hasCompactionSnapshot = compactionTokensAfter !== undefined;
+  const hasCurrentContextSnapshot = params.currentContextSnapshot !== undefined;
+  const currentContextTokens = resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens);
 
   if (
     hasUsage ||
     hasFreshContextSnapshot ||
-    hasCompactionSnapshot ||
+    hasCurrentContextSnapshot ||
     params.modelUsed ||
     params.contextTokensUsed
   ) {
     try {
-      await updateSessionEntry(
-        {
-          storePath,
-          sessionKey,
-        },
-        async (entry) => {
-          // Result metadata belongs to the admitted generation, even if a reset
-          // replaced the row before this accounting write acquired the store.
+      await patchSessionEntryCore(
+        { agentId, storePath, sessionKey },
+        (entry) => {
+          // Retained compaction facts carry an exact writer, including known absence;
+          // ordinary usage callers may carry only the existing generation fence.
           if (
-            params.expectedSession &&
-            (entry.sessionId !== params.expectedSession.sessionId ||
-              entry.lifecycleRevision !== params.expectedSession.lifecycleRevision)
+            !(authorize?.() ?? true) ||
+            (expectedSession &&
+              (entry.sessionId !== expectedSession.sessionId ||
+                entry.lifecycleRevision !== expectedSession.lifecycleRevision ||
+                (Object.hasOwn(expectedSession, "activeWriterRunId") &&
+                  entry.activeWriterRunId !== expectedSession.activeWriterRunId)))
           ) {
             return null;
           }
@@ -178,27 +185,17 @@ export async function persistSessionUsageUpdate(params: {
           const resolvedContextTokens = preserveSessionModelState
             ? entry.contextTokens
             : (params.contextTokensUsed ?? entry.contextTokens);
-          // Use last-call usage for totalTokens when available. The accumulated
-          // `usage.input` sums input tokens from every API call in the run
-          // (tool-use loops, compaction retries), overstating actual context.
-          // `lastCallUsage` reflects only the final API call — the true context.
-          const usageTotalTokens =
-            hasFreshContextSnapshot && !preserveUserFacingRunState
+          // Arrival order owns context freshness; an older model result cannot replace
+          // a later compaction or an explicit unknown observation. Billing stays separate.
+          const totalTokens = hasCurrentContextSnapshot
+            ? currentContextTokens
+            : hasFreshContextSnapshot
               ? deriveSessionTotalTokens({
                   lastCallUsage: params.lastCallUsage,
                   contextTokens: resolvedContextTokens,
                   promptTokens: params.promptTokens,
                 })
               : undefined;
-          const hasPositiveUsageTotal =
-            typeof usageTotalTokens === "number" &&
-            Number.isFinite(usageTotalTokens) &&
-            usageTotalTokens > 0;
-          const useCompactionSnapshot =
-            !preserveUserFacingRunState &&
-            compactionTokensAfter !== undefined &&
-            !hasPositiveUsageTotal;
-          const totalTokens = useCompactionSnapshot ? compactionTokensAfter : usageTotalTokens;
           const runEstimatedCostUsd = preserveUserFacingRunState
             ? undefined
             : estimateSessionRunCostUsd({
@@ -231,18 +228,10 @@ export async function persistSessionUsageUpdate(params: {
           if (hasUsage && !preserveUserFacingRunState) {
             patch.inputTokens = params.usage?.input ?? 0;
             patch.outputTokens = params.usage?.output ?? 0;
-            // Cache counters should reflect the latest context snapshot when
-            // available, not accumulated per-call totals across a whole run.
+            // Cache buckets retain the latest call's usage, independently of current context.
             const cacheUsage = params.lastCallUsage ?? params.usage;
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
-          }
-          if (useCompactionSnapshot && !preserveUserFacingRunState) {
-            patch.inputTokens = undefined;
-            patch.outputTokens = undefined;
-            patch.cacheRead = undefined;
-            patch.cacheWrite = undefined;
-            patch.contextBudgetStatus = undefined;
           }
           // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
           // cumulative run usage, so assign directly instead of accumulating).
@@ -250,7 +239,7 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          if ((hasPositiveUsageTotal || hasCompactionSnapshot) && !preserveUserFacingRunState) {
+          if (totalTokens !== undefined && !preserveUserFacingRunState) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
             patch.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
@@ -260,7 +249,8 @@ export async function persistSessionUsageUpdate(params: {
             }
           } else if (
             !preserveUserFacingRunState &&
-            (params.preserveFreshTotalTokensOnStaleUsage !== true ||
+            (hasCurrentContextSnapshot ||
+              params.preserveFreshTotalTokensOnStaleUsage !== true ||
               entry.totalTokensFresh !== true)
           ) {
             patch.totalTokensFresh = false;
@@ -272,7 +262,23 @@ export async function persistSessionUsageUpdate(params: {
         },
         {
           skipMaintenance: true,
-          takeCacheOwnership: true,
+          ...(sessionStore
+            ? {
+                onCommitted: (entry: InternalSessionEntry) => {
+                  // Publish this commit before a newer writer can replace the caller's cache.
+                  sessionStore[sessionKey] = entry;
+                },
+              }
+            : {}),
+          ...(authorize
+            ? {
+                assertCommitAllowed: () => {
+                  if (!authorize()) {
+                    throw new Error("session usage accounting authority revoked");
+                  }
+                },
+              }
+            : {}),
         },
       );
     } catch (err) {

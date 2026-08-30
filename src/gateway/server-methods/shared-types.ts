@@ -169,6 +169,8 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Live reload owner, including same-config restart work and shutdown. */
+  isConfigReloadSettled: () => boolean;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
@@ -183,6 +185,11 @@ type GatewayKernelContext = {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  approvalWebPushDelivery?: {
+    handleRequested: <TPayload>(record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
+    handleResolved: (resolved: { id: string }) => Promise<void>;
+    handleExpired: (request: { id: string }) => Promise<void>;
+  };
   pluginApprovalIosPushDelivery?: {
     handleRequested?: (
       request: PluginApprovalRequest,

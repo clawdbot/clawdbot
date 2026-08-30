@@ -1,5 +1,6 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -32,10 +33,10 @@ import {
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
+  uiConversationMatches,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-  resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
   resolveUiSelectedSessionAgentId,
@@ -47,6 +48,7 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
+import { applyChatPendingInputs, clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
@@ -196,6 +198,10 @@ export function retireChatBranchRequests(state: ChatState): void {
   getChatHistoryPaneRequests(state).branchVersion += 1;
 }
 
+export function getChatHistoryVersion(state: ChatState): number {
+  return getChatHistoryPaneRequests(state).historyVersion;
+}
+
 type ChatHistoryRequestOwnership = {
   version: number;
   client: GatewayBrowserClient;
@@ -242,6 +248,7 @@ function shouldApplyChatHistoryResult(
 }
 
 export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  clearChatPendingInputs(state);
   const requests = getChatHistoryPaneRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
@@ -348,6 +355,7 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 };
 
 export type ChatHistoryResult = {
+  pendingInputs?: ChatPendingInputsPage;
   sourceCanonicalListRevision?: number;
   deltaCursor?: string;
   messages?: Array<unknown>;
@@ -381,6 +389,7 @@ export type ChatHistoryResult = {
 };
 
 type ChatHistoryDeltaResult = {
+  pendingInputs?: ChatPendingInputsPage;
   kind: "delta";
   messages: unknown[];
   deltaCursor: string;
@@ -753,35 +762,12 @@ function setChatError(state: ChatState, error: string | null) {
   state.chatError = message;
 }
 
-function chatScopedEventAgentScopeMatches(
-  state: ChatState,
-  sessionKey: string,
-  agentId?: string | null,
-): boolean {
-  if (!isUiSelectedGlobalSessionKey(state, state.sessionKey) || !isUiGlobalSessionKey(sessionKey)) {
-    return true;
-  }
-  const payloadAgentId =
-    typeof agentId === "string" && agentId.trim() ? normalizeAgentId(agentId) : undefined;
-  const selectedAgentId = resolveUiSelectedSessionAgentId(state);
-  return payloadAgentId
-    ? selectedAgentId !== undefined && payloadAgentId === selectedAgentId
-    : selectedAgentId === undefined || selectedAgentId === resolveUiDefaultAgentId(state);
-}
-
 export function chatScopedEventSessionMatches(
   state: ChatState,
   sessionKey: string,
   agentId?: string | null,
 ): boolean {
-  if (areUiSessionKeysEquivalent(sessionKey, state.sessionKey)) {
-    return chatScopedEventAgentScopeMatches(state, sessionKey, agentId);
-  }
-  return (
-    isUiGlobalSessionKey(sessionKey) &&
-    isUiSelectedGlobalSessionKey(state, state.sessionKey) &&
-    chatScopedEventAgentScopeMatches(state, sessionKey, agentId)
-  );
+  return uiConversationMatches(state, state.sessionKey, sessionKey, agentId);
 }
 
 function normalizeSubscriptionKey(value: string | null | undefined): string | null {
@@ -793,11 +779,7 @@ function resolveSelectedGlobalAliasAgentId(
   state: ChatSessionMessageSubscriptionState,
   key: string | null | undefined,
 ): string | null {
-  const row = state.sessionsResult?.sessions.find((session) => session.key === key);
-  return resolveUiGlobalAliasAgentId(state, key, {
-    rowKind: row?.kind,
-    requireGlobalRowForMainAlias: true,
-  });
+  return resolveUiGlobalAliasAgentId(state, key);
 }
 
 function resolveSelectedGlobalAgentId(state: ChatSessionMessageSubscriptionState): string {
@@ -2006,6 +1988,7 @@ async function loadChatHistoryUncached(
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      applyChatPendingInputs(state, response.pendingInputs);
       // An accepted delta advances the same transcript generation, not a branch replacement.
       // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
       setChatSessionProjection(state, {
@@ -2037,6 +2020,7 @@ async function loadChatHistoryUncached(
       return {
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
+        pendingInputs: response.pendingInputs,
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
@@ -2110,6 +2094,7 @@ async function loadChatHistoryUncached(
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
+    applyChatPendingInputs(state, res.pendingInputs);
     commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
     if (
       state.reconnectResumeSessionId &&

@@ -337,7 +337,6 @@ src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.te
 src/agents/embedded-agent-runner.sanitize-session-history.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
-src/agents/embedded-agent-runner/compact.queued.ts
 src/agents/embedded-agent-runner/context-engine-maintenance.test.ts
 src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts

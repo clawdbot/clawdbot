@@ -81,7 +81,7 @@ export function resolveConversationRefForThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): { conversationId: string; parentConversationId?: string } | null {
-  const resolution = resolveInboundConversationResolution({
+  return resolveInboundConversationResolution({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
@@ -90,7 +90,6 @@ export function resolveConversationRefForThreadBinding(params: {
     groupId: params.groupId,
     isGroup: true,
   });
-  return resolution?.canonical ?? null;
 }
 
 function resolveRequesterBoundConversationRef(params: {

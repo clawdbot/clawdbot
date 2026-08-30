@@ -61,6 +61,17 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
+    assertCompactionSuccessorAllowed({ currentTarget }) {
+      const placement = options.placements.get(currentTarget.sessionId);
+      // Remote-exec has a local turn claim but still owns remote workspace state.
+      // Only an absent or explicitly local placement can keep its exact cleanup on rotation.
+      if (placement && placement.state !== "local") {
+        throw new Error(
+          "Compaction cannot change the session ID while a worker placement owns this session. " +
+            "Keep the same session ID, or move the session back to the Gateway before retrying.",
+        );
+      }
+    },
     recoverTerminalTurn(session) {
       const active = activeWorkerTurns.get(session.sessionId);
       return active && (!session.sessionKey || active.sessionKey === session.sessionKey)

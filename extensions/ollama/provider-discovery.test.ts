@@ -513,7 +513,7 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("uses resolved discovery api key when configured cloud apiKey is an env marker", async () => {
+  it("preserves the env marker when a configured cloud apiKey resolves", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
       stubOllamaFetch(fetchMock);
@@ -550,12 +550,12 @@ describe("Ollama provider", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(provider?.baseUrl).toBe("https://ollama.com");
       expect(provider?.api).toBe("ollama");
-      expect(provider?.apiKey).toBe("real-secret");
+      expect(provider?.apiKey).toBe("OLLAMA_API_KEY");
       expect(provider?.models).toHaveLength(1);
     });
   });
 
-  it("uses resolved discovery api key for configured cloud providers without apiKey", async () => {
+  it("preserves resolved auth metadata for configured cloud providers without apiKey", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
       stubOllamaFetch(fetchMock);
@@ -591,7 +591,7 @@ describe("Ollama provider", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(provider?.baseUrl).toBe("https://ollama.com");
       expect(provider?.api).toBe("ollama");
-      expect(provider?.apiKey).toBe("real-secret");
+      expect(provider?.apiKey).toBe("OLLAMA_API_KEY");
       expect(provider?.models).toHaveLength(1);
     });
   });

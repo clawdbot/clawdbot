@@ -17,7 +17,7 @@ type JsonSchema = {
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema;
-  enum?: string[];
+  enum?: Array<string | null>;
   patternProperties?: Record<string, JsonSchema>;
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
@@ -177,10 +177,29 @@ function namedSchema(schema: JsonSchema, allowStructuralFallback = false): strin
 }
 
 function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed = false): string {
-  const t = schema.type;
+  const schemaTypes = schema.type;
+  const normalizedSchema =
+    !required &&
+    Array.isArray(schemaTypes) &&
+    schemaTypes.length === 2 &&
+    schemaTypes.includes("null")
+      ? {
+          ...schema,
+          type: schemaTypes.find((type) => type !== "null"),
+          enum: schema.enum?.filter((value): value is string => value !== null),
+          anyOf: schema.anyOf?.filter((branch) => branch.type !== "null"),
+          oneOf: schema.oneOf?.filter((branch) => branch.type !== "null"),
+        }
+      : schema;
+  const nullableTypeArray = normalizedSchema !== schema;
+  const t = normalizedSchema.type;
   const isOptional = !required;
   let base: string;
-  const named = namedSchema(schema, allowStructuralNamed);
+  let named = namedSchema(normalizedSchema, allowStructuralNamed);
+  if (!named && nullableTypeArray && (normalizedSchema.anyOf || normalizedSchema.oneOf)) {
+    const { type: _normalizedType, ...normalizedStructuralSchema } = normalizedSchema;
+    named = namedSchema(normalizedStructuralSchema, allowStructuralNamed);
+  }
   if (named) {
     base = named;
   } else if (t === "string") {
@@ -192,8 +211,8 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   } else if (t === "boolean") {
     base = "Bool";
   } else if (t === "array") {
-    base = `[${swiftType(schema.items ?? { type: "Any" }, true, true)}]`;
-  } else if (schema.enum) {
+    base = `[${swiftType(normalizedSchema.items ?? { type: "Any" }, true, true)}]`;
+  } else if (normalizedSchema.enum) {
     base = "String";
   } else if (schema.patternProperties) {
     base = "[String: AnyCodable]";
@@ -207,7 +226,8 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
 
 function stringEnumCases(schema: JsonSchema): string[] | undefined {
   if (schema.type === "string" && schema.enum) {
-    return schema.enum.every((value) => typeof value === "string") ? schema.enum : undefined;
+    const cases = schema.enum.filter((value): value is string => typeof value === "string");
+    return cases.length === schema.enum.length ? cases : undefined;
   }
 
   const variants = schema.oneOf ?? schema.anyOf;
@@ -227,8 +247,8 @@ function swiftInitializerParam(params: {
   required: boolean;
   allowStructuralNamed?: boolean;
 }): string {
-  const type = swiftType(params.schema, true, params.allowStructuralNamed ?? true);
-  return params.required ? `${params.name}: ${type}` : `${params.name}: ${type}? = nil`;
+  const type = swiftType(params.schema, params.required, params.allowStructuralNamed ?? true);
+  return params.required ? `${params.name}: ${type}` : `${params.name}: ${type} = nil`;
 }
 
 function emitEnum(name: string, schema: JsonSchema): string {

@@ -8,7 +8,7 @@ github_output="${3:-}"
 
 package_json="${source_root}/package.json"
 package_lock="${source_root}/package-lock.json"
-expected_lock_sha256="4cea63abc4e89d659902aae28dd3e88973fdff9cdd2d2f5e234315d3a3bb680e"
+expected_lock_sha256="85e611c2d409f9ce91f2f85bdfbdf02fdaaead2e2e4ba7dfaaac9c7220d6b021"
 expected_vercel_integrity="sha512-Bj/SN1qln/9guMcIz4gEGn+Ij+amGtkT2kqxwUAFgrLU2Hr0zYk4kX4QfxmZEs6WhheAaMlblVw2VUF2JFP5fA=="
 test -f "${package_json}"
 test -f "${package_lock}"
@@ -59,11 +59,15 @@ vercel_version="$(
 }
 test -x "${destination}/node_modules/.bin/vercel"
 vercel_cli="${destination}/node_modules/.bin/vercel"
+# Use Sandbox directly: Vercel's sandbox wrapper overwrites failed remote exits.
+test -x "${destination}/node_modules/.bin/sandbox"
+sandbox_cli="${destination}/node_modules/.bin/sandbox"
 
 echo "Materialized vercel@${vercel_version} from lock ${lock_sha256}."
 if [[ -n "${github_output}" ]]; then
   {
     echo "cli=${vercel_cli}"
+    echo "sandbox_cli=${sandbox_cli}"
     echo "integrity=${vercel_integrity}"
     echo "lock_sha256=${lock_sha256}"
     echo "version=${vercel_version}"

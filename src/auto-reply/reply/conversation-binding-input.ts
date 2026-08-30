@@ -1,7 +1,7 @@
 // Builds normalized conversation binding inputs from channel and routing facts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
-import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
+import { resolveCommandConversationResolution } from "../../channels/conversation-resolution.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { MsgContext } from "../templating.js";
@@ -59,9 +59,9 @@ export function resolveConversationBindingContextFromMessage(params: {
   sessionKey?: string | null;
   parentSessionKey?: string | null;
   commandTo?: string | null;
-}): ReturnType<typeof resolveConversationBindingContext> {
+}): ReturnType<typeof resolveCommandConversationResolution> {
   const channel = resolveBindingChannel(params.ctx);
-  return resolveConversationBindingContext({
+  return resolveCommandConversationResolution({
     cfg: params.cfg,
     channel,
     accountId: resolveBindingAccountId({
@@ -85,7 +85,7 @@ export function resolveConversationBindingContextFromMessage(params: {
 
 export function resolveConversationBindingContextFromAcpCommand(
   params: HandleCommandsParams,
-): ReturnType<typeof resolveConversationBindingContext> {
+): ReturnType<typeof resolveCommandConversationResolution> {
   return resolveConversationBindingContextFromMessage({
     cfg: params.cfg,
     ctx: params.ctx,

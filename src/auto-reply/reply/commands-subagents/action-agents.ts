@@ -1,4 +1,4 @@
-// Lists available agents for subagent spawn and focus commands.
+// Lists available agents and conversation bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";

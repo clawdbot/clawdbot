@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import * as installedPluginIndex from "./installed-plugin-index.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -103,6 +104,26 @@ function createCurrentSnapshot(params: {
 }
 
 describe("setup-registry descriptor lookup", () => {
+  it("resolves backend ownership before evaluating unrelated plugin activation", async () => {
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
+    const snapshot = createCurrentSnapshot({ manifestHash: "lookup", cliBackends: ["Other-CLI"] });
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        const activation = vi.spyOn(installedPluginIndex, "isInstalledPluginEnabled");
+        try {
+          expect(
+            resolvePluginSetupCliBackendDescriptor({ backend: "model-provider", config: {} }),
+          ).toBeUndefined();
+          expect(activation).not.toHaveBeenCalled();
+        } finally {
+          activation.mockRestore();
+        }
+      },
+      { trustConfigIdentity: true },
+    );
+  });
+
   it("keeps descriptors inside a narrower view of the same metadata generation", async () => {
     const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
     const snapshot = createCurrentSnapshot({ manifestHash: "scoped", cliBackends: ["Scoped-CLI"] });

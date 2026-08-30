@@ -7,10 +7,30 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-OpenClaw.app does not bundle Node or the Gateway runtime. The macOS app
-expects an **external** `openclaw` CLI install, does not spawn the Gateway as
-a child process, and manages a per-user launchd service to keep the Gateway
-running (or attaches to an already-running local Gateway).
+OpenClaw.app bundles a private Node runtime and matching OpenClaw package for
+its app-owned `node worker` helper. Rebuilding or replacing the app replaces
+that helper too, including rebuilds with the same public version. The helper
+runs from the signed bundle, so moving the app or removing its build checkout
+does not change which worker it uses.
+
+The **Gateway remains external**. The app uses an external `openclaw` CLI to
+manage a per-user launchd service, or attaches to an already-running Gateway.
+It does not start the Gateway inside its private worker runtime. Packaging the
+worker never installs, updates, or restarts a Gateway service.
+
+The private worker validates core and node configuration through a read-only
+bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
+Node plugins still validate their own settings before publishing commands, and
+the node runtime owns its MCP clients. Node startup retains the Doctor-owned
+device-auth, device-identity, and exec-approval migrations; this is not a promise
+that all worker startup is read-only. Public `node run`, Gateway, and Doctor
+retain their existing startup policies.
+
+When the native app creates identity, device-auth, or approval tables before
+the worker starts, node startup completes that recognized version-zero database
+through the canonical initializer before plugins read their state. Existing
+native rows are preserved. This does not migrate an already-versioned shared
+Gateway database or adopt unknown or occupied bootstrap state.
 
 ## Automatic setup
 
@@ -20,9 +40,17 @@ user-space Node runtime and the matching `openclaw` CLI under `~/.openclaw`,
 then installs and starts the per-user launchd service. This path needs no
 Terminal, Homebrew, or administrator access.
 
-The app bundles the installer script only, not the Node or Gateway payload;
-setup needs an internet connection to download the runtime and matching
-OpenClaw package.
+Gateway setup still needs an internet connection to download its separate
+runtime and matching OpenClaw package. The bundled installer owns that setup;
+the private worker is not a replacement for a CLI or Gateway installation.
+
+Remote connections and attachment to an independently managed local Gateway
+skip this installation. Attach-only mode never prompts for a CLI to run the
+app's node. Pausing preserves who manages the Gateway, even when stopping an
+app-managed service removes its LaunchAgent record. If an independent endpoint
+is no longer available on reattachment, local setup becomes available again.
+An unreadable service ownership record blocks automatic installation instead
+of being treated as a missing service; check the LaunchAgent and retry.
 
 ## Manual recovery
 
@@ -94,10 +122,17 @@ Logging:
 
 ## Version compatibility
 
-The macOS app checks the Gateway version against its own version. Onboarding
-automatically runs managed setup when an existing CLI is missing or
-incompatible. Use **Retry setup** to repeat installation, or **Check again**
-after repairing an external CLI.
+The private worker must match the app's build provenance, not merely its
+version number. A missing or incompatible worker payload produces a visible
+worker error; rebuild or reinstall the app. Changing CLI channels or updating
+a global CLI does not repair this private payload. Unbundled Swift development
+builds can use the checkout's freshness-aware source runner instead.
+
+For an app-owned local Gateway, the macOS app checks the external CLI against
+its install policy. Onboarding runs managed setup when that CLI is missing or
+incompatible. An attached Gateway uses connection and health checks instead of
+local CLI installation diagnostics. Use **Retry setup** after a failed managed
+installation, or **Recheck** in Connection settings after repairing it.
 
 ## State directory on macOS
 

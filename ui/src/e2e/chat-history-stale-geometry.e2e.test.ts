@@ -62,6 +62,7 @@ suite.define(() => {
         },
       },
       sessionKey: "agent:main:main",
+      sessions: [{ key: "agent:main:main", sessionId }],
     });
 
     try {

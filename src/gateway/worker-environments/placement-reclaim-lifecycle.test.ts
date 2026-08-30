@@ -5,6 +5,7 @@ import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeSupport from "./node-worker-tunnel.test-support.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -209,6 +210,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           throw error;
         }
       });
+      const coordinated = coordinateWorkerPlacementDispatch(harness.service);
       invoke.mockClear();
       vi.mocked(harness.environments.startTunnel).mockClear();
       vi.useFakeTimers();
@@ -219,10 +221,10 @@ describe("placement reclaim with provider-owned node teardown", () => {
       };
       const result = (
         operation === "recovery"
-          ? harness.service.reconcileActive()
+          ? coordinated.reconcileActive()
           : operation === "reclaim"
-            ? harness.service.reclaim(request)
-            : harness.service.move({
+            ? coordinated.reclaim(request)
+            : coordinated.move({
                 ...request,
                 source: {
                   generation: active.generation,
@@ -265,7 +267,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
                 REMOTE_WORKSPACE_RESUME_JS,
             ),
           ).toHaveLength(1);
-          await expect(harness.service.reclaim(request)).resolves.toMatchObject({
+          await expect(coordinated.reclaim(request)).resolves.toMatchObject({
             state: "reclaimed",
           });
           return;
@@ -289,10 +291,15 @@ describe("placement reclaim with provider-owned node teardown", () => {
               expect.objectContaining({ error: "Worker provider operation failed" }),
             );
           expect(placements.get(active.sessionId)?.state).toBe("draining");
-          await harness.service.reconcileActive();
         } else {
           expect.soft(outcome).toBe(primaryError);
         }
+        expect(placements.get(active.sessionId)?.state).toBe("draining");
+        expect(placements.listPendingWorkspaceResults()).toEqual([
+          expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
+        ]);
+        expect(destroy).toHaveBeenCalledOnce();
+        await coordinated.reconcileActive();
         expect(placements.get(active.sessionId)).toMatchObject({
           state: operation === "move" ? "local" : "reclaimed",
           generation: active.generation + 3,

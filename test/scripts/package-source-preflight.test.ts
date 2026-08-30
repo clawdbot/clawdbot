@@ -307,6 +307,7 @@ function runReleaseInputCapture(params: {
         RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
         RELEASE_RUN_RELEASE_SOAK_INPUT: "false",
         RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+        TELEGRAM_WAIVER: "",
       },
     });
     expect(result.status, result.stderr).toBe(0);

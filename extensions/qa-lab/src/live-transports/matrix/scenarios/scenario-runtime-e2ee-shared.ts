@@ -227,15 +227,28 @@ export async function waitForMatrixQaVerificationSummary(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
+  let last: MatrixVerificationSummary[] = [];
   while (Date.now() - startedAt < params.timeoutMs) {
     const summaries = await params.client.listVerifications();
+    last = summaries;
     const found = summaries.find(params.predicate);
     if (found) {
       return found;
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
   }
-  throw new Error(`timed out waiting for Matrix verification summary: ${params.label}`);
+  const states = last.slice(0, 4).map((summary) => ({
+    phase: summary.phaseName,
+    pending: summary.pending,
+    completed: summary.completed,
+    initiatedByMe: summary.initiatedByMe,
+    hasReciprocateQr: summary.hasReciprocateQr,
+    hasSas: summary.hasSas,
+    hasError: Boolean(summary.error),
+  }));
+  const details = `timed out waiting for Matrix verification summary: ${params.label}; states=${JSON.stringify(states)}`;
+  process.stderr.write(`[matrix-verification-timeout] ${details}\n`);
+  throw new Error(details);
 }
 
 export function sameMatrixQaVerificationTransaction(

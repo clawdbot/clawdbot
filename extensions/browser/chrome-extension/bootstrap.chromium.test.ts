@@ -512,14 +512,22 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           relayPlaywrightContext = relayPage.context();
           expect(connectOverCdp).not.toHaveBeenCalled();
           const bindingSession = await relayPlaywrightContext.newCDPSession(relayPage);
+          const observerSession = await relayPlaywrightContext.newCDPSession(relayPage);
           const bindingName = "__openclawRelayBindingProof";
           const bindingPayloads: string[] = [];
+          const observerPayloads: string[] = [];
+          observerSession.on("Runtime.bindingCalled", (event) => {
+            if (event.name === bindingName) {
+              observerPayloads.push(event.payload);
+            }
+          });
           bindingSession.on("Runtime.bindingCalled", (event) => {
             if (event.name === bindingName) {
               bindingPayloads.push(event.payload);
             }
           });
           try {
+            await observerSession.send("Runtime.enable");
             await bindingSession.send("Runtime.addBinding", { name: bindingName });
             await bindingSession.send("Runtime.evaluate", {
               expression: "globalThis.__openclawRelayBindingProof('before-enable')",
@@ -531,11 +539,13 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
               expression: "globalThis.__openclawRelayBindingProof('after-disable')",
             });
             await expect.poll(() => bindingPayloads).toEqual(["before-enable", "after-disable"]);
+            expect(observerPayloads).toEqual([]);
           } finally {
             await bindingSession
               .send("Runtime.removeBinding", { name: bindingName })
               .catch(() => {});
             await bindingSession.detach().catch(() => {});
+            await observerSession.detach().catch(() => {});
           }
         } finally {
           connectOverCdp.mockRestore();

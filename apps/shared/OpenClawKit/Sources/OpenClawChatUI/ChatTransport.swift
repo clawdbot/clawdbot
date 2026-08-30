@@ -809,7 +809,10 @@ public protocol OpenClawChatTransport: Sendable {
     func listQuestions() async throws -> [QuestionRecord]
     func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary]
     func getQuestion(id: String) async throws -> QuestionRecord
-    func resolveQuestion(id: String, answers: [String: [String]]) async throws
+    func resolveQuestion(
+        id: String,
+        answers: [String: [String]],
+        secretStoreAllowedHosts: [String]?) async throws -> QuestionAnswers
     func cancelQuestion(id: String) async throws
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
@@ -872,7 +875,11 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "question.get not supported by this transport"])
     }
 
-    public func resolveQuestion(id _: String, answers _: [String: [String]]) async throws {
+    public func resolveQuestion(
+        id _: String,
+        answers _: [String: [String]],
+        secretStoreAllowedHosts _: [String]?) async throws -> QuestionAnswers
+    {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,

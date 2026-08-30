@@ -4,6 +4,34 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test(arguments: [[String]?.none, [], ["api.example.test"]])
+    func `question host consent uses protocol field`(hosts: [String]?) throws {
+        let request = OpenClawChatGatewayRequests.resolveQuestion(
+            id: "ask_secret", answers: ["credential": ["  synthetic-value  "]], secretStoreAllowedHosts: hosts)
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["secretStoreAllowedHosts"] as? [String] == hosts)
+        let envelope = try #require(object["answers"] as? [String: [String: [String]]])
+        #expect(envelope == ["answers": ["credential": ["  synthetic-value  "]]])
+    }
+
+    @Test func `question answer response decodes canonical marker`() throws {
+        let data = Data(#"{"status":"answered","answers":{"answers":{"credential":["stored"]}}}"#.utf8)
+        let answers = try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(data)
+        let encoded = try JSONEncoder().encode(answers)
+        let object = try JSONSerialization.jsonObject(with: encoded) as? [String: [String: [String]]]
+        #expect(object == ["answers": ["credential": ["stored"]]])
+        for invalid in [
+            #"{"status":"cancelled"}"#,
+            #"{"status":"pending","answers":{"answers":{}}}"#,
+            #"{"status":"answered"}"#,
+        ] {
+            #expect(throws: (any Error).self) {
+                try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(Data(invalid.utf8))
+            }
+        }
+    }
+
     @Test func `models list scopes worker catalogs and preserves default scope`() {
         let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
         let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
@@ -431,7 +459,7 @@ struct ChatGatewayRequestTests {
         #expect(inherited.params["thinking"] == nil)
     }
 
-    @Test func `question resolve request preserves answer arrays`() throws {
+    @Test func `question resolve request uses the gateway answer envelope`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
             answers: ["meal": ["Pizza", "Salad"]])
@@ -439,8 +467,9 @@ struct ChatGatewayRequestTests {
         #expect(request.method == "question.resolve")
         let data = try JSONEncoder().encode(request.params)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let answers = try #require(object["answers"] as? [String: Any])
-        #expect(answers["meal"] as? [String] == ["Pizza", "Salad"])
+        let envelope = try #require(object["answers"] as? [String: Any])
+        let answers = try #require(envelope["answers"] as? [String: [String]])
+        #expect(answers == ["meal": ["Pizza", "Salad"]])
     }
 
     @Test func `question get request carries id`() {

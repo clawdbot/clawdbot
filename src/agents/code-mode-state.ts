@@ -7,6 +7,7 @@ import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
+import type { CodeModeOutputState } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type {
   CodeModeConfig,
@@ -21,7 +22,8 @@ import {
   type ToolEffectReceipt,
 } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
-import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
+import type { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type CodeModeBridgeDispatchState = {
@@ -47,9 +49,7 @@ type CodeModeRunState = {
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
-  output: unknown[];
-  // Retain all output for cumulative limits, but never replay blocks already returned to the model.
-  deliveredOutputCount: number;
+  output: CodeModeOutputState;
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
@@ -210,13 +210,6 @@ export function disposeAllCodeModeRuns(): void {
   activeRuns.clear();
   resumingRunIds.clear();
   scheduleActiveRunExpiry();
-}
-
-/** Advance the snapshot frontier before exposing output to a wait observer. */
-export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
-  const output = state.output.slice(state.deliveredOutputCount);
-  state.deliveredOutputCount = state.output.length;
-  return output;
 }
 
 /** Abort each bridge call whose result has not already reached its guest. */
@@ -469,8 +462,7 @@ export function storeSnapshotState(params: {
   runtime: ToolSearchRuntime;
   catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
-  output: unknown[];
-  deliveredOutputCount?: number;
+  output: CodeModeOutputState;
   bridgeDispatch: CodeModeBridgeDispatchState;
 }) {
   const runId = params.owner.runId;
@@ -503,7 +495,6 @@ export function storeSnapshotState(params: {
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
     output: params.output,
-    deliveredOutputCount: params.output.length,
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,
@@ -512,36 +503,42 @@ export function storeSnapshotState(params: {
     bridgeDispatch: params.bridgeDispatch,
     owner: params.owner,
   };
+  const result = params.output.takeResult(
+    {
+      status: "waiting" as const,
+      runId,
+      reason: codeModeWaitingReason(params.pending),
+      pendingToolCalls: pendingToolCalls(params.pending),
+      replaySafe: params.replaySafe,
+      telemetry: telemetry(params.runtime),
+    },
+    {},
+    params.runtime.hasNetworkContent(),
+  );
+  // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return {
-    status: "waiting" as const,
-    runId,
-    reason: codeModeWaitingReason(params.pending),
-    pendingToolCalls: pendingToolCalls(params.pending),
-    replaySafe: params.replaySafe,
-    output: params.output.slice(params.deliveredOutputCount ?? 0),
-    telemetry: telemetry(params.runtime),
-  };
+  return result;
 }
 
 export function codeModeAbortedResult(params: {
   bridgeDispatch: CodeModeBridgeDispatchState;
-  output: unknown[];
-  deliveredOutputCount?: number;
+  output: CodeModeOutputState;
   replaySafe: boolean;
   runtime: ToolSearchRuntime;
 }) {
-  return {
-    status: "failed" as const,
-    error: "code mode execution aborted",
-    code: "aborted" as const,
-    failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
-    bridgeDispatchStarted: params.bridgeDispatch.started,
-    output: params.output.slice(params.deliveredOutputCount ?? 0),
-    replaySafe: params.replaySafe,
-    telemetry: telemetry(params.runtime),
-  };
+  return params.output.takeResult(
+    {
+      status: "failed" as const,
+      code: "aborted" as const,
+      failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
+      bridgeDispatchStarted: params.bridgeDispatch.started,
+      replaySafe: params.replaySafe,
+      telemetry: telemetry(params.runtime),
+    },
+    { error: "code mode execution aborted" },
+    params.runtime.hasNetworkContent(),
+  );
 }
 
 export function codeModeWaitingReason(

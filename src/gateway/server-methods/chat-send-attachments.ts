@@ -276,7 +276,7 @@ export async function prepareChatSendAttachments(params: {
         finishAbortedChatSend();
         return { ok: false as const };
       }
-      cleanupAdmittedRun({ force: true });
+      cleanupAdmittedRun();
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
       respond(

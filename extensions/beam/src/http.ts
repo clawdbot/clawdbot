@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { buildControlUiCatalogSessionUrl } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { buildControlUiCatalogSharePath } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -8,7 +8,7 @@ import {
   readJsonWebhookBodyOrReject,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, BEAM_MAX_BODY_BYTES, parseBeamUpload } from "./types.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status;
@@ -25,6 +25,7 @@ function firstHeader(req: IncomingMessage, name: string): string | undefined {
 type BeamRequestClient = {
   clientIp: string;
   scopes: readonly string[];
+  profileId?: string;
 };
 
 function currentRequestClient(req: IncomingMessage): BeamRequestClient {
@@ -32,6 +33,7 @@ function currentRequestClient(req: IncomingMessage): BeamRequestClient {
   return {
     clientIp: client?.clientIp ?? req.socket.remoteAddress ?? "unknown",
     scopes: client?.connect?.scopes ?? [],
+    profileId: client?.authenticatedUserProfile?.profileId,
   };
 }
 
@@ -43,7 +45,7 @@ export function createBeamRequestHandler(params: {
   store: BeamStore;
   now?: () => number;
   resolveClient?: (req: IncomingMessage) => BeamRequestClient;
-  resolveControlUiTarget: () => { agentId: string; basePath?: string };
+  resolveControlUiBasePath: () => string | undefined;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
@@ -101,18 +103,18 @@ export function createBeamRequestHandler(params: {
       const existing = await params.store.get(parsed.value.beamId);
       await params.store.put({
         ...parsed.value,
+        // An anonymous replacement must not inherit a previous publisher's identity.
+        ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
         createdAt: existing?.createdAt ?? receivedAt,
         receivedAt,
       });
       sendJson(res, 200, {
         ok: true,
         beamId: parsed.value.beamId,
-        url: buildControlUiCatalogSessionUrl({
-          namespace: "chat",
-          ...params.resolveControlUiTarget(),
-          catalog: "beam",
-          host: BEAM_HOST_ID,
-          thread: parsed.value.beamId,
+        url: buildControlUiCatalogSharePath({
+          shareRoute: BEAM_SESSION_SHARE_ROUTE,
+          threadId: parsed.value.beamId,
+          basePath: params.resolveControlUiBasePath(),
         }),
       });
       return true;

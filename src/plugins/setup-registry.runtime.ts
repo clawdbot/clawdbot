@@ -20,7 +20,7 @@ type SetupCliBackendDescriptorLookupParams = {
 };
 
 function resolveSetupCliBackendDescriptors(
-  params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
+  params: Partial<SetupCliBackendDescriptorLookupParams> = {},
 ): SetupCliBackendDescriptorEntry[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -30,11 +30,21 @@ function resolveSetupCliBackendDescriptors(
     ...(workspaceDir ? { workspaceDir } : {}),
     allowWorkspaceScopedCurrent: true,
   });
+  const normalizedBackend =
+    params.backend === undefined ? undefined : normalizeProviderId(params.backend);
   return snapshot.plugins.flatMap((plugin) => {
-    if (!isInstalledPluginEnabled(snapshot.index, plugin.id, params.config)) {
+    const backendIds = [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].filter(
+      (id) => normalizedBackend === undefined || normalizeProviderId(id) === normalizedBackend,
+    );
+    // Model-provider probes must not evaluate activation for unrelated plugins;
+    // only manifest owners need current enablement policy.
+    if (
+      backendIds.length === 0 ||
+      !isInstalledPluginEnabled(snapshot.index, plugin.id, params.config)
+    ) {
       return [];
     }
-    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
+    return backendIds.map(
       (backendId) =>
         ({
           pluginId: plugin.id,
@@ -47,10 +57,7 @@ function resolveSetupCliBackendDescriptors(
 export function resolvePluginSetupCliBackendDescriptor(
   params: SetupCliBackendDescriptorLookupParams,
 ) {
-  const normalized = normalizeProviderId(params.backend);
-  return resolveSetupCliBackendDescriptors(params).find(
-    (entry) => normalizeProviderId(entry.backend.id) === normalized,
-  );
+  return resolveSetupCliBackendDescriptors(params)[0];
 }
 
 /** Resolve enabled setup CLI backend ids from one metadata snapshot. */

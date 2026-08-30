@@ -6,6 +6,7 @@ import {
   type WorkerLaunchDescriptor,
   type WorkerLaunchPlan,
 } from "./launch-descriptor.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 import { parseWorkerAdmissionDeadlineResult } from "./worker-connection-contract.js";
 import { WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES } from "./worker-connection-endpoint.js";
 import type { WorkerRuntimeResult } from "./worker.runtime.js";
@@ -55,10 +56,10 @@ export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
   ) {
     throw new Error("invalid managed worker request");
   }
-  if (value.type === "cancel" && Object.keys(value).length === 2) {
+  if (value.type === "cancel" && hasExactOwnKeys(value, ["type", "turnId"])) {
     return { type: "cancel", turnId: value.turnId };
   }
-  if (value.type === "turn" && Object.keys(value).length === 3) {
+  if (value.type === "turn" && hasExactOwnKeys(value, ["type", "turnId", "descriptor"])) {
     const descriptor = parseWorkerLaunchDescriptor(value.descriptor);
     if (descriptor.assignment.turnId !== value.turnId) {
       throw new Error("managed worker request disagrees with its assigned turn");
@@ -79,7 +80,7 @@ export function parseWorkerRuntimeResult(value: unknown): WorkerRuntimeResult | 
   if (
     value.status === "fenced" &&
     (value.reason === "credential-replaced" || value.reason === "owner-epoch-mismatch") &&
-    Object.keys(value).length === 2
+    hasExactOwnKeys(value, ["status", "reason"])
   ) {
     return { status: value.status, reason: value.reason };
   }
@@ -93,13 +94,16 @@ export function parseWorkerRuntimeResult(value: unknown): WorkerRuntimeResult | 
       transcriptLeafId: value.transcriptLeafId,
       transcriptNextSeq: value.transcriptNextSeq,
     };
-    if (value.status === "completed" && Object.keys(value).length === 3) {
+    if (
+      value.status === "completed" &&
+      hasExactOwnKeys(value, ["status", "transcriptLeafId", "transcriptNextSeq"])
+    ) {
       return { status: value.status, ...transcript };
     }
     if (
       value.status === "failed" &&
       value.reason === "turn-failed" &&
-      Object.keys(value).length === 4
+      hasExactOwnKeys(value, ["status", "reason", "transcriptLeafId", "transcriptNextSeq"])
     ) {
       return { status: value.status, reason: value.reason, ...transcript };
     }
@@ -110,7 +114,7 @@ export function parseWorkerRuntimeResult(value: unknown): WorkerRuntimeResult | 
 export function parseWorkerProcessResult(value: unknown): WorkerProcessResult | null {
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== 4 ||
+    !hasExactOwnKeys(value, ["type", "turnId", "result", "retainWorker"]) ||
     value.type !== "result" ||
     typeof value.turnId !== "string" ||
     !value.turnId.trim() ||

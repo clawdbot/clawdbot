@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/run-state.js";
+import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
@@ -261,24 +261,31 @@ export function createDispatchReplyOperationCoordinator(params: {
   let dispatchResetTriggered = false;
   let allowRestartTombstoneParentFork = false;
   let allowRestartTombstoneReset = false;
-  const dispatchLifecycleWork = new Set<Promise<void>>();
+  const dispatchLifecycleWork = {
+    owner: new Set<Promise<void>>(),
+    delivery: new Set<Promise<void>>(),
+  };
 
-  const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
+  const trackDispatchLifecycleWork = (
+    work: Promise<unknown>,
+    phase: "owner" | "delivery" = "owner",
+  ) => {
     if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
       return;
     }
+    const pending = dispatchLifecycleWork[phase];
     const settled = work.then(
       () => {},
       () => {},
     );
-    dispatchLifecycleWork.add(settled);
+    pending.add(settled);
     void settled.then(() => {
-      dispatchLifecycleWork.delete(settled);
+      pending.delete(settled);
     });
   };
 
-  const waitForDispatchLifecycleWorkAndDelivery = async (): Promise<void> => {
-    await Promise.allSettled(Array.from(dispatchLifecycleWork));
+  const waitForDispatchDelivery = async (): Promise<void> => {
+    await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
     await waitForReplyDispatcherIdle(params.dispatcher);
   };
 
@@ -292,7 +299,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     if (!admission) {
       return;
     }
-    const pendingWork = Array.from(dispatchLifecycleWork);
+    const pendingWork = [...dispatchLifecycleWork.owner, ...dispatchLifecycleWork.delivery];
     const clearAbortControllers = () => {
       if (preDispatchLifecycleAbortController === preDispatchAbortController) {
         preDispatchLifecycleAbortController = undefined;
@@ -657,13 +664,20 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
 
   const completeDispatchReplyOperation = () => {
-    const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
     void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
-    if (dispatchReplyOperation) {
-      dispatchReplyOperation.completeWithAfterClearBarrier(
-        completionBarrier,
-        params.dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.(),
-      );
+    const operation = dispatchReplyOperation;
+    if (!operation) {
+      return;
+    }
+    const timeoutPolicy = params.dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.();
+    const complete = () =>
+      operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
+    // Abort races the resolver, not its bookkeeping. Retain this exact owner
+    // until that work exits; delivery must remain after-clear to avoid queue cycles.
+    if (dispatchLifecycleWork.owner.size > 0) {
+      void Promise.allSettled(Array.from(dispatchLifecycleWork.owner)).then(complete);
+    } else {
+      complete();
     }
   };
 
@@ -671,19 +685,11 @@ export function createDispatchReplyOperationCoordinator(params: {
     if (terminalOutcome === "failed" && agentRunTerminalOutcome === "completed") {
       agentRunTerminalOutcome = "failed";
     }
-    const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
-    if (!dispatchReplyOperation) {
-      return;
-    }
-    dispatchReplyOperation.freezeAbort();
-    if (!dispatchReplyOperation.result) {
+    dispatchReplyOperation?.freezeAbort();
+    if (dispatchReplyOperation && !dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }
-    dispatchReplyOperation.completeWithAfterClearBarrier(
-      completionBarrier,
-      params.dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.(),
-    );
+    completeDispatchReplyOperation();
   };
 
   const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;

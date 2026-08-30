@@ -57,14 +57,9 @@ export function limitHistoryTurns(
     conversationStart++;
   }
 
-  const tail = messages.slice(conversationStart);
-  if (tail.length === 0) {
-    return messages;
-  }
-
   let userCount = 0;
-  for (const message of tail) {
-    if (message.role === "user") {
+  for (let i = conversationStart; i < messages.length; i++) {
+    if (messages[i]?.role === "user") {
       userCount++;
     }
   }
@@ -80,13 +75,13 @@ export function limitHistoryTurns(
   const userTurnsToKeep = targetUserTurns + ((userCount - targetUserTurns) % evictionBatchSize);
 
   userCount = 0;
-  let lastUserIndex = tail.length;
+  let lastUserIndex = messages.length;
 
-  for (const [i, message] of Array.from(tail.entries()).toReversed()) {
-    if (message.role === "user") {
+  for (let i = messages.length - 1; i >= conversationStart; i--) {
+    if (messages[i]?.role === "user") {
       userCount++;
       if (userCount > userTurnsToKeep) {
-        return [...messages.slice(0, conversationStart), ...tail.slice(lastUserIndex)];
+        return [...messages.slice(0, conversationStart), ...messages.slice(lastUserIndex)];
       }
       lastUserIndex = i;
     }

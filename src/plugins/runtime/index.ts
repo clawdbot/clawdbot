@@ -258,7 +258,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
 // Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
-  state = createRuntimeState(),
+  initialRuntime = { config: createRuntimeConfig(), state: createRuntimeState() },
 ) => {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -271,7 +271,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     gateway: _options.gateway ?? createRuntimeGateway(),
-    config: createRuntimeConfig(),
+    config: initialRuntime.config,
     agent,
     hooks: _options.hooks ?? {
       dispatchHookAgentTurn: async () => {
@@ -295,7 +295,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     ),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
-    state,
+    state: initialRuntime.state,
     tasks,
   } satisfies Omit<
     PluginRuntime,

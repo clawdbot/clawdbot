@@ -19,6 +19,10 @@ import type {
   WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerComputerParams,
+  WorkerComputerResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import type {
   WorkerInferenceCancelParams,
   WorkerInferenceCancelResponseFrame,
   WorkerInferenceEventFrame,
@@ -238,6 +242,12 @@ export class WorkerConnection {
 
   requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
     return this.frames.request("portal", params);
+  }
+
+  requestComputer(params: WorkerComputerParams): Promise<WorkerComputerResponseFrame> {
+    // Desktop input is not a durable session operation. A lost response cannot
+    // automatically replay clicks or typing on a reconnected transport.
+    return this.frames.request("computer", params, undefined, params.timeoutMs);
   }
 
   private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {

@@ -1,9 +1,12 @@
 // Grep tool streaming tests cover result limits, cancellation, and subprocess errors.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { createGrepToolDefinition } from "./grep.js";
@@ -15,6 +18,8 @@ vi.mock("../../../process/exec.js", () => ({
 vi.mock("../../utils/tools-manager.js", () => ({
   ensureTool: vi.fn(),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -42,13 +47,18 @@ function createChild(): MockChild {
   return child;
 }
 
-function grepMatch(lineNumber: number): string {
+function grepRow(
+  lineNumber: number,
+  lines: { text: string } | { bytes: string } = { text: "foo\n" },
+  type: "match" | "context" = "match",
+  filePath = "/tmp/match.txt",
+): string {
   return `${JSON.stringify({
-    type: "match",
+    type,
     data: {
-      path: { text: "/tmp/match.txt" },
+      path: { text: filePath },
       line_number: lineNumber,
-      lines: { text: "foo\n" },
+      lines,
     },
   })}\n`;
 }
@@ -61,6 +71,272 @@ function textContent(
 }
 
 describe("grep tool streaming", () => {
+  it.each(["..notes/sub/sample.txt", ...(path.sep === "/" ? ["literal\\name.txt"] : [])])(
+    "preserves readable result path %s",
+    async (relativePath) => {
+      const cwd = tempDirs.make("openclaw-grep-path-");
+      const filePath = path.join(cwd, relativePath);
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, "needle\n");
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const tool = createGrepToolDefinition(cwd);
+      const execution = tool.execute(
+        "path",
+        { pattern: "needle" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      child.stdout.end(grepRow(1, { text: "needle\n" }, "match", filePath));
+      child.stderr.end();
+      child.emit("close", 0);
+      expect(textContent(await execution)).toBe(`${relativePath}:1: needle`);
+    },
+  );
+
+  it.each(["utf8", "utf16le", "utf16be", "byte-form"] as const)(
+    "renders the searched %s context without decoding the file again",
+    async (encoding) => {
+      const cwd = tempDirs.make("openclaw-grep-context-");
+      const filePath = path.join(cwd, "sample.txt");
+      const text = "before\nneedle中\nafter\n";
+      const bytes =
+        encoding === "byte-form"
+          ? Buffer.from("before\xff\nneedle\xff\nafter\n", "latin1")
+          : encoding === "utf8"
+            ? Buffer.from(text)
+            : Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+      await writeFile(filePath, encoding === "utf16be" ? bytes.swap16() : bytes);
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const tool = createGrepToolDefinition(cwd);
+      const execution = tool.execute(
+        "context",
+        { pattern: "needle", context: 1 },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      child.stdout.end(
+        grepRow(
+          1,
+          encoding === "byte-form"
+            ? { bytes: Buffer.from("before\xff\n", "latin1").toString("base64") }
+            : { text: "before\n" },
+          "context",
+          filePath,
+        ) +
+          grepRow(
+            2,
+            encoding === "byte-form"
+              ? { bytes: Buffer.from("needle\xff\n", "latin1").toString("base64") }
+              : { text: "needle中\n" },
+            "match",
+            filePath,
+          ) +
+          grepRow(3, { text: "after\n" }, "context", filePath),
+      );
+      child.stderr.end();
+      child.emit("close", 0);
+      const result = await execution;
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: `sample.txt-1- ${encoding === "byte-form" ? "before�" : "before"}\nsample.txt:2: ${encoding === "byte-form" ? "needle�" : "needle中"}\nsample.txt-3- after`,
+        },
+      ]);
+      expect(result.details).toBeUndefined();
+      expect(vi.mocked(spawnCommand).mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining(["--context", "1"]),
+      );
+    },
+  );
+
+  it.each([3, 4, 5])("captures context before stopping at sentinel line %s", async (sentinel) => {
+    const cwd = tempDirs.make("openclaw-grep-sentinel-");
+    const filePath = path.join(cwd, "sample.txt");
+    const lines = ["before", "foo retained", "middle", "tail", "outside"];
+    lines[sentinel - 1] = "foo extra";
+    await writeFile(filePath, lines.join("\n"));
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const tool = createGrepToolDefinition(cwd);
+    const execution = tool.execute(
+      "limit",
+      { pattern: "foo", context: 2, limit: 1 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    const killedAfterRows: boolean[] = [];
+    for (let lineNumber = 1; lineNumber <= Math.max(4, sentinel); lineNumber++) {
+      child.stdout.write(
+        grepRow(
+          lineNumber,
+          { text: `${lines[lineNumber - 1]}\n` },
+          lineNumber === 2 || lineNumber === sentinel ? "match" : "context",
+          filePath,
+        ),
+      );
+      killedAfterRows.push(child.killed);
+    }
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", null);
+    const result = await execution;
+    expect(killedAfterRows).toEqual(
+      sentinel === 5 ? [false, false, false, false, true] : [false, false, false, true],
+    );
+    expect(textContent(result)).toBe(
+      `sample.txt-1- before\nsample.txt:2: foo retained\nsample.txt-3- ${lines[2]}\nsample.txt-4- ${lines[3]}\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]`,
+    );
+    expect(result.details).toEqual({ matchLimitReached: 1 });
+  });
+
+  it("keeps exact-limit overlapping windows in match order", async () => {
+    const cwd = tempDirs.make("openclaw-grep-overlap-");
+    const filePath = path.join(cwd, "match.txt");
+    await writeFile(filePath, "before\nfoo first\nfoo second\nafter");
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const tool = createGrepToolDefinition(cwd);
+    const execution = tool.execute(
+      "overlap",
+      { pattern: "foo", context: 1, limit: 2 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.stdout.end(
+      grepRow(1, { text: "before\n" }, "context", filePath) +
+        grepRow(2, { text: "foo first\n" }, "match", filePath) +
+        grepRow(3, { text: "foo second\n" }, "match", filePath) +
+        grepRow(4, { text: "after" }, "context", filePath),
+    );
+    child.stderr.end();
+    child.emit("close", 0);
+    const result = await execution;
+    expect(textContent(result)).toBe(
+      "match.txt-1- before\nmatch.txt:2: foo first\nmatch.txt-3- foo second\nmatch.txt-2- foo first\nmatch.txt:3: foo second\nmatch.txt-4- after",
+    );
+    expect(result.details).toBeUndefined();
+    expect(child.killed).toBe(false);
+  });
+
+  it.each(["", "\n"])(
+    "finishes a retained window at file end with terminator %j",
+    async (terminator) => {
+      const cwd = tempDirs.make("openclaw-grep-eof-");
+      const filePath = path.join(cwd, "sample.txt");
+      await writeFile(filePath, `before\nfoo retained\nfoo extra${terminator}`);
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const tool = createGrepToolDefinition(cwd);
+      const execution = tool.execute(
+        "eof",
+        { pattern: "foo", context: 3, limit: 1 },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      child.stdout.write(
+        grepRow(1, { text: "before\n" }, "context", filePath) +
+          grepRow(2, { text: "foo retained\n" }, "match", filePath) +
+          grepRow(3, { text: `foo extra${terminator}` }, "match", filePath),
+      );
+      const killedBeforeEnd = child.killed;
+      child.stdout.end(`${JSON.stringify({ type: "end", data: { path: { text: filePath } } })}\n`);
+      const killedAfterEnd = child.killed;
+      child.stderr.end();
+      child.emit("close", null);
+      const result = await execution;
+      expect([killedBeforeEnd, killedAfterEnd]).toEqual([false, true]);
+      expect(textContent(result)).toBe(
+        "sample.txt-1- before\nsample.txt:2: foo retained\nsample.txt-3- foo extra\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]",
+      );
+    },
+  );
+
+  it.each([
+    { context: 0, hasText: true, reads: 0, expected: "match.txt:2: native needle" },
+    { context: 0, hasText: false, reads: 1, expected: "match.txt:2: custom needle" },
+    {
+      context: 1,
+      hasText: true,
+      reads: 1,
+      expected: "match.txt-1- remote\nmatch.txt:2: custom needle\nmatch.txt-3- tail",
+    },
+  ])(
+    "preserves custom reader ownership for context $context and native text $hasText",
+    async ({ context, hasText, reads, expected }) => {
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const readFile = vi.fn(async () => "remote\r\ncustom needle\rtail\n");
+      const tool = createGrepToolDefinition("/workspace", {
+        operations: { isDirectory: () => true, readFile },
+      });
+      const execution = tool.execute(
+        "custom",
+        { pattern: "needle", context },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      child.stdout.end(
+        grepRow(
+          2,
+          hasText
+            ? { text: "native needle\n" }
+            : { bytes: Buffer.from("native needle\xff\n", "latin1").toString("base64") },
+        ),
+      );
+      child.stderr.end();
+      child.emit("close", 0);
+      expect(textContent(await execution)).toBe(expected);
+      expect(readFile).toHaveBeenCalledTimes(reads);
+    },
+  );
+
+  it("settles cancellation while draining a retained context window", async () => {
+    const child = createChild();
+    const kill = vi.spyOn(child, "kill");
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const controller = new AbortController();
+    const tool = createGrepToolDefinition(process.cwd());
+    const execution = tool.execute(
+      "drain-abort",
+      { pattern: "foo", context: 2, limit: 1 },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.stdout.write(grepRow(1) + grepRow(2));
+    const killedBeforeAbort = child.killed;
+    const rejection = expect(execution).rejects.toThrow("Operation aborted");
+    controller.abort();
+    await rejection;
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", null);
+    expect(killedBeforeAbort).toBe(false);
+    expect(kill).toHaveBeenCalledOnce();
+  });
+
   it.for([
     { context: undefined, expected: ["sample.txt:3: context needle"] },
     { context: 0, expected: ["sample.txt:3: context needle"] },
@@ -165,7 +441,7 @@ describe("grep tool streaming", () => {
       );
       await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
       for (let lineNumber = 1; lineNumber <= matchCount; lineNumber += 1) {
-        child.stdout.write(grepMatch(lineNumber));
+        child.stdout.write(grepRow(lineNumber));
       }
       child.stdout.end();
       child.stderr.end();

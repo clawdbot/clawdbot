@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
+} from "../../agents/run-termination.js";
+import type { ReplySessionBinding } from "../../auto-reply/reply/get-reply.types.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   interruptReplyRunTarget,
@@ -14,6 +18,7 @@ import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main
 import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
@@ -23,7 +28,11 @@ import {
   isCompetingSessionWorkAdmissionActive,
 } from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
+import {
+  isChatAbortControllerEntryAbortable,
+  registerChatAbortController,
+  resolveChatRunExpiresAtMs,
+} from "../chat-abort.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -407,15 +416,36 @@ export async function admitChatSend(params: {
       identities: [sessionKey, backingSessionId],
       assertAllowed: () => assertChatWorkAdmissionAllowed(false),
       revalidateAllowed: () => assertChatWorkAdmissionAllowed(true),
-      onInterrupt: () => {
-        if (admittedRunAbort?.entry) {
-          admittedRunAbort.entry.abortStopReason = "restart";
+      onInterrupt: (reason) => {
+        const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
+        if (!admittedRunAbort) {
+          if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+            writePreRegisteredChatAbort({
+              context,
+              runId: clientRunId,
+              stopReason,
+              attemptId: pendingAttemptId,
+            });
+          }
+        } else if (!admittedRunAbort.controller.signal.aborted) {
+          // A later lifecycle drain must not overwrite the first abort reason.
+          if (admittedRunAbort.entry) {
+            admittedRunAbort.entry.abortStopReason = stopReason;
+          }
+          admittedRunAbort.controller.abort(
+            stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
+          );
         }
-        admittedRunAbort?.controller.abort(createAgentRunRestartAbortError());
       },
     });
   } catch (err) {
     clearPendingChatSendReservation();
+    const aborted =
+      context.chatRunState.hasAbortMarker(clientRunId) && context.dedupe.get(`chat:${clientRunId}`);
+    if (aborted) {
+      respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
+      return { ok: false as const };
+    }
     if (err instanceof Error && err.message === "goal-session-busy") {
       respond(
         false,
@@ -463,7 +493,7 @@ export async function admitChatSend(params: {
         activeRunAbort.entry.abortStopReason = "restart";
       }
       activeRunAbort.controller.abort();
-      activeRunAbort.cleanup({ force: true });
+      activeRunAbort.cleanup();
     }
     gatewayWorkAdmission.release();
     if (!context.dedupe.has(`chat:${clientRunId}`)) {
@@ -505,7 +535,7 @@ export async function admitChatSend(params: {
   let releaseGatewayRootContinuation = () => {};
   // Until dispatch takes custody, interruption and callback failures own the same three resources.
   const cleanupPreDispatchAdmission = () => {
-    activeRunAbort.cleanup({ force: true });
+    activeRunAbort.cleanup();
     gatewayWorkAdmission.release();
     releaseGatewayRootContinuation();
   };
@@ -562,6 +592,27 @@ export async function admitChatSend(params: {
   }
 
   const acquiredGatewayWorkAdmission = gatewayWorkAdmission;
+  // Native initialization may create the SID after admission. Keep the original
+  // registration as the shared binding; retained callbacks cannot adopt a successor.
+  const sessionBinding = activeRunAbort.entry;
+  const onSessionPrepared = (binding: ReplySessionBinding) => {
+    if (binding.sessionKey !== sessionKey) {
+      return;
+    }
+    if (
+      context.chatAbortControllers.get(clientRunId) !== sessionBinding ||
+      lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+      !acquiredGatewayWorkAdmission.isActive() ||
+      !isChatAbortControllerEntryAbortable(sessionBinding) ||
+      sessionBinding.registrationCleanupRequested ||
+      sessionBinding.projectSessionActive === false ||
+      sessionBinding.projectSessionTerminalPending ||
+      sessionBinding.projectSessionTerminalPersisted
+    ) {
+      throw createAbortError("chat session preparation no longer owns its admission");
+    }
+    sessionBinding.sessionId = binding.sessionId;
+  };
   let gatewayWorkAdmissionRetains = 1;
   const releaseGatewayWorkAdmission = () => {
     if (gatewayWorkAdmissionRetains === 0) {
@@ -600,15 +651,15 @@ export async function admitChatSend(params: {
   // handler disarms it once the media becomes referenced (durable admission
   // or ACK handing ownership to dispatch, which persists on all paths).
   let discardAbandonedPreparedMedia: (() => void) | undefined;
-  const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
-    activeRunAbort.cleanup(options);
+  const cleanupAdmittedRun: typeof activeRunAbort.cleanup = () => {
+    activeRunAbort.cleanup();
     releaseInitialGatewayWorkAdmission();
     releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };
   const rejectSessionRoutingChanged = () => {
-    cleanupAdmittedRun({ force: true });
+    cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);
     respondChatSessionRoutingChanged(respond);
   };
@@ -636,6 +687,8 @@ export async function admitChatSend(params: {
     value: {
       activeRunAbort,
       admittedSessionId,
+      sessionBinding,
+      onSessionPrepared,
       initialSessionEntry,
       chatSendTraceAttributes,
       cleanupAdmittedRun,

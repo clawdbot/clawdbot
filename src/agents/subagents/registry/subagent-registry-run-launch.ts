@@ -17,8 +17,10 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import type {
   SubagentProgressOrigin,
@@ -124,9 +126,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
       taskRunId: runId,
-      ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
-        ? { requesterTurnRunId }
-        : {}),
+      ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey,
@@ -206,6 +206,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
     };
     const activateRegistrationLifecycle = () => {
+      bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry);
+      subagentRuns.commitOwnership(entry);
       this.options.ensureListener();
       // Session-mode and persistence-recovery runs also need TTL cleanup.
       this.options.startSweeper();

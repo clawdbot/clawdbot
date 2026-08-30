@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -107,13 +108,8 @@ function notifyDelegatedAuthorityClosed(
   state: AgentRunRegistryState,
   authority: AgentRunDelegatedAuthority,
 ): void {
-  for (const handler of state.delegatedAuthorityClosedHandlers ?? []) {
-    try {
-      handler(authority);
-    } catch {
-      // One observer cannot block closure or prevent other owners from cancelling work.
-    }
-  }
+  // One observer cannot block closure or prevent other owners from canceling work.
+  notifyListeners(state.delegatedAuthorityClosedHandlers ?? [], authority);
 }
 
 /** Observe exact delegated-authority closure without displacing other lifecycle owners. */
@@ -121,10 +117,7 @@ export function registerAgentRunDelegatedAuthorityClosedHandler(
   handler: (authority: AgentRunDelegatedAuthority) => void,
 ): () => void {
   const handlers = (getAgentRunRegistryState().delegatedAuthorityClosedHandlers ??= new Set());
-  handlers.add(handler);
-  return () => {
-    handlers.delete(handler);
-  };
+  return registerListener(handlers, handler);
 }
 
 /** Connects registry cleanup to the event sequencer without reversing ownership. */

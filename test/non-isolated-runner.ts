@@ -8,6 +8,7 @@ import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import { drainGlobalSingletonLifecycleState } from "../src/shared/global-singleton.js";
 import {
   type CustomElementTracking,
   dropRepoOwnedCustomElements,
@@ -104,6 +105,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   delete process.env.OPENCLAW_CONFIG_PATH;
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
   process.env.XDG_CONFIG_HOME = path.join(testHome, ".config");
   process.env.XDG_DATA_HOME = path.join(testHome, ".local", "share");
   process.env.XDG_STATE_HOME = path.join(testHome, ".local", "state");
@@ -484,6 +486,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
     resetOpenClawSessionSuspensionState();
+    // Lifecycle-owned singletons survive module resets; close them before the next file
+    // can observe a previous file's sessions, caches, or registered resources.
+    await drainGlobalSingletonLifecycleState();
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();

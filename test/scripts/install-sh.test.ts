@@ -2545,6 +2545,56 @@ EOF
     expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 
+  it.each([0, 17])("joins the finalization watchdog after probe exit %s", (probeExit) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-install-watchdog-"));
+    const sleep = join(root, "sleep");
+    // Synchronize on the real watchdog sleep without shortening its deadline
+    // or making the assertion depend on host timing.
+    writeFileSync(
+      sleep,
+      '#!/bin/bash\nprintf "%s\\n" "$$" > "$WATCHDOG_PID"\nprintf "ready\\n" > "$WATCHDOG_READY"\nexec /bin/sleep "$@"\n',
+      { mode: 0o755 },
+    );
+
+    try {
+      const result = runInstallShell(
+        `
+          source "${SCRIPT_PATH}"
+          mkfifo "$WATCHDOG_READY"
+          fast_probe() {
+            IFS= read -r ready < "$WATCHDOG_READY"
+            printf 'probe-output'
+            return "$PROBE_EXIT"
+          }
+          output="$(
+            probe_status=0
+            bounded_probe_output fixture fast_probe || probe_status=$?
+            watchdog_pid="$(cat "$WATCHDOG_PID")"
+            if kill -0 "$watchdog_pid" 2>/dev/null; then
+              printf ':watchdog-alive'
+            fi
+            printf ':status=%s' "$probe_status"
+            cleanup_tmpfiles
+          )"
+          printf '%s\\n' "$output"
+        `,
+        {
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          PROBE_EXIT: String(probeExit),
+          WATCHDOG_PID: join(root, "sleep.pid"),
+          WATCHDOG_READY: join(root, "ready"),
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: undefined,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`probe-output:status=${probeExit}\n`);
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("bounds installer npm prefix probes during finalization helpers", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-probe-"));
     const npm = join(tmp, "npm");

@@ -380,6 +380,7 @@ export async function runEmbeddedAttempt(
             effectiveWorkspace,
             initialSystemPrompt: preparedSystemPrompt.systemPromptText,
             isRawModelRun,
+            nestedToolActivities: preparedToolBase.nestedToolActivities,
             sessionManager: {
               replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
               resolveActiveContextEnginePluginId,

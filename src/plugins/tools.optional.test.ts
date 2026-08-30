@@ -55,8 +55,8 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
-let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
-let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
+let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
+let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
 let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -541,12 +541,8 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({
-      buildPluginToolMetadataKey,
-      ensureStandalonePluginToolRegistryLoaded,
-      getPluginToolMeta,
-      resolvePluginTools,
-    } = await import("./tools.js"));
+    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -3408,7 +3404,7 @@ describe("resolvePluginTools optional tools", () => {
 
 describe("buildPluginToolMetadataKey", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey } = await import("./tool-metadata.js"));
   });
 
   it("does not collide when ids or names contain separator-like characters", () => {

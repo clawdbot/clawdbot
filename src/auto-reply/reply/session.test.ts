@@ -5779,7 +5779,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "prefers fresh final usage over zero compactionTokensAfter",
+      name: "preserves an ordered zero context snapshot independently of billable usage",
       seed: {
         totalTokens: 1_794_391,
         totalTokensFresh: true,
@@ -5793,10 +5793,10 @@ describe("persistSessionUsageUpdate", () => {
         lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
         providerUsed: "claude-cli",
         contextTokensUsed: 1_048_576,
-        compactionTokensAfter: 0,
+        currentContextSnapshot: { tokens: 0 },
       },
       expected: {
-        totalTokens: 1_794_391,
+        totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: 20,
         outputTokens: 10_855,
@@ -5805,16 +5805,16 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "prefers fresh lastCallUsage over positive compactionTokensAfter",
+      name: "uses ordered current context rather than older last-call usage",
       seed: { totalTokens: 180_000, totalTokensFresh: true },
       update: {
         usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
         lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
         providerUsed: "openai",
-        compactionTokensAfter: 80_000,
+        currentContextSnapshot: { tokens: 80_000 },
       },
       expected: {
-        totalTokens: 95_000,
+        totalTokens: 80_000,
         totalTokensFresh: true,
         inputTokens: 100_000,
         outputTokens: 3_000,
@@ -5822,7 +5822,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "uses positive compactionTokensAfter when final usage has no prompt total",
+      name: "keeps ordered context separate from output-only billing usage",
       seed: {
         totalTokens: 180_000,
         totalTokensFresh: true,
@@ -5854,14 +5854,14 @@ describe("persistSessionUsageUpdate", () => {
         lastCallUsage: { output: 125 },
         providerUsed: "claude-cli",
         contextTokensUsed: undefined,
-        compactionTokensAfter: 80_000,
+        currentContextSnapshot: { tokens: 80_000 },
       },
       expected: {
         totalTokens: 80_000,
         totalTokensFresh: true,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheRead: undefined,
+        inputTokens: 0,
+        outputTokens: 125,
+        cacheRead: 0,
         contextBudgetStatus: undefined,
       },
     },

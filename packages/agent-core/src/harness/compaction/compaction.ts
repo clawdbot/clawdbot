@@ -703,8 +703,6 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
-  /** Explicit terminal state of the turn whose prefix was split from its retained suffix. */
-  splitTurnCompleted?: boolean;
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
@@ -715,24 +713,6 @@ export interface CompactionPreparation {
   fileOps: FileOperations;
   /** Settings used to prepare compaction. */
   settings: CompactionSettings;
-}
-
-function latestUserTurnCompleted(messages: AgentMessage[]): boolean {
-  let sawTurnTail = false;
-  let completed = false;
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      return completed;
-    }
-    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
-      sawTurnTail = true;
-      completed =
-        message.role === "assistant" &&
-        message.stopReason === "stop" &&
-        message.content.some((block) => block.type === "text" && block.text.trim().length > 0);
-    }
-  }
-  return false;
 }
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
@@ -844,23 +824,12 @@ export function prepareCompaction(
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
-  const retainedTurnSuffixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = effectiveEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
-      }
-    }
-    for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
-      const entry = effectiveEntries.at(i);
-      if (!entry || (i > cutPoint.firstKeptEntryIndex && isTurnStartEntry(entry))) {
-        break;
-      }
-      const msg = getMessageFromEntryForCompaction(entry);
-      if (msg) {
-        retainedTurnSuffixMessages.push(msg);
       }
     }
   }
@@ -879,14 +848,6 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
-    ...(cutPoint.isSplitTurn
-      ? {
-          splitTurnCompleted: latestUserTurnCompleted([
-            ...turnPrefixMessages,
-            ...retainedTurnSuffixMessages,
-          ]),
-        }
-      : {}),
     tokensBefore,
     previousSummary,
     previousSummaryDetails,

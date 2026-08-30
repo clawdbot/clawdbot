@@ -13,8 +13,6 @@ import {
   type ExecTarget,
   maxAsk,
   minSecurity,
-  normalizeExecAsk,
-  normalizeExecSecurity,
   normalizeExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
@@ -29,43 +27,17 @@ import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mo
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
   SessionEntry,
-  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd" | "permissionMode" | "sandbox"
+  "execHost" | "execNode" | "execCwd" | "permissionMode" | "sandbox"
 >;
 
-// Resolved exec config layers come from global config, agent config, legacy
-// session fields, and per-call overrides.
-type ResolvedExecConfig = {
+// Resolved exec config layers come from global config, agent config, and per-call overrides.
+export type ExecPolicyOverrides = {
   host?: ExecTarget;
   mode?: ExecMode;
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
 };
-
-export type ExecPolicyOverrides = ResolvedExecConfig;
-
-// Legacy/config resolution keeps the most specific mode/security/ask while
-// preserving policy bounds from approvals and sandbox availability later.
-type LayeredExecPolicy = {
-  mode?: ExecMode;
-  security: ExecSecurity;
-  ask: ExecAsk;
-};
-
-function applySessionLegacyExecPolicyLayer(
-  base: LayeredExecPolicy,
-  sessionEntry?: ExecSessionDefaults,
-): LayeredExecPolicy {
-  const security = normalizeExecSecurity(sessionEntry?.execSecurity);
-  const ask = normalizeExecAsk(sessionEntry?.execAsk);
-  if (security !== null || ask !== null) {
-    return {
-      security: security ?? base.security,
-      ask: ask ?? base.ask,
-    };
-  }
-  return base;
-}
 
 // Gather the shared config state once so exec resolution applies one
 // agent/global/session precedence order.
@@ -80,8 +52,8 @@ function resolveExecConfigState(params: {
   cfg: OpenClawConfig;
   host: ExecTarget;
   agentId: string | undefined;
-  agentExec?: ResolvedExecConfig;
-  globalExec?: ResolvedExecConfig;
+  agentExec?: ExecPolicyOverrides;
+  globalExec?: ExecPolicyOverrides;
 } {
   const cfg = params.cfg ?? {};
   const resolvedAgentId =
@@ -193,16 +165,18 @@ export function resolveExecDefaults(params: {
             ask: "off",
           },
         }).agent;
-  const basePolicy: LayeredExecPolicy = {
-    security: approvalDefaults?.security ?? defaultSecurity,
-    ask: approvalDefaults?.ask ?? "off",
-  };
-  const layeredPolicy: LayeredExecPolicy =
+  const layeredPolicy =
     sessionPermissionPolicy ??
     applyExecPolicyLayer(
-      applySessionLegacyExecPolicyLayer(
-        applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
-        params.sessionEntry,
+      applyExecPolicyLayer(
+        applyExecPolicyLayer(
+          {
+            security: approvalDefaults?.security ?? defaultSecurity,
+            ask: approvalDefaults?.ask ?? "off",
+          },
+          globalExec,
+        ),
+        agentExec,
       ),
       params.execOverrides,
     );

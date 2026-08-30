@@ -16,12 +16,15 @@ import {
   GATEWAY_INGRESS_ARGS,
 } from "./agent-command.compaction.test-support.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 
 const {
   appendTranscriptEvent,
   appendTranscriptMessage,
   createAgentRunRestartAbortError,
+  loadSessionEntry,
   loadTranscriptEvents,
+  patchSessionEntryCore,
   replaceSessionEntry,
   rotateAgentEventLifecycleGeneration,
 } = compactionTestRuntime;
@@ -117,9 +120,13 @@ describe("agentCommand embedded maintenance", () => {
       return completed;
     });
     state.runSessionCompactionIfNeededMock.mockImplementationOnce(async (params) => {
-      expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text,
+      expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+        pendingFinalDelivery: { kind: "replayable", text },
+        totalTokens: 904_869,
+        inputTokens: lastCallUsage.input,
+        outputTokens: lastCallUsage.output,
+        cacheRead: lastCallUsage.cacheRead,
+        cacheWrite: lastCallUsage.cacheWrite,
       });
       expect(params).toMatchObject({
         agentHarnessId: "openclaw",
@@ -185,8 +192,94 @@ describe("agentCommand embedded maintenance", () => {
       }),
     );
     expect(state.deliveryFreshEntries.at(-1)?.sessionId).toBe(successorSessionId);
+    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+      sessionId: successorSessionId,
+      totalTokens: 12_000,
+      totalTokensFresh: true,
+      inputTokens: lastCallUsage.input,
+      outputTokens: lastCallUsage.output,
+      cacheRead: lastCallUsage.cacheRead,
+      cacheWrite: lastCallUsage.cacheWrite,
+    });
     expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "refreshes count-zero retry context only for its retained writer (replacement=%s)",
+    async (replaceWriter) => {
+      const sessionId = "retry-context-owner";
+      const sessionKey = `agent:main:explicit:${sessionId}`;
+      const storePath = requireStorePath();
+      let retainedWriter: string | undefined;
+      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+        const target = params.sessionTarget;
+        const entry = target ? loadSessionEntry(target) : undefined;
+        if (!target || !entry) {
+          throw new Error("expected the first candidate owner");
+        }
+        retainedWriter = entry.activeWriterRunId;
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 1,
+          currentContextTokens: 42,
+          target: {
+            ...target,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: entry.activeWriterRunId,
+          },
+        });
+        throw new LiveSessionModelSwitchError({
+          provider: params.providerOverride,
+          model: params.modelOverride,
+          authProfileId: "switched-profile",
+          authProfileIdSource: "user",
+        });
+      });
+      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+        const target = params.sessionTarget;
+        if (!target) {
+          throw new Error("expected the retry target");
+        }
+        if (replaceWriter) {
+          await patchSessionEntryCore(target, () => ({
+            activeWriterRunId: "replacement-writer",
+            compactionCount: 7,
+            totalTokens: 777,
+            totalTokensFresh: true,
+            totalTokensVersion: 1,
+          }));
+        }
+        const entry = loadSessionEntry(target);
+        if (!entry) {
+          throw new Error("expected the retry owner");
+        }
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          currentContextTokens: 95_000,
+          target: {
+            ...target,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: entry.activeWriterRunId,
+          },
+        });
+        return makeResult({ sessionId, text: "retry answer", runner: "embedded" });
+      });
+
+      await agentCommand({ message: "continue", sessionId, sessionKey });
+
+      expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+      expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+        sessionId,
+        compactionCount: replaceWriter ? 7 : 1,
+        totalTokens: replaceWriter ? 777 : 95_000,
+        totalTokensFresh: true,
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.activeWriterRunId).toBe(
+        replaceWriter ? "replacement-writer" : retainedWriter,
+      );
+    },
+  );
 
   const excludedEmbeddedRuns: Array<{
     name: string;
@@ -230,6 +323,23 @@ describe("agentCommand embedded maintenance", () => {
     });
     completed.meta = { ...completed.meta, ...testCase.meta };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      if (testCase.compactionCount) {
+        const target = params.sessionTarget;
+        const entry = target ? loadSessionEntry(target) : undefined;
+        if (!target || !entry) {
+          throw new Error("expected the in-run compaction owner");
+        }
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: testCase.compactionCount,
+          currentContextTokens: undefined,
+          target: {
+            ...target,
+            lifecycleRevision: entry.lifecycleRevision,
+            activeWriterRunId: entry.activeWriterRunId,
+          },
+        });
+      }
       if (testCase.observeAuth !== false) {
         params.onSuccessfulAuthProfile?.({});
       }

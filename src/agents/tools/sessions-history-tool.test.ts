@@ -152,7 +152,7 @@ describe("sessions_history redaction", () => {
       Value.Check(tool.outputSchema!, { status: "forbidden", error: "hidden", extra: true }),
     ).toBe(false);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted" }>; total: number; nextBefore?: number }; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -234,6 +234,50 @@ describe("sessions_history redaction", () => {
     expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
     expect(serialized).toContain("OPENROUTER_API_KEY=");
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
+  });
+
+  it("keeps accepted inputs separate, redacted, bounded, and addressable by their own cursor", async () => {
+    useLoggingConfig("pending-redaction-off.json", { redactSensitive: "off" });
+    const requests: CallGatewayRequest[] = [];
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+      runId: "do-not-expose-correlation",
+      state: "interrupted",
+      acceptedAt: 1_700_000_000_000,
+      message: {
+        role: "user",
+        content: `OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ${"queued input ".repeat(1000)}`,
+      },
+    }));
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return {
+          messages: [{ role: "assistant", content: "Canonical reply" }],
+          pendingInputs: { items, total: 23, nextBefore: 4 },
+        } as T;
+      },
+    });
+    const result = await tool.execute("pending-cursor", { sessionKey: "main", pendingBefore: 24 });
+    const details = result.details as {
+      messages: unknown[];
+      pendingInputs: { items: unknown[]; total: number; nextBefore: number };
+      contentRedacted: boolean;
+      bytes: number;
+    };
+    expect(requireGatewayRequest(requests, "chat.history").params).toMatchObject({
+      pendingBefore: 24,
+    });
+    expect(details.messages).toEqual([{ role: "assistant", content: "Canonical reply" }]);
+    expect(details.pendingInputs).toMatchObject({ total: 23, nextBefore: 4 });
+    expect(details.pendingInputs.items).toHaveLength(20);
+    expect(Buffer.byteLength(JSON.stringify(details.pendingInputs))).toBeLessThanOrEqual(4096);
+    expect(JSON.stringify(details.pendingInputs)).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(JSON.stringify(details.pendingInputs)).not.toContain("do-not-expose-correlation");
+    expect(details.contentRedacted).toBe(true);
+    expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
+    expect(Value.Check(tool.outputSchema!, details)).toBe(true);
   });
 
   it("applies custom redaction patterns to recalled session text", async () => {

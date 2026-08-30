@@ -46,67 +46,9 @@ export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | n
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
 }
 
-function blobFromDataUrl(dataUrl: string): Blob | null {
-  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const metadata = match[1] ?? "";
-  const payload = match[2] ?? "";
-  try {
-    if (metadata.toLowerCase().includes(";base64")) {
-      const binary = atob(payload.replace(/\s+/gu, ""));
-      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
-    }
-    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
-      type: metadata.split(";", 1)[0],
-    });
-  } catch {
-    return null;
-  }
-}
-
+// Startup handoffs share this registry; binary conversion stays with lazy persistence.
 export function getChatAttachmentBlob(attachment: ChatAttachment): Blob | null {
-  const stored = payloads.get(attachment.id)?.blob;
-  if (stored) {
-    return stored;
-  }
-  const dataUrl = getChatAttachmentDataUrl(attachment);
-  return dataUrl ? blobFromDataUrl(dataUrl) : null;
-}
-
-function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Blob read failed")), {
-      once: true,
-    });
-    reader.addEventListener(
-      "load",
-      () =>
-        typeof reader.result === "string"
-          ? resolve(reader.result)
-          : reject(new Error("Blob read returned no data")),
-      { once: true },
-    );
-    reader.readAsDataURL(blob);
-  });
-}
-
-export async function restoreChatAttachmentPayload(params: {
-  attachment: ChatAttachment;
-  blob: Blob;
-}): Promise<ChatAttachment> {
-  const blob =
-    params.blob.type === params.attachment.mimeType
-      ? params.blob
-      : params.blob.slice(0, params.blob.size, params.attachment.mimeType);
-  const dataUrl = await readBlobAsDataUrl(blob);
-  const file = new File([blob], params.attachment.fileName ?? "attachment", {
-    type: params.attachment.mimeType,
-  });
-  return registerChatAttachmentPayload({ attachment: params.attachment, dataUrl, file });
+  return payloads.get(attachment.id)?.blob ?? null;
 }
 
 // Stored data URLs keep previews available when this browser cannot create object URLs.

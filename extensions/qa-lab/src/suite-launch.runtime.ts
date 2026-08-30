@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import {
@@ -417,6 +418,7 @@ async function resolveSuiteExecutionPlan(
 
 async function runQaTestFileSuiteFromRuntime(params: {
   env?: NodeJS.ProcessEnv;
+  kind: QaTestFileExecutionKind;
   runParams: QaSuiteRunParams | undefined;
   scenarios: readonly QaTestFileScenario[];
 }): Promise<QaTestFileScenarioRunResult> {
@@ -428,7 +430,15 @@ async function runQaTestFileSuiteFromRuntime(params: {
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   return await runQaTestFileScenarios({
     evidenceMode: runParams?.evidenceMode,
-    ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
+    ...(params.env
+      ? { env: params.env, envMode: "replace" as const }
+      : params.kind !== "script"
+        ? {
+            // The owning QA process already loaded the prepared runtime. Native
+            // child setup must not clean or rebuild those files under live gateways.
+            env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+          }
+        : {}),
     ...(runParams?.failFast ? { failFast: true } : {}),
     ...(shouldLogQaSuiteProgress()
       ? { progress: (message: string) => writeQaSuiteProgress(true, message) }
@@ -440,6 +450,21 @@ async function runQaTestFileSuiteFromRuntime(params: {
     scenarios: params.scenarios,
     writeEvidenceFile: runParams?.writeEvidenceFile,
   });
+}
+
+async function prepareQaSuiteNativeRuntime(repoRoot: string) {
+  const argv = [
+    process.execPath,
+    "--import",
+    "tsx",
+    "scripts/tsdown-build.mts",
+    "--config",
+    "tsdown.ai.config.ts",
+  ];
+  const result = await runPluginCommandWithTimeout({ argv, cwd: repoRoot, timeoutMs: 20 * 60_000 });
+  if (result.code !== 0) {
+    throw new Error(`QA suite runtime preparation failed (${argv.join(" ")}): ${result.stderr}`);
+  }
 }
 
 function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | undefined) {
@@ -1062,6 +1087,7 @@ async function runUnifiedQaSuite(params: {
           );
           const result = await runQaTestFileSuiteFromRuntime({
             env: kind === "script" ? preparedScriptEnv : undefined,
+            kind,
             runParams: {
               ...params.runParams,
               outputDir: suitePartitionOutputDir(outputDir, kind),
@@ -1306,10 +1332,15 @@ async function runUnifiedQaSuite(params: {
         })
       : await runWeightedUnifiedPartitionTasks(retryingTasks, maxWeight);
   };
+  // Native children opt out of their destructive global build only after this
+  // scheduler has established the shared runtime they consume concurrently.
+  if (concurrentTestFileScenariosByKind.has("vitest")) {
+    await prepareQaSuiteNativeRuntime(repoRoot);
+  }
   const concurrentPartitionResults = await runPartitionTasks(concurrentPartitionTasks, concurrency);
   const concurrentFailed = failFast && concurrentPartitionResults.some(partitionFailed);
   let scriptPreparationFailure: QaUnifiedPartitionResult | undefined;
-  if (!concurrentFailed && scriptScenarios?.some(dockerBatch.isDockerE2eScenario)) {
+  if (!concurrentFailed && scriptScenarios?.some(dockerBatch.dockerLaneName)) {
     try {
       preparedScriptEnv = await dockerBatch.prepareDockerE2eEnvironment({
         env: process.env,

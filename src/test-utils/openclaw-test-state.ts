@@ -237,6 +237,7 @@ function buildEnvVars(params: {
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENCLAW_CONFIG_PATH: params.configPath,
     ...agentDirEnv,
+    PI_CODING_AGENT_DIR: undefined,
     ...params.scenarioEnv,
     ...params.extraEnv,
   };

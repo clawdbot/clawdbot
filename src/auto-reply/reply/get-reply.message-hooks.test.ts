@@ -1,9 +1,13 @@
 // Tests get-reply message hooks before and after agent execution.
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
@@ -38,30 +42,24 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: mocks.createInternalHookEvent,
   triggerInternalHook: mocks.triggerInternalHook,
 }));
-vi.mock("../../link-understanding/apply.js", () => ({
-  applyLinkUnderstanding: mocks.applyLinkUnderstanding,
-}));
 vi.mock("../../link-understanding/apply.runtime.js", () => ({
   applyLinkUnderstanding: mocks.applyLinkUnderstanding,
-}));
-vi.mock("../../media-understanding/apply.js", () => ({
-  applyMediaUnderstanding: mocks.applyMediaUnderstanding,
 }));
 vi.mock("../../media-understanding/apply.runtime.js", () => ({
   applyMediaUnderstanding: mocks.applyMediaUnderstanding,
 }));
-vi.mock("./commands-core.js", () => ({
-  emitResetCommandHooks: vi.fn(async () => undefined),
-}));
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let resolveAgentWorkspaceDirMock: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 let stageSandboxMediaMock: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
+    await import("../../agents/agent-scope.js"));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
@@ -841,66 +839,68 @@ describe("getReplyFromConfig message hooks", () => {
   });
 
   it("stages remaining remote iMessage media in a mixed staged context", async () => {
-    const order: string[] = [];
-    const alreadyStagedPath = "/tmp/already-staged.jpg";
-    const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
-    const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
-    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
-      order.push("stage");
-      const stagedFacts = [
-        { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-        { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-      ];
-      params.ctx.media = stagedFacts;
-      params.sessionCtx.media = stagedFacts;
-      return { staged: new Map([[1, stagedPath]]) };
-    });
-    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
-      order.push("understand");
-      const { ctx } = args[0] as { ctx: MsgContext };
-      expect(ctx.media).toEqual([
-        { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-        { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-      ]);
-    });
+    await withOpenClawTestState({ label: "reply-message-hooks-mixed-media" }, async (state) => {
+      const order: string[] = [];
+      const alreadyStagedPath = "/tmp/already-staged.jpg";
+      const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+      const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
+      vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+        order.push("stage");
+        const stagedFacts = [
+          { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+          { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+        ];
+        params.ctx.media = stagedFacts;
+        params.sessionCtx.media = stagedFacts;
+        return { staged: new Map([[1, stagedPath]]) };
+      });
+      mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+        order.push("understand");
+        const { ctx } = args[0] as { ctx: MsgContext };
+        expect(ctx.media).toEqual([
+          { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+          { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+        ]);
+      });
 
-    await getReplyFromConfig(
-      buildCtx({
-        Provider: "imessage",
-        Surface: "imessage",
-        OriginatingChannel: "imessage",
-        OriginatingTo: "imessage:chat:abc",
-        ChatType: "direct",
-        Body: "please describe this",
-        BodyForAgent: "please describe this",
-        RawBody: "please describe this",
-        CommandBody: "please describe this",
-        BodyForCommands: "please describe this",
-        SessionKey: "agent:main:imessage:direct:user",
-        From: "imessage:user",
-        To: "imessage:chat:abc",
-        media: [
-          {
-            path: alreadyStagedPath,
-            contentType: "image/jpeg",
-            workspaceDir: "/tmp",
-          },
-          { path: remotePath, url: remotePath, contentType: "image/jpeg" },
-        ],
-        MediaRemoteHost: "user@gateway-host",
-      }),
-      undefined,
-      withFastReplyConfig({}),
-    );
+      await getReplyFromConfig(
+        buildCtx({
+          Provider: "imessage",
+          Surface: "imessage",
+          OriginatingChannel: "imessage",
+          OriginatingTo: "imessage:chat:abc",
+          ChatType: "direct",
+          Body: "please describe this",
+          BodyForAgent: "please describe this",
+          RawBody: "please describe this",
+          CommandBody: "please describe this",
+          BodyForCommands: "please describe this",
+          SessionKey: "agent:main:imessage:direct:user",
+          From: "imessage:user",
+          To: "imessage:chat:abc",
+          media: [
+            {
+              path: alreadyStagedPath,
+              contentType: "image/jpeg",
+              workspaceDir: "/tmp",
+            },
+            { path: remotePath, url: remotePath, contentType: "image/jpeg" },
+          ],
+          MediaRemoteHost: "user@gateway-host",
+        }),
+        undefined,
+        withFastReplyConfig({ agents: { defaults: { workspace: state.workspaceDir } } }),
+      );
 
-    expect(order).toEqual(["stage", "understand"]);
-    expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
-    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:imessage:direct:user",
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+      expect(order).toEqual(["stage", "understand"]);
+      expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
+      expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:imessage:direct:user",
+          workspaceDir: state.workspaceDir,
+        }),
+      );
+    });
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {
@@ -922,14 +922,26 @@ describe("getReplyFromConfig message hooks", () => {
   });
 
   it("skips message hooks in fast test mode", async () => {
-    process.env.OPENCLAW_TEST_FAST = "1";
+    await withOpenClawTestState(
+      { label: "reply-message-hooks-fast", env: { OPENCLAW_TEST_FAST: "1" } },
+      async (state) => {
+        const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+        const cfg = withFastReplyConfig({
+          agents: { defaults: { workspace: state.workspaceDir } },
+          session: { store: storePath },
+        });
+        const sqliteTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(cfg.session.store);
+        expect(isPathInside(state.root, sqliteTarget.path)).toBe(true);
+        expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
 
-    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+        await getReplyFromConfig(buildCtx(), undefined, cfg);
 
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
-    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
-    expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
-    expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+        expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+        expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+        expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+        expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("skips message hooks when SessionKey is unavailable", async () => {

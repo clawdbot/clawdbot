@@ -17,6 +17,7 @@ import {
   isUiGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
   uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -63,7 +64,7 @@ type RunLifecycleHost = Omit<
   "hello" | "sessions"
 > & {
   sessionKey: string;
-  agentsList?: { mainKey?: string | null } | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
   chatRunError?: ChatRunError | null;
@@ -442,7 +443,7 @@ function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<
     keys.add("global");
   }
   for (const row of host.sessionsResult?.sessions ?? []) {
-    if (uiSessionRowMatchesSelectedChat(host, row.key, primary)) {
+    if (uiSessionRowMatchesSelectedChat(host, row.key, primary, row.agentId)) {
       keys.add(row.key);
     }
   }
@@ -561,7 +562,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
 
 function currentSessionRow(host: RunLifecycleHost) {
   return host.sessionsResult?.sessions.find((row) =>
-    uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey),
+    uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId),
   );
 }
 
@@ -641,20 +642,12 @@ export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleH
   return canReconcile && reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: false });
 }
 
-function isSessionRowForSelectedChat(
-  host: RunLifecycleHost,
-  rowKey: string,
-  sessionKey: string,
-): boolean {
-  return uiSessionRowMatchesSelectedChat(host, rowKey, sessionKey);
-}
-
 export function reconcileChatRunFromSessionRow(
   host: RunLifecycleHost,
   row: GatewaySessionRow,
   options: { publishRunStatus?: boolean } = {},
 ): boolean {
-  if (!isSessionRowForSelectedChat(host, row.key, host.sessionKey)) {
+  if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
     return false;
   }
   if (!host.chatRunId && host.chatStream == null) {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,8 +20,10 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  SessionGroupNotEmptyError,
   updateSessionGroupDefaults,
 } from "./session-groups.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 describe("session groups catalog", () => {
   let root: string;
@@ -50,21 +52,66 @@ describe("session groups catalog", () => {
 
   it("replaces the ordered catalog with deduped trimmed names", () => {
     expect(listSessionGroups(env)).toEqual([]);
-    const groups = putSessionGroups(["Work", "  Personal  ", "Work", ""], undefined, env);
+    const groups = putSessionGroups({ cfg, names: ["Work", "  Personal  ", "Work", ""], env });
     expect(groups).toEqual([
       { name: "Work", position: 0 },
       { name: "Personal", position: 1 },
     ]);
     expect(listSessionGroups(env)).toEqual(groups);
-    expect(putSessionGroups(["Personal"], undefined, env)).toEqual([
+    expect(putSessionGroups({ cfg, names: ["Personal"], env })).toEqual([
       { name: "Personal", position: 0 },
     ]);
   });
 
+  it("rejects dropping a group that still has member sessions", async () => {
+    const groups = putSessionGroups({ cfg, names: ["Keep", "Gone"], env });
+    const sessionKey = "agent:main:dashboard:a";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "a1", updatedAt: Date.now(), category: "Gone" },
+    });
+    const sessionTarget = { agentId: "main", storePath, sessionKey };
+
+    expect(() => putSessionGroups({ cfg, names: ["Keep"], env })).toThrow(
+      SessionGroupNotEmptyError,
+    );
+    expect(() => putSessionGroups({ cfg, names: ["Keep"], env })).toThrow('"Gone" (1)');
+    expect(listSessionGroups(env)).toEqual(groups);
+    expect(loadSessionEntry(sessionTarget)?.category).toBe("Gone");
+
+    await deleteSessionGroup({ cfg, name: "Gone", env });
+    expect(loadSessionEntry(sessionTarget)?.category).toBeUndefined();
+    expect(putSessionGroups({ cfg, names: ["Keep"], env })).toEqual([
+      { name: "Keep", position: 0 },
+    ]);
+  });
+
+  it("propagates changed member authorization before reporting a non-empty drop", async () => {
+    const groups = putSessionGroups({ cfg, names: ["Keep", "Gone"], env });
+    const sessionKey = "agent:main:dashboard:changed-member";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "changed-member", updatedAt: Date.now(), category: "Gone" },
+    });
+    const error = new SessionMutationAuthorizationChangedError({
+      code: "INVALID_REQUEST",
+      message: "session changed before sessions.groups.put; retry the request",
+    });
+    const assertTargetCurrent = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => putSessionGroups({ cfg, names: ["Keep"], env, assertTargetCurrent })).toThrow(
+      error,
+    );
+    expect(assertTargetCurrent).toHaveBeenCalledExactlyOnceWith({ agentId: "main", sessionKey });
+    expect(listSessionGroups(env)).toEqual(groups);
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("Gone");
+  });
+
   it("roundtrips normalized sidebar order, including catalog section ids", () => {
-    putSessionGroups(
-      ["Alpha", " Beta ", "Alpha"],
-      [
+    putSessionGroups({
+      cfg,
+      names: ["Alpha", " Beta ", "Alpha"],
+      sectionOrder: [
         " work ",
         " catalog: codex ",
         "category:Beta",
@@ -78,7 +125,7 @@ describe("session groups catalog", () => {
         "",
       ],
       env,
-    );
+    });
     expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Alpha", "Beta"]);
     const expectedSectionOrder = [
       "work",
@@ -90,7 +137,7 @@ describe("session groups catalog", () => {
     expect(listSidebarSectionOrder(env)).toEqual(expectedSectionOrder);
     expect(readConfigMachineState("sidebar.sectionOrder", { env })).toEqual(expectedSectionOrder);
 
-    putSessionGroups(["Beta", "Alpha"], undefined, env);
+    putSessionGroups({ cfg, names: ["Beta", "Alpha"], env });
     expect(listSidebarSectionOrder(env)).toEqual(expectedSectionOrder);
   });
 
@@ -114,7 +161,9 @@ describe("session groups catalog", () => {
     );
 
     expect(listSessionGroups(env)).toEqual([{ name: "Client", position: 0 }]);
-    expect(putSessionGroups(["Client"], undefined, env)).toEqual([{ name: "Client", position: 0 }]);
+    expect(putSessionGroups({ cfg, names: ["Client"], env })).toEqual([
+      { name: "Client", position: 0 },
+    ]);
     const afterCatalogUse = openOpenClawStateDatabase({ env })
       .db.prepare("PRAGMA table_info(session_groups)")
       .all() as Array<{ name: string }>;
@@ -151,7 +200,7 @@ describe("session groups catalog", () => {
   });
 
   it("preserves New Session defaults through reorder and rename", async () => {
-    putSessionGroups(["Client", "Other"], undefined, env);
+    putSessionGroups({ cfg, names: ["Client", "Other"], env });
     expect(
       updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env),
     ).toContainEqual({
@@ -160,7 +209,7 @@ describe("session groups catalog", () => {
       worktree: true,
     });
 
-    putSessionGroups(["Other", "Client"], undefined, env);
+    putSessionGroups({ cfg, names: ["Other", "Client"], env });
     await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
     expect(listSessionGroupDefaults(env)).toContainEqual({
       name: "Customer",
@@ -170,7 +219,7 @@ describe("session groups catalog", () => {
   });
 
   it("rejects renaming an unknown group after defaults schema activation", async () => {
-    putSessionGroups(["Client"], undefined, env);
+    putSessionGroups({ cfg, names: ["Client"], env });
     updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env);
 
     await expect(renameSessionGroup({ cfg, name: "Missing", to: "Other", env })).rejects.toThrow(
@@ -183,7 +232,7 @@ describe("session groups catalog", () => {
   });
 
   it("clears New Session defaults without removing the group", () => {
-    putSessionGroups(["Client"], undefined, env);
+    putSessionGroups({ cfg, names: ["Client"], env });
     updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env);
 
     expect(updateSessionGroupDefaults("Client", { cwd: null, worktree: false }, env)).toEqual([
@@ -192,7 +241,7 @@ describe("session groups catalog", () => {
   });
 
   it("does not recreate a deleted group from a stale defaults update", async () => {
-    putSessionGroups(["Client"], undefined, env);
+    putSessionGroups({ cfg, names: ["Client"], env });
     await deleteSessionGroup({ cfg, name: "Client", env });
 
     expect(
@@ -222,7 +271,7 @@ describe("session groups catalog", () => {
   });
 
   it("absorbs ad-hoc categories at the end of the catalog", () => {
-    putSessionGroups(["Work"], undefined, env);
+    putSessionGroups({ cfg, names: ["Work"], env });
     ensureSessionGroupRegistered("Travel", env);
     ensureSessionGroupRegistered("Travel", env);
     expect(listSessionGroups(env)).toEqual([
@@ -232,11 +281,12 @@ describe("session groups catalog", () => {
   });
 
   it("renames a group and repoints member categories without bumping updatedAt", async () => {
-    putSessionGroups(
-      ["Old", "Other"],
-      ["ungrouped", "category:Old", "work", "category:Other"],
+    putSessionGroups({
+      cfg,
+      names: ["Old", "Other"],
+      sectionOrder: ["ungrouped", "category:Old", "work", "category:Other"],
       env,
-    );
+    });
     // Store saves run maintenance pruning; stale timestamps would be dropped.
     const updatedAtA = Date.now() - 1_000;
     const updatedAtB = Date.now() - 2_000;
@@ -266,7 +316,12 @@ describe("session groups catalog", () => {
   });
 
   it("deletes a group and clears member categories", async () => {
-    putSessionGroups(["Gone"], ["category:Gone", "ungrouped", "work"], env);
+    putSessionGroups({
+      cfg,
+      names: ["Gone"],
+      sectionOrder: ["category:Gone", "ungrouped", "work"],
+      env,
+    });
     const storePath = await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: Date.now(), category: "Gone" },
     });
@@ -286,7 +341,12 @@ describe("session groups catalog", () => {
   });
 
   it("merges a rename into an existing target group", async () => {
-    putSessionGroups(["A", "B"], ["category:A", "ungrouped", "category:B"], env);
+    putSessionGroups({
+      cfg,
+      names: ["A", "B"],
+      sectionOrder: ["category:A", "ungrouped", "category:B"],
+      env,
+    });
     await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: Date.now(), category: "A" },
     });
@@ -297,7 +357,7 @@ describe("session groups catalog", () => {
   });
 
   it("keeps the source sidebar slot when the merge target has no stored slot", async () => {
-    putSessionGroups(["A", "B"], ["category:A", "work"], env);
+    putSessionGroups({ cfg, names: ["A", "B"], sectionOrder: ["category:A", "work"], env });
 
     const result = await renameSessionGroup({ cfg, name: "A", to: "B", env });
 

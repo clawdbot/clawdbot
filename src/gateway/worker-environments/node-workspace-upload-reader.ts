@@ -58,7 +58,10 @@ export class RequestByteReader {
     }
     const count = Math.min(maxBytes, this.#pending.length);
     const value = this.#pending.subarray(0, count);
-    this.#pending = Buffer.from(this.#pending.subarray(count));
+    // Coalesced records must not repeatedly copy the unread suffix.
+    // Release exhausted chunks rather than retaining their backing storage.
+    this.#pending =
+      count === this.#pending.length ? Buffer.alloc(0) : this.#pending.subarray(count);
     this.bytesRead += value.byteLength;
     if (this.bytesRead > MAX_UPLOAD_BYTES) {
       throw new NodeWorkspaceTransferLimitError("Workspace transfer upload exceeds its byte limit");

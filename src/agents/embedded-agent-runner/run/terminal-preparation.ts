@@ -217,6 +217,7 @@ export function prepareEmbeddedRunTerminal(input: {
     agentId: runParams.agentId,
     runId: runParams.runId,
     runAborted: isEmbeddedRunTerminalInterrupted(input.terminalState.outcome),
+    runStopReason: input.terminalState.outcome.stopReason,
     deferAssistantTimeoutError:
       timedOutDuringPrompt &&
       (!hasMessagingToolDeliveryEvidence(attempt) ||

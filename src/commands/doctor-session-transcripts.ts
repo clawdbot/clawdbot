@@ -31,6 +31,7 @@ import {
   repairCanonicalSessionResolvedSkills,
   type SessionDeliveryStateRepairReport,
 } from "./doctor-session-delivery-state.js";
+import { repairLegacySessionExecPolicy } from "./doctor-session-exec-policy.js";
 import {
   repairReservedIncognitoSessionKeys,
   type ReservedIncognitoKeyRepairReport,
@@ -519,28 +520,18 @@ async function noteSessionSqliteMigrationHealth(params: {
       env: params.env,
       mode: params.shouldRepair ? "doctor-fix" : "detect",
     });
-    canonicalKeyReport = await repairCanonicalSessionKeys({
+    const repairParams = {
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
       env: params.env,
-    });
+    };
+    canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
-    resolvedSkillsReport = repairCanonicalSessionResolvedSkills({
-      apply: params.shouldRepair,
-      cfg: params.cfg ?? {},
-      env: params.env,
-    });
+    resolvedSkillsReport = repairCanonicalSessionResolvedSkills(repairParams);
     // Import may create the first durable SQLite row for a colliding legacy key.
-    reservedKeyReport = repairReservedIncognitoSessionKeys({
-      apply: params.shouldRepair,
-      cfg: params.cfg ?? {},
-      env: params.env,
-    });
-    deliveryReport = repairCanonicalSessionDeliveryStates({
-      apply: params.shouldRepair,
-      cfg: params.cfg ?? {},
-      env: params.env,
-    });
+    reservedKeyReport = repairReservedIncognitoSessionKeys(repairParams);
+    deliveryReport = repairCanonicalSessionDeliveryStates(repairParams);
+    repairLegacySessionExecPolicy(repairParams);
     const pluginRepair = await runPostSessionPluginDoctorStateRepairs({
       config: params.cfg ?? {},
       env: params.env,

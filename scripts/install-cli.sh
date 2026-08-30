@@ -1093,8 +1093,10 @@ repo_pnpm_spec() {
 
 
 install_node() {
-  local os
-  local arch
+  # Packaging provisions each requested architecture in a fresh private prefix.
+  # It must execute that Node (Rosetta for x64 on ARM), never link the host runtime.
+  local os="$1"
+  local arch="$2"
   local url
   local tmp
   local dir
@@ -1103,8 +1105,6 @@ install_node() {
   local expected_sha
   local actual_sha
 
-  os="$(os_detect)"
-  arch="$(arch_detect)"
   select_node_version_for_platform "$os" "$arch"
   if ! node_version_is_supported "$NODE_VERSION"; then
     fail "Node ${NODE_VERSION} is unsupported; use ${SUPPORTED_NODE_VERSION_LABEL}."
@@ -1169,7 +1169,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.0.0"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.1.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1757,7 +1757,7 @@ main() {
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 
-  install_node
+  install_node "$(os_detect)" "$(arch_detect)"
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
   elif [[ "$INSTALL_METHOD" == "npm" ]]; then

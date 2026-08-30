@@ -289,6 +289,7 @@ function rememberSingleRowChildSessionCandidateCacheEntry(
 
 function buildStoreChildSessionCandidateIndex(
   store: Record<string, SessionEntry> | null | undefined,
+  selectedParents?: ReadonlySet<string>,
 ): Map<string, string[]> {
   const childSessionsByKey = new Map<string, string[]>();
   if (!store) {
@@ -303,7 +304,9 @@ function buildStoreChildSessionCandidateIndex(
       normalizeOptionalString(entry.parentSessionKey),
     ].filter((value): value is string => Boolean(value) && value !== key);
     for (const parentKey of parentKeys) {
-      addChildSessionKey(childSessionsByKey, parentKey, key);
+      if (!selectedParents || selectedParents.has(parentKey)) {
+        addChildSessionKey(childSessionsByKey, parentKey, key);
+      }
     }
   }
   return childSessionsByKey;
@@ -412,92 +415,72 @@ export function isCurrentSessionChildOwner(params: {
   );
 }
 
-export function buildStoreChildSessionIndex(
-  store: Record<string, SessionEntry>,
-  now = Date.now(),
-  subagentRuns?: SessionListRowContext["subagentRuns"],
-): Map<string, string[]> {
-  const childSessionsByKey = new Map<string, string[]>();
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const parentKeys = [
-      normalizeOptionalString(entry.spawnedBy),
-      normalizeOptionalString(entry.parentSessionKey),
-    ].filter((value): value is string => Boolean(value) && value !== key);
-    if (parentKeys.length === 0) {
-      continue;
-    }
-    const latest = subagentRuns
-      ? subagentRuns.getDisplaySubagentRun(key)
-      : getSessionDisplaySubagentRunByChildSessionKey(key);
-    let latestControllerSessionKey: string | undefined;
-    if (latest) {
-      latestControllerSessionKey =
-        normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey);
-      if (
-        !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: subagentRuns
-            ? subagentRuns.countActiveDescendantRuns(key)
-            : countActiveDescendantRuns(key),
-          now,
-        })
-      ) {
-        continue;
-      }
-    } else if (!shouldKeepStoreOnlyChildLink(entry, now)) {
-      continue;
-    }
-    for (const parentKey of parentKeys) {
-      if (
-        latestControllerSessionKey &&
-        !isCurrentSessionChildOwner({
-          entry,
-          ownerSessionKey: parentKey,
-          controllerSessionKey: latestControllerSessionKey,
-        })
-      ) {
-        continue;
-      }
-      addChildSessionKey(childSessionsByKey, parentKey, key);
+/** Prepare only selected parents; a supplied candidate map retains exact-row cache ownership. */
+export function buildStoreChildSessionIndex(params: {
+  store: Record<string, SessionEntry>;
+  keys: readonly string[];
+  now: number;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  candidates?: ReadonlyMap<string, readonly string[]>;
+  excludedChildKeys?: ReadonlySet<string>;
+  requireCurrentController?: boolean;
+}): Map<string, string[]> {
+  const children = new Map<string, string[]>();
+  if (params.keys.length === 0) {
+    return children;
+  }
+  const candidates =
+    params.candidates ?? buildStoreChildSessionCandidateIndex(params.store, new Set(params.keys));
+  for (const key of params.keys) {
+    const childKeys = resolveStoreChildSessionKeysFromCandidates({ ...params, key, candidates });
+    if (childKeys) {
+      children.set(key, childKeys);
     }
   }
-  return childSessionsByKey;
+  return children;
 }
 
-export function resolveStoreChildSessionKeysFromCandidates(params: {
+function resolveStoreChildSessionKeysFromCandidates(params: {
   store: Record<string, SessionEntry>;
   key: string;
   now: number;
   candidates: ReadonlyMap<string, readonly string[]>;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  excludedChildKeys?: ReadonlySet<string>;
+  requireCurrentController?: boolean;
 }): string[] | undefined {
   const childSessionKeys: string[] = [];
   for (const childKey of params.candidates.get(params.key) ?? []) {
+    if (params.excludedChildKeys?.has(childKey)) {
+      continue;
+    }
     const entry = params.store[childKey];
     if (!entry) {
       continue;
     }
-    const latest = getSessionDisplaySubagentRunByChildSessionKey(childKey);
+    const latest = params.subagentRuns
+      ? params.subagentRuns.getDisplaySubagentRun(childKey)
+      : getSessionDisplaySubagentRunByChildSessionKey(childKey);
     if (latest) {
       const latestControllerSessionKey =
         normalizeOptionalString(latest.controllerSessionKey) ||
         normalizeOptionalString(latest.requesterSessionKey);
-      if (
-        !isCurrentSessionChildOwner({
-          entry,
-          ownerSessionKey: params.key,
-          controllerSessionKey: latestControllerSessionKey,
-        })
-      ) {
+      const matchesOwner = isCurrentSessionChildOwner({
+        entry,
+        ownerSessionKey: params.key,
+        controllerSessionKey: latestControllerSessionKey,
+      });
+      if (params.requireCurrentController && !matchesOwner) {
         continue;
       }
       if (
         !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: countActiveDescendantRuns(childKey),
+          activeDescendants: params.subagentRuns
+            ? params.subagentRuns.countActiveDescendantRuns(childKey)
+            : countActiveDescendantRuns(childKey),
           now: params.now,
-        })
+        }) ||
+        (latestControllerSessionKey && !matchesOwner)
       ) {
         continue;
       }

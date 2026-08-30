@@ -1,5 +1,7 @@
 import { fileURLToPath } from "node:url";
+import { Command } from "commander";
 import type {
+  OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   WorkerProvider,
@@ -9,6 +11,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { createNodeBootstrapFixture } from "./src/crabbox-worker-node-enrollment.test-support.js";
 
 const PROFILE = {
   binary: "/mock/crabbox",
@@ -70,6 +73,33 @@ describe("Crabbox plugin generation lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("lazily exposes warm-image inspection and acknowledged recovery through the plugin CLI", async () => {
+    const registrars: Parameters<OpenClawPluginApi["registerCli"]>[0][] = [];
+    const api = createTestPluginApi({
+      id: "crabbox",
+      rootDir: fileURLToPath(new URL(".", import.meta.url)),
+      registerCli: (registrar) => registrars.push(registrar),
+    });
+    plugin.register(api);
+    const program = new Command().exitOverride();
+    let help = "";
+    program.configureOutput({
+      writeOut: (text) => {
+        help += text;
+      },
+    });
+    expect(registrars).toHaveLength(1);
+    await registrars[0]!({ program, parentPath: [], config: {}, logger: api.logger });
+
+    await expect(
+      program.parseAsync(["crabbox", "warm-images", "--help"], { from: "user" }),
+    ).rejects.toMatchObject({ code: "commander.helpDisplayed" });
+
+    expect(help).toContain("--json");
+    expect(help).toContain("--recover <selector>");
+    expect(help).toContain("--acknowledge-provider-cleanup");
+  });
+
   it.each([
     { backend: "aws", executionMode: "worker-turn" },
     { backend: "hetzner", executionMode: "remote-exec" },
@@ -115,7 +145,7 @@ describe("Crabbox plugin generation lifecycle", () => {
                 }
               : { mode: "resume" as const, deviceId: "device-classless" }),
             openclawVersion: "2026.8.1",
-            packageSpecs: ["openclaw@2026.8.1"],
+            nodeBootstrap: createNodeBootstrapFixture(),
             displayName: "Classless worker",
             waitForDeviceId,
           }),

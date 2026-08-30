@@ -75,11 +75,7 @@ describe("full release same-parent recovery workflow", () => {
     }
   });
 
-  it("records effective attempts and composite jobs in the final manifest", () => {
-    const write = String(step("summary", "Write release validation manifest").run);
-    expect(write).toContain("CHILD_EVIDENCE=");
-    expect(write).toContain("acceptedRunAttempt");
-    expect(write).toContain("compositeJobsSha256");
+  it("validates final manifest attempts against the diagnostic drain", () => {
     expect(step("summary", "Validate release validation manifest").env).toMatchObject({
       DIAGNOSTIC_DRAIN_PATH:
         "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",

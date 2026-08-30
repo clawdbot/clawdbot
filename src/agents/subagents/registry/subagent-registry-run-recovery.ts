@@ -22,6 +22,7 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type {
   RequesterSettleWakeState,
@@ -347,6 +348,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       });
       this.options.persist(...changedRunIds);
     }
+    subagentRuns.commitOwnership(next);
     if (previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
       this.options.resumedRuns.delete(previousRunId);

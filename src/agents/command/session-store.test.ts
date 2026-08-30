@@ -9,11 +9,7 @@ import {
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
-import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
@@ -25,6 +21,8 @@ import {
   updateSessionStoreAfterAgentRun as updateSessionStoreAfterAgentRunBase,
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
+
+const { listSessionEntriesCore, loadSessionEntry, replaceSessionEntry } = sessionAccessor;
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
@@ -150,6 +148,116 @@ async function updateSessionStoreAfterAgentRun(
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it.each(["finalizer", "cli-compaction"] as const)(
+    "publishes %s cache at commit without overwriting a subsequent writer",
+    async (operation) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = `agent:main:commit-publication:${operation}`;
+        const owner: SessionEntry = {
+          sessionId: "committed-session",
+          lifecycleRevision: "lifecycle",
+          activeWriterRunId: "current-writer",
+          updatedAt: 1,
+          compactionCount: 2,
+          totalTokens: 900,
+          totalTokensFresh: true,
+        };
+        await seedSessionStore(storePath, { [sessionKey]: owner });
+        const sessionStore = { [sessionKey]: owner };
+        const replacement: SessionEntry = {
+          ...owner,
+          activeWriterRunId: "replacement-writer",
+          updatedAt: 2,
+          compactionCount: 9,
+          totalTokens: 777,
+        };
+        const observed: Array<{ cached: SessionEntry; persisted?: SessionEntry }> = [];
+        let replacementSnapshot: SessionEntry | undefined;
+        const originalPatch = sessionAccessor.patchSessionEntryCore;
+        const patch = vi
+          .spyOn(sessionAccessor, "patchSessionEntryCore")
+          .mockImplementation((scope, update, options) =>
+            originalPatch(scope, update, {
+              ...options,
+              onCommitted: (committed) => {
+                options?.onCommitted?.(committed);
+                if (scope.sessionKey !== sessionKey || scope.storePath !== storePath) {
+                  return;
+                }
+                observed.push({
+                  cached: sessionStore[sessionKey]!,
+                  persisted: loadSessionEntry({ ...scope, readConsistency: "latest" }),
+                });
+                sessionAccessor.replaceSessionEntrySync(scope, replacement);
+                const canonicalReplacement = loadSessionEntry({
+                  ...scope,
+                  readConsistency: "latest",
+                });
+                if (!canonicalReplacement) {
+                  throw new Error("expected the committed replacement writer");
+                }
+                replacementSnapshot = structuredClone(canonicalReplacement);
+                sessionStore[sessionKey] = canonicalReplacement;
+              },
+            }),
+          );
+        try {
+          let recorded: SessionEntry | undefined;
+          if (operation === "cli-compaction") {
+            recorded = await recordCliCompactionInStore({
+              compactionKind: "native-harness",
+              sessionKey,
+              sessionStore,
+              storePath,
+              expectedSession: owner,
+              tokensAfter: 42,
+            });
+          } else {
+            await updateSessionStoreAfterAgentRun({
+              cfg: {},
+              sessionId: owner.sessionId,
+              sessionKey,
+              sessionStore,
+              storePath,
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.6-luna",
+              compactionAccounting: {
+                kind: "durable",
+                count: 0,
+                currentContextTokens: 42,
+                target: {
+                  agentId: "main",
+                  sessionId: owner.sessionId,
+                  sessionKey,
+                  storePath,
+                  lifecycleRevision: owner.lifecycleRevision,
+                  activeWriterRunId: owner.activeWriterRunId,
+                },
+              },
+              result: { meta: { durationMs: 1 } },
+            });
+          }
+
+          expect(observed).toHaveLength(1);
+          expect(observed[0]?.persisted).toMatchObject({
+            activeWriterRunId: "current-writer",
+            totalTokens: 42,
+            compactionCount: operation === "cli-compaction" ? 3 : 2,
+          });
+          expect(observed[0]?.cached).toEqual(observed[0]?.persisted);
+          expect(replacementSnapshot).toBeDefined();
+          expect(sessionStore[sessionKey]).toEqual(replacementSnapshot);
+          expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(replacementSnapshot);
+          if (operation === "cli-compaction") {
+            expect(recorded).toEqual(observed[0]?.persisted);
+          }
+        } finally {
+          patch.mockRestore();
+        }
+      });
+    },
+  );
+
   it("uses the prepared agent directory for multi-agent cost accounting", async () => {
     await withTempSessionStore(async ({ dir, storePath }) => {
       const sessionKey = "agent:marie:dashboard:cost-accounting";
@@ -432,7 +540,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("persists rotated compaction session identity and transcript file", async () => {
+  it("rejects a finalizer attempting to rebind from public compaction metadata", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-rotated-session";
@@ -470,14 +578,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       });
 
-      expect(sessionStore[sessionKey]).toMatchObject({
-        sessionId: rotatedSessionId,
-        usageFamilyKey: sessionKey,
-        usageFamilySessionIds: [sessionId, rotatedSessionId],
-        compactionCount: 1,
-      });
-      expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
-      expect(sessionStore[sessionKey]?.sessionStartedAt).toBeGreaterThan(1);
+      expect(sessionStore[sessionKey]?.sessionId).toBe(sessionId);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.sessionId).toBe(sessionId);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.compactionCount).toBeUndefined();
     });
   });
 
@@ -1345,61 +1448,147 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("uses the compaction snapshot when non-CLI last-call context is unavailable", async () => {
+  it.each([
+    { observation: "compaction after model", tokens: 80_000, count: 1 },
+    { observation: "model after compaction", tokens: 95_000, count: 1 },
+    { observation: "zero-token compaction", tokens: 0, count: 1 },
+    { observation: "unknown context", tokens: undefined, count: 1 },
+    { observation: "model-only initial writer", tokens: 95_000, count: 0 },
+  ])("persists private $observation independently of billing usage", async ({ tokens, count }) => {
     await withTempSessionStore(async ({ storePath }) => {
-      const sessionKey = "agent:main:explicit:test-unavailable-context";
-      const sessionId = "test-unavailable-context-session";
+      const sessionKey = "agent:main:explicit:ordered-context";
+      const sessionId = "ordered-context-session";
       const sessionStore: Record<string, SessionEntry> = {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
-          totalTokens: 95_000,
+          totalTokens: 180_000,
           totalTokensFresh: true,
+          compactionCount: 3,
+          estimatedCostUsd: 1.25,
+          lifecycleRevision: "lifecycle",
+          activeWriterRunId: "previous-writer",
         },
       };
-      await replaceSessionEntry({ storePath, sessionKey }, sessionStore[sessionKey]!);
+      await seedSessionStore(storePath, {
+        [sessionKey]: { ...sessionStore[sessionKey]!, activeWriterRunId: "current-writer" },
+      });
+      const usage = { input: 100_000, output: 3_000, cacheRead: 20_000, cacheWrite: 1_000 };
+      const lastCallUsage = { input: 91_000, output: 1_000, cacheRead: 4_000 };
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            usage,
+            lastCallUsage,
+            promptTokens: 95_000,
+            compactionCount: 99,
+            compactionTokensAfter: 80_000,
+          },
+        },
+      };
 
       await updateSessionStoreAfterAgentRun({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         sessionId,
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-fable-5",
-        result: {
-          meta: {
-            durationMs: 1,
-            agentMeta: {
-              sessionId,
-              provider: "anthropic",
-              model: "claude-fable-5",
-              usage: {
-                input: 12,
-                output: 15_104,
-                cacheRead: 819_661,
-                cacheWrite: 93_130,
-                total: 927_907,
-              },
-              lastCallUsage: {
-                input: 12,
-                output: 15_104,
-                cacheRead: 819_661,
-                cacheWrite: 93_130,
-                contextUsage: { state: "unavailable" },
-                total: 927_907,
-              },
-              compactionTokensAfter: 80_000,
-            },
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.6-luna",
+        compactionAccounting: {
+          kind: "durable",
+          count,
+          currentContextTokens: tokens,
+          target: {
+            agentId: "main",
+            sessionId,
+            sessionKey,
+            storePath,
+            lifecycleRevision: "lifecycle",
+            activeWriterRunId: "current-writer",
           },
-        } as EmbeddedAgentRunResult,
+        },
+        result,
       });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(80_000);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      for (const entry of [
+        sessionStore[sessionKey],
+        loadPersistedSessionEntry(storePath, sessionKey),
+      ]) {
+        expect(entry).toMatchObject({
+          inputTokens: usage.input,
+          outputTokens: usage.output,
+          cacheRead: usage.cacheRead,
+          cacheWrite: usage.cacheWrite,
+          estimatedCostUsd: 1.25,
+          compactionCount: 3,
+          activeWriterRunId: "current-writer",
+          totalTokensFresh: tokens !== undefined,
+        });
+        expect(entry?.totalTokens).toBe(tokens);
+        expect(resolveFreshSessionTotalTokens(entry)).toBe(tokens);
+      }
+      expect(result.meta.agentMeta?.usage).toEqual(usage);
+      expect(result.meta.agentMeta?.lastCallUsage).toEqual(lastCallUsage);
     });
   });
+
+  it.each(["missing", "replaced"] as const)(
+    "does not write through a private fact whose owner is %s",
+    async (ownerState) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionId = "stale-private-fact";
+        const sessionKey = `agent:main:explicit:${sessionId}`;
+        const replacement: SessionEntry | undefined =
+          ownerState === "replaced"
+            ? {
+                sessionId,
+                updatedAt: 1,
+                lifecycleRevision: "lifecycle",
+                activeWriterRunId: "replacement-writer",
+                totalTokens: 73_000,
+                totalTokensFresh: true,
+              }
+            : undefined;
+        if (replacement) {
+          await seedSessionStore(storePath, { [sessionKey]: replacement });
+        }
+        const before = loadPersistedSessionEntry(storePath, sessionKey);
+        const sessionStore: Record<string, SessionEntry> = {};
+
+        await updateSessionStoreAfterAgentRun({
+          cfg: {},
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.6-luna",
+          compactionAccounting: {
+            kind: "durable",
+            count: 0,
+            currentContextTokens: 42,
+            target: {
+              agentId: "main",
+              sessionId,
+              sessionKey,
+              storePath,
+              lifecycleRevision: "lifecycle",
+              activeWriterRunId: "previous-writer",
+            },
+          },
+          result: { meta: { durationMs: 1 } },
+        });
+
+        expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(before);
+        expect(sessionStore[sessionKey]).toBeUndefined();
+      });
+    },
+  );
 
   it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
@@ -1458,54 +1647,66 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("persists compaction tokensAfter when provider usage is unavailable", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-compaction-tokens-after";
-      const sessionId = "test-compaction-tokens-after-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
+  it.each([21_225, 0])(
+    "persists private context %s without erasing prior billing",
+    async (tokens) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = "agent:main:explicit:private-context-without-usage";
+        const sessionId = "private-context-without-usage";
+        const billing = { inputTokens: 20, outputTokens: 10, cacheRead: 30, cacheWrite: 40 };
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: { sessionId, updatedAt: 1, ...billing },
+        };
+        await seedSessionStore(storePath, sessionStore);
+
+        await updateSessionStoreAfterAgentRun({
+          cfg: {},
           sessionId,
-          updatedAt: 1,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      const result: EmbeddedAgentRunResult = {
-        meta: {
-          durationMs: 500,
-          agentMeta: {
-            sessionId,
-            provider: "minimax",
-            model: "MiniMax-M2.7",
-            compactionCount: 1,
-            compactionTokensAfter: 21_225,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.6-luna",
+          compactionAccounting: {
+            kind: "durable",
+            count: 1,
+            currentContextTokens: tokens,
+            target: {
+              agentId: "main",
+              sessionId,
+              sessionKey,
+              storePath,
+              lifecycleRevision: undefined,
+              activeWriterRunId: undefined,
+            },
           },
-        },
-      };
+          result: {
+            meta: {
+              durationMs: 500,
+              agentMeta: {
+                sessionId,
+                provider: "openai",
+                model: "gpt-5.6-luna",
+                compactionCount: 99,
+                compactionTokensAfter: 80_000,
+              },
+            },
+          },
+        });
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "minimax",
-        defaultModel: "MiniMax-M2.7",
-        result,
+        for (const entry of [
+          sessionStore[sessionKey],
+          loadPersistedSessionEntry(storePath, sessionKey),
+        ]) {
+          expect(entry).toMatchObject({ ...billing, totalTokens: tokens, totalTokensFresh: true });
+          expect(resolveFreshSessionTotalTokens(entry)).toBe(tokens);
+          expect(entry?.compactionCount).toBeUndefined();
+        }
       });
+    },
+  );
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(21_225);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
-
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.totalTokens).toBe(21_225);
-      expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
-    });
-  });
-
-  it("prefers fresh CLI usage over zero compaction tokensAfter", async () => {
+  it("keeps ordinary CLI context independent of historical compaction metadata", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-zero-compaction-with-usage";
@@ -1567,7 +1768,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("prefers fresh last-call usage over positive compaction tokensAfter", async () => {
+  it("keeps ordinary model context independent of historical compaction metadata", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-positive-compaction-with-usage";
@@ -1622,118 +1823,50 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("accepts zero compaction tokensAfter when provider usage is unavailable", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-zero-compaction-tokens-after";
-      const sessionId = "test-zero-compaction-tokens-after-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          totalTokens: 12_000,
-          totalTokensFresh: true,
-          inputTokens: 20,
-          outputTokens: 10_855,
-          cacheRead: 1_761_324,
-          cacheWrite: 33_047,
-          contextBudgetStatus: {
-            schemaVersion: 1,
-            source: "pre-prompt-estimate",
+  it.each([0, 80_000, Number.POSITIVE_INFINITY])(
+    "does not revive historical compaction snapshot %s without a private fact",
+    async (compactionTokensAfter) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const cfg = {} as OpenClawConfig;
+        const sessionKey = "agent:main:explicit:test-compaction-tokens-after-invalid";
+        const sessionId = "test-compaction-tokens-after-invalid-session";
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: {
+            sessionId,
             updatedAt: 1,
-            provider: "claude-cli",
-            model: "claude-opus-4-7",
-            route: "compact_only",
-            shouldCompact: true,
-            estimatedPromptTokens: 1_794_391,
-            contextTokenBudget: 1_048_576,
-            promptBudgetBeforeReserve: 1_044_480,
-            reserveTokens: 4_096,
-            effectiveReserveTokens: 4_096,
-            remainingPromptBudgetTokens: 0,
-            overflowTokens: 749_911,
-            toolResultReducibleChars: 0,
-            messageCount: 0,
-            unwindowedMessageCount: 0,
+            totalTokens: 12_000,
+            totalTokensFresh: true,
           },
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
+        };
+        await seedSessionStore(storePath, sessionStore);
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "minimax",
-        defaultModel: "MiniMax-M2.7",
-        result: {
-          meta: {
-            durationMs: 500,
-            agentMeta: {
-              sessionId,
-              provider: "minimax",
-              model: "MiniMax-M2.7",
-              compactionCount: 1,
-              compactionTokensAfter: 0,
-            },
-          },
-        } as EmbeddedAgentRunResult,
-      });
-
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
-      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
-      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
-      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
-    });
-  });
-
-  it("ignores non-finite compaction tokensAfter values", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-compaction-tokens-after-invalid";
-      const sessionId = "test-compaction-tokens-after-invalid-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
           sessionId,
-          updatedAt: 1,
-          totalTokens: 12_000,
-          totalTokensFresh: true,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "minimax",
-        defaultModel: "MiniMax-M2.7",
-        result: {
-          meta: {
-            durationMs: 500,
-            agentMeta: {
-              sessionId,
-              provider: "minimax",
-              model: "MiniMax-M2.7",
-              compactionCount: 1,
-              compactionTokensAfter: Number.POSITIVE_INFINITY,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "minimax",
+          defaultModel: "MiniMax-M2.7",
+          result: {
+            meta: {
+              durationMs: 500,
+              agentMeta: {
+                sessionId,
+                provider: "minimax",
+                model: "MiniMax-M2.7",
+                compactionCount: 1,
+                compactionTokensAfter,
+              },
             },
           },
-        },
-      });
+        });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(12_000);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
-    });
-  });
+        expect(sessionStore[sessionKey]?.totalTokens).toBe(12_000);
+        expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      });
+    },
+  );
 
   it("snapshots cost instead of accumulating (fixes #69347)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
@@ -2779,6 +2912,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "native-harness",
         sessionKey,
         sessionStore,
@@ -2849,6 +2983,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
+        expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "native-harness",
         sessionKey,
         sessionStore,
@@ -2870,39 +3005,7 @@ describe("recordCliCompactionInStore", () => {
     });
   });
 
-  it("persists successor session ids from native CLI compaction", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const sessionKey = "agent:main:explicit:test-record-cli-compaction-rotate";
-      const sessionId = "test-record-cli-compaction-rotate-session";
-      const nextSessionId = "test-record-cli-compaction-rotate-next";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      await recordCliCompactionInStore({
-        compactionKind: "native-harness",
-        sessionKey,
-        sessionStore,
-        storePath,
-        newSessionId: nextSessionId,
-      });
-
-      expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
-      expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
-      expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
-      expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
-
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
-      expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
-    });
-  });
-
-  it("recreates a complete persisted row and clears its context-engine CLI binding", async () => {
+  it("records compaction on the existing row and clears its context-engine CLI binding", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction-missing-row";
       const sessionId = "test-record-cli-compaction-missing-row-session";
@@ -2934,7 +3037,10 @@ describe("recordCliCompactionInStore", () => {
         },
       };
 
+      await seedSessionStore(storePath, sessionStore);
+
       await recordCliCompactionInStore({
+        expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "context-engine",
         sessionKey,
         sessionStore,
@@ -2977,18 +3083,48 @@ describe("recordCliCompactionInStore", () => {
       };
 
       const result = await recordCliCompactionInStore({
+        expectedSession: { sessionId, lifecycleRevision: undefined, activeWriterRunId: undefined },
         compactionKind: "context-engine",
         sessionKey,
         sessionStore,
         storePath,
-        expectedSessionId: sessionId,
         tokensAfter: 42,
       });
 
-      expect(result).toEqual(sessionStore[sessionKey]);
+      expect(result).toBeUndefined();
       expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
     });
   });
+  it.each([{ lifecycleRevision: "replacement" }, { activeWriterRunId: "replacement" }])(
+    "does not account against a changed CLI owner: %j",
+    async (replacement) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = "agent:main:cli-fenced-count";
+        const entry = {
+          sessionId: "same-session",
+          updatedAt: 1,
+          lifecycleRevision: "lifecycle",
+          activeWriterRunId: "writer",
+          compactionCount: 3,
+        };
+        const sessionStore = { [sessionKey]: entry };
+        const changed = { ...entry, ...replacement };
+        await seedSessionStore(storePath, { [sessionKey]: changed });
+
+        const result = await recordCliCompactionInStore({
+          compactionKind: "context-engine",
+          sessionKey,
+          storePath,
+          sessionStore,
+          expectedSession: entry,
+          tokensAfter: 42,
+        });
+
+        expect(result).toBeUndefined();
+        expect(loadPersistedSessionEntry(storePath, sessionKey)).toMatchObject(changed);
+      });
+    },
+  );
 });
 
 describe("consumeCliSessionForkInStore", () => {

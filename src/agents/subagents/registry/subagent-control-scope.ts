@@ -148,7 +148,7 @@ export function listControlledSubagentRuns(
 
 export function ensureSubagentControllerOwnsRun(params: {
   cfg: OpenClawConfig;
-  controller: ResolvedSubagentController;
+  controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
   entry: SubagentRunRecord;
 }) {
   const owner = params.entry.controllerSessionKey?.trim() || params.entry.requesterSessionKey;

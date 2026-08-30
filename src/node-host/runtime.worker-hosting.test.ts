@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -72,6 +74,40 @@ function prepareWorkerRuntime(isolation?: "container") {
 }
 
 describe("node-host worker manifest", () => {
+  it.each([true, false])(
+    "keeps computer commands private only for ephemeral=%s",
+    async (ephemeral) => {
+      const computerUse: ComputerUseCapabilityDescriptor = {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "one" },
+        actions: ["screenshot", "left_click"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      };
+      vi.mocked(listRegisteredNodeHostCapsAndCommands).mockReturnValueOnce({
+        caps: ["screen", "computer", "browser"],
+        commands: ["screen.snapshot", "computer.act", "browser.proxy"],
+        computerUse,
+        nodePluginTools: [],
+      });
+      const prepared = await prepareNodeHostRuntime({
+        config: { nodeHost: { skills: { enabled: false } } },
+        env: { PATH: "/usr/bin" },
+        enableWorkerRuns: true,
+        forceWorkerRuns: true,
+        ephemeral,
+      });
+      expect(prepared.manifest.commands.includes("screen.snapshot")).toBe(!ephemeral);
+      expect(prepared.manifest.commands.includes("computer.act")).toBe(!ephemeral);
+      expect(prepared.manifest.commands).toContain("browser.proxy");
+      expect(prepared.manifest.caps.includes("computer")).toBe(!ephemeral);
+      expect(prepared.manifest.caps.includes("screen")).toBe(!ephemeral);
+      expect(prepared.manifest.computerUse).toEqual(ephemeral ? undefined : computerUse);
+    },
+  );
+
   it("allows environment-managed processes to force worker hosting without durable config", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },

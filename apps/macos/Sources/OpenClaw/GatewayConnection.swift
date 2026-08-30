@@ -12,8 +12,17 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// This owns exactly one `GatewayChannelActor` and reuses it across all callers
 /// (ControlChannel, debug actions, SwiftUI WebChat, etc.).
 actor GatewayConnection {
-    static let shared = GatewayConnection(
-        endpointProvider: GatewayConnection.defaultEndpointProvider)
+    static let shared: GatewayConnection = {
+        #if DEBUG
+        // Rendered test views can request previews through the shared connection.
+        // Only explicitly injected test routes may reach a transport or credentials.
+        if ProcessInfo.processInfo.isRunningTests {
+            return GatewayConnection(testEndpointProvider: { throw URLError(.notConnectedToInternet) })
+        }
+        #endif
+        return GatewayConnection(endpointProvider: GatewayConnection.defaultEndpointProvider)
+    }()
+
     nonisolated static let operatorClientCaps = [
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,

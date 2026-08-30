@@ -162,6 +162,8 @@ const ownerRoutedUnitTestPatterns = [
   // Real Git process-tree fixtures stay in serial tooling even when their
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",
+  "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+  "test/scripts/release-workflow-git-lifecycle.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
   // Command compaction tests need the scoped runtime registry even when their
