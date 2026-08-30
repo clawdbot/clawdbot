@@ -178,6 +178,7 @@ export async function runPackageInstallUpdate(params: {
         ...doctorProgressInfo,
         durationMs: completedDoctorStep.durationMs,
         exitCode: completedDoctorStep.exitCode,
+        stdoutTail: completedDoctorStep.stdoutTail,
         stderrTail: completedDoctorStep.stderrTail,
         signal: completedDoctorStep.signal,
         killed: completedDoctorStep.killed,

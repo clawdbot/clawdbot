@@ -271,6 +271,9 @@ export async function updateGitCheckout(params: {
   };
 
   const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
+  if (statusCheck.exitCode !== 0) {
+    return buildError("clean-check-failed");
+  }
   if (statusCheck.stdoutTail?.trim()) {
     return buildError("dirty", "skipped");
   }
