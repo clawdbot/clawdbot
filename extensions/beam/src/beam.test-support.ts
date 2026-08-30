@@ -10,7 +10,7 @@ export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
 export const beamTestLogger = { warn: () => {}, info: () => {} };
 export type BeamTestSession = { threadId: string; name?: string; recencyAt: number };
 
-export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}): unknown {
+export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}) {
   return {
     plugins: {
       entries: {
