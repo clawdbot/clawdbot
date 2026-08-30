@@ -32,6 +32,9 @@ function transcriptItems(session: BeamStoredSession): SessionCatalogTranscriptIt
     type: item.type,
     text: item.text,
     timestamp: session.updatedAt,
+    ...(item.type === "userMessage" && session.uploaderProfileId
+      ? { sender: { identity: { type: "profile" as const, id: session.uploaderProfileId } } }
+      : {}),
   }));
 }
 

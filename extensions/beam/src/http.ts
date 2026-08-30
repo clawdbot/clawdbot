@@ -25,6 +25,7 @@ function firstHeader(req: IncomingMessage, name: string): string | undefined {
 type BeamRequestClient = {
   clientIp: string;
   scopes: readonly string[];
+  profileId?: string;
 };
 
 function currentRequestClient(req: IncomingMessage): BeamRequestClient {
@@ -32,6 +33,7 @@ function currentRequestClient(req: IncomingMessage): BeamRequestClient {
   return {
     clientIp: client?.clientIp ?? req.socket.remoteAddress ?? "unknown",
     scopes: client?.connect?.scopes ?? [],
+    profileId: client?.authenticatedUserProfile?.profileId,
   };
 }
 
@@ -101,6 +103,8 @@ export function createBeamRequestHandler(params: {
       const existing = await params.store.get(parsed.value.beamId);
       await params.store.put({
         ...parsed.value,
+        // An anonymous replacement must not inherit a previous publisher's identity.
+        ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
         createdAt: existing?.createdAt ?? receivedAt,
         receivedAt,
       });

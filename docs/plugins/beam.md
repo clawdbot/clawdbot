@@ -44,7 +44,7 @@ openclaw gateway restart
 
 The receiver uses normal Gateway HTTP authentication. It is not an anonymous upload endpoint.
 
-- With `gateway.auth.mode: "trusted-proxy"`, send requests through the configured identity-aware proxy. Beam relies on Gateway authentication but does not persist proxy identity headers as uploader attribution.
+- With `gateway.auth.mode: "trusted-proxy"`, send requests through the configured identity-aware proxy. Beam records the verified uploader's OpenClaw profile ID, when available; it does not retain proxy identity headers or credentials.
 - With token or password auth, send `Authorization: Bearer <gateway-token-or-password>`.
 - Do not enable Beam with `gateway.auth.mode: "none"` unless another private ingress fully authenticates every request.
 
@@ -113,7 +113,9 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 - oldest-entry eviction when the catalog reaches its bound
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
 
-The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session, while uploads require `operator.write` or `operator.admin`. Uploader identity is not retained, and any write-authorized operator that knows a Beam id can update that row. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session, while uploads require `operator.write` or `operator.admin`. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+
+User turns are attributed to the verified publisher of the current snapshot, using their current profile name and avatar, including merged profiles. Beam's upload format does not identify individual authors within a multi-user transcript. The uploader reference shares the snapshot's seven-day retention and is replaced on each upload. Shared-token uploads, failed profile resolution, and older snapshots without a recorded uploader display **User**; they never inherit the viewer's identity or a previous uploader's identity. Reupload an older snapshot through personal authentication to attribute it.
 
 ## Security boundary
 

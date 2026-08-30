@@ -173,6 +173,41 @@ describe("Beam payload validation", () => {
 });
 
 describe("Beam receiver", () => {
+  it("attributes each uploaded snapshot to its verified publisher, never payload claims", async () => {
+    const store = memoryStore();
+    let profileId: string | undefined = "uploader-profile";
+    const endpoint = await serve(
+      createBeamRequestHandler({
+        store,
+        resolveClient: () => ({ ...writeClient(), profileId }),
+        resolveControlUiTarget: mainControlUiTarget,
+      }),
+    );
+    const upload = (body = sampleUpload()) =>
+      fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const read = () =>
+      createBeamSessionCatalog(store).read({
+        hostId: "gateway",
+        threadId: sampleUpload().beamId,
+      });
+    for (const publisher of ["uploader-profile", "another-profile", undefined]) {
+      profileId = publisher;
+      expect((await upload()).status).toBe(200);
+      expect((await store.get(sampleUpload().beamId))?.uploaderProfileId).toBe(publisher);
+      const transcript = await read();
+      expect(transcript.items.find((item) => item.type === "userMessage")?.sender).toEqual(
+        publisher ? { identity: { type: "profile", id: publisher } } : undefined,
+      );
+      expect(transcript.items.find((item) => item.type === "agentMessage")?.sender).toBeUndefined();
+    }
+    expect((await upload(sampleUpload({ uploaderProfileId: "forged-profile" }))).status).toBe(400);
+    expect((await store.get(sampleUpload().beamId))?.uploaderProfileId).toBeUndefined();
+  });
+
   it("stores authenticated uploads and preserves creation time across updates", async () => {
     const store = memoryStore();
     let now = 100;

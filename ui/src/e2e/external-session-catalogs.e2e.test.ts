@@ -23,6 +23,117 @@ const SHARE_ROUTE = {
 } as const;
 
 suite.define(() => {
+  it.each(["Riley", "Morgan"])(
+    "keeps external transcript authors independent of viewer %s",
+    async (viewer) => {
+      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+        const catalogIds = ["beam", "claude", "codex"];
+        await page.route("**/api/users/uploader-profile/avatar*", (route) =>
+          route.fulfill({
+            contentType: "image/svg+xml",
+            body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#43786a"/><text x="20" y="28" text-anchor="middle" fill="white" font-size="24">T</text></svg>',
+          }),
+        );
+        await installMockGateway(page, {
+          presenceUsers: [
+            {
+              self: true,
+              id: "viewer-profile",
+              identity: { type: "profile", id: "viewer-profile" },
+              name: viewer,
+              avatarUrl: "/viewer-avatar.png",
+            },
+          ],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "sessions.catalog.list",
+            "sessions.catalog.read",
+          ],
+          methodResponses: {
+            "sessions.catalog.list": {
+              catalogs: catalogIds.map((id) => ({
+                id,
+                label: id,
+                capabilities: { continueSession: false, archive: false },
+                hosts: [
+                  {
+                    hostId: "gateway",
+                    label: "Shared transcripts",
+                    kind: "gateway",
+                    connected: true,
+                    sessions: [
+                      {
+                        threadId: "shared",
+                        name: `${id} shared transcript`,
+                        status: "stored",
+                        canContinue: false,
+                        canArchive: false,
+                      },
+                    ],
+                  },
+                ],
+              })),
+            },
+            "sessions.catalog.read": {
+              hostId: "gateway",
+              threadId: "shared",
+              items: [
+                {
+                  id: "known-question",
+                  type: "userMessage",
+                  text: "The uploader's question.",
+                  sender: {
+                    identity: { type: "profile", id: "uploader-profile" },
+                    label: "Taylor",
+                    avatarUrl: "/api/users/uploader-profile/avatar?v=2",
+                  },
+                },
+                { id: "answer", type: "agentMessage", text: "The imported answer." },
+                { id: "question", type: "userMessage", text: "The imported author's question." },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        for (const catalogId of catalogIds) {
+          await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
+          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+          const message = pane
+            .locator(".chat-group.user")
+            .filter({ hasText: "The imported author's question." });
+          await message.waitFor();
+          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          if (artifactDir && catalogId === "beam") {
+            await fs.mkdir(artifactDir, { recursive: true });
+            await page.screenshot({ path: path.join(artifactDir, `beam-author-${viewer}.png`) });
+          }
+          expect(await message.locator(".chat-sender-name").textContent()).toBe("User");
+          expect(
+            await message
+              .locator(`[aria-label="${viewer}"], img[alt="${viewer}"], img[src*="viewer-avatar"]`)
+              .count(),
+          ).toBe(0);
+          expect(await message.locator('a[href*="activity"]').count()).toBe(0);
+          const known = pane
+            .locator(".chat-group.user")
+            .filter({ hasText: "The uploader's question." });
+          expect(await known.locator(".chat-sender-name").textContent()).toBe("Taylor");
+          await expect
+            .poll(() =>
+              known
+                .locator('img.chat-avatar[alt="Taylor"]')
+                .evaluateAll((images) =>
+                  images.some((image) => (image as HTMLImageElement).naturalWidth > 0),
+                ),
+            )
+            .toBe(true);
+          expect(await known.locator('a[href*="uploader-profile"]').count()).toBeGreaterThan(0);
+        }
+      });
+    },
+  );
+
   it.each(["sidebar", "cold link"])(
     "preserves catalog pane ownership from %s through retention, split focus, reconnect and adoption",
     async (entrance) => {

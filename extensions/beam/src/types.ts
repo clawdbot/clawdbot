@@ -39,6 +39,8 @@ type BeamUpload = {
 };
 
 export type BeamStoredSession = BeamUpload & {
+  /** Verified publisher of this snapshot; never accepted from the upload body. */
+  uploaderProfileId?: string;
   createdAt: number;
   receivedAt: number;
 };

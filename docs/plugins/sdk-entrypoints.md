@@ -162,6 +162,12 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  Transcript items may include a `sender` with a qualified `SessionParticipant`
+  identity and optional display label or avatar. Supply only source-known
+  attribution; the viewer and the session adopter are not transcript authors.
+  Core resolves profile identities against current profile data, including merges.
+  User items without attribution display as **User**.
+
   Native source titles are presentation, not unique session labels. When adopting
   a new source, pass its title as `displayName` to the owner-authorized
   [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot

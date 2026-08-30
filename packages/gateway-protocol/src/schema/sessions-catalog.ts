@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
@@ -145,6 +146,8 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
   text: Type.Optional(Type.String()),
   timestamp: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  /** Source-supplied attribution, independent of the viewer and session adopter. */
+  sender: Type.Optional(SessionParticipantSchema),
   truncated: Type.Optional(Type.Boolean()),
   raw: Type.Optional(PluginJsonValueSchema),
 });
