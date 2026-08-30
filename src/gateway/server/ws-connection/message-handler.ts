@@ -470,7 +470,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       await handleMessage(data);
       return;
     }
-    const admission = tryBeginGatewayRootWorkAdmission();
+    const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
     if (!admission) {
       if (
         isGatewayRestartDraining() &&

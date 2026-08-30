@@ -860,6 +860,9 @@ export async function startGatewaySidecars(params: {
         ["readyCount", ready ? 1 : 0],
         ["backend", params.cfg.acp?.backend ?? "default"],
       ]);
+      if (!ready) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.acp.identity-reconcile", async () => {
         const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] =
           await Promise.all([
@@ -876,7 +879,7 @@ export async function startGatewaySidecars(params: {
           `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
         );
       });
-    }).catch((err: unknown) => {
+    }, "startup:acp-identity-reconcile").catch((err: unknown) => {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
   }

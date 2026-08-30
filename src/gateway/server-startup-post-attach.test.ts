@@ -3827,6 +3827,59 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("does not retain root work when the configured ACP backend never becomes ready", async () => {
+    vi.useFakeTimers();
+    const trace = createStartupTraceRecorder();
+    hoisted.reconcilePendingSessionIdentities.mockImplementation(
+      async () => await new Promise<never>(() => {}),
+    );
+
+    try {
+      await startGatewaySidecars({
+        cfg: {
+          hooks: { internal: { enabled: false } },
+          acp: { enabled: true, backend: "acpx" },
+        } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels: vi.fn(async () => {}),
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+        startupTrace: trace.startupTrace,
+      });
+
+      await waitForGatewayTestState(() => {
+        expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitForGatewayTestState(() => {
+        expect(trace.details).toContainEqual({
+          name: "sidecars.acp.runtime-ready",
+          metrics: [
+            ["readyCount", 0],
+            ["backend", "acpx"],
+          ],
+        });
+      });
+      await waitForGatewayTestState(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+
+      expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
     const runGatewayStart = vi.fn<
       (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>

@@ -5,6 +5,10 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { waitForGatewayActiveWork } from "./gateway-active-work.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
@@ -14,6 +18,7 @@ afterEach(() => {
     clearActiveEmbeddedRun(sessionId, handle);
   }
   activeRuns.clear();
+  resetGatewayWorkAdmission();
 });
 
 describe("waitForGatewayActiveWork", () => {
@@ -37,5 +42,26 @@ describe("waitForGatewayActiveWork", () => {
       count: 1,
       message: "1 active embedded run(s)",
     });
+  });
+
+  it("names active root request holders in deterministic order", async () => {
+    const first = tryBeginGatewayRootWorkAdmission("ws:sessions.subscribe");
+    const second = tryBeginGatewayRootWorkAdmission("startup:acp-identity-reconcile");
+    const third = tryBeginGatewayRootWorkAdmission("ws:sessions.subscribe");
+
+    try {
+      const result = await waitForGatewayActiveWork(0);
+
+      expect(result.snapshot.blockers).toContainEqual({
+        kind: "root-request",
+        count: 3,
+        message:
+          "3 active gateway request(s): startup:acp-identity-reconcile, ws:sessions.subscribe (2)",
+      });
+    } finally {
+      first?.release();
+      second?.release();
+      third?.release();
+    }
   });
 });

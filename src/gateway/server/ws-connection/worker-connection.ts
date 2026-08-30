@@ -399,7 +399,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         if (disposed || params.isClosed()) {
           return;
         }
-        const admission = tryBeginGatewayRootWorkAdmission();
+        const admission = tryBeginGatewayRootWorkAdmission("ws:worker-frame");
         if (!admission) {
           const client = params.getClient();
           const identity = client?.worker;
