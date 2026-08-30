@@ -1316,7 +1316,7 @@ describe("tool-loop-detection", () => {
       },
     );
 
-    it("resets the terminal-failure tail before returning to an earlier command", () => {
+    it("keeps an intervening command as a reset after the first command resumes", () => {
       const state = createState();
       const first = { command: "node first.js" };
 
@@ -1339,6 +1339,20 @@ describe("tool-loop-detection", () => {
         { command: "node second.js" },
         createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=2000" }),
         CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+
+      recordSuccessfulCall(
+        state,
+        "exec",
+        first,
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=3000" }),
+        CRITICAL_THRESHOLD + 1,
       );
 
       expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
