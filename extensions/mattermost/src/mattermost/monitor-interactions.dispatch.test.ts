@@ -103,12 +103,45 @@ describe("createMattermostInteractionDispatch", () => {
 
     const outcome = await createMattermostInteractionDispatch(monitor)(recordedClick, lifecycle);
 
+    // Route preparation may run first — it is a read. What must not happen is any
+    // agent-visible effect.
     expect(mocks.dispatch).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mocks.buildEventPlan).not.toHaveBeenCalled();
     // A refused click reached no turn, so it must settle instead of waiting for an
     // adoption that will never come.
     expect(outcome).toBe("dropped");
+  });
+
+  it("refuses a click whose sender loses access while its route is prepared", async () => {
+    // Authorization has to be the last thing before the enqueue and dispatch. Route
+    // preparation awaits a channel lookup, so a pairing or allowlist change can land
+    // inside that await; a check taken before it would already be stale.
+    const monitor = createMonitor();
+    mocks.buildEventPlan.mockImplementation(async () => {
+      mocks.authorize.mockResolvedValue({ ok: false, roomLabel: "#ops" });
+      return {
+        channelId: "channel-1",
+        channelDisplay: "Ops",
+        kind: "channel",
+        roomLabel: "#ops",
+        route: { agentId: "main", dmScope: "per-peer", sessionKey: "agent:main:mm" },
+        thread: { sessionKey: "agent:main:mm", effectiveReplyToId: undefined },
+        to: "channel:channel-1",
+        finalizeContext: (context: Record<string, unknown>) => context,
+        createReplyPlan: () => ({
+          replyOptions: {},
+          replyPipeline: {},
+          tableMode: "off",
+          textLimit: 4000,
+        }),
+      };
+    });
+
+    const outcome = await createMattermostInteractionDispatch(monitor)(recordedClick, lifecycle);
+
+    expect(outcome).toBe("dropped");
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it("settles a click whose channel can no longer be routed", async () => {

@@ -116,7 +116,22 @@ export function createMattermostInteractionDispatch(
 ) => Promise<MattermostInteractionDispatchOutcome> {
   const { account, cfg, core, runtime } = monitor;
   return async (interaction, turnAdoptionLifecycle) => {
+    // Route preparation only reads transport metadata and produces nothing the
+    // agent can see, so it runs first. That leaves no await between the
+    // authorization below and the effects it guards.
+    const eventPlan = await buildMattermostEventPlan(monitor, {
+      channelId: interaction.channelId,
+      senderId: interaction.userId,
+      postId: interaction.postId,
+      threadRootId: interaction.rootId,
+      dropLabel: "interaction dispatch",
+    });
+    if (!eventPlan) {
+      return "dropped";
+    }
     // A stored click is evidence that a press happened, never a standing grant.
+    // Resolved here rather than before the route so a pairing or allowlist change
+    // during preparation cannot reach the enqueue and dispatch below.
     const access = await resolveMattermostInteractionAccess(monitor, {
       senderId: interaction.userId,
       senderName: interaction.userName,
@@ -133,16 +148,6 @@ export function createMattermostInteractionDispatch(
       actionId: interaction.actionId,
       eventId: interaction.eventId,
     });
-    const eventPlan = await buildMattermostEventPlan(monitor, {
-      channelId: interaction.channelId,
-      senderId: interaction.userId,
-      postId: interaction.postId,
-      threadRootId: interaction.rootId,
-      dropLabel: "interaction dispatch",
-    });
-    if (!eventPlan) {
-      return "dropped";
-    }
     const { channelDisplay, channelId, kind, route, thread, to } = eventPlan;
     core.system.enqueueSystemEvent(
       `Mattermost button click: action="${interaction.actionId}" ` +
