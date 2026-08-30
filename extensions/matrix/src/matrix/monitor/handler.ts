@@ -29,6 +29,7 @@ import { loadMatrixSendModule, redactMatrixDraftEvent } from "./handler-runtime.
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
 import type { MatrixLocationPayload } from "./location.js";
+import { registerMatrixParticipation } from "./participation.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
 import {
@@ -102,6 +103,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     allowFromResolvedEntries,
     groupAllowFromResolvedEntries,
     resolveLiveUserAllowlist,
+  });
+  registerMatrixParticipation({
+    handler: handlerConfig,
+    resolveLiveAccountAllowlists: handlerState.resolveLiveAccountAllowlists,
   });
   const resolveThreadContext = createMatrixThreadContextResolver({
     client,

@@ -566,6 +566,51 @@ describe("MatrixClient request hardening", () => {
     expect(matrixJsClient.getStateEvent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "missing room",
+      known: false,
+      stateEncrypted: false,
+      storedEncrypted: false,
+      allowed: false,
+    },
+    {
+      name: "encrypted state",
+      known: true,
+      stateEncrypted: true,
+      storedEncrypted: false,
+      allowed: false,
+    },
+    {
+      name: "persisted encryption",
+      known: true,
+      stateEncrypted: false,
+      storedEncrypted: true,
+      allowed: false,
+    },
+    {
+      name: "synced plaintext room",
+      known: true,
+      stateEncrypted: false,
+      storedEncrypted: false,
+      allowed: true,
+    },
+  ])(
+    "only admits $name to plaintext participation from synced state",
+    async ({ known, stateEncrypted, storedEncrypted, allowed }) => {
+      matrixJsClient.getRoom.mockReturnValue(
+        known ? { hasEncryptionStateEvent: () => stateEncrypted } : null,
+      );
+      matrixJsClient.getCrypto.mockReturnValue({
+        isEncryptionEnabledInRoom: vi.fn(async () => storedEncrypted),
+      });
+      const client = new MatrixClient("https://matrix.example.org", "token");
+
+      await expect(client.isSyncedUnencryptedRoom("!room:example.org")).resolves.toBe(allowed);
+      expect(matrixJsClient.getStateEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves persisted encryption settings when the homeserver no longer exposes room state", async () => {
     matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => false });
     matrixJsClient.getCrypto.mockReturnValue({

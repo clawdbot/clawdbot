@@ -171,6 +171,37 @@ describe("createDirectRoomTracker", () => {
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
+  it.each(["recent invite", "unmapped strict room"])(
+    "observes a %s without repairing m.direct, leaving normal ingress to repair it",
+    async (promotion) => {
+      const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+      const tracker = createDirectRoomTracker(client, {
+        canPromoteUnmappedStrictRoom: () => promotion === "unmapped strict room",
+      });
+      if (promotion === "recent invite") {
+        tracker.rememberInvite(DEFAULT_DIRECT_CHECK.roomId, DEFAULT_DIRECT_CHECK.senderId);
+      }
+
+      await expect(tracker.observeDirectMessage(DEFAULT_DIRECT_CHECK)).resolves.toBeUndefined();
+      expect(client.setAccountData).not.toHaveBeenCalled();
+
+      await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
+      expect(client.setAccountData).toHaveBeenCalledExactlyOnceWith(EventType.Direct, {
+        "@alice:example.org": ["!room:example.org"],
+      });
+    },
+  );
+
+  it("keeps unavailable membership unknown during observation", async () => {
+    const client = createMockClient({ isDm: true });
+    client.getJoinedRoomMembers.mockRejectedValue(new Error("membership unavailable"));
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(tracker.observeDirectMessage(DEFAULT_DIRECT_CHECK)).resolves.toBeUndefined();
+    expect(client.setAccountData).not.toHaveBeenCalled();
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
+  });
+
   it("falls back to strict 2-member membership before m.direct account data is available", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: false });
     const tracker = createDirectRoomTracker(client);

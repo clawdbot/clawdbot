@@ -52,6 +52,7 @@ const DEFAULT_ROUTE = {
 
 type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
+  participation?: MatrixMonitorHandlerParams["participation"];
   accountConfig?: MatrixConfig;
   cfg?: unknown;
   liveCfg?: unknown;
@@ -340,6 +341,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
+    participation: options.participation,
     accountConfig: options.accountConfig,
     runtime:
       options.runtime ??

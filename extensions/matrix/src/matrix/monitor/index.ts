@@ -206,6 +206,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let client: MatrixClient | null = null;
   let clientLease: SharedMatrixClientLease | null = null;
   let monitorLifecycleSignal = opts.abortSignal;
+  const participationLifetime = new AbortController();
   let threadBindingManager: { accountId: string; stop: () => Promise<void> } | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
@@ -220,6 +221,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       return cleanupPromise;
     }
     cleanedUp = true;
+    participationLifetime.abort();
     cleanupPromise = (async () => {
       try {
         await clientLease?.release({
@@ -296,6 +298,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const monitorRetirement = {
     closeTaskAdmission: () => {
       monitorSetupClosed = true;
+      participationLifetime.abort();
       monitorTaskRunner.close();
     },
     detachListeners: () => {
@@ -401,6 +404,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       core,
       cfg,
       accountId: effectiveAccountId,
+      participation: {
+        homeserver: auth.homeserver,
+        abortSignal: AbortSignal.any([monitorLifecycleSignal, participationLifetime.signal]),
+        hasRecent: inboundDeduper.hasRecent,
+        observeDirectMessage: directTracker.observeDirectMessage,
+      },
       accountConfig,
       runtime,
       logger,

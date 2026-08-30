@@ -1,4 +1,8 @@
 import type { DispatchFromConfigResult } from "../auto-reply/reply/dispatch-from-config.js";
+export {
+  createChannelParticipationCoordinator,
+  type ChannelParticipationCandidate,
+} from "../channels/participation.js";
 // Channel inbound contracts define plugin ingress payloads and reply dispatch metadata.
 import {
   buildChannelInboundEventContext,

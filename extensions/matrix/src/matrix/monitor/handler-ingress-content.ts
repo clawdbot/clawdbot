@@ -21,12 +21,14 @@ import { loadAcpBindingRuntime, loadSessionBindingRuntime } from "./handler-runt
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
+import { shouldSuppressMatrixParticipation } from "./participation.js";
 import {
   isMatrixAudioContent,
   resolveMatrixPreflightAudioTranscript,
   sendMatrixPreflightAudioTranscriptEcho,
 } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
+import { resolveMatrixRequireMention } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { logInboundDrop } from "./runtime-api.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -286,15 +288,7 @@ export async function resolveMatrixIngressContent(config: {
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
   }
-  const shouldRequireMention = isRoom
-    ? roomConfig?.autoReply === true
-      ? false
-      : roomConfig?.autoReply === false
-        ? true
-        : typeof roomConfig?.requireMention === "boolean"
-          ? roomConfig?.requireMention
-          : true
-    : false;
+  const shouldRequireMention = isRoom && resolveMatrixRequireMention(roomConfig);
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       // Matrix native mention metadata lets us reliably decide absence even
@@ -313,7 +307,7 @@ export async function resolveMatrixIngressContent(config: {
   });
   const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
   const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-  if (mentionDecision.shouldSkip) {
+  const recordSkippedRoomMessage = async (reason: "no-mention" | "participation") => {
     const pendingHistoryBody = preflightAudioTranscript
       ? formatAudioTranscriptForAgent(preflightAudioTranscript)
       : pendingHistoryText || pendingHistoryPollText;
@@ -336,8 +330,41 @@ export async function resolveMatrixIngressContent(config: {
         roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
       }
     }
-    logger.info("skipping room message", { roomId, reason: "no-mention" });
+    logger.info("skipping room message", { roomId, reason });
     await commitInboundEventIfClaimed();
+  };
+  if (mentionDecision.shouldSkip) {
+    await recordSkippedRoomMessage("no-mention");
+    return undefined;
+  }
+  // Legacy formatted mentions can target an excluded receiver; preserve their native routing.
+  if (
+    handler.participation &&
+    isRoom &&
+    !hasExplicitSessionBinding &&
+    !hasControlCommandInMessage &&
+    !wasMentioned &&
+    !hasExplicitMention &&
+    !content["m.mentions"]?.user_ids?.length &&
+    !content["m.mentions"]?.room &&
+    !isConfiguredBotSender &&
+    content.msgtype === "m.text" &&
+    !content.formatted_body &&
+    !mediaUrl &&
+    messageId &&
+    (await shouldSuppressMatrixParticipation(accountId, {
+      homeserver: handler.participation.homeserver,
+      roomId,
+      eventId: messageId,
+      senderId,
+      eventTs,
+      eventAge: event.unsigned?.age,
+      threadRootId,
+      content,
+      message: mentionPrecheckText,
+    }))
+  ) {
+    await recordSkippedRoomMessage("participation");
     return undefined;
   }
   if (preflightAudioTranscript) {

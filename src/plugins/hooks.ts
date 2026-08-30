@@ -41,6 +41,9 @@ import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeAgentReplyEvent,
   PluginHookBeforeAgentReplyResult,
+  PluginHookBeforeChannelParticipationContext,
+  PluginHookBeforeChannelParticipationEvent,
+  PluginHookBeforeChannelParticipationResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -174,6 +177,7 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   gateway_stop: 5_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+  before_channel_participation: 8_000,
   before_agent_run: 15_000,
   // Policy hooks fail closed in the global runner. A bounded timeout turns a
   // stalled policy process into a denial instead of freezing the operation.
@@ -1274,6 +1278,48 @@ export function createHookRunner(
     );
   }
 
+  /** Select participants using the first valid claim in priority order. */
+  async function runBeforeChannelParticipation(
+    event: PluginHookBeforeChannelParticipationEvent,
+    ctx: PluginHookBeforeChannelParticipationContext,
+    options?: { isCurrent: () => boolean },
+  ): Promise<PluginHookBeforeChannelParticipationResult | undefined> {
+    const accountIds = new Set(event.candidates.map((candidate) => candidate.accountId));
+    return runModifyingHook<
+      "before_channel_participation",
+      PluginHookBeforeChannelParticipationResult
+    >("before_channel_participation", event, Object.freeze({ ...ctx }), {
+      isolateEventPerHandler: true,
+      assertHandlerBoundaryActive: () => {
+        // Per-policy timeouts cannot extend the caller's shared decision deadline.
+        if (options?.isCurrent() === false) {
+          throw new Error("Channel participation decision is no longer current");
+        }
+      },
+      onHandlerResult: ({ result }) => {
+        if (result === undefined) {
+          return;
+        }
+        if (
+          !result ||
+          !Array.isArray(result.accountIds) ||
+          result.accountIds.length === 0 ||
+          result.accountIds.length > accountIds.size ||
+          new Set(result.accountIds).size !== result.accountIds.length ||
+          Array.from(result.accountIds).some((accountId) => !accountIds.has(accountId))
+        ) {
+          throw new Error(
+            "participation claim must select a nonempty subset of candidate accounts",
+          );
+        }
+      },
+      // Retained plugin results cannot mutate a claim after the dispatch has settled.
+      mergeResults: (_previous, next) => ({ accountIds: [...next.accountIds] }),
+      shouldStop: () => true,
+      terminalLabel: "claimed",
+    });
+  }
+
   /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
@@ -1784,6 +1830,7 @@ export function createHookRunner(
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
+    runBeforeChannelParticipation,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,

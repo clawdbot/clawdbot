@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/agent-participation",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "OpenClaw multi-agent channel participation policy",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

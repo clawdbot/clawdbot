@@ -123,6 +123,16 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return this.client.getRoom(roomId)?.getMember(userId)?.membership === "join";
   }
 
+  async isSyncedUnencryptedRoom(roomId: string): Promise<boolean> {
+    const room = this.client.getRoom(roomId);
+    // Participation only shares plaintext from joined, synced rooms; missing state is unknown.
+    if (!room || room.hasEncryptionStateEvent()) {
+      return false;
+    }
+    // The crypto store remembers encryption even if a server removes the current state event.
+    return !(await this.client.getCrypto()?.isEncryptionEnabledInRoom(roomId));
+  }
+
   async getRoomStateEvent(
     roomId: string,
     eventType: string,

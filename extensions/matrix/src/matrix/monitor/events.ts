@@ -185,7 +185,10 @@ export function registerMatrixMonitorEvents(params: {
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
-  directTracker: ReturnType<typeof createDirectRoomTracker>;
+  directTracker: Pick<
+    ReturnType<typeof createDirectRoomTracker>,
+    "invalidateRoom" | "rememberInvite" | "isDirectMessage"
+  >;
   groupPolicy: "open" | "allowlist" | "disabled";
   roomsConfig?: Record<string, MatrixRoomConfig>;
   needsRoomAliasesForConfig: boolean;

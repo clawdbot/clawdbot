@@ -160,6 +160,10 @@ export type {
   PluginConversationBindingRequestResult,
 } from "../plugins/conversation-binding.types.js";
 export type {
+  PluginHookBeforeChannelParticipationContext,
+  PluginHookBeforeChannelParticipationEvent,
+  PluginHookBeforeChannelParticipationResult,
+  PluginHookChannelParticipationCandidate,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,

@@ -112,6 +112,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "inbound_claim"
+  | "before_channel_participation"
   | "channel_pairing_requested"
   | "message_received"
   | "message_sending"
@@ -156,6 +157,7 @@ const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "inbound_claim",
+  "before_channel_participation",
   "channel_pairing_requested",
   "message_received",
   "message_sending",
@@ -227,6 +229,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
 const CONVERSATION_HOOK_NAMES = [
+  "before_channel_participation",
   "before_model_resolve",
   "agent_turn_prepare",
   "before_prompt_build",
@@ -503,6 +506,28 @@ export type PluginHookAfterCompactionEvent = {
 export type PluginHookInboundClaimResult = {
   handled: boolean;
   reply?: ReplyPayload;
+};
+
+export type PluginHookChannelParticipationCandidate = {
+  accountId: string;
+  agentId: string;
+  participantId: string;
+  name?: string;
+};
+
+export type PluginHookBeforeChannelParticipationEvent = {
+  message: string;
+  candidates: PluginHookChannelParticipationCandidate[];
+};
+
+export type PluginHookBeforeChannelParticipationContext = {
+  channelId: string;
+  conversationId: string;
+};
+
+export type PluginHookBeforeChannelParticipationResult = {
+  /** Nonempty subset of the admitted candidate accounts; void preserves ordinary activation. */
+  accountIds: string[];
 };
 
 export type PluginHookBeforeDispatchEvent = {
@@ -1257,6 +1282,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  before_channel_participation: (
+    event: PluginHookBeforeChannelParticipationEvent,
+    ctx: PluginHookBeforeChannelParticipationContext,
+  ) =>
+    | Promise<PluginHookBeforeChannelParticipationResult | void>
+    | PluginHookBeforeChannelParticipationResult
+    | void;
   channel_pairing_requested: (
     event: PluginHookChannelPairingRequestedEvent,
     ctx: PluginHookChannelPairingContext,

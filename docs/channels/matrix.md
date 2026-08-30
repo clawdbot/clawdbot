@@ -18,6 +18,37 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 
+## Optional multi-agent participation
+
+When multiple live Matrix accounts would ordinarily reply to the same room
+message, the optional Agent Participation plugin can choose one respondent:
+
+```bash
+openclaw plugins enable agent-participation
+openclaw gateway restart
+```
+
+This is a suppression-only feature. Configure the agents, account bindings,
+room access, and ordinary activation first. Enabling it does not bypass
+`requireMention` or make otherwise silent accounts eligible. Explicit mentions,
+commands, direct messages, encrypted rooms, formatted text, media, polls, and explicitly bound
+sessions keep their existing behavior.
+
+For eligible text messages, core gathers live authorized receivers and shares
+one bounded classification across them. The plugin sees the current message and
+public agent names/IDs, not private agent instructions, history, or previews.
+Names do not establish expertise: uncertain classifications preserve normal
+replies. It uses the configured default model through the existing completion
+runtime, so each classified event adds a model request and its latency/cost.
+The model request aborts after five seconds; the full decision has an
+eight-second wait limit. There is no model call when the plugin is disabled or
+only one receiver is eligible.
+
+This first version does not redraft replies when newer messages arrive and does
+not add a Matrix wire protocol. Existing previews and delivery stay unchanged.
+See [the shared participation contract](/plugins/sdk-channel-plugins#optional-shared-participation)
+for limits and lifecycle behavior.
+
 ## Setup
 
 1. Create a Matrix account on your homeserver.

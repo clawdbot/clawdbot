@@ -66,6 +66,10 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+"plugin: agent-participation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agent-participation/**"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:

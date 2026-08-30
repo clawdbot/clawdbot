@@ -41,6 +41,62 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Optional shared participation
+
+`createChannelParticipationCoordinator` from `openclaw/plugin-sdk/channel-inbound`
+coordinates multiple live accounts receiving the same native event. Core gathers
+the complete eligible roster and invokes the optional
+`before_channel_participation` plugin hook once per cached event. This happens
+before agent execution, independently of the agent runtime and reply previews.
+
+A channel creates one coordinator and registers each running account with
+`register({ accountId, prepare, abortSignal })`. The side-effect-free
+`prepare(source)` callback returns `{ accountId, agentId, participantId, name?,
+alreadyHandled? }` only after ordinary membership, sender access, routing, and
+activation checks pass. It must not claim replay delivery, create sessions, send
+pairing prompts, download media, or reserve history. Core calls it again before
+suppression because access can change during inference. Dispose registrations
+when monitors stop; aborting or replacing a registration invalidates old choices.
+If the existing replay owner has already adopted or terminally handled the event,
+set `alreadyHandled`. Such accounts cannot be nominated in a new decision, but
+normal adoption after classification does not invalidate the selected account.
+This receiver-only fact is not passed to policy plugins and is not proof of reply delivery.
+Return `"bypass"` for explicit targeting or uncertain classification, even when
+that receiver cannot be selected. This veto is separate from eligibility so
+already-handled or explicitly bound receivers cannot lose targeting information.
+Return `undefined` only for an ineligible receiver. The delivering account must
+itself qualify before core shares any message with policy plugins.
+
+Call `decide({ accountId, eventKey, conversationId, source, message })`
+from admitted ingress. `eventKey` must identify the
+exact native event, including its realm, room, and thread scope; do not derive it
+from message text or session keys. A `suppress` result is an intentional skipped
+turn: record that reason and settle the channel's existing replay claim. A
+`keep` result preserves the ordinary flow. Commands and unsupported source
+types bypass participation in the adapter.
+
+With no policy hook, no receiver preparation or model call occurs. Core also
+preserves ordinary behavior for explicit targeting, fewer than two eligible
+receivers, oversized input, incomplete preparation, policy errors, timeouts, or
+changed membership. Choices are process-local, retained for five minutes, and
+capped at 256 events; they are coordination hints, not durable replay state.
+The current limits are eight candidates, 2,000 message characters, 128 characters
+per identity field, and 80 per display name. Inputs over the limits are skipped,
+not truncated. Each decision request waits at most eight seconds.
+
+Policy plugins register `before_channel_participation(event, context)` through
+`api.on`. The event contains only the current message and eligible candidates;
+the context contains `channelId` and `conversationId`. Return
+`{ accountIds: [...] }` with a nonempty subset to retain, or return nothing to
+preserve ordinary behavior. The first valid policy result wins. The hook cannot
+admit an unauthorized account or silence the entire roster. It is a
+conversation-access hook and follows the same registration permission checks as
+other hooks that read messages.
+
+The optional Agent Participation plugin implements this hook using the existing
+model completion runtime. Matrix is the first adapter; other channels are
+unchanged until they supply equivalent live receiver facts.
+
 ## Message adapter
 
 Expose a `message` adapter with `defineChannelMessageAdapter` from

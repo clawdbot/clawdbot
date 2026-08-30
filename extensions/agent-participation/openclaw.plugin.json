@@ -1,0 +1,12 @@
+{
+  "id": "agent-participation",
+  "name": "Agent Participation",
+  "description": "Select one respondent for eligible multi-agent channel messages.",
+  "enabledByDefault": false,
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

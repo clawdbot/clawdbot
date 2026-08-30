@@ -17,6 +17,21 @@ const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
+export function shouldDropMatrixPreStartupEvent(params: {
+  dropPreStartupMessages: boolean;
+  eventTs?: number;
+  eventAge?: number;
+  startupMs: number;
+  startupGraceMs: number;
+}): boolean {
+  return (
+    params.dropPreStartupMessages &&
+    (typeof params.eventTs === "number"
+      ? params.eventTs < params.startupMs - params.startupGraceMs
+      : typeof params.eventAge === "number" && params.eventAge > params.startupGraceMs)
+  );
+}
+
 export function resolveMatrixMentionPrecheckText(params: {
   eventType: string;
   content: RoomMessageEventContent;

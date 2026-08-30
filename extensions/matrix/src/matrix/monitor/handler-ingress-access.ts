@@ -7,7 +7,7 @@ import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import type { MatrixLocationPayload } from "./location.js";
 import type { ReservedHistorySlot } from "./room-history.js";
 import { createRoomHistoryTracker } from "./room-history.js";
-import { resolveMatrixRoomConfig } from "./rooms.js";
+import { isMatrixRoomEnabled, resolveMatrixRoomConfigWithAliases } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
@@ -104,18 +104,12 @@ export async function resolveMatrixIngressAccess(config: {
     return undefined;
   }
 
-  const roomInfoForConfig =
-    isRoom && needsRoomAliasesForConfig
-      ? await getRoomInfo(roomId, { includeAliases: true })
-      : undefined;
-  const roomAliasesForConfig = roomInfoForConfig
-    ? [roomInfoForConfig.canonicalAlias ?? "", ...roomInfoForConfig.altAliases].filter(Boolean)
-    : [];
   const roomConfigInfo = isRoom
-    ? resolveMatrixRoomConfig({
+    ? await resolveMatrixRoomConfigWithAliases({
         rooms: roomsConfig,
         roomId,
-        aliases: roomAliasesForConfig,
+        needsAliases: needsRoomAliasesForConfig,
+        getRoomInfo,
       })
     : undefined;
   const roomConfig = roomConfigInfo?.config;
@@ -151,22 +145,10 @@ export async function resolveMatrixIngressAccess(config: {
         }
       : undefined;
 
-  if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
-    logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
+  if (roomConfigInfo && !isMatrixRoomEnabled({ groupPolicy, roomConfig: roomConfigInfo })) {
+    logVerboseMessage(`matrix: drop room message (room policy, ${roomMatchMeta})`);
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
-  }
-  if (isRoom && groupPolicy === "allowlist") {
-    if (!roomConfigInfo?.allowlistConfigured) {
-      logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
-      await commitInboundEventIfClaimedAndDiscardReserved();
-      return undefined;
-    }
-    if (!roomConfig) {
-      logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
-      await commitInboundEventIfClaimedAndDiscardReserved();
-      return undefined;
-    }
   }
 
   let senderNamePromise: Promise<string> | null = null;

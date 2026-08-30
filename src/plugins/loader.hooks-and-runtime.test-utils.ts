@@ -1342,6 +1342,7 @@ ${channelPluginSource({
       id: "conversation-hooks",
       filename: "conversation-hooks.cjs",
       body: `module.exports = { id: "conversation-hooks", register(api) {
+    api.on("before_channel_participation", () => undefined);
     api.on("before_model_resolve", () => undefined);
     api.on("agent_turn_prepare", () => undefined);
     api.on("before_prompt_build", () => undefined);
@@ -1367,7 +1368,7 @@ ${channelPluginSource({
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(9);
+    expect(blockedDiagnostics).toHaveLength(10);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -1376,6 +1377,7 @@ ${channelPluginSource({
       id: "conversation-hooks-allowed",
       filename: "conversation-hooks-allowed.cjs",
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
+    api.on("before_channel_participation", () => undefined);
     api.on("before_model_resolve", () => undefined);
     api.on("agent_turn_prepare", () => undefined);
     api.on("before_prompt_build", () => undefined);
@@ -1403,6 +1405,7 @@ ${channelPluginSource({
     });
 
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_channel_participation",
       "before_model_resolve",
       "agent_turn_prepare",
       "before_prompt_build",

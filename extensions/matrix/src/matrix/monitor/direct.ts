@@ -176,6 +176,115 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     );
   };
 
+  // Participation observes siblings before their own ingress; only that ingress may
+  // repair m.direct or clear a locally promoted classification.
+  const resolveDirectMessage = async (
+    params: DirectMessageCheck,
+    allowPromotion: boolean,
+  ): Promise<boolean | undefined> => {
+    const { roomId, senderId } = params;
+    if (await isExplicitlyConfiguredRoom(roomId)) {
+      log(`matrix: dm rejected via explicit room config room=${roomId}`);
+      return false;
+    }
+    const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
+    const joinedMembers = params.joinedMembers ?? (await resolveJoinedMembers(roomId));
+    if (!allowPromotion && joinedMembers === null) {
+      return undefined;
+    }
+    const strictDirectMembership = isStrictDirectMembership({
+      selfUserId,
+      remoteUserId: senderId,
+      joinedMembers,
+    });
+
+    try {
+      await refreshDmCache();
+    } catch (err) {
+      log(`matrix: dm cache refresh failed (${String(err)})`);
+    }
+
+    if (client.dms.isDm(roomId)) {
+      if (strictDirectMembership) {
+        log(`matrix: dm detected via m.direct room=${roomId}`);
+        return true;
+      }
+      log(`matrix: ignoring stale m.direct classification room=${roomId}`);
+    }
+
+    if (strictDirectMembership) {
+      const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+      if (directViaSelf === true) {
+        log(`matrix: dm detected via member state room=${roomId}`);
+        return true;
+      }
+      if (directViaSelf === false) {
+        log(`matrix: dm rejected via member state room=${roomId}`);
+        return false;
+      }
+
+      if (!hasSeededDmCache) {
+        log(`matrix: dm detected via exact 2-member fallback before dm cache seed room=${roomId}`);
+        return true;
+      }
+
+      if (hasLocallyPromotedDirectRoom(roomId, senderId)) {
+        const shouldKeep = await shouldKeepLocallyPromotedDirectRoom(roomId);
+        if (shouldKeep !== false) {
+          log(`matrix: dm detected via local promotion room=${roomId}`);
+          return true;
+        }
+        if (allowPromotion) {
+          locallyPromotedDirectRooms.delete(roomId);
+          log(`matrix: local promotion cleared room=${roomId}`);
+        }
+      }
+
+      if (hasRecentInviteCandidate(roomId, senderId) && (await canPromoteRecentInvite(roomId))) {
+        if (!allowPromotion) {
+          return undefined;
+        }
+        const promotion = await promoteMatrixDirectRoomCandidate({
+          client,
+          remoteUserId: senderId ?? "",
+          roomId,
+          selfUserId,
+        });
+        if (promotion.classifyAsDirect) {
+          rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
+          log(
+            `matrix: dm detected via recent invite room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
+          );
+          return true;
+        }
+      }
+
+      if (await canPromoteUnmappedStrictRoom(roomId)) {
+        if (!allowPromotion) {
+          return undefined;
+        }
+        const promotion = await promoteMatrixDirectRoomCandidate({
+          client,
+          remoteUserId: senderId ?? "",
+          roomId,
+          selfUserId,
+        });
+        if (promotion.classifyAsDirect) {
+          rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
+          log(
+            `matrix: dm detected via per-room strict fallback room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
+          );
+          return true;
+        }
+      }
+    }
+
+    log(
+      `matrix: dm check room=${roomId} result=group members=${joinedMembers?.length ?? "unknown"}`,
+    );
+    return false;
+  };
+
   return {
     invalidateRoom: (roomId: string): void => {
       joinedMembersCache.delete(roomId);
@@ -196,99 +305,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       setBoundedMap(recentInviteCandidates, roomId, invite, MAX_DM_ROOMS);
       log(`matrix: remembered invite candidate room=${roomId} sender=${normalizedRemoteUserId}`);
     },
-    isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
-      const { roomId, senderId } = params;
-      if (await isExplicitlyConfiguredRoom(roomId)) {
-        log(`matrix: dm rejected via explicit room config room=${roomId}`);
-        return false;
-      }
-      const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
-      const joinedMembers = params.joinedMembers ?? (await resolveJoinedMembers(roomId));
-      const strictDirectMembership = isStrictDirectMembership({
-        selfUserId,
-        remoteUserId: senderId,
-        joinedMembers,
-      });
-
-      try {
-        await refreshDmCache();
-      } catch (err) {
-        log(`matrix: dm cache refresh failed (${String(err)})`);
-      }
-
-      if (client.dms.isDm(roomId)) {
-        if (strictDirectMembership) {
-          log(`matrix: dm detected via m.direct room=${roomId}`);
-          return true;
-        }
-        log(`matrix: ignoring stale m.direct classification room=${roomId}`);
-      }
-
-      if (strictDirectMembership) {
-        const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
-        if (directViaSelf === true) {
-          log(`matrix: dm detected via member state room=${roomId}`);
-          return true;
-        }
-        if (directViaSelf === false) {
-          log(`matrix: dm rejected via member state room=${roomId}`);
-          return false;
-        }
-
-        if (!hasSeededDmCache) {
-          log(
-            `matrix: dm detected via exact 2-member fallback before dm cache seed room=${roomId}`,
-          );
-          return true;
-        }
-
-        if (hasLocallyPromotedDirectRoom(roomId, senderId)) {
-          const shouldKeep = await shouldKeepLocallyPromotedDirectRoom(roomId);
-          if (shouldKeep !== false) {
-            log(`matrix: dm detected via local promotion room=${roomId}`);
-            return true;
-          }
-          locallyPromotedDirectRooms.delete(roomId);
-          log(`matrix: local promotion cleared room=${roomId}`);
-        }
-
-        if (hasRecentInviteCandidate(roomId, senderId) && (await canPromoteRecentInvite(roomId))) {
-          const promotion = await promoteMatrixDirectRoomCandidate({
-            client,
-            remoteUserId: senderId ?? "",
-            roomId,
-            selfUserId,
-          });
-          if (promotion.classifyAsDirect) {
-            rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
-            log(
-              `matrix: dm detected via recent invite room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
-            );
-            return true;
-          }
-        }
-
-        if (await canPromoteUnmappedStrictRoom(roomId)) {
-          const promotion = await promoteMatrixDirectRoomCandidate({
-            client,
-            remoteUserId: senderId ?? "",
-            roomId,
-            selfUserId,
-          });
-          if (promotion.classifyAsDirect) {
-            rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
-            log(
-              `matrix: dm detected via per-room strict fallback room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
-            );
-            return true;
-          }
-        }
-      }
-
-      log(
-        `matrix: dm check room=${roomId} result=group members=${joinedMembers?.length ?? "unknown"}`,
-      );
-      return false;
-    },
+    isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> =>
+      (await resolveDirectMessage(params, true)) === true,
+    observeDirectMessage: (params: DirectMessageCheck): Promise<boolean | undefined> =>
+      resolveDirectMessage(params, false),
   };
 }

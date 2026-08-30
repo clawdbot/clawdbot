@@ -8,6 +8,41 @@ type MatrixRoomLookup = { roomId: string; aliases: string[] };
 type MatrixRoomScopeLookup = MatrixRoomLookup & { tree: ScopeTree };
 type MatrixRoomConfigLookup = MatrixRoomLookup & { rooms?: MatrixRooms };
 
+export function resolveMatrixRequireMention(room: MatrixRoomConfig | undefined): boolean {
+  return typeof room?.autoReply === "boolean" ? !room.autoReply : (room?.requireMention ?? true);
+}
+
+export function isMatrixRoomEnabled(params: {
+  groupPolicy: "open" | "allowlist" | "disabled";
+  roomConfig: ReturnType<typeof resolveMatrixRoomConfig>;
+}): boolean {
+  return (
+    params.groupPolicy !== "disabled" &&
+    (!params.roomConfig.config || params.roomConfig.allowed) &&
+    (params.groupPolicy !== "allowlist" ||
+      (params.roomConfig.allowlistConfigured && params.roomConfig.config !== undefined))
+  );
+}
+
+export async function resolveMatrixRoomConfigWithAliases(params: {
+  rooms?: MatrixRooms;
+  roomId: string;
+  needsAliases: boolean;
+  getRoomInfo: (
+    roomId: string,
+    options: { includeAliases: boolean },
+  ) => Promise<{ canonicalAlias?: string; altAliases: string[] }>;
+}) {
+  const info = params.needsAliases
+    ? await params.getRoomInfo(params.roomId, { includeAliases: true })
+    : undefined;
+  return resolveMatrixRoomConfig({
+    rooms: params.rooms,
+    roomId: params.roomId,
+    aliases: info ? [info.canonicalAlias ?? "", ...info.altAliases].filter(Boolean) : [],
+  });
+}
+
 function readLegacyRoomAllowAlias(room: MatrixRoomConfig | undefined): boolean | undefined {
   const rawRoom = room as Record<string, unknown> | undefined;
   return typeof rawRoom?.allow === "boolean" ? rawRoom.allow : undefined;

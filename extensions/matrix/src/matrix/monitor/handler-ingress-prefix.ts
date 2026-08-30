@@ -1,5 +1,8 @@
 import type { LocationMessageEventContent } from "../sdk.js";
-import { hasBundledMatrixReplacementRelation } from "./handler-helpers.js";
+import {
+  hasBundledMatrixReplacementRelation,
+  shouldDropMatrixPreStartupEvent,
+} from "./handler-helpers.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
@@ -54,13 +57,16 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
   if (senderId === selfUserId) {
     return undefined;
   }
-  if (dropPreStartupMessages) {
-    if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
-      return undefined;
-    }
-    if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > startupGraceMs) {
-      return undefined;
-    }
+  if (
+    shouldDropMatrixPreStartupEvent({
+      dropPreStartupMessages,
+      eventTs,
+      eventAge,
+      startupMs,
+      startupGraceMs,
+    })
+  ) {
+    return undefined;
   }
 
   const content = event.content as RoomMessageEventContent;
