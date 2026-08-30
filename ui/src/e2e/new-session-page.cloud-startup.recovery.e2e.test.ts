@@ -552,9 +552,10 @@ suite.define(() => {
       await checkDelivery.waitFor({ state: "visible" });
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await checkDelivery.click();
-      expect(await gateway.waitForRequest("chat.history", { after: historyCount })).toMatchObject({
-        params: { sessionKey, limit: 1000 },
-      });
+      // Background history loads may arrive before this action's request.
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
+        .toContainEqual(expect.objectContaining({ params: { sessionKey, limit: 1000 } }));
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await retainedTurn
         .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
