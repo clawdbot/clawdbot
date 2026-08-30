@@ -1121,27 +1121,29 @@ export function createSessionsSendTool(opts?: {
                 : baselineReply;
             // This detached flow can outlive the tool request that launched it.
             // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(() =>
-              runWithoutOwnedSessionTranscriptWrites(() =>
-                runSessionsSendA2AFlow({
-                  callGateway: gatewayCall,
-                  targetSessionKey: flowTargetSessionKey,
-                  targetAgentId,
-                  displayKey: flowDisplayKey,
-                  message,
-                  announceTimeoutMs,
-                  // Cron runs are isolated jobs; target replies must not become new
-                  // requester turns, but the target-side announce still runs.
-                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterAgentId,
-                  requesterChannel,
-                  baseline: flowBaseline,
-                  roundOneReply,
-                  waitRunId,
-                  notifyRequesterOnWaitFailure,
-                }),
-              ),
+            void runWithGatewayIndependentRootWorkContinuation(
+              () =>
+                runWithoutOwnedSessionTranscriptWrites(() =>
+                  runSessionsSendA2AFlow({
+                    callGateway: gatewayCall,
+                    targetSessionKey: flowTargetSessionKey,
+                    targetAgentId,
+                    displayKey: flowDisplayKey,
+                    message,
+                    announceTimeoutMs,
+                    // Cron runs are isolated jobs; target replies must not become new
+                    // requester turns, but the target-side announce still runs.
+                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                    requesterSessionKey: replyRequesterSessionKey,
+                    requesterAgentId,
+                    requesterChannel,
+                    baseline: flowBaseline,
+                    roundOneReply,
+                    waitRunId,
+                    notifyRequesterOnWaitFailure,
+                  }),
+                ),
+              "session:a2a-send",
             ).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",

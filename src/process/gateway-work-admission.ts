@@ -335,12 +335,14 @@ function tryBeginGatewayIndependentRootWorkAdmission(
 }
 
 /** Waits through a prepared lease, then joins the root-work set atomically. */
-export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRootWorkAdmissionLease> {
+export async function beginGatewayRootWorkAdmissionWhenOpen(
+  origin = "gateway",
+): Promise<GatewayRootWorkAdmissionLease> {
   while (true) {
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError();
     }
-    const admission = tryBeginGatewayRootWorkAdmission();
+    const admission = tryBeginGatewayRootWorkAdmission(origin);
     if (admission) {
       return admission;
     }
@@ -375,7 +377,7 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
 /** Re-admits preserved work whose inherited root was retired before it could run. */
 export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Promise<T> =>
   GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore()?.retiredByReset
-    ? runWithGatewayIndependentRootWorkAdmission(run)
+    ? runWithGatewayIndependentRootWorkAdmission(run, "runtime:readmission")
     : run();
 
 /**
@@ -386,10 +388,11 @@ export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Pro
  */
 export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
+  origin = "independent",
 ): Promise<T> {
   const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (!parent || parent.released) {
-    return runWithGatewayIndependentRootWorkAdmission(run);
+    return runWithGatewayIndependentRootWorkAdmission(run, origin);
   }
   const admission = createGatewayRootWorkAdmission(`${parent.origin}:continuation`);
   return admission.run(run).finally(admission.release);

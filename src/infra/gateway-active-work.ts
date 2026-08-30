@@ -152,9 +152,8 @@ export function createGatewayActiveWorkSnapshot(
     `${counts.backgroundExecSessions} active background exec session(s)`,
   );
   add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
-  const rootRequestHolders = inspectors.getRootRequestHolders
-    ? inspectors.getRootRequestHolders()
-    : inspectors.getRootRequests
+  const rootRequestHolders =
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
       ? []
       : (resolved.getRootRequestHolders?.() ?? []);
   const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
