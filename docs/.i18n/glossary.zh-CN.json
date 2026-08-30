@@ -1400,6 +1400,10 @@
     "target": "后台进程"
   },
   {
+    "source": "Channel inbound API",
+    "target": "渠道入站 API"
+  },
+  {
     "source": "Channel outbound API",
     "target": "渠道出站 API"
   },

@@ -1,4 +1,5 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
@@ -11,10 +12,18 @@ export type CrabboxWorkerNodeEnrollment = Awaited<
 
 export function createCrabboxNodeEnrollmentSetup(params: {
   enrollment: CrabboxWorkerNodeEnrollment;
+  desktop?: boolean;
   leaseId: string;
 }): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
   const { token, ...nodeBootstrap } = enrollment.nodeBootstrap;
+  const desktopEnvironment = params.desktop
+    ? [
+        "set -eu",
+        ...createCrabboxXfceSessionEnvironment(),
+        `exec "$1" -e 'process.stdout.write(JSON.stringify({DISPLAY:process.env.DISPLAY,DBUS_SESSION_BUS_ADDRESS:process.env.DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR:process.env.XDG_RUNTIME_DIR}))'`,
+      ].join("\n")
+    : null;
   // The script receives credentials only through the private forwarded environment.
   // Its children inherit neither download authority nor the enrollment credential.
   const command = `set -eu
@@ -32,6 +41,7 @@ const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const leaseId = ${JSON.stringify(leaseId)};
 const displayName = ${JSON.stringify(enrollment.displayName)};
 const mode = ${JSON.stringify(enrollment.mode)};
+const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const token = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
@@ -46,6 +56,13 @@ process.umask(0o077);
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  if (desktopEnvironment) {
+    // Inspect XFCE only after stripping forwarded credentials from every child environment.
+    const desktop = spawnSync("bash", ["-c", desktopEnvironment, "bash", process.execPath], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
+    if (desktop.status !== 0) throw new Error(desktop.stderr?.trim() || "Cloud worker XFCE session is unavailable");
+    delete nodeEnv.XDG_RUNTIME_DIR;
+    Object.assign(nodeEnv, JSON.parse(desktop.stdout));
+  }
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(stateDir, 0o700);
   if (fs.existsSync(pidFile)) {
@@ -145,7 +162,7 @@ process.umask(0o077);
     fs.unlinkSync(runtimeLink);
   } catch (error) { if (error.code !== "ENOENT") throw error; }
   fs.symlinkSync(runtimeDir, runtimeLink);
-  for (const pluginId of bootstrap.enabledPluginIds) {
+  for (const pluginId of new Set([...bootstrap.enabledPluginIds, ...${JSON.stringify(params.desktop ? ["cua-computer"] : [])}])) {
     const enabled = spawnSync(process.execPath, [cli, "plugins", "enable", pluginId], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
     if (enabled.status !== 0) throw new Error("Cloud worker bootstrap could not enable plugin " + pluginId);
   }

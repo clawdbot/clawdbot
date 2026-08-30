@@ -30,6 +30,7 @@ import {
   createEmbeddedAttemptExternalAbortController,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-finalize.js";
+import { createEmbeddedAttemptPreparation } from "./attempt-preparation.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 import {
@@ -47,10 +48,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
-import {
-  measureEmbeddedAgentPreparation,
-  measureEmbeddedAgentPreparationSync,
-} from "./preparation-timing.js";
+import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -152,17 +150,18 @@ export async function runEmbeddedAttempt(
     runId: params.runId,
     state: abortState,
   });
+  const prepare = createEmbeddedAttemptPreparation({
+    config: params.config,
+    assertCurrent: externalAbortController.throwIfFired,
+  });
   try {
-    const preparedSkills = measureEmbeddedAgentPreparationSync(
-      "attempt.skills",
-      () =>
-        prepareEmbeddedAttemptSkills({
-          attempt: params,
-          effectiveWorkspace,
-          sandbox,
-          sessionAgentId,
-        }),
-      { config: params.config },
+    const preparedSkills = await prepare("attempt.skills", () =>
+      prepareEmbeddedAttemptSkills({
+        attempt: params,
+        effectiveWorkspace,
+        sandbox,
+        sessionAgentId,
+      }),
     );
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
     const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
@@ -189,41 +188,38 @@ export async function runEmbeddedAttempt(
     emitDiagnosticRunCompleted = emitCompleted;
     const corePluginToolStages = createEmbeddedRunStageTracker();
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-    const preparedToolBase = measureEmbeddedAgentPreparationSync(
-      "attempt.tool-base",
-      () =>
-        prepareEmbeddedAttemptToolBase({
-          agentDir,
-          attempt: params,
-          effectiveCwd,
-          effectiveWorkspace,
-          markCoreToolStage: (name) => corePluginToolStages.mark(name),
-          onYield: (message, acknowledgment) => {
-            yieldDetected = true;
-            yieldMessage = message;
-            yieldAcknowledgment = acknowledgment;
-            queueYieldInterruptForSession?.();
-            runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
-            abortSessionForYield?.();
-          },
-          resolvedWorkspace,
-          runAbortController,
-          runTrace,
-          sandbox,
-          sandboxSessionKey,
-          sessionPermissionPolicy,
-          sessionAgentId,
-          skillUsagePaths,
-          skillsSnapshot: skillsSnapshotForRun,
-          codeModeSkills,
-          toolSearchCatalogExecutor: (toolParams) => {
-            if (!toolSearchCatalogExecutor) {
-              throw new Error("Tool Search catalog executor is unavailable for this run.");
-            }
-            return toolSearchCatalogExecutor(toolParams);
-          },
-        }),
-      { config: params.config },
+    const preparedToolBase = await prepare("attempt.tool-base", () =>
+      prepareEmbeddedAttemptToolBase({
+        agentDir,
+        attempt: params,
+        effectiveCwd,
+        effectiveWorkspace,
+        markCoreToolStage: (name) => corePluginToolStages.mark(name),
+        onYield: (message, acknowledgment) => {
+          yieldDetected = true;
+          yieldMessage = message;
+          yieldAcknowledgment = acknowledgment;
+          queueYieldInterruptForSession?.();
+          runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+          abortSessionForYield?.();
+        },
+        resolvedWorkspace,
+        runAbortController,
+        runTrace,
+        sandbox,
+        sandboxSessionKey,
+        sessionPermissionPolicy,
+        sessionAgentId,
+        skillUsagePaths,
+        skillsSnapshot: skillsSnapshotForRun,
+        codeModeSkills,
+        toolSearchCatalogExecutor: (toolParams) => {
+          if (!toolSearchCatalogExecutor) {
+            throw new Error("Tool Search catalog executor is unavailable for this run.");
+          }
+          return toolSearchCatalogExecutor(toolParams);
+        },
+      }),
     );
     toolSearchCatalogRef = preparedToolBase.toolSearchCatalogRef;
     const {
@@ -240,21 +236,18 @@ export async function runEmbeddedAttempt(
     runCleanups = preparedRunCleanups;
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const preparedBootstrap = await measureEmbeddedAgentPreparation(
-      "attempt.bootstrap",
-      () =>
-        prepareEmbeddedAttemptBootstrap({
-          attempt: params,
-          bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
-          effectiveWorkspace,
-          hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
-          isRawModelRun,
-          markStage: (name) => prepStages.mark(name),
-          resolvedWorkspace,
-          sessionAgentId,
-          sessionLabel: params.sessionKey ?? params.sessionId,
-        }),
-      { config: params.config },
+    const preparedBootstrap = await prepare("attempt.bootstrap", () =>
+      prepareEmbeddedAttemptBootstrap({
+        attempt: params,
+        bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
+        effectiveWorkspace,
+        hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
+        isRawModelRun,
+        markStage: (name) => prepStages.mark(name),
+        resolvedWorkspace,
+        sessionAgentId,
+        sessionLabel: params.sessionKey ?? params.sessionId,
+      }),
     );
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
@@ -264,20 +257,17 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
-    const preparedBundleTools = await measureEmbeddedAgentPreparation(
-      "attempt.bundle-tools",
-      () =>
-        prepareEmbeddedAttemptBundleTools({
-          agentDir,
-          attempt: params,
-          effectiveWorkspace,
-          getCurrentAttemptPluginMetadataSnapshot,
-          getProviderRuntimeHandle,
-          isRawModelRun,
-          preparedToolBase,
-          sessionAgentId,
-        }),
-      { config: params.config },
+    const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
+      prepareEmbeddedAttemptBundleTools({
+        agentDir,
+        attempt: params,
+        effectiveWorkspace,
+        getCurrentAttemptPluginMetadataSnapshot,
+        getProviderRuntimeHandle,
+        isRawModelRun,
+        preparedToolBase,
+        sessionAgentId,
+      }),
     );
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
@@ -285,29 +275,26 @@ export async function runEmbeddedAttempt(
     // Catalog preparation registers global run state before tool projection and
     // diagnostics, so arm cleanup before either can fail and leak the catalog.
     toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
-    const preparedToolCatalog = measureEmbeddedAgentPreparationSync(
-      "attempt.tool-catalog",
-      () =>
-        prepareEmbeddedAttemptToolCatalog({
-          attempt: params,
-          preparedToolBase,
-          bundleTools: { clientTools, uncompactedEffectiveTools },
-          effectiveCwd,
-          effectiveWorkspace,
-          sessionAgentId,
-          sandboxSessionKey,
-          runTrace,
-          abortSignal: runAbortController.signal,
-          executeCodeModeTool: (toolParams) => {
-            if (!toolSearchCatalogExecutor) {
-              throw new Error("Code Mode catalog executor is unavailable for this run.");
-            }
-            return toolSearchCatalogExecutor(toolParams);
-          },
-          getProviderRuntimeHandle,
-          markStage: (name) => prepStages.mark(name),
-        }),
-      { config: params.config },
+    const preparedToolCatalog = await prepare("attempt.tool-catalog", () =>
+      prepareEmbeddedAttemptToolCatalog({
+        attempt: params,
+        preparedToolBase,
+        bundleTools: { clientTools, uncompactedEffectiveTools },
+        effectiveCwd,
+        effectiveWorkspace,
+        sessionAgentId,
+        sandboxSessionKey,
+        runTrace,
+        abortSignal: runAbortController.signal,
+        executeCodeModeTool: (toolParams) => {
+          if (!toolSearchCatalogExecutor) {
+            throw new Error("Code Mode catalog executor is unavailable for this run.");
+          }
+          return toolSearchCatalogExecutor(toolParams);
+        },
+        getProviderRuntimeHandle,
+        markStage: (name) => prepStages.mark(name),
+      }),
     );
     const {
       catalogToolHookContext,
@@ -317,33 +304,29 @@ export async function runEmbeddedAttempt(
       toolSearchRunPlan,
     } = preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
-    const preparedSystemPrompt = await measureEmbeddedAgentPreparation(
-      "attempt.system-prompt",
-      () =>
-        prepareEmbeddedAttemptSystemPrompt({
-          activeContextEngine,
-          attempt: params,
-          bootstrap: preparedBootstrap,
-          capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-          effectiveCwd,
-          effectiveTools,
-          effectiveWorkspace,
-          getProviderRuntimeHandle,
-          isRawModelRun,
-          markStage: (name) => prepStages.mark(name),
-          modelToolsEnabled: toolsEnabled,
-          proactiveSubagentOrchestration,
-          sandbox: sandbox ?? undefined,
-          sandboxSessionKey,
-          sessionAgentId,
-          skillsPrompt,
-          codeModeActive: codeModeControlsEnabledForRun,
-          toolSearchCatalogRef,
-          toolSearchDirectoryEnabled:
-            toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
-          toolSearchRuntimeConfig,
-        }),
-      { config: params.config },
+    const preparedSystemPrompt = await prepare("attempt.system-prompt", () =>
+      prepareEmbeddedAttemptSystemPrompt({
+        activeContextEngine,
+        attempt: params,
+        bootstrap: preparedBootstrap,
+        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
+        effectiveCwd,
+        effectiveTools,
+        effectiveWorkspace,
+        getProviderRuntimeHandle,
+        isRawModelRun,
+        markStage: (name) => prepStages.mark(name),
+        modelToolsEnabled: toolsEnabled,
+        proactiveSubagentOrchestration,
+        sandbox: sandbox ?? undefined,
+        sandboxSessionKey,
+        sessionAgentId,
+        skillsPrompt,
+        codeModeActive: codeModeControlsEnabledForRun,
+        toolSearchCatalogRef,
+        toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+        toolSearchRuntimeConfig,
+      }),
     );
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const {
@@ -351,14 +334,11 @@ export async function runEmbeddedAttempt(
       ownedTranscriptWriteContext,
       transcriptLifecycle,
       withOwnedTranscriptWrite,
-    } = await measureEmbeddedAgentPreparation(
-      "attempt.transcript-lifecycle",
-      () =>
-        prepareEmbeddedAttemptTranscriptLifecycle({
-          attempt: params,
-          externalAbortController,
-        }),
-      { config: params.config },
+    } = await prepare("attempt.transcript-lifecycle", () =>
+      prepareEmbeddedAttemptTranscriptLifecycle({
+        attempt: params,
+        externalAbortController,
+      }),
     );
 
     let session: AgentSession | undefined;
@@ -368,90 +348,87 @@ export async function runEmbeddedAttempt(
     >["trajectoryRecorder"] = null;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     try {
-      const preparedSessionRuntime = await measureEmbeddedAgentPreparation(
-        "attempt.session-runtime",
-        () =>
-          prepareEmbeddedAttemptSessionRuntime({
-            attempt: params,
-            ...(activeContextEngine ? { activeContextEngine } : {}),
-            agentDir,
-            effectiveCwd,
-            effectiveFsWorkspaceOnly,
-            effectiveWorkspace,
-            initialSystemPrompt: preparedSystemPrompt.systemPromptText,
-            isRawModelRun,
-            nestedToolActivities: preparedToolBase.nestedToolActivities,
-            sessionManager: {
-              replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
-              resolveActiveContextEnginePluginId,
-              sessionAgentId,
-              transcriptLifecycle,
-              withOwnedTranscriptWrite,
-            },
-            agentSession: {
-              agentCoreThinkingLevel,
-              clientToolPreparation: {
-                catalogToolHookContext,
-                clientTools,
-                codeModeControlsEnabledForRun,
-                deferredDirectoryToolsCallable,
-                effectiveTools,
-                replaySafetyOptions,
-                sandboxEnabled: Boolean(sandbox?.enabled),
-                sandboxSessionKey,
-                sessionAgentId,
-                toolSearchCatalogRef,
-                toolSearchRuntimeConfig,
-                uncompactedEffectiveTools,
-              },
-              getCurrentAttemptPluginMetadataSnapshot,
-              markStage: (stage) => prepStages.mark(stage),
-              runAbortSignal: runAbortController.signal,
-            },
-            contextGuards: { computerContextEpoch },
-            trajectory: {
-              effectiveToolCount: effectiveTools.length,
-              localModelLeanEnabled,
-              ...(preparedSystemPrompt.systemPromptReport
-                ? { systemPromptReport: preparedSystemPrompt.systemPromptReport }
-                : {}),
-            },
-            transport: {
-              abortSignal: runAbortController.signal,
-              codeModeControlsEnabled: codeModeControlsEnabledForRun,
-              getProviderRuntimeHandle,
-              providerThinkingLevel,
-              ...(sandbox !== undefined ? { sandbox } : {}),
+      const preparedSessionRuntime = await prepare("attempt.session-runtime", () =>
+        prepareEmbeddedAttemptSessionRuntime({
+          attempt: params,
+          ...(activeContextEngine ? { activeContextEngine } : {}),
+          agentDir,
+          effectiveCwd,
+          effectiveFsWorkspaceOnly,
+          effectiveWorkspace,
+          initialSystemPrompt: preparedSystemPrompt.systemPromptText,
+          isRawModelRun,
+          nestedToolActivities: preparedToolBase.nestedToolActivities,
+          sessionManager: {
+            replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
+            resolveActiveContextEnginePluginId,
+            sessionAgentId,
+            transcriptLifecycle,
+            withOwnedTranscriptWrite,
+          },
+          agentSession: {
+            agentCoreThinkingLevel,
+            clientToolPreparation: {
+              catalogToolHookContext,
+              clientTools,
+              codeModeControlsEnabledForRun,
+              deferredDirectoryToolsCallable,
+              effectiveTools,
+              replaySafetyOptions,
+              sandboxEnabled: Boolean(sandbox?.enabled),
               sandboxSessionKey,
+              sessionAgentId,
+              toolSearchCatalogRef,
+              toolSearchRuntimeConfig,
+              uncompactedEffectiveTools,
             },
-            externalAbortController,
-            lifecycle: {
-              onContextGuardsInstalled: (remove) => {
-                removeToolResultContextGuard = remove;
-              },
-              onSessionCreated: (createdSession) => {
-                session = createdSession;
-              },
-              onSessionManagerCreated: (createdSessionManager) => {
-                sessionManager = createdSessionManager;
-              },
-              onSessionSettleTrackerReady: (build) => {
-                buildAbortSettlePromise = build;
-              },
-              onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
-                abortSessionForYield = () => {
-                  yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
-                };
-                queueYieldInterruptForSession = () => {
-                  queueSessionsYieldInterruptMessage(activeSession);
-                };
-              },
-              onTrajectoryRecorderCreated: (recorder) => {
-                trajectoryRecorder = recorder;
-              },
+            getCurrentAttemptPluginMetadataSnapshot,
+            markStage: (stage) => prepStages.mark(stage),
+            runAbortSignal: runAbortController.signal,
+          },
+          contextGuards: { computerContextEpoch },
+          trajectory: {
+            effectiveToolCount: effectiveTools.length,
+            localModelLeanEnabled,
+            ...(preparedSystemPrompt.systemPromptReport
+              ? { systemPromptReport: preparedSystemPrompt.systemPromptReport }
+              : {}),
+          },
+          transport: {
+            abortSignal: runAbortController.signal,
+            codeModeControlsEnabled: codeModeControlsEnabledForRun,
+            getProviderRuntimeHandle,
+            providerThinkingLevel,
+            ...(sandbox !== undefined ? { sandbox } : {}),
+            sandboxSessionKey,
+          },
+          externalAbortController,
+          lifecycle: {
+            onContextGuardsInstalled: (remove) => {
+              removeToolResultContextGuard = remove;
             },
-          }),
-        { config: params.config },
+            onSessionCreated: (createdSession) => {
+              session = createdSession;
+            },
+            onSessionManagerCreated: (createdSessionManager) => {
+              sessionManager = createdSessionManager;
+            },
+            onSessionSettleTrackerReady: (build) => {
+              buildAbortSettlePromise = build;
+            },
+            onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
+              abortSessionForYield = () => {
+                yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
+              };
+              queueYieldInterruptForSession = () => {
+                queueSessionsYieldInterruptMessage(activeSession);
+              };
+            },
+            onTrajectoryRecorderCreated: (recorder) => {
+              trajectoryRecorder = recorder;
+            },
+          },
+        }),
       );
       const executionResult = await runEmbeddedAttemptExecutionPhase({
         attempt: params,

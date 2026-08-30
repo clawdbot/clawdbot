@@ -43,6 +43,9 @@ type WorkerEnvironmentStore = ReturnType<
   typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
 >;
 type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
+type WorkerSessionToolExecutor = ReturnType<
+  typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerSessionToolExecutor
+>;
 type WorkerEnvironmentLogger = {
   child: (name: string) => { warn: (message: string) => void };
 };
@@ -76,6 +79,9 @@ const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
 );
 const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/inference-runtime.js"),
+);
+const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(
+  () => import("./worker-environments/worker-session-tool-executor.js"),
 );
 
 export async function loadGatewayWorkerEnvironmentStartupState(): Promise<GatewayWorkerEnvironmentStartupState> {
@@ -139,9 +145,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createNodeWorkerBundleTransferHttpCallback },
     { createNodeWorkspaceTransferService },
     { createNodeWorkspaceTransferHttpCallback },
-    { createWorkerSessionToolExecutor },
     { createWorkerNodeDesktopCarrier },
     { createWorkerNodePortalCarrier },
+    { createWorkerComputerService },
     { resolveWorkerProvider },
     { createWorkerBootstrapArtifactTransferService },
     { createWorkerBootstrapArtifactTransferHttpCallback },
@@ -157,9 +163,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/node-worker-bundle-transfer-http.js"),
     import("./worker-environments/node-workspace-transfer-service.js"),
     import("./worker-environments/node-workspace-transfer-http.js"),
-    import("./worker-environments/worker-session-tool-executor.js"),
     import("./worker-environments/node-desktop-carrier.js"),
     import("./worker-environments/portal-node-carrier.js"),
+    import("./worker-environments/computer-transport.js"),
     import("../plugins/worker-provider-registry.js"),
     import("./worker-environments/worker-bootstrap-artifact-transfer-service.js"),
     import("./worker-environments/worker-bootstrap-artifact-transfer-http.js"),
@@ -354,7 +360,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       return await generation.producer.prepare(signal);
     },
   });
-  let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
+  let executeSessionTool: WorkerSessionToolExecutor = async () => {
     throw new Error("Worker session tools are unavailable");
   };
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
@@ -365,7 +371,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       throw new Error("GitHub publication is unavailable");
     },
   };
+  const computers = createWorkerComputerService({
+    store: params.startup.store,
+    placements: params.startup.placementStore,
+    resolveGatewayContext: params.resolveGatewayContext,
+    getNodeTransport: () => deviceRuntime.getNodeTransport(),
+    warn: (message) => workerEnvironmentLog.warn(message),
+  });
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
+    prepareComputer: computers.prepare,
+    executeComputer: computers.execute,
+    closeComputers: computers.close,
     store: params.startup.store,
     getConfig: getRuntimeConfig,
     // Plugin reload replaces the registry object; resolve against the live binding.
@@ -475,20 +491,28 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     );
     return environmentIds;
   });
-  executeSessionTool = createWorkerSessionToolExecutor({
-    resolveGatewayContext: params.resolveGatewayContext,
-    placements: params.startup.placementStore,
-    environments: workerEnvironmentService,
-    dispatchChild: (request) => dispatchChild(request),
-    githubPublication: {
-      requestForClaim: (request) => githubPublication.requestForClaim(request),
-    },
-    portals: {
-      getService: () => params.getPortalRuntime()?.portalService,
-      carrier: workerNodePortalCarrier,
-      onChanged: notifyPortalChange,
-    },
-  });
+  let workerSessionToolExecutor: Promise<WorkerSessionToolExecutor> | undefined;
+  executeSessionTool = async (request) => {
+    const executor = await (workerSessionToolExecutor ??=
+      loadWorkerSessionToolExecutorModule().then(({ createWorkerSessionToolExecutor }) =>
+        createWorkerSessionToolExecutor({
+          resolveGatewayContext: params.resolveGatewayContext,
+          placements: params.startup.placementStore,
+          environments: workerEnvironmentService,
+          dispatchChild: (childRequest) => dispatchChild(childRequest),
+          githubPublication: {
+            requestForClaim: (publicationRequest) =>
+              githubPublication.requestForClaim(publicationRequest),
+          },
+          portals: {
+            getService: () => params.getPortalRuntime()?.portalService,
+            carrier: workerNodePortalCarrier,
+            onChanged: notifyPortalChange,
+          },
+        }),
+      ));
+    return await executor(request);
+  };
   const bindWorkerNodeDesktopControl =
     workerNodeDesktopCarrier && workerNodeDesktopStreamBroker
       ? (transport: NodeWorkerSupervisorTransport) =>

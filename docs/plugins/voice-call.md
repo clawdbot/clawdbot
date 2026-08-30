@@ -564,6 +564,7 @@ Behavior notes:
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 - When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
 - When Twilio barge-in or stream teardown clears the pending TTS queue, queued playback requests settle instead of hanging callers awaiting playback completion.
+- Resumed caller speech discards older automatic replies that are still being generated. Twilio streaming reacts to speech-start and partial transcripts; carrier webhook calls react when a new speech event arrives. Explicit speech requests remain available, and already accepted agent work can finish without speaking an obsolete reply.
 
 ### TTS examples
 
@@ -869,6 +870,13 @@ should use `voicecall.dtmf` after the call exists if they need post-connect
 digits.
 
 ## Troubleshooting
+
+### Call placement fails to save its initial record
+
+Voice Call saves the initial record before reserving a concurrency slot or
+contacting the carrier. If that write fails, the placement reports the storage
+error without dialing. Restore access to the state directory, then retry; the
+failed placement does not consume `maxConcurrentCalls` capacity.
 
 ### Setup fails webhook exposure
 

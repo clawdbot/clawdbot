@@ -217,6 +217,37 @@ describe("worker transcript commit application", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("persists and reopens image-bearing worker results above the control-frame budget", async () => {
+    const image = {
+      type: "image" as const,
+      data: Buffer.alloc(128 * 1024, 42).toString("base64"),
+      mimeType: "image/png",
+    };
+    const messages = createTurnMessages();
+    const toolResult = messages[2];
+    if (toolResult?.role !== "toolResult") {
+      throw new Error("expected tool result fixture");
+    }
+    toolResult.content.push(image);
+    const request = createRequest({ messages });
+    const outcome = await committer.commit({ identity: IDENTITY, request });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`expected image transcript commit success: ${outcome.reason}`);
+    }
+    await expect(committer.commit({ identity: IDENTITY, request })).resolves.toEqual(outcome);
+    const reopened = SessionManager.open(sessionTarget);
+    const entry = reopened.getEntry(outcome.result.newLeafId);
+    expect(entry).toMatchObject({
+      type: "message",
+      message: { role: "toolResult", content: expect.arrayContaining([image]) },
+    });
+    expect(reopened.buildSessionContext().messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      content: expect.arrayContaining([image]),
+    });
+  });
+
   it("commits semantic turns as a generated parent-linked transcript and publishes normally", async () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));

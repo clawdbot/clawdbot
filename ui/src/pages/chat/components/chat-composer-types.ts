@@ -40,6 +40,7 @@ export type ChatQueuedEditProps = {
   /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
   editingText?: string;
+  source?: ChatQueueItem;
   onEdit?: (id: string) => void;
   onEditChange?: (text: string) => void;
   onEditSubmit?: () => void;

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
+import { getPluginToolSideEffectOwnerKey } from "../../../plugins/tool-metadata.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import {
   attachInternalToolExecutionPreparer,

@@ -296,7 +296,8 @@ type LlmBoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmB
 
 type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>;
 
-export function prepareEmbeddedAttemptSessionBoundary(input: {
+export async function prepareEmbeddedAttemptSessionBoundary(input: {
+  abortSignal?: AbortSignal;
   activeSession: Pick<AgentSession, "agent">;
   attempt: SessionBoundaryAttempt;
   getUserTranscriptContexts: () => LlmBoundaryOptions["userTranscriptContexts"];
@@ -304,12 +305,12 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
   preparedUserTurnMessage: AgentMessage | undefined;
   sessionManager: ReturnType<typeof guardSessionManager>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
-}): {
+}): Promise<{
   boundaryTimezone: string | undefined;
   includeBoundaryTimestamp: boolean;
   orphanRepair: ReturnType<typeof resolveOrphanRepairPlan>;
   setCurrentUserTimestampOverride: (override: CurrentUserTimestampOverride | undefined) => void;
-} {
+}> {
   const { activeSession, attempt, isRawModelRun, sessionManager } = input;
   const preserveExactPrompt = isRawModelRun || attempt.operation === "settled-tool-finalization";
   if (isRawModelRun) {
@@ -340,12 +341,28 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     });
   const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;
   if (orphanRepair?.removeLeaf) {
+    input.abortSignal?.throwIfAborted();
     if (orphanRepair.messageEntry.parentId) {
       sessionManager.branch(orphanRepair.messageEntry.parentId);
     } else {
       sessionManager.resetLeaf();
     }
+    const target = sessionManager.getSessionTarget();
+    if (target) {
+      // Commit the repaired cursor even when no metadata follows the orphan.
+      // Its owning attempt must settle the projection before the next append adopts it.
+      sessionManager.appendLeafControl({
+        targetId: sessionManager.getLeafId(),
+        appendParentId: sessionManager.getAppendParentId(),
+      });
+    }
     replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
+    if (target) {
+      const { waitForSessionTranscriptProjection } =
+        await import("../../../config/sessions/session-transcript-reconcile.js");
+      await waitForSessionTranscriptProjection(target, input.abortSignal);
+      input.abortSignal?.throwIfAborted();
+    }
     // The old canonical user turn is gone. Its persistence suppression must not
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();

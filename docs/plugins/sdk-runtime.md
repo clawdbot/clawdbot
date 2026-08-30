@@ -669,6 +669,15 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
+    A node command may declare `prepare(context)` for asynchronous native startup.
+    Node-host initialization awaits it before publishing the initial manifest or
+    connecting to the Gateway; plugin registration itself stays synchronous.
+    Shared preparation callbacks run once per node registry initialization, not
+    per invocation or reconnect. Optional providers should retain a known
+    unavailable state on expected preparation failure and let `isAvailable`
+    withhold their commands; throwing aborts node startup. Use `watchAvailability`
+    for later availability changes and `onDisconnect` for execution cleanup.
+
     <Warning>
     The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. When `openDuplex` runs inside an authenticated Gateway request, its effective scopes never exceed that authenticated caller's actual scopes, even if a trusted plugin requests stronger scopes. Without an authenticated incoming client, existing trusted-plugin scope behavior applies. Use requested scopes only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
     </Warning>

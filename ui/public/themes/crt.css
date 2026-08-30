@@ -1,0 +1,171 @@
+/* CRT palette; selected by index.html and app/theme.ts. */
+
+/* Terminal shape: the whole console is near-square. Radius tokens flatten the
+   var(--radius-*) chain and the scale factor flattens the fixed px * scale
+   corner rules; --radius-full is untouched so avatars and pills stay round.
+   The attribute selector outscores the :root capability flip to 1.25. */
+:root[data-theme="crt"],
+:root[data-theme="crt-light"] {
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --radius: 3px;
+  --openclaw-corner-radius-scale: 0.25;
+}
+
+:root[data-theme="crt"] {
+  /*
+   * Accent — bright phosphor green on neutral tube black; white-cast body text.
+   * Phosphor (green-on-green glass) stays the tinted sibling; CRT is the
+   * neutral white/green console.
+   *
+   * WCAG 2.1 AA audit (bg = #090a09, relative luminance ≈ 0.0030):
+   *   --accent #3aff7d  contrast ≈ 14.9:1 AAA ✓
+   *   --primary-foreground #052b12 on #3aff7d button: 11.6:1 ✓
+   *   --destructive-foreground (base #fafafa) on #d0342d button: 4.7:1 AA ✓
+   *   body text --text #c2cac3: 11.8:1 ✓
+   *   worst text pairing --muted on --bg-muted: 6.5:1 ✓
+   */
+  --ring: #3aff7d;
+  --accent: #3aff7d;
+  --accent-hover: #71ffa5;
+  --accent-muted: #3aff7d;
+  --accent-subtle: rgba(58, 255, 125, 0.12);
+  --accent-glow: rgba(58, 255, 125, 0.2);
+  --primary: #3aff7d;
+  --primary-hover: #71ffa5;
+  --primary-foreground: #052b12;
+
+  --destructive: #d0342d;
+  --destructive-hover: #b92d27;
+
+  --focus: rgba(58, 255, 125, 0.18);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg: #090a09;
+  --bg-accent: #0d0f0d;
+  --bg-elevated: #111412;
+  --bg-hover: #171b18;
+  --bg-muted: #151915;
+
+  --card: #0d0f0d;
+  --card-foreground: #e9eee9;
+  --card-highlight: rgba(220, 245, 225, 0.04);
+  --popover: #111412;
+  --popover-foreground: #e9eee9;
+
+  --panel: #090a09;
+  --panel-strong: #111412;
+  --panel-hover: #171b18;
+  --chrome: rgba(9, 10, 9, 0.96);
+  --chrome-strong: rgba(9, 10, 9, 0.98);
+
+  --text: #c2cac3;
+  --text-strong: #e9eee9;
+  --chat-text: #c2cac3;
+  --muted: #90a094;
+  --muted-strong: #a3b2a7;
+  --muted-foreground: #90a094;
+
+  --border: #202521;
+  --border-strong: #303833;
+  --border-hover: #45524a;
+  --input: #202521;
+
+  --secondary: #0d0f0d;
+  --secondary-foreground: #e9eee9;
+  --accent-2: #ffcf5c;
+  --accent-2-muted: rgba(255, 207, 92, 0.7);
+  --accent-2-subtle: rgba(255, 207, 92, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.65);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(220, 245, 225, 0.04);
+
+  /* One face for the whole console, prose included — same opt-in character
+     decision as Phosphor; the mono choice is why this theme is not a default. */
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+}
+
+:root[data-theme="crt-light"] {
+  /*
+   * Accent — deep console green on neutral paper.
+   *
+   * WCAG 2.1 AA audit (bg = #f5f5f4, relative luminance ≈ 0.911):
+   *   --accent #0a612b  contrast ≈ 6.9:1 AA ✓
+   *   --primary-foreground #ffffff on #0a612b button: 7.6:1 ✓
+   *   body text --text #343a34: 10.7:1 ✓
+   *   worst text pairing --muted on --bg-muted: 5.1:1 ✓
+   */
+  --ring: #0a612b;
+  --accent: #0a612b;
+  --accent-hover: #084d22;
+  --accent-muted: #0a612b;
+  --accent-subtle: rgba(10, 97, 43, 0.1);
+  --accent-glow: rgba(10, 97, 43, 0.14);
+  --primary: #0a612b;
+  --primary-foreground: #ffffff;
+
+  --bg: #f5f5f4;
+  --bg-accent: #ececea;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e3e4e1;
+  --bg-muted: #e9eae8;
+  --bg-content: #efefee;
+
+  --card: #ffffff;
+  --card-foreground: #191e19;
+  --card-highlight: rgba(20, 40, 25, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #191e19;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f5f5f4;
+  --panel-strong: #ececea;
+  --panel-hover: #dddedb;
+  --chrome: rgba(245, 245, 244, 0.96);
+  --chrome-strong: rgba(245, 245, 244, 0.98);
+
+  --text: #343a34;
+  --text-strong: #191e19;
+  --chat-text: #343a34;
+  --muted: #5b655c;
+  --muted-strong: #49544a;
+  --muted-foreground: #5b655c;
+
+  --border: #dcdedb;
+  --border-strong: #c0c5bf;
+  --border-hover: #97a399;
+  --input: #dcdedb;
+
+  --secondary: #ececea;
+  --secondary-foreground: #343a34;
+  --accent-2: #7a5d10;
+  --accent-2-muted: rgba(122, 93, 16, 0.75);
+  --accent-2-subtle: rgba(122, 93, 16, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(15, 25, 18, 0.05);
+  --shadow-md: 0 4px 12px rgba(15, 25, 18, 0.07);
+  --shadow-lg: 0 12px 28px rgba(15, 25, 18, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(20, 40, 25, 0.04);
+
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+}

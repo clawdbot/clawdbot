@@ -528,7 +528,7 @@ describe("external shared-state ownership", () => {
 
     try {
       expect(() => openOpenClawStateDatabase({ env })).toThrow(
-        /fresh state database open completed, but releasing its coordinator failed/u,
+        /fresh state database open and coordinator release both failed/u,
       );
     } finally {
       exec.mockRestore();

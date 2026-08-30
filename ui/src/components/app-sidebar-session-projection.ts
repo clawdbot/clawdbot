@@ -243,9 +243,10 @@ export class SidebarSessionProjection {
       if (!collapsed) {
         expandedRows.push(...section.rows);
         let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
+        let retainedSlots = visibleLimit;
         const sticky = this.stickySections.get(section.id);
-        // Union after normal paging keeps newly sorted rows visible without
-        // evicting rows the operator already saw before a run-state transition.
+        // Keep one prior page through run-state and recency changes. An unbounded
+        // union eventually renders the entire roster without a Show more action.
         section.rows = section.rows.filter((row) => {
           if (row.active || row.pinned) {
             return true;
@@ -254,7 +255,11 @@ export class SidebarSessionProjection {
             optionalSlots -= 1;
             return true;
           }
-          return sticky?.has(row.key) === true;
+          if (retainedSlots === 0 || !sticky?.has(row.key)) {
+            return false;
+          }
+          retainedSlots -= 1;
+          return true;
         });
         this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);

@@ -1,6 +1,7 @@
 ---
 summary: "Outbound message lifecycle API for channel plugins: adapters, receipts, durable sends, live preview, and reply pipeline helpers"
 title: "Channel outbound API"
+doc-schema-version: 1
 read_when:
   - You are building or refactoring a messaging channel plugin send path
   - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
@@ -201,6 +202,13 @@ export const messageAdapter = createChannelMessageAdapterFromOutbound({
 });
 ```
 
+Deriving an adapter does not make a channel-owned prepared dispatcher durable.
+Route its final sends through the durable helpers while preserving
+channel-specific post-send effects and callback-only transport targets.
+`message.send.lifecycle.afterSendSuccess` runs after the native send succeeds;
+for queued sends, `afterCommit` runs after queue acknowledgment. Keep effects
+at the boundary they require rather than leaving them only in a legacy dispatcher.
+
 ## Durable sends
 
 Runtime send helpers also live on `channel-outbound`:
@@ -209,6 +217,12 @@ Runtime send helpers also live on `channel-outbound`:
 - `withDurableMessageSendContext(...)`
 - `deliverInboundReplyWithMessageSendContext(...)`
 - draft streaming/progress helpers such as `resolveChannelDraftStreamingChunking(...)`
+
+`sendDurableMessageBatch(...)` and `withDurableMessageSendContext(...)` default
+to `durability: "required"`: failure to persist the send intent stops delivery
+before the platform call. With `durability: "best_effort"`, a queue-write
+failure can fall through to a logged, live-only send without crash recovery.
+These durable helpers do not accept `durability: "disabled"`.
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 

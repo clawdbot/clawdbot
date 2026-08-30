@@ -115,7 +115,7 @@ const targetedSessionReconciliationCases = [
 ];
 
 describe("session connection hydration", () => {
-  it("subscribes and hydrates the owner-first roster in one bootstrap request", async () => {
+  it("lets a queued foreground refresh supersede an owner-first bootstrap roster", async () => {
     const roster: SessionsListResult = {
       ...emptySessionsResult(),
       count: 3,
@@ -141,6 +141,11 @@ describe("session connection hydration", () => {
       ],
     };
     const bootstrap = createDeferred<{ subscribed: true; list: SessionsListResult }>();
+    const queuedResult: SessionsListResult = {
+      ...emptySessionsResult(),
+      count: 1,
+      sessions: [{ key: "agent:other:queued", kind: "direct", updatedAt: 4 }],
+    };
     const queuedList = createDeferred<SessionsListResult>();
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.subscribe") {
@@ -194,20 +199,16 @@ describe("session connection hydration", () => {
 
     bootstrap.resolve({ subscribed: true, list: roster });
     await waitForFast(() =>
-      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
-        "agent:main:mine-new",
-        "agent:main:mine-old",
-        "agent:main:theirs",
-      ]),
-    );
-    await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1),
     );
+    expect(sessions.state.result).toBeNull();
     expect(request.mock.calls.at(-1)?.[1]).toEqual(
       expect.objectContaining({ agentId: "other", search: "queued" }),
     );
-    queuedList.resolve(emptySessionsResult());
+    queuedList.resolve(queuedResult);
     await queuedRefresh;
+    expect(sessions.state.agentId).toBe("other");
+    expect(sessions.state.result).toBe(queuedResult);
     sessions.dispose();
   });
 

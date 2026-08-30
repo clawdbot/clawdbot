@@ -44,6 +44,7 @@ export type UpdateRunResult = {
           | "manager-unavailable"
           | "deps-install-failed"
           | "build-failed"
+          | "rollback-checkout-dirty"
           | "runtime-verification-failed";
       };
   postUpdate?: {

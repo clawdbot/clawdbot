@@ -1,7 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { generateSecureToken } from "../infra/secure-random.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,

@@ -145,6 +145,7 @@ test("sessions.recover settles its active placement before archiving a real sess
   const reclaimStarted = createDeferredCore();
   const reclaimGate = createDeferredCore();
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
+    cancelSessionWork: vi.fn(async () => {}),
     placements: {
       get: () => placement,
       waitForTurnClaimRelease: vi.fn(async () => {}),
@@ -312,6 +313,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
       throw new Error("ineligible worker must not be reclaimed");
     });
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         get: () => placement,
         waitForTurnClaimRelease: async () => {

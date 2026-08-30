@@ -13,7 +13,7 @@ Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
-the OpenClaw command handler, and `/status` plus `/unfocus` stay local whenever
+the OpenClaw command handler, and `/status` plus `/session` stay local whenever
 command handling is enabled for the surface.
 
 ## Three command types
@@ -166,7 +166,6 @@ Gateway callers with explicit scopes still need `operator.admin` to reset.
 Commands come from three sources:
 
 - **Core built-ins:** `src/auto-reply/commands-registry.shared.ts`
-- **Generated dock commands:** `src/auto-reply/commands-registry.data.ts`
 - **Plugin commands:** plugin `registerCommand()` calls
 
 Availability depends on config flags, channel surface, and installed/enabled
@@ -286,8 +285,7 @@ plugins.
     | --- | --- |
     | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
     | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
-    | `/focus <target>` | Bind the current Discord thread or Telegram topic to a session target |
-    | `/unfocus` | Remove the current thread binding |
+    | `/session unbind` | Detach the current conversation without closing its agent session |
     | `/agents` | List thread-bound agents for the current session |
   </Accordion>
 
@@ -313,21 +311,6 @@ plugins.
   </Accordion>
 </AccordionGroup>
 
-### Dock commands
-
-Dock commands switch the active session's reply route to another linked channel.
-See [Channel docking](/concepts/channel-docking) for setup and troubleshooting.
-
-Generated from channel plugins with native-command support:
-
-- `/dock-discord` (alias: `/dock_discord`)
-- `/dock-mattermost` (alias: `/dock_mattermost`)
-- `/dock-slack` (alias: `/dock_slack`)
-- `/dock-telegram` (alias: `/dock_telegram`)
-
-Dock commands require `session.identityLinks`. The source sender and target peer
-must be in the same identity group.
-
 ### Bundled plugin commands
 
 | Command                                                                             | Description                                                                                                                                                                                    |
@@ -335,8 +318,9 @@ must be in the same identity group.
 | `/dreaming [on\|off\|status\|help]`                                                 | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
 | `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                             | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
 | [`/voice`](/nodes/talk#choose-a-talk-voice-from-chat) `status\|list\|set <voiceId>` | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
-| `/card ...`                                                                         | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
 | `/codex <action> ...`                                                               | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
+
+LINE-only: `/card ...` (rich card presets; see [LINE](/channels/line))
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 
@@ -513,6 +497,8 @@ the source and permits replacement of an existing install; it does not bypass
 `security.installPolicy` or installer security checks. ClawHub Review outcomes
 are printed informationally; blocked releases remain non-installable.
 Marketplace, linked, and pinned installs remain shell-only.
+
+`/plugins inspect <child>` (also `show` or `get`) and `/plugins inspect all` include the shared package install metadata for multi-entry plugins. Inspection returns `install: null` when package ownership is missing or ambiguous, and preserves its runtime capability report.
 
 When `/plugins install` or `/plugins enable` requires capability consent, it
 returns the plugin's declared capabilities and an exact retry command. Review

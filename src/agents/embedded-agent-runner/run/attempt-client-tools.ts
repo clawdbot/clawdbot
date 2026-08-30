@@ -1,4 +1,7 @@
-import { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
+import {
+  getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
+} from "../../../plugins/tool-metadata.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,

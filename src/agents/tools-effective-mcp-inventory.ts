@@ -5,7 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import {
   filterRuntimeCompatibleTools,

@@ -410,7 +410,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           sharingSnapshot.selfUser,
           sharingSnapshot.client?.instanceId,
           key,
-          renderedOwnerIdentity,
+          [
+            ...(renderedOwnerIdentity ? [renderedOwnerIdentity] : []),
+            ...(showOwnerChip ? (row?.participants ?? []).map(({ identity }) => identity) : []),
+          ],
         );
     const ownerViewing = projectPresencePayload(this.presencePayload).users.some(
       (user) =>
@@ -431,7 +434,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      title: this.paneTitle,
+      title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
       showOwnerChip,
       ownerViewing,

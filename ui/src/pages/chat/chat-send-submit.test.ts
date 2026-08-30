@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { readStoredOutboxStore, storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -13,16 +14,19 @@ import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 beforeEach(() => {
+  installOutboxBrowserStorage();
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
@@ -549,7 +553,7 @@ describe("handleSendChat browser annotation context", () => {
     });
 
     const send = handleSendChat(host);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
     expect(host.chatQueue[0]?.text).toBe("Stable browser context\n\nUse the marked area");
 
     host.chatMessage = "New draft";
@@ -898,17 +902,44 @@ describe("handleSendChat session ownership", () => {
       });
       const send = handleSendChat(host);
       await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      const original = host.chatQueue[0]!;
+      const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get");
       if (hold === "initial-turn") {
         pending = true;
       } else {
-        vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+        readiness.mockReturnValue(false);
       }
       host.chatMessage = "newer draft";
       settingsPatch.resolve(true);
       await send;
       expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      // A connected unresolved owner cannot finish a Blob row's settings write.
+      // The stored interrupted-settings state remains paused until explicit retry.
+      const sendState = hold === "recovery-scope" ? "failed" : "waiting-idle";
+      const retained = Object.values(
+        readStoredOutboxStore(sessionStorage, storageTargetForGateway(host.settings?.gatewayUrl))
+          .sessions,
+      ).flatMap((session) => session.queue ?? []);
+      expect(retained).toMatchObject([
+        {
+          id: original.id,
+          sendRunId: original.sendRunId,
+          attachmentPayload: original.attachmentPayload,
+          text: "later turn",
+          sendAttempts: 0,
+          sendState,
+        },
+      ]);
+      if (hold === "recovery-scope") {
+        expect(retained[0]?.sendError).toBe(
+          "Chat settings update was interrupted. Review and retry when ready.",
+        );
+        expect(host.chatQueue).toEqual([]);
+        readiness.mockReturnValue(true);
+        syncVisibleChatQueueProjection(host);
+      }
       expect(host.chatQueue).toMatchObject([
-        { text: "later turn", sendAttempts: 0, sendState: "waiting-idle" },
+        { id: original.id, text: "later turn", sendAttempts: 0, sendState },
       ]);
       expect(host.chatMessage).toBe("newer draft");
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);

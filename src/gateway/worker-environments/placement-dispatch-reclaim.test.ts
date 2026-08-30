@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   BUNDLE_HASH,
   MANIFEST_REF,
@@ -38,6 +39,76 @@ describe("worker placement dispatch reclaim", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
+    const harness = createHarness(placementStore, {
+      workspacePath: root,
+      destroyFailureCount: 1,
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(harness.service);
+    const provisionStarted = createDeferredCore();
+    const releaseProvision = createDeferredCore();
+    vi.mocked(harness.environments.create).mockImplementationOnce(async () => {
+      provisionStarted.resolve();
+      await releaseProvision.promise;
+      return harness.ready;
+    });
+    const dispatching = coordinated.dispatch(REQUEST);
+    await provisionStarted.promise;
+    const provisioning = placementStore.get(REQUEST.sessionId);
+    if (provisioning?.state !== "provisioning") {
+      throw new Error("expected in-flight provisioning owner");
+    }
+    const reclaiming = coordinated.reclaim(REQUEST);
+    const outcome = reclaiming.catch((error: unknown) => error);
+    const olderRecovery = coordinated.resumeProvisioning(provisioning, async () => {});
+    // The environment service joins the pass already waiting behind reclaim.
+    vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(() => olderRecovery);
+    releaseProvision.resolve();
+    await dispatching;
+    expect(await outcome).toEqual(new Error("destroy pending"));
+    await olderRecovery;
+    expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([
+      expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
+    ]);
+    expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
+
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the accepted placement draining when provider destruction is not proven", async () => {
+    const harness = createHarness(placementStore, {
+      workspacePath: path.join(root, "workspace"),
+      destroyFails: true,
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("destroy pending");
+
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([
+      expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
+    ]);
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    await harness.service.reconcileActive();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "draining",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: null,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.log).toContain("placement:draining");
+    expect(harness.log).toContain("workspace:resume");
   });
 
   it("rechecks session authorization at the activation lifecycle fence", async () => {

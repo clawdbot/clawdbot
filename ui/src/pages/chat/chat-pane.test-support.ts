@@ -223,6 +223,7 @@ export function createInitializationContext(): ApplicationContext {
       get: () => null,
       hasPendingTurn: () => false,
       retry: () => undefined,
+      pause: () => undefined,
       subscribe: () => () => {},
     },
     navigate: () => undefined,
@@ -316,6 +317,7 @@ export function createSessionContext(
     initialUserMessage: createInitialUserMessageHandoff(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
+    placementStartup: { pause: vi.fn() },
     sessions,
   } as unknown as ApplicationContext;
 }

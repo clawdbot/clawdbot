@@ -510,14 +510,11 @@ async function resolveReachableGateway(
     if (options.hasConfiguredGateway && !configuredGateway) {
       configuredGateway = toReachableGateway(target, auth);
     }
-    const probeOptions: {
-      url: string;
-      config?: OpenClawConfig;
-      token?: string;
-      password?: string;
-      tlsFingerprint?: string;
-      preauthHandshakeTimeoutMs?: number;
-    } = { url: target.url };
+    const probeOptions: Parameters<typeof probeGatewayConfiguredModel>[0] = {
+      url: target.url,
+      // A configured remote origin stays remote through a loopback tunnel.
+      ...(target.scope === "remote" ? { originScopedDeviceAuth: true } : {}),
+    };
     if (config.gateway?.remote?.edgeAuth) {
       probeOptions.config = config;
     }

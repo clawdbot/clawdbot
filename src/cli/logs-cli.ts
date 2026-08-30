@@ -52,6 +52,7 @@ type LogsTailPayload = {
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
+  skippedBytes?: number;
   localFallback?: boolean;
 };
 
@@ -336,6 +337,12 @@ function normalizeTailText(text: string, truncated: boolean): { text: string; tr
     return { text: "", truncated };
   }
   return { text: text.slice(firstNewline + 1), truncated };
+}
+
+function formatLogResetNotice(skippedBytes: number | undefined): string {
+  return skippedBytes !== undefined && skippedBytes > 0
+    ? `Log cursor re-anchored (skipped ${skippedBytes} bytes).`
+    : "Log cursor reset (file rotated).";
 }
 
 function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
@@ -735,7 +742,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log cursor reset (file rotated).",
+              message: formatLogResetNotice(payload.skippedBytes),
             })
           ) {
             return;
@@ -790,7 +797,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.reset) {
-          if (!errorLine("Log cursor reset (file rotated).")) {
+          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
             return;
           }
         }

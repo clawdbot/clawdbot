@@ -39,6 +39,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   display?: false;
   /** Private transcript correlation; never authorizes an execution. */
   idempotencyKey?: string;
+  provenance?: InputProvenance;
   __openclaw?: Record<string, unknown>;
 };
 

@@ -219,6 +219,14 @@ accepted by the active Gateway runtime. Clients can compare it with
 needs a restart. `config.get.hash` remains the raw root-file revision used by
 config write conflict guards.
 
+`openclaw.setup.verify` additionally checks the Gateway's current application and
+restart state before and after its live inference probe. It returns
+`{ ok: false, status: "unavailable", error }` while saved settings are not active,
+restart work remains, or the verified runtime changes during the probe. Clients
+should preserve the selected model and retry after application or restart finishes.
+Standalone CLI verification still tests saved configuration without requiring a
+running Gateway.
+
 While the gateway is still finishing startup sidecars, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
 `retryAfterMs`. Retry within your connection budget instead of treating it as

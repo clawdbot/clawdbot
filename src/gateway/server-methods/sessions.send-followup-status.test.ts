@@ -3,7 +3,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -12,7 +12,8 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 const loadSessionEntryMock = vi.fn();
 const loadGatewaySessionEntryReadOnlyMock = vi.fn();
 const readSessionMessageCountAsyncMock = vi.fn();
-const loadGatewaySessionRowMock = vi.fn();
+const loadGatewaySessionRowMock =
+  vi.fn<typeof import("../session-utils.js").loadGatewaySessionRow>();
 const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
@@ -23,7 +24,8 @@ vi.mock("../session-utils.js", () => ({
   loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
   loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
     loadGatewaySessionEntryReadOnlyMock(...args),
-  loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
+  loadGatewaySessionRow: (...args: Parameters<typeof loadGatewaySessionRowMock>) =>
+    loadGatewaySessionRowMock(...args),
   resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
     resolveDeletedAgentIdFromSessionKeyMock(...args),
 }));
@@ -63,6 +65,7 @@ vi.mock("./chat-send-external-entry.js", () => ({
   handleDirectExternalChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
 
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
 function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
@@ -79,6 +82,8 @@ function createRequestContext(overrides: Record<string, unknown> = {}): GatewayR
 }
 
 describe("sessions.send completed subagent follow-up status", () => {
+  afterEach(() => flushPendingSessionsChangedEvents());
+
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
     loadGatewaySessionEntryReadOnlyMock.mockReset();
@@ -158,6 +163,10 @@ describe("sessions.send completed subagent follow-up status", () => {
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
     loadGatewaySessionRowMock.mockReturnValue({
+      key: childSessionKey,
+      kind: "direct",
+      updatedAt: 123,
+      sessionId: "sess-followup",
       status: "running",
       startedAt: 123,
       endedAt: undefined,

@@ -1,4 +1,3 @@
-// Voice Call plugin module implements outbound behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -210,8 +209,9 @@ export async function initiateCall(
     },
   };
 
-  ctx.activeCalls.set(callId, callRecord);
+  // Persist before reserving capacity so storage failures cannot strand undialed calls.
   persistCallRecord(ctx.storePath, callRecord);
+  ctx.activeCalls.set(callId, callRecord);
 
   try {
     // For notify mode with a message, use inline TwiML with <Say>.

@@ -38,6 +38,13 @@ export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Authentication failed (provider returned HTTP 401). " +
   "Your provider token may have expired — try the request again in a moment. " +
   "If the failure persists, re-authenticate this provider.";
+const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
+  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
+  code === "selected_auth_profile_unavailable"
+    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+    : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
@@ -79,7 +86,7 @@ export function formatBillingErrorMessage(
     : "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
 }
 
-export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
 /** Surface only bounded numeric limit facts, never arbitrary provider-controlled error text. */
 export function renderFormatErrorCopy(raw: string): string {

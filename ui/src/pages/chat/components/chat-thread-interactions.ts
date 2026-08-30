@@ -3,7 +3,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -32,6 +36,7 @@ import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -53,7 +58,7 @@ export type ChatThreadState = {
   };
 };
 
-export type ReplyMessageAccess = {
+type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
@@ -61,11 +66,12 @@ export type ReplyMessageAccess = {
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = {
+export type ChatThreadProps = ChatSendStatusActions & {
   paneId: string;
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
@@ -78,6 +84,7 @@ export type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
   runOutputTokens?: number | null;
   runStatus?: ChatRunUiStatus | null;
@@ -92,9 +99,15 @@ export type ChatThreadProps = {
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;
+  senderAgentAvatars?: ReadonlyMap<string, string | null>;
+  agents?: AgentsListResult["agents"];
+  /** Configured main-session key; an agent's main source labels as the agent. */
+  mainKey?: string;
+  currentAgentId?: string;
   assistantAvatarUrl?: string | null;
   userId?: string | null;
   userName?: string | null;
@@ -126,8 +139,6 @@ export type ChatThreadProps = {
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
-  onRetryQueuedMessage?: (id: string) => void;
-  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

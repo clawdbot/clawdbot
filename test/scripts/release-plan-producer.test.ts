@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  constants as fsConstants,
   cpSync,
   existsSync,
   linkSync,
@@ -14,7 +15,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { collectClawHubPublishablePluginPackages } from "../../scripts/lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
@@ -40,6 +41,8 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let defaultFixture: ReturnType<typeof buildFixtureRepo> | undefined;
 const TOOLING_CLOSURE = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
@@ -91,17 +94,31 @@ function copyToolingClosure(root: string) {
   }
 }
 
-function createFixtureRepo(
-  version = "2026.8.1-beta.2",
-  options: {
-    conflictingPlatformId?: boolean;
-    corePackageNameCollision?: boolean;
-    duplicateCrossTargetPackageName?: boolean;
-    malformedPlugin?: boolean;
-    malformedPluginJson?: boolean;
-  } = {},
-) {
+type FixtureOptions = {
+  conflictingPlatformId?: boolean;
+  corePackageNameCollision?: boolean;
+  duplicateCrossTargetPackageName?: boolean;
+  malformedPlugin?: boolean;
+  malformedPluginJson?: boolean;
+};
+
+function createFixtureRepo(version = "2026.8.1-beta.2", options: FixtureOptions = {}) {
   const root = tempDirs.make("openclaw-release-plan-");
+  if (version !== "2026.8.1-beta.2" || Object.keys(options).length > 0) {
+    return buildFixtureRepo(root, version, options);
+  }
+  const template = (defaultFixture ??= buildFixtureRepo(
+    templateDirs.make("openclaw-release-plan-template-"),
+    version,
+    options,
+  ));
+  // Copy both commits before any case adds YAML, tags, or mutated tooling.
+  // Independent files keep those authority and loader faults local to each case.
+  cpSync(template.root, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return { ...template, root };
+}
+
+function buildFixtureRepo(root: string, version: string, options: FixtureOptions) {
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
 
   writeFixture(

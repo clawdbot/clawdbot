@@ -758,13 +758,15 @@ describe("plugin metadata snapshot", () => {
     },
   );
 
-  it("prepares provider endpoint and request facts", () => {
+  it("prepares normalized CLI ownership, provider endpoint, and request facts", () => {
     const index = makeIndex();
     const registry = makeManifestRegistry();
     const plugin = registry.plugins[0];
     if (!plugin) {
       throw new Error("expected manifest plugin fixture");
     }
+    plugin.cliBackends = ["DEMO-CLI"];
+    plugin.setup = { cliBackends: ["Demo-CLI", "Other-CLI"] };
     plugin.providerEndpoints = [
       {
         endpointClass: "openai-public",
@@ -790,6 +792,10 @@ describe("plugin metadata snapshot", () => {
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
 
+    expect([...snapshot.owners.cliBackends]).toEqual([
+      ["demo-cli", ["demo"]],
+      ["other-cli", ["demo"]],
+    ]);
     expect(snapshot.owners.providerEndpoints).toContainEqual({
       endpointClass: "openai-public",
       hosts: ["api.example.com"],

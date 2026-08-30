@@ -75,10 +75,10 @@ describe("chat transcript rendering", () => {
   );
 
   it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
-    const sessionKey = "agent:main:archived-notice";
+    const sessionKey = "agent:work:main";
     const archivedSession: GatewaySessionRow = {
-      key: sessionKey,
-      kind: "direct",
+      key: "global",
+      kind: "global",
       updatedAt: 2_000,
       archived: true,
       archivedAt: 2_000,
@@ -98,6 +98,7 @@ describe("chat transcript rendering", () => {
         { role: "user", content: "Before archive", timestamp: 1_000 },
         { role: "assistant", content: "After archive", timestamp: 3_000 },
       ]),
+      selectedSession: archivedSession,
       sessions,
     };
     const rerender = () => {
@@ -123,12 +124,14 @@ describe("chat transcript rendering", () => {
       ...archivedSession,
       archivedBy: { type: "human", id: "profile-bob" },
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(requireElement(container, ".chat-notice").textContent).toContain(
       "Archived by profile-bob",
     );
 
     sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
 
@@ -138,6 +141,7 @@ describe("chat transcript rendering", () => {
       archivedAt: undefined,
       archivedBy: undefined,
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
     transcript.hostDisconnected();

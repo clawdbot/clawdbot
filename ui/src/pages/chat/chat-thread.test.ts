@@ -318,7 +318,7 @@ describe("assistant commentary grouping", () => {
         runId: "active-run",
         messages: [
           userMessage("Original", 1, {
-            __openclaw: { idempotencyKey: "active-run:user" },
+            __openclaw: { idempotencyKey: "original-submit:user", runId: "active-run" },
           }),
           userMessage("Steer", 2, {
             __openclaw: {
@@ -532,11 +532,11 @@ describe("assistant commentary grouping", () => {
         runId: "run-current",
         messages: [
           userMessage("Earlier prompt", 1_000, {
-            __openclaw: { idempotencyKey: "run-earlier:user" },
+            __openclaw: { idempotencyKey: "earlier-submit:user", runId: "run-earlier" },
           }),
           assistantMessage("Earlier reply", 1_300),
           userMessage("Current prompt", 2_000, {
-            __openclaw: { idempotencyKey: "run-current:user" },
+            __openclaw: { idempotencyKey: "current-submit:user", runId: "run-current" },
           }),
         ],
         streamSegments: [
@@ -1363,41 +1363,45 @@ describe("coalesceActivityRuns", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
-  it("keeps an accepted initial send key across local-to-history replacement", () => {
-    resetChatThreadState();
-    const initial = groupAt(
-      messageGroups({
-        messages: [
-          {
-            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
-            role: "user",
-            content: "Initial image prompt",
-            timestamp: 1,
-          },
-        ],
-      }),
-      0,
-    );
-    const reconciled = groupAt(
-      messageGroups({
-        messages: [
-          {
-            __openclaw: {
-              id: "persisted-user-message",
-              idempotencyKey: "initial-send:user",
-              seq: 1,
+  it.each([undefined, "queued-execution"])(
+    "keeps a send key across local-to-history replacement with execution %s",
+    (runId) => {
+      resetChatThreadState();
+      const initial = groupAt(
+        messageGroups({
+          messages: [
+            {
+              __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+              role: "user",
+              content: "Initial image prompt",
+              timestamp: 1,
             },
-            role: "user",
-            content: "Initial image prompt",
-            timestamp: 2,
-          },
-        ],
-      }),
-      0,
-    );
+          ],
+        }),
+        0,
+      );
+      const reconciled = groupAt(
+        messageGroups({
+          messages: [
+            {
+              __openclaw: {
+                id: "persisted-user-message",
+                idempotencyKey: "initial-send:user",
+                runId,
+                seq: 1,
+              },
+              role: "user",
+              content: "Initial image prompt",
+              timestamp: 2,
+            },
+          ],
+        }),
+        0,
+      );
 
-    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
-  });
+      expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+    },
+  );
 
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
