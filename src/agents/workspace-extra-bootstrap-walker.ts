@@ -288,9 +288,9 @@ async function* walkFallbackMatches(
           continue;
         }
         // Not descended: the link is a terminal leaf candidate, yielded like a file
-        // only on a full match.
-        // oxlint-disable-next-line unicorn/prefer-regexp-test -- Minimatch.match returns a boolean; it has no RegExp#test.
-        if (matcher.match(matchKey)) {
+        // only on a full match. The explicit `partial=false` keeps the Minimatch
+        // two-argument call shape shared with the other match sites.
+        if (matcher.match(matchKey, false)) {
           yield childRelativePath;
         }
         continue;
