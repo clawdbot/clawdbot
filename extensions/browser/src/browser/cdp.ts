@@ -823,8 +823,6 @@ async function buildCdpRoleSnapshot(params: {
   }
 
   const counts = new Map<string, number>();
-  const refsByKey = new Map<string, string[]>();
-  const nodesByRef = new Map<string, RoleTreeNode>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -843,13 +841,6 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    const refsForKey = refsByKey.get(key);
-    if (refsForKey) {
-      refsForKey.push(ref);
-    } else {
-      refsByKey.set(key, [ref]);
-    }
-    nodesByRef.set(ref, node);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
@@ -857,19 +848,6 @@ async function buildCdpRoleSnapshot(params: {
       ...(node.backendDOMNodeId ? { backendDOMNodeId: node.backendDOMNodeId } : {}),
       ...(params.frameId ? { frameId: params.frameId } : {}),
     };
-  }
-  for (const refList of refsByKey.values()) {
-    if (refList.length > 1) {
-      continue;
-    }
-    const ref = refList[0];
-    if (ref) {
-      delete refs[ref]?.nth;
-      const node = nodesByRef.get(ref);
-      if (node) {
-        delete node.nth;
-      }
-    }
   }
 
   const iframeFrameIds = await resolveIframeFrameIds(params.send, tree, params.sessionId);

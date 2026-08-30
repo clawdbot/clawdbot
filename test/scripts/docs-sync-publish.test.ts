@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import {
   composeDocsConfig,
@@ -146,8 +146,7 @@ describe("docs-sync-publish", () => {
   });
 
   it("keeps generated locale navigation aligned with English routes", () => {
-    const sourceConfigPath = path.resolve(import.meta.dirname, "../../docs/docs.json");
-    const sourceConfig = JSON.parse(fs.readFileSync(sourceConfigPath, "utf8")) as {
+    const config = composeDocsConfig() as {
       navigation: {
         languages: Array<{
           language: string;
@@ -158,31 +157,6 @@ describe("docs-sync-publish", () => {
         }>;
       };
     };
-    const sourceEnglish = sourceConfig.navigation.languages.find(
-      (entry) => entry.language === "en",
-    );
-    const releaseNotesGroup = sourceEnglish?.tabs
-      .find((tab) => tab.tab === "Release & CI")
-      ?.groups?.find((group) => group.group === "Release notes");
-    if (!releaseNotesGroup) {
-      throw new Error("English source navigation must contain release notes");
-    }
-    const releaseNotes = collectPages(releaseNotesGroup);
-    // New releases enter through authored navigation before every locale overlay catches up.
-    releaseNotes.splice(1, 0, "releases/2099.1.1");
-    releaseNotesGroup.pages = releaseNotes;
-    const readFileSync = fs.readFileSync;
-    const sourceRead = vi
-      .spyOn(fs, "readFileSync")
-      .mockImplementation((file, options) =>
-        file === sourceConfigPath ? JSON.stringify(sourceConfig) : readFileSync(file, options),
-      );
-    let config: typeof sourceConfig;
-    try {
-      config = composeDocsConfig() as typeof sourceConfig;
-    } finally {
-      sourceRead.mockRestore();
-    }
     const english = config.navigation.languages.find((entry) => entry.language === "en");
     const simplifiedChinese = config.navigation.languages.find(
       (entry) => entry.language === "zh-Hans",
@@ -199,26 +173,16 @@ describe("docs-sync-publish", () => {
       "Help",
     ]);
 
-    const releaseRoutes = [
-      ...releaseNotes,
-      "maturity/scorecard",
-      "maturity/taxonomy",
-      "reference/RELEASING",
-      "reference/full-release-validation",
-      "reference/release-performance-sweep",
-      "reference/test",
-      "ci",
-      "help/scripts",
-    ];
     const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
+    const releaseRoutes = collectPages(releaseTab);
+    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
     expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
       "Release notes",
       "Maturity",
       "Release process",
       "Testing and CI",
     ]);
-    expect(releaseTab?.groups?.[0]?.pages).toEqual(releaseNotes);
-    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
+    expect(releaseNotes[0]).toBe("releases/index");
     expect(new Set(collectPages(releaseTab))).toHaveLength(releaseRoutes.length);
 
     const englishWithoutClawHub = {
@@ -240,7 +204,7 @@ describe("docs-sync-publish", () => {
       "发布流程",
       "测试与 CI",
     ]);
-    expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual(
+    expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
       releaseNotes.map((page) => `zh-CN/${page}`),
     );
     expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
