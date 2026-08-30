@@ -545,23 +545,35 @@ export function resolveOwnedAppReadOnlyToolConfigKeys(
 ): Pick<CodexPluginOwnedApp, "readOnlyToolConfigKeys"> {
   const appName = app.name.trim();
   const appNameLower = appName.toLowerCase();
-  const keys: string[] = [];
-  for (const tool of app.toolSummaries ?? []) {
-    if (!tool.isReadOnly) {
-      continue;
-    }
-    keys.push(tool.name);
-    if (tool.title) {
-      keys.push(tool.title);
-    }
-    if (appName) {
-      keys.push(`${appName}_${tool.name}`);
-    }
-    if (appNameLower && appNameLower !== appName) {
-      keys.push(`${appNameLower}_${tool.name}`);
-    }
-  }
+  const tools = app.toolSummaries ?? [];
+  const writableToolConfigKeys = new Set(
+    tools
+      .filter((tool) => !tool.isReadOnly)
+      .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool })),
+  );
+  const keys = tools
+    .filter((tool) => tool.isReadOnly)
+    .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool }))
+    .filter((key) => !writableToolConfigKeys.has(key));
   return keys.length > 0 ? { readOnlyToolConfigKeys: Array.from(new Set(keys)).toSorted() } : {};
+}
+
+function resolveAppToolConfigKeys(params: {
+  appName: string;
+  appNameLower: string;
+  tool: { name: string; title?: string | null };
+}): string[] {
+  const keys = [params.tool.name];
+  if (params.tool.title) {
+    keys.push(params.tool.title);
+  }
+  if (params.appName) {
+    keys.push(`${params.appName}_${params.tool.name}`);
+  }
+  if (params.appNameLower && params.appNameLower !== params.appName) {
+    keys.push(`${params.appNameLower}_${params.tool.name}`);
+  }
+  return keys;
 }
 
 function findPluginSummary(
