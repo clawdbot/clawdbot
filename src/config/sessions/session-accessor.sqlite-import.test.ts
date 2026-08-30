@@ -8,6 +8,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { listSessionBranches } from "./session-accessor.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   importSqliteSessionRows,
@@ -144,6 +145,7 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     };
     const first = { ...message, timestamp: 10 };
     const second = { ...message, id: "two", parentId: "one", timestamp: 30 };
+    const rejected = { ...second, timestamp: 99 };
     const opaque = { custom: "no identity", timestamp: 25 };
     const readTranscriptEvents = (append: (event: unknown) => void) => {
       for (const event of [
@@ -153,7 +155,9 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
         opaque,
         opaque,
         second,
-        { ...second, timestamp: 99 },
+        rejected,
+        { ...second, timestamp: 50 },
+        rejected,
       ]) {
         append(event);
       }
@@ -161,6 +165,9 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     const stages = observeStages();
     await importSqliteSessionRows({ ...params, readTranscriptEvents: (append) => append(first) });
     const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
+    db.prepare("UPDATE session_windows SET created_at = 7 WHERE session_id = ?").run(
+      params.entry.sessionId,
+    );
     const generation = db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get();
     expect(await importSqliteSessionRows({ ...params, readTranscriptEvents })).toMatchObject({
       transcriptEvents: 2,
@@ -184,7 +191,10 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     expect(
       db.prepare("SELECT event_id FROM transcript_event_identities ORDER BY seq").all(),
     ).toEqual([{ event_id: "one" }, { event_id: "two" }]);
-    expect(db.prepare("SELECT updated_at FROM session_windows").get()).toEqual({ updated_at: 99 });
+    expect(db.prepare("SELECT created_at, updated_at FROM session_windows").get()).toEqual({
+      created_at: 7,
+      updated_at: 99,
+    });
     expect(db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get()).toEqual(
       generation,
     );
@@ -197,10 +207,16 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
     const owner = { actor: { type: "human" as const, id: "owner" }, assignedAt: 40 };
+    const firstMessage = { ...message, timestamp: "2026-08-30T00:00:01.000Z" };
+    const canonicalMessage = {
+      ...message,
+      timestamp: "2026-08-30T00:00:02.000Z",
+      message: { role: "user", content: "canonical duplicate" },
+    };
     const rows = [
       { createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
-      { createdAt: 43, eventJson: JSON.stringify(message, null, 2) },
-      { createdAt: 45, eventJson: JSON.stringify(message) },
+      { createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
+      { createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
     ];
     await importSqliteSessionRows({
       ...params,
@@ -231,6 +247,16 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
       }),
     ).toMatchObject({ skippedExisting: true, transcriptEvents: 0 });
     expect(loadTranscriptEventsSync({ ...params, sessionId: "exact" })).toHaveLength(3);
+    await expect(listSessionBranches(params)).resolves.toEqual({
+      status: "ok",
+      branches: Array.from({ length: 2 }, () => ({
+        leafEntryId: "one",
+        headline: "canonical duplicate",
+        messageCount: 1,
+        updatedAt: canonicalMessage.timestamp,
+        active: true,
+      })),
+    });
   });
 });
 

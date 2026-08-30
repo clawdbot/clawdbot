@@ -520,7 +520,7 @@ describe("RealtimeTalkSession lifecycle", () => {
 
     await expect(session.start()).rejects.toThrow("Realtime connection closed");
 
-    expect(onStatus).toHaveBeenCalledWith("connecting");
+    expect(onStatus).toHaveBeenCalledWith("connecting", "Preparing voice session...");
     expect(transportMock.webRtcStops[0]).toHaveBeenCalledWith({ emitClosed: false });
   });
 

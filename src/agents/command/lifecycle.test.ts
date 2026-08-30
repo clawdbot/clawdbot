@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { FailoverError } from "../failover-error.js";
+import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
 const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
@@ -166,6 +168,47 @@ describe("createAgentCommandLifecycle", () => {
       expect(event.data.error).toContain("The provider failed.");
       expect(event.data.error).toContain("Authorization: Bearer");
       expect(JSON.stringify(event)).not.toContain(secret);
+    },
+  );
+
+  it.each(["basic", "post-turn"] as const)(
+    "publishes bounded selected-profile recovery from %s lifecycle errors",
+    (source) => {
+      emitAgentEvent.mockClear();
+      const profileId = "openai:private-profile";
+      const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "missing-selected-profile",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      const error = new FailoverError(rawCause, {
+        reason: "auth",
+        code: "selected_auth_profile_unavailable",
+        profileId,
+        cause: new Error(rawCause),
+      });
+
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else {
+        lifecycle.emitPostTurnError(error, {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+        });
+      }
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toBe(
+        renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
+      );
+      expect(JSON.stringify(event)).not.toContain(profileId);
+      expect(JSON.stringify(event)).not.toContain(rawCause);
     },
   );
 

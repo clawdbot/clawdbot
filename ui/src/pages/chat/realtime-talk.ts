@@ -7,6 +7,7 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
@@ -166,7 +167,7 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = ++this.lifecycleGeneration;
       this.stopPendingTransport();
       this.closed = false;
-      this.callbacks.onStatus?.("connecting");
+      this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
       const existingTransport = this.transport;
       const existingVoiceSessionId = this.voiceSessionId;
       const existingOwner = this.clientVoiceSessionOwner;

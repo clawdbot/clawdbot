@@ -147,7 +147,7 @@ type RegisteredChatAbortController = {
   entry?: ChatAbortControllerEntry;
   markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
-  cleanup: (opts?: { force?: boolean }) => void;
+  cleanup: () => void;
 };
 
 export function isChatStopCommandText(text: string): boolean {
@@ -270,17 +270,13 @@ export function registerChatAbortController(params: {
     });
     return true;
   };
-  const cleanup = (opts?: { force?: boolean }) => {
+  const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       // This registration carries the exact operational instance. Close its
       // capability before terminal cleanup can observe a same-run successor.
       if (entry.agentRunDelegatedAuthority) {
         releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
-      }
-      if (opts?.force === true) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
-        return;
       }
       entry.registrationCleanupRequested = true;
       // Terminal event handling owns final removal once the event has been
@@ -292,12 +288,19 @@ export function registerChatAbortController(params: {
       if (persistence) {
         void persistence
           .then(() => {
-            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+            if (
+              params.chatAbortControllers.get(params.runId)?.controller === controller &&
+              entry.projectSessionTerminalPersistence === persistence
+            ) {
+              entry.projectSessionTerminalPersistence = undefined;
               removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           })
           .catch(() => {
-            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+            if (
+              params.chatAbortControllers.get(params.runId)?.controller === controller &&
+              entry.projectSessionTerminalPersistence === persistence
+            ) {
               removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           });
@@ -717,6 +720,7 @@ export function abortChatRunById(
     active.projectSessionTerminalObservedAt === undefined &&
     !active.projectSessionTerminalPersistence
   ) {
+    active.projectSessionTerminalPending = false;
     removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
   }
   ops.agentRunSeq.delete(runId);

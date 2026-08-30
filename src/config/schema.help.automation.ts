@@ -53,11 +53,11 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.threadBindings":
-    "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
+    "Shared defaults for thread-bound session spawning and routing across supported channels. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
-    "Global master switch for thread-bound session routing features and focused thread delivery behavior. Keep enabled for modern thread workflows unless you need to disable thread binding globally.",
+    "Global master switch for thread-bound session spawning, routing, and delivery. Disable to turn off thread binding globally.",
   "session.threadBindings.idleHours":
-    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
+    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle expiry). Default: 24.",
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.threadBindings.spawnSessions":

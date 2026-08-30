@@ -229,10 +229,33 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
+Telegram release tests are best effort in every release profile. Selected source
+and package lanes still attempt the real Test Server flow when a Convex credential
+is available. They use the canonical 90-second lease-acquisition retry budget;
+missing broker access, an exhausted pool, or failed tests remain visible as
+failures or skips in the job summaries and evidence, but never block release
+validation. Assertions, credential isolation, lease cleanup, and exact candidate
+identity checks remain unchanged. A successful release decision does not imply
+that Telegram passed; inspect the recorded Telegram outcome separately.
+
 Use `-f skip_package_telegram_e2e=true` only when the release owner explicitly
 defers the Package Acceptance Telegram E2E to a follow-up beta. The input is
 rejected for `stable` and `full`, recorded in validation evidence, and does not disable the focused
 `rerun_group=npm-telegram` workflow.
+
+Best effort is separate from an explicit omission. For the release owner's
+2026.8.1 exception, pass
+`-f telegram_waiver=2026.8.1-owner-approved`. This is accepted only when the
+actual target package is `2026.8.1` and the profile is `stable` or `full`.
+It omits source Telegram QA, Package Acceptance Telegram E2E, and the
+published-package Telegram E2E; their evidence states **waived / not run**,
+never passed. Telegram unit tests and every other selected gate remain active,
+including stable soak and performance checks. An explicit Telegram rerun or
+suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
+that selects Telegram, conflicts with the waiver and is rejected. The declaration and
+target version bind the immutable execution plan, manifest, and reuse identity;
+the publisher carries the waiver into release verification notes. The beta-only
+package deferral above remains unchanged.
 
 ## Top-level stages
 
@@ -479,7 +502,8 @@ commands print heartbeat lines so a stuck update is visible before the job
 timeout.
 
 QA release-check failures block normal release validation only for selected
-Matrix, Telegram, and QA runtime tool coverage lanes. QA parity, runtime
+Matrix and QA runtime tool coverage lanes. Source and package Telegram outcomes
+are always advisory; failed or skipped attempts are never reported as passed. QA parity, runtime
 parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory and
 publish status artifacts without blocking the release verifier. Tideclaw
 alpha runs may still treat non-package-safety release-check lanes as advisory. With

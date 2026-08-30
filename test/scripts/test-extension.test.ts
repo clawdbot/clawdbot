@@ -197,7 +197,7 @@ describe("scripts/test-extension.mts", () => {
   });
 
   it("includes newly authored Matrix tests in bounded process targets", () => {
-    const root = mkdtempSync(path.join(process.cwd(), "extensions", ".extension-test-plan-"));
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-test-plan-"));
     const relativeRoot = path.relative(process.cwd(), root);
     const testFile = path.join(root, "newly-authored.test.ts");
     writeFileSync(testFile, "export {};\n");

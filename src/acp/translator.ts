@@ -42,13 +42,7 @@ import { ACP_AGENT_INFO } from "./types.js";
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
-const loadAcpCommandsModule = createLazyRuntimeModule(() => import("./commands.js"));
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
-
-async function getAvailableCommandsForAcp() {
-  const { getAvailableCommands } = await loadAcpCommandsModule();
-  return getAvailableCommands();
-}
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
   eventLedger?: AcpEventLedger;
@@ -82,7 +76,6 @@ export class AcpGatewayAgent implements Agent {
     this.sessionUpdates = new AcpTranslatorSessionUpdates({
       connection,
       eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
-      getAvailableCommands: getAvailableCommandsForAcp,
       log: this.log,
     });
     const sessionState = new AcpTranslatorSessionState(gateway, this.sessionUpdates, this.log);

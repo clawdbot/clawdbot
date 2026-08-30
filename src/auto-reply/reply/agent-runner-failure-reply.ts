@@ -23,6 +23,7 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -54,6 +55,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
+    code: described.code,
     provider: described.provider,
     authMode: described.authMode,
     providerRequestError: resolveProviderRequestFailureCopy({
@@ -223,6 +225,10 @@ export function buildExternalRunFailureReply(
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
+  const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
+  if (failoverCodeCopy) {
+    return { text: failoverCodeCopy, isGenericRunnerFailure: false };
+  }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   const codexLoginRecovery = buildCodexLoginRecovery({

@@ -541,7 +541,6 @@ extensions/google/onboard.ts	3
 extensions/google/provider-catalog.ts	2
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	6
-extensions/google/src/gemini-web-search-provider.runtime.ts	1
 extensions/google/transport-stream.ts	15
 extensions/google/vertex-adc.ts	6
 extensions/google/video-generation-provider.ts	13

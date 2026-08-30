@@ -44,8 +44,9 @@ function estimateRelayEventBytes(event: GatewayRelayEvent): number {
 }
 
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
-  private readonly input = new RealtimeTalkInputController((detail) =>
-    this.failAudioAppend(detail),
+  private readonly input = new RealtimeTalkInputController(
+    (detail) => this.failAudioAppend(detail),
+    (detail) => this.ctx.callbacks.onStatus?.("connecting", detail),
   );
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;

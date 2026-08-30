@@ -55,7 +55,6 @@ const CommandCategorySchema = Type.Union([
   Type.Literal("management"),
   Type.Literal("media"),
   Type.Literal("tools"),
-  Type.Literal("docks"),
 ]);
 
 /** Static argument choice shown to clients. */

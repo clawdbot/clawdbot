@@ -288,7 +288,7 @@ export async function handleAcpSpawnAction(
     }
   } else {
     parts.push(
-      "Session is unbound (use /acp spawn ... --bind here to bind this conversation, or /focus <session-key> where supported).",
+      "Session is unbound (use /acp spawn ... --bind here to create a session bound to this conversation).",
     );
   }
 

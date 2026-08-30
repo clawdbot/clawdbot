@@ -58,8 +58,7 @@ These commands work on channels with persistent thread bindings. See
 [Thread supporting channels](#thread-supporting-channels) below.
 
 ```text
-/focus <subagent-label|session-key|session-id|session-label>
-/unfocus
+/session unbind
 /agents
 /session idle <duration|off>
 /session max-age <duration|off>
@@ -398,11 +397,11 @@ enablement, timeouts, and `spawnSessions`.
     Replies and follow-up messages in that thread route to the bound session.
   </Step>
   <Step title="Inspect timeouts">
-    Use `/session idle` to inspect/update inactivity auto-unfocus and
+    Use `/session idle` to inspect/update inactivity expiry and
     `/session max-age` to control the hard cap.
   </Step>
   <Step title="Detach">
-    Use `/unfocus` to detach manually.
+    Use `/session unbind` to detach without closing the agent session.
   </Step>
 </Steps>
 
@@ -410,11 +409,10 @@ enablement, timeouts, and `spawnSessions`.
 
 | Command            | Effect                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------- |
-| `/focus <target>`  | Bind the current thread (or create one) to a sub-agent/session target                     |
-| `/unfocus`         | Remove the binding for the current bound thread                                           |
+| `/session unbind`  | Remove the current conversation binding without closing the agent session                 |
 | `/agents`          | List active runs and binding state (`binding:<id>`, `unbound`, or `bindings unavailable`) |
-| `/session idle`    | Inspect/update idle auto-unfocus (focused bound threads only)                             |
-| `/session max-age` | Inspect/update hard cap (focused bound threads only)                                      |
+| `/session idle`    | Inspect/update inactivity expiry for the current binding                                  |
+| `/session max-age` | Inspect/update the maximum age of the current binding                                     |
 
 ### Config switches
 

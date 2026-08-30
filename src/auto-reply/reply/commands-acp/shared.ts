@@ -445,7 +445,7 @@ export function resolveAcpHelpText(): string {
     "Notes:",
     "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
-    "- /focus and /unfocus also work with ACP session keys.",
+    "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");
 }

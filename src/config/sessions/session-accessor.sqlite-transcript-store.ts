@@ -32,7 +32,6 @@ import {
   readNextTranscriptSeq,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
-  upsertTranscriptSessionWindowInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   createTranscriptIndexAppenderInTransaction,
@@ -83,9 +82,15 @@ function appendTranscriptEvent(
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
   if (cursor.initialized) {
-    // Even rejected identities update window recency. Only root/generation setup
-    // is shared by the synchronous batch; per-attempt writes stay in order.
-    upsertTranscriptSessionWindowInTransaction(database, scope, createdAt);
+    // The first attempt established this window and the batch cannot delete it.
+    // Even rejected identities update recency; keep each attempt's write in order.
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_windows")
+        .set({ updated_at: createdAt })
+        .where("session_id", "=", scope.sessionId),
+    );
   } else {
     ensureTranscriptSessionRoot(database, scope, createdAt, {
       allowStoredAlias: options.allowStoredAlias === true,

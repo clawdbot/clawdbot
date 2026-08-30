@@ -153,8 +153,8 @@ Quick `/acp` flow from chat:
     - Spawn creates or resumes an ACP runtime session, records ACP metadata in the OpenClaw session store, and may create a background task when the run is parent-owned.
     - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery go through the parent task notifier rather than acting like a normal user-facing chat session.
     - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
-    - Bound follow-up messages go directly to the ACP session until the binding is closed, unfocused, reset, or expired.
-    - Gateway commands stay local. `/acp ...`, `/status`, and `/unfocus` are never sent as normal prompt text to a bound ACP harness.
+    - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.
+    - Gateway commands stay local. `/acp ...`, `/status`, and `/session` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
@@ -288,7 +288,7 @@ Examples:
     - `--bind here` only works on channels that advertise current-conversation binding; OpenClaw returns a clear unsupported message otherwise. Bindings persist across gateway restarts.
     - On Discord, `spawnSessions` gates child thread creation for `--thread auto|here` - not `--bind here`.
     - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
-    - Gateway management commands stay local in bound conversations - `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/unfocus` also stay local whenever command handling is enabled for that surface.
+    - Gateway management commands stay local in bound conversations - `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/session` also stay local whenever command handling is enabled for that surface.
 
   </Accordion>
   <Accordion title="Thread-bound sessions">
@@ -297,8 +297,8 @@ Examples:
     - OpenClaw binds a thread to a target ACP session.
     - Follow-up messages in that thread route to the bound ACP session.
     - ACP output is delivered back to the same thread.
-    - Unfocus/close/archive/idle-timeout or max-age expiry removes the binding.
-    - `/acp close`, `/acp cancel`, `/acp status`, `/status`, and `/unfocus` are Gateway commands, not prompts to the ACP harness.
+    - `/session unbind`, close, archive, idle timeout, or max-age expiry removes the binding. `/session unbind` detaches only the current conversation and leaves the ACP session running.
+    - `/acp close`, `/acp cancel`, `/acp status`, `/status`, and `/session` are Gateway commands, not prompts to the ACP harness.
 
     Required feature flags for thread-bound ACP:
 
@@ -475,7 +475,7 @@ its current reasoning effort or conversation.
 - Messages in that channel, topic, or chat route to the configured ACP session.
 - Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
-- Temporary runtime bindings (for example created by thread-focus flows) still apply where present.
+- Runtime bindings created by thread-bound spawns still apply where present.
 - For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.
 - Missing inherited workspace paths fall back to the backend default cwd; non-missing access failures surface as spawn errors.
 
@@ -872,7 +872,7 @@ see [ACP agents - setup](/tools/acp-agents-setup).
 | `Sandboxed sessions cannot spawn ACP sessions ...`                                        | ACP runtime is host-side; requester session is sandboxed.                                                              | Use `runtime="subagent"` from sandboxed sessions, or run ACP spawn from a non-sandboxed session.                                                                         |
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`                   | `sandbox="require"` requested for ACP runtime.                                                                         | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                                      |
 | `Cannot apply --model ... did not advertise model support`                                | The target harness does not expose generic ACP model switching.                                                        | Use a harness that advertises ACP `models`/`session/set_model`, use Codex ACP model refs, or configure the model directly in the harness if it has its own startup flag. |
-| Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
+| Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Detach with `/session unbind`, then recreate with `/acp spawn --bind here` or `/acp spawn --thread here`.                                                                |
 | ACP input request is declined or cancelled                                                | The form/URL is malformed, exceeds field/choice limits, uses unsupported constraints, or the owning turn ended.        | Read the visible decline reason, retry with a standard primitive form or valid HTTP(S) URL, and keep the originating turn active while answering.                        |
 | `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.                                                    | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                                | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |

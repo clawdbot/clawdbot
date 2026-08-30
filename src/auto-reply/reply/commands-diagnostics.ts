@@ -308,7 +308,6 @@ async function requestGatewayDiagnosticsExportApproval(
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
       env,
-      security: "allowlist",
       ask: "always",
       background: true,
       timeoutSeconds: timeoutSec,

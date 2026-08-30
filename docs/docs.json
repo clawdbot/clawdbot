@@ -1259,7 +1259,6 @@
                   "concepts/session",
                   "concepts/session-attachment",
                   "concepts/session-search",
-                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-state",
                   "concepts/session-tool",

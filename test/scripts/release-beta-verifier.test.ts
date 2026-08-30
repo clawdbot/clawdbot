@@ -1,7 +1,8 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,7 +16,11 @@ import {
   runNpmViewWithRetry,
   runReleaseVerifierCommand,
   validateClawHubBootstrapEvidence,
+  verifyBetaRelease,
 } from "../../scripts/lib/release-beta-verifier.ts";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = createTempDirTracker();
 type CommandError = Error & {
   code?: string;
   signal?: NodeJS.Signals;
@@ -92,8 +97,142 @@ function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Buffer 
 }
 
 afterEach(() => {
+  tempDirs.cleanup();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("verifyBetaRelease workflow outcomes", () => {
+  const version = "2026.5.10-beta.3";
+
+  function workflowFixture(overrides: Record<string, unknown> = {}, telegram = true) {
+    const rootDir = tempDirs.make("release-workflow-outcome-");
+    const binDir = join(rootDir, "bin");
+    mkdirSync(binDir);
+    mkdirSync(join(rootDir, "extensions"));
+    writeFileSync(join(rootDir, "package.json"), JSON.stringify({ version }));
+    const run = {
+      workflowName: telegram ? "NPM Telegram Beta E2E" : "OpenClaw NPM Release",
+      headBranch: "main",
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      url: "https://example.invalid/runs/44",
+      createdAt: "2026-07-10T00:00:00Z",
+      updatedAt: "2026-07-10T00:02:00Z",
+      jobs: [],
+      ...overrides,
+    };
+    writeFileSync(join(binDir, "run.json"), JSON.stringify(run));
+    const command = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] === "openclaw@${version}") {
+  console.log(JSON.stringify({version: "${version}", "dist-tags.beta": "${version}", "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/openclaw.tgz"}));
+} else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
+  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "run.json")));
+} else {
+  throw new Error("Unexpected release verifier command: " + args.join(" "));
+}
+`;
+    for (const name of ["npm", "gh"]) {
+      const file = join(binDir, name);
+      writeFileSync(file, command);
+      chmodSync(file, 0o755);
+    }
+    vi.stubEnv("PATH", `${binDir}:${process.env.PATH}`);
+    const args = parseReleaseVerifyBetaArgs([
+      version,
+      "--skip-postpublish",
+      "--skip-github-release",
+      "--skip-clawhub",
+      "--workflow-ref",
+      "main",
+      telegram ? "--npm-telegram-run" : "--openclaw-npm-run",
+      "44",
+      "--evidence-out",
+      "evidence.json",
+    ]);
+    return { args, rootDir };
+  }
+
+  it.each([
+    { status: "completed", conclusion: "failure" },
+    { status: "completed", conclusion: "cancelled" },
+    { status: "completed", conclusion: "skipped" },
+    { status: "completed", conclusion: "success" },
+  ])(
+    "records optional Telegram as advisory without relabeling $status/$conclusion",
+    async (run) => {
+      const fixture = workflowFixture(run);
+
+      const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+      const evidence = JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8"));
+
+      expect(lines).toContain("openclaw npm OK: 2026.5.10-beta.3 (beta)");
+      expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E advisory:"))).toBe(true);
+      expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E OK:"))).toBe(false);
+      expect(evidence.workflowRuns).toEqual([
+        expect.objectContaining({
+          id: "44",
+          advisory: {
+            status: run.status,
+            conclusion: run.conclusion ?? "unavailable",
+            failedJobs: [],
+          },
+        }),
+      ]);
+    },
+  );
+
+  it("requires a terminal Telegram attempt before recording advisory evidence", async () => {
+    const fixture = workflowFixture({ status: "in_progress", conclusion: null });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "NPM Telegram Beta E2E: run 44 is in_progress/<missing>",
+    );
+  });
+
+  it("preserves a failed Telegram job even when its advisory workflow concludes success", async () => {
+    const fixture = workflowFixture({
+      jobs: [{ name: "Run package Telegram E2E", conclusion: "failure" }],
+    });
+
+    const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+    const evidence = JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8"));
+
+    expect(lines.join("\n")).toContain("Run package Telegram E2E");
+    expect(evidence.workflowRuns[0].advisory).toEqual({
+      status: "completed",
+      conclusion: "success",
+      failedJobs: ["Run package Telegram E2E"],
+    });
+  });
+
+  it.each([
+    { override: { workflowName: "Other Workflow" }, error: "workflow is Other Workflow" },
+    { override: { event: "push" }, error: "event is push" },
+    { override: { headBranch: "untrusted" }, error: "branch is untrusted" },
+  ])("keeps Telegram identity validation strict: $error", async ({ override, error }) => {
+    const fixture = workflowFixture({ conclusion: "failure", ...override });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      error,
+    );
+  });
+
+  it.each([
+    { conclusion: "failure" },
+    { jobs: [{ name: "Publish package", conclusion: "failure" }] },
+  ])("keeps non-Telegram workflow failures blocking: %j", async (run) => {
+    const fixture = workflowFixture(run, false);
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "OpenClaw NPM Release: run 44 is",
+    );
+  });
 });
 
 describe("parseReleaseVerifyBetaArgs", () => {

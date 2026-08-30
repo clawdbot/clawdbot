@@ -62,13 +62,6 @@ If the same person contacts you from multiple channels, use
 they share a session.
 </Tip>
 
-### Dock linked channels
-
-Dock commands move the current direct-chat session's reply route to another
-linked channel without starting a new session. See
-[Channel docking](/concepts/channel-docking) for examples, config, and
-troubleshooting.
-
 Verify your setup with `openclaw security audit`.
 
 ## Group and room routing

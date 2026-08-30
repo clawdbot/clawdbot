@@ -57,9 +57,9 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       expected: true,
     },
     {
-      name: "local unfocus commands",
+      name: "local session unbind commands",
       provider: "discord",
-      command: "/unfocus",
+      command: "/session unbind",
       expected: true,
     },
     {

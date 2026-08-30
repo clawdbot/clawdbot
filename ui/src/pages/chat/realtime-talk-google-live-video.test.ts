@@ -477,6 +477,7 @@ describe("Google Live Video Talk", () => {
     const transport = createTransport({ onStatus, onVideoStream });
 
     const { start, ws } = await beginTransport(transport);
+    onStatus.mockClear();
     await transport.setVideoEnabled(true);
     ws.emitOpen();
     const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");

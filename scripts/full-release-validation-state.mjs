@@ -29,6 +29,7 @@ import {
   selectReleaseStateArtifacts,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
+  validateReleaseTelegramWaiverBinding,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
 
@@ -438,6 +439,7 @@ async function validateReuse(plan, planInputs, signal) {
     ) {
       throw new Error("reused release evidence no longer matches the requested validation");
     }
+    validateReleaseTelegramWaiverBinding(planInputs, evidence.manifest.validationInputs);
     return {
       blockers: [],
       children: hydrateReusedPlan(plan, evidence),
@@ -562,6 +564,8 @@ function verifyMode() {
 
 function planExpected() {
   return {
+    telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
+    ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
@@ -667,7 +671,10 @@ async function planMode() {
     throw new Error("collector retry omitted the immutable attempt-one execution plan");
   }
 
-  const planInputs = parsePlanInputs(process.env.FULL_RELEASE_PLAN_INPUTS_JSON);
+  const planInputs = {
+    ...parsePlanInputs(process.env.FULL_RELEASE_PLAN_INPUTS_JSON),
+    releaseProfile: expected.releaseProfile,
+  };
   const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
   const candidate = candidateFromInputs(planInputs, built.gates);
@@ -683,6 +690,8 @@ async function planMode() {
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
+    telegramWaiver: planInputs.telegramWaiver,
+    targetVersion: planInputs.targetVersion,
     trustedWorkflow: trustedWorkflowFromInputs(planInputs),
   });
   const stop = () => {
@@ -712,6 +721,8 @@ async function planMode() {
       gates: plan.gates,
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,
+      telegramWaiver: plan.telegramWaiver,
+      targetVersion: plan.targetVersion,
       trustedWorkflow: plan.trustedWorkflow,
     });
     writeExecutionPlan(outputPath, plan);
@@ -736,6 +747,8 @@ async function planMode() {
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
+    telegramWaiver: planInputs.telegramWaiver,
+    targetVersion: planInputs.targetVersion,
     trustedWorkflow: trustedWorkflowFromInputs(planInputs),
   });
   writeExecutionPlan(outputPath, plan);
@@ -1034,6 +1047,7 @@ async function validateManifestMode() {
     workflowRef: executionPlan.workflowRef,
     workflowSha: executionPlan.workflowSha,
   });
+  validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [
       child.key,

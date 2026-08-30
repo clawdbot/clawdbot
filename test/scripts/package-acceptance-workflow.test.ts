@@ -313,14 +313,28 @@ function pluginPrereleaseTimeoutFloor(
   return Object.values(components).reduce((total, value) => total + value, 0);
 }
 
-function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
+function runFullReleaseInputValidation(
+  releaseProfile: string,
+  skipTelegram: string,
+  options: {
+    telegramWaiver?: string;
+    version?: string;
+    rerunGroup?: string;
+    liveSuiteFilter?: string;
+  } = {},
+) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
     "Validate release inputs",
   );
   const workdir = tempDirs.make("full-release-input-validation-");
   mkdirSync(resolve(workdir, "target"));
-  writeFileSync(resolve(workdir, "target", "package.json"), '{"version":"2026.8.1"}\n', "utf8");
+  writeFileSync(
+    resolve(workdir, "target", "package.json"),
+    JSON.stringify({ version: options.version ?? "2026.8.1" }),
+    "utf8",
+  );
+  symlinkSync(process.cwd(), resolve(workdir, "workflow"), "dir");
   return spawnSync("bash", ["-c", step.run ?? ""], {
     cwd: workdir,
     encoding: "utf8",
@@ -328,6 +342,9 @@ function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: str
       PATH: process.env.PATH,
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
+      TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      RERUN_GROUP: options.rerunGroup ?? "all",
+      LIVE_SUITE_FILTER: options.liveSuiteFilter ?? "",
       TARGET_CONTEXT_REF: "",
       TARGET_REF: "main",
     },
@@ -412,6 +429,8 @@ function runReleaseChecksInputValidation(
   liveSuiteFilter = "",
   options: {
     candidateArtifactJson?: string;
+    telegramWaiver?: string;
+    version?: string;
     packageAcceptancePackageSpec?: string;
     phase?: "all" | "candidate" | "independent";
     releasePackageSpec?: string;
@@ -424,8 +443,16 @@ function runReleaseChecksInputValidation(
   );
   const workdir = tempDirs.make("release-checks-input-validation-");
   const outputPath = resolve(workdir, "github-output");
+  mkdirSync(resolve(workdir, "waiver-target"));
+  writeFileSync(
+    resolve(workdir, "waiver-target", "package.json"),
+    JSON.stringify({ version: options.version ?? "2026.8.1" }),
+    "utf8",
+  );
+  symlinkSync(process.cwd(), resolve(workdir, "workflow"), "dir");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: workdir,
     encoding: "utf8",
     env: {
       ...stepEnv,
@@ -449,6 +476,7 @@ function runReleaseChecksInputValidation(
       RELEASE_RUN_MATURITY_SCORECARD_INPUT: options.runMaturityScorecard ?? "false",
       RELEASE_RUN_RELEASE_SOAK_INPUT: runReleaseSoak,
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
+      TELEGRAM_WAIVER: options.telegramWaiver ?? "",
     },
   });
   return { outputPath, result };
@@ -748,6 +776,7 @@ exit 0
     RUN_RELEASE_SOAK: "false",
     SCENARIO: "",
     SKIP_PACKAGE_TELEGRAM_E2E: "false",
+    TELEGRAM_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
     TARGET_SHA: "b".repeat(40),
@@ -1546,6 +1575,7 @@ function runReleaseChecksSummary(params: {
   resolveResult?: "failure" | "success";
   resultOverrides?: Record<string, "cancelled" | "failure" | "skipped" | "success">;
   telegramSelected?: boolean;
+  telegramIdentityVerified?: boolean;
   validatedStatuses?: Array<{ job: string; status: string; variant: string }>;
   workflowRef?: string;
 }) {
@@ -1586,6 +1616,7 @@ function runReleaseChecksSummary(params: {
       QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: params.currentResult,
       QA_LIVE_TELEGRAM_SELECTED: String(params.telegramSelected ?? true),
+      QA_LIVE_TELEGRAM_IDENTITY_VERIFIED: String(params.telegramIdentityVerified ?? true),
       QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: "skipped",
       RELEASE_CHECK_RUN_ATTEMPT: params.currentAttempt,
       RELEASE_CHECK_RUN_ID: runId,
@@ -5141,6 +5172,53 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
   );
 
+  it.each(["stable", "full"])(
+    "waives only Telegram integration lanes for approved %s 2026.8.1",
+    (profile) => {
+      const options = { telegramWaiver: "2026.8.1-owner-approved" };
+      const direct = runReleaseChecksInputValidation(profile, "false", "all", "false", "", options);
+      const umbrella = runFullReleaseInputValidation(profile, "false", options);
+      expect(direct.result.status, direct.result.stderr).toBe(0);
+      expect(umbrella.status, umbrella.stderr).toBe(0);
+      const output = readFileSync(direct.outputPath, "utf8");
+      expect(output).toContain("telegram_waiver=2026.8.1-owner-approved");
+      expect(output).toContain("qa_live_telegram_enabled=false");
+      expect(output).toContain("run_release_soak=true");
+      expect(output).toContain("skip_package_telegram_e2e=false");
+    },
+  );
+
+  it.each([
+    { version: "2026.8.2" },
+    { version: "2026.8.1-beta.3" },
+    { telegramWaiver: "true" },
+    { rerunGroup: "npm-telegram" },
+    { liveSuiteFilter: "qa-telegram" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-all" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-all" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-non-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "qa-non-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "non-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "no-slack" },
+    { rerunGroup: "qa-live", liveSuiteFilter: "without-slack" },
+  ])("rejects a conflicting Telegram waiver request: %j", (override) => {
+    const options = { telegramWaiver: "2026.8.1-owner-approved", ...override };
+    const umbrella = runFullReleaseInputValidation("stable", "false", options);
+    const direct = runReleaseChecksInputValidation(
+      "stable",
+      "false",
+      options.rerunGroup ?? "all",
+      "false",
+      options.liveSuiteFilter ?? "",
+      options,
+    );
+    expect(umbrella.status).not.toBe(0);
+    expect(direct.result.status).not.toBe(0);
+    expect(umbrella.stderr).toContain("Telegram waiver");
+    expect(direct.result.stderr).toContain("Telegram waiver");
+  });
+
   it("allows Package Acceptance Telegram deferral only for beta validation", () => {
     const direct = runReleaseChecksInputValidation("beta", "true");
     const umbrella = runFullReleaseInputValidation("beta", "true");
@@ -5598,10 +5676,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
     expect(packageAcceptanceJob.with).toMatchObject({
       telegram_mode:
-        "${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}",
+        "${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}",
     });
     expect(packageAcceptanceJob.with).toMatchObject({
-      telegram_advisory: "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
+      telegram_advisory: true,
     });
     expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
@@ -6507,7 +6585,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     }
   });
 
-  it("allows beta callers to make only Telegram package acceptance advisory", () => {
+  it("allows release callers to make only Telegram package acceptance advisory", () => {
     const telegramResult = runPackageAcceptanceSummary({
       telegramAdvisory: true,
       telegramEnabled: true,
@@ -6527,6 +6605,33 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(dockerResult.status).toBe(1);
     expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
   });
+
+  it.each(["failure", "skipped"] as const)(
+    "reports a package Telegram %s even when no suite report exists",
+    (outcome) => {
+      const report = workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Summarize Telegram attempt",
+      );
+      expect(report.if).toBe("always()");
+      const workdir = tempDirs.make("npm-telegram-attempt-summary-");
+      const summary = resolve(workdir, "summary.md");
+      const result = spawnSync("bash", ["-c", report.run ?? ""], {
+        cwd: workdir,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          ADVISORY: "true",
+          GITHUB_STEP_SUMMARY: summary,
+          LANE_OUTCOME: outcome,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`::warning::Package Telegram attempt: ${outcome}`);
+      expect(readFileSync(summary, "utf8")).toContain(`Telegram attempt: ${outcome}`);
+      expect(readFileSync(summary, "utf8")).not.toContain("passed");
+    },
+  );
 
   it("gives release build steps enough Node heap", () => {
     for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
@@ -6976,8 +7081,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
-      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "600000"],
-      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "600000"],
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", undefined],
+      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", undefined],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
     ] as const;
 
@@ -7401,7 +7506,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(telegramDispatch.run).toContain('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
     expect(telegramDispatch.run).not.toContain("commits/main");
     expect(telegramDispatch.run).not.toContain("dispatch_attempt");
-    expect(telegramCaller["continue-on-error"]).toBeUndefined();
+    expect(telegramCaller["continue-on-error"]).toBe(true);
+    expect(telegramCaller.outputs?.identity_verified).toBe(
+      "${{ steps.dispatch.outputs.identity_verified }}",
+    );
+    expect(telegramDispatch.run?.indexOf('echo "identity_verified=true"')).toBeGreaterThan(
+      telegramDispatch.run?.indexOf('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]') ?? -1,
+    );
     expect(telegramCaller["timeout-minutes"]).toBe(210);
 
     const telegramStatus = workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, "advisory_status");
@@ -7451,6 +7562,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const verifyStep = workflowStep(summary, "Verify release check results");
     expect(verifyStep.env).toMatchObject({
       QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_buzz_release_checks.result }}",
+      QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT:
+        "${{ needs.qa_live_telegram_release_checks.outputs.conclusion || needs.qa_live_telegram_release_checks.result }}",
       QA_LIVE_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_release_checks.result }}",
       RELEASE_CHECK_RUN_ATTEMPT: "${{ github.run_attempt }}",
       RELEASE_CHECK_RUN_ID: "${{ github.run_id }}",
@@ -7509,10 +7622,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     ...(["cancelled", "failure", "skipped"] as const).map((currentResult) => ({
       emptyStderr: false,
-      expected: [`::error::qa_live_telegram_release_checks ended with ${currentResult}`],
-      name: `rejects a ${currentResult} selected Telegram child`,
+      expected: [
+        `::warning::qa_live_telegram_release_checks ended with ${currentResult}; Telegram release testing is best effort and does not block release validation.`,
+      ],
+      name: `reports a ${currentResult} selected Telegram child without blocking release`,
       params: { currentAttempt: "2", currentResult, telegramSelected: true },
-      status: 1,
+      status: 0,
     })),
     {
       emptyStderr: false,
@@ -7520,6 +7635,31 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       name: "accepts a skipped unselected Telegram dispatch",
       params: { currentAttempt: "2", currentResult: "skipped", telegramSelected: false },
       status: 0,
+    },
+    {
+      emptyStderr: false,
+      expected: ["::error::Telegram dispatch identity was not verified"],
+      name: "rejects an unverified Telegram child identity despite advisory execution",
+      params: {
+        currentAttempt: "2",
+        currentResult: "failure",
+        telegramIdentityVerified: false,
+      },
+      status: 1,
+    },
+    {
+      emptyStderr: false,
+      expected: [
+        "qa_live_telegram_release_checks ended with failure",
+        "::error::package_acceptance_release_checks ended with failure",
+      ],
+      name: "keeps package failures blocking alongside an advisory Telegram failure",
+      params: {
+        currentAttempt: "2",
+        currentResult: "failure",
+        resultOverrides: { PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: "failure" },
+      },
+      status: 1,
     },
     {
       emptyStderr: false,
@@ -7535,7 +7675,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     {
       emptyStderr: false,
-      expected: ["qa_live_telegram_release_checks ended with cancelled", "Tideclaw alpha"],
+      expected: [
+        "qa_live_telegram_release_checks ended with cancelled",
+        "Telegram release testing is best effort",
+      ],
       name: "keeps a cancelled Telegram child non-blocking for Tideclaw alpha",
       params: {
         currentAttempt: "2",

@@ -153,6 +153,20 @@ function collectConfiguredModelProviderIds(params: {
   }
 }
 
+function hasScopedProviderAuthAlias(
+  record: PluginManifestRegistryRecord,
+  scopedProviderIds: ReadonlySet<string>,
+): boolean {
+  return Object.entries(record.providerAuthAliases ?? {}).some(([rawAlias, rawTarget]) => {
+    const target = normalizeProviderId(rawTarget);
+    return (
+      scopedProviderIds.has(normalizeProviderId(rawAlias)) &&
+      target !== "" &&
+      record.providers.some((providerId) => normalizeProviderId(providerId) === target)
+    );
+  });
+}
+
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   const ids = new Set<string>();
   const root = asNullableRecord(raw);
@@ -320,6 +334,9 @@ function resolvePluginDoctorManifestRecords(params: {
   });
 
   const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
+  const scopedProviderIds = params?.pluginIds
+    ? new Set(params.pluginIds.map(normalizeProviderId).filter(Boolean))
+    : null;
   return manifestRegistry.plugins.filter(
     (record) =>
       !(
@@ -328,7 +345,8 @@ function resolvePluginDoctorManifestRecords(params: {
         !(record.packageName && scopedPluginIds.has(record.packageName)) &&
         !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
         !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
-        !record.providers.some((providerId) => scopedPluginIds.has(providerId))
+        !record.providers.some((providerId) => scopedPluginIds.has(providerId)) &&
+        !(scopedProviderIds && hasScopedProviderAuthAlias(record, scopedProviderIds))
       ),
   );
 }

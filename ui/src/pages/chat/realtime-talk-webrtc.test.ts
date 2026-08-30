@@ -50,6 +50,14 @@ class FakePeerConnection extends EventTarget {
   }
 }
 
+function requirePeer(): FakePeerConnection {
+  const peer = FakePeerConnection.instances[0];
+  if (!peer) {
+    throw new Error("expected WebRTC peer");
+  }
+  return peer;
+}
+
 function requireTalkEvent(
   onTalkEvent: ReturnType<typeof vi.fn>,
   index: number,
@@ -332,10 +340,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const transport = createOpenAiTransport();
 
     const startPromise = transport.start();
-    const peer = FakePeerConnection.instances[0];
-    if (!peer) {
-      throw new Error("expected WebRTC peer");
-    }
+    const peer = requirePeer();
     const createOfferSpy = vi.spyOn(peer, "createOffer").mockImplementation(
       () =>
         new Promise<RTCSessionDescriptionInit>((_, reject) => {
@@ -445,10 +450,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const onTalkEvent = vi.fn();
     const transport = createOpenAiTransport({}, { onStatus, onTalkEvent });
     const start = transport.start();
-    const peer = FakePeerConnection.instances[0];
-    if (!peer) {
-      throw new Error("expected WebRTC peer");
-    }
+    const peer = requirePeer();
     let finishRemoteDescription: (() => void) | undefined;
     const remoteDescription = vi.spyOn(peer, "setRemoteDescription").mockImplementation(
       async () =>
@@ -457,6 +459,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         }),
     );
     await waitForFast(() => expect(remoteDescription).toHaveBeenCalled());
+    onStatus.mockClear();
 
     peer.connectionState = "failed";
     peer.dispatchEvent(new Event("connectionstatechange"));
@@ -470,15 +473,13 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("releases an active peer when the terminal status callback throws", async () => {
     stubAnswerSdpFetch();
-    const onStatus = vi.fn(() => {
-      throw new Error("consumer failed");
-    });
+    const onStatus = vi.fn();
     const transport = createOpenAiTransport({}, { onStatus });
     await expect(transport.start()).resolves.toBe("ready");
-    const peer = FakePeerConnection.instances[0];
-    if (!peer) {
-      throw new Error("expected WebRTC peer");
-    }
+    onStatus.mockImplementation(() => {
+      throw new Error("consumer failed");
+    });
+    const peer = requirePeer();
 
     peer.connectionState = "failed";
     peer.dispatchEvent(new Event("connectionstatechange"));
@@ -495,10 +496,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     });
     const transport = createOpenAiTransport({}, { onTalkEvent });
     await expect(transport.start()).resolves.toBe("ready");
-    const peer = FakePeerConnection.instances[0];
-    if (!peer) {
-      throw new Error("expected WebRTC peer");
-    }
+    const peer = requirePeer();
 
     expect(() => transport.stop()).toThrow("consumer failed");
 

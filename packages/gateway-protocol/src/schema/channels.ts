@@ -599,7 +599,7 @@ export const ChannelsStatusParamsSchema = closedObject({
 });
 
 /**
- * Per-account status snapshot for channel docking.
+ * Per-account channel status snapshot.
  *
  * This is intentionally schema-light so new channel-specific metadata can ship
  * without a gateway protocol update; known fields stay documented for UI use.

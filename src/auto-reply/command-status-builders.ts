@@ -23,7 +23,6 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   management: "Management",
   media: "Media",
   tools: "Tools",
-  docks: "Docks",
 };
 
 const CATEGORY_ORDER: CommandCategory[] = [
@@ -33,7 +32,6 @@ const CATEGORY_ORDER: CommandCategory[] = [
   "management",
   "media",
   "tools",
-  "docks",
 ];
 
 function groupCommandsByCategory(

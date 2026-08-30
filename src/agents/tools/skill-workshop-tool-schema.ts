@@ -148,7 +148,7 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
       expected_revision_hash: Type.Optional(
         Type.String({
           description:
-            "Optional exact proposal revision hash for revise/evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
+            "Optional exact recorded proposal revision hash for revise/evaluate/apply/reject/quarantine. The action fails if the stored proposal record changed. Revise, evaluate, and apply verify proposal artifacts. Reject and quarantine run interrupted-apply recovery first, then use only the stored record.",
         }),
       ),
       correlation_id: Type.Optional(

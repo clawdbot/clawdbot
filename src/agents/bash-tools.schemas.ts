@@ -58,15 +58,10 @@ export const execSchema = Type.Object({
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
     description: "Omit/auto: inherit configured host.",
   }),
-  security: Type.Optional(
-    Type.String({
-      description: "Ignored per call; tools.exec.security and host approvals decide.",
-    }),
-  ),
   ask: Type.Optional(
     Type.String({
       description:
-        "Uses tools.exec.ask and host approvals; channel-origin calls cannot override host ask=off.",
+        "Requests stricter approvals under tools.exec.mode and host policy; channel-origin calls cannot override host ask=off.",
     }),
   ),
   node: Type.Optional(

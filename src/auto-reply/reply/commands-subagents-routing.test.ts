@@ -1,4 +1,4 @@
-// Tests subagent routing commands and active focus handoff.
+// Tests subagent inspection command routing and authorization.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -9,12 +9,12 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
+import { handleSubagentsCommand } from "./commands-subagents.js";
 import {
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
-} from "./commands-subagents-dispatch.js";
-import { handleSubagentsCommand } from "./commands-subagents.js";
+} from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const COMMAND = "/subagents";
@@ -147,6 +147,14 @@ describe("subagents command dispatch", () => {
     expect(resolveHandledPrefix("/steer 1 continue")).toBeNull();
     expect(resolveHandledPrefix("/unknown")).toBeNull();
   });
+
+  it.each(["/focus target", "/unfocus"])(
+    "does not dispatch retired command %s",
+    async (command) => {
+      expect(await handleSubagentsCommand(buildParams(command), true)).toBeNull();
+      expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps prefixes and args to subagent actions", () => {
     const listTokens = ["list"];

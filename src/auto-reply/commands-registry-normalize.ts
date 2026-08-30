@@ -21,7 +21,6 @@ type TextAliasSpec = {
 };
 
 type CommandRegistryLookup = {
-  commands: ChatCommandDefinition[];
   aliases: Map<string, TextAliasSpec>;
   detection: CommandDetection;
 };
@@ -46,14 +45,13 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
 }
 
 function getCommandRegistryLookup(): CommandRegistryLookup {
-  const commands = getChatCommands();
-  if (cachedRegistryLookup?.commands === commands) {
+  if (cachedRegistryLookup) {
     return cachedRegistryLookup;
   }
   const aliases = new Map<string, TextAliasSpec>();
   const exact = new Set<string>();
   const patterns: string[] = [];
-  for (const command of commands) {
+  for (const command of getChatCommands()) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
     const canonical = normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
@@ -76,7 +74,6 @@ function getCommandRegistryLookup(): CommandRegistryLookup {
     }
   }
   cachedRegistryLookup = {
-    commands,
     aliases,
     detection: {
       exact,

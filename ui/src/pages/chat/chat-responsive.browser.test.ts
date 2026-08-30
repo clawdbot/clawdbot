@@ -3186,11 +3186,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       // The resting shape is two stacked regions, not one line that may grow
       // into two: a draft that fits on a single line still leaves the surface at
       // its multiline floor, with the whole action row below the editor.
-      const [surface, editor, actionRow] = await Promise.all([
-        getRect(page, ".agent-chat__composer-shell > .agent-chat__input"),
-        getRect(page, ".agent-chat__composer-combobox > textarea"),
-        getRect(page, ".agent-chat__composer-footer"),
-      ]);
+      // Shell/card entry animations move all boxes together; compare one browser snapshot.
+      const { surface, editor, actionRow } = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const [element, ...others] = document.querySelectorAll<HTMLElement>(selector);
+          if (!element || others.length > 0) {
+            throw new Error(`Expected one layout element: ${selector}`);
+          }
+          const {
+            x,
+            y,
+            width: rectWidth,
+            height: rectHeight,
+            top,
+            bottom,
+          } = element.getBoundingClientRect();
+          return { x, y, width: rectWidth, height: rectHeight, top, bottom };
+        };
+        return {
+          surface: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+          editor: rectFor(".agent-chat__composer-combobox > textarea"),
+          actionRow: rectFor(".agent-chat__composer-footer"),
+        };
+      });
+      for (const rect of [surface, editor, actionRow]) {
+        expectFiniteRect(rect);
+      }
       expect(surface.height).toBeGreaterThanOrEqual(98);
       expect(actionRow.top).toBeGreaterThanOrEqual(editor.bottom - 1);
       expect(surface.bottom - actionRow.bottom).toBeGreaterThanOrEqual(0);

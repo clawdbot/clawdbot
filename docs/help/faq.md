@@ -197,10 +197,9 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     Bind a Discord thread to a subagent or session target so follow-up messages there stay on that bound session.
 
     - Spawn with `sessions_spawn` using `thread: true` (optionally `mode: "session"` for persistent follow-up).
-    - Or bind manually with `/focus <target>`.
     - `/agents` inspects binding state.
-    - `/session idle <duration|off>` and `/session max-age <duration|off>` control auto-unfocus.
-    - `/unfocus` detaches the thread.
+    - `/session idle <duration|off>` and `/session max-age <duration|off>` control automatic expiry.
+    - `/session unbind` detaches the thread without closing the agent session.
 
     Config: `session.threadBindings.enabled` (global switch), `session.threadBindings.idleHours` (default `24`, `0` disables), `session.threadBindings.maxAgeHours` (default `0` = no hard cap), and `session.threadBindings.spawnSessions` for auto-bind on spawn (default `true`).
 

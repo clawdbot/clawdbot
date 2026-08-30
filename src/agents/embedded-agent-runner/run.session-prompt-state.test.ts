@@ -9,6 +9,7 @@ const assertActive = () => {};
 
 const CONTINUE_FROM_TRANSCRIPT_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const CONTINUE_AFTER_TOOL_FAILURE_PROMPT = `${CONTINUE_FROM_TRANSCRIPT_PROMPT} If a tool failed, say so; never claim completion or success.`;
 
 const BASE_RUN_PARAMS = {
   admittedRunContext: createTestAdmittedRunContext("run-1"),
@@ -86,6 +87,18 @@ function createState(
 }
 
 describe("embedded run session prompt state", () => {
+  it("adds failed-tool guidance to current-transcript continuation", () => {
+    const state = createState();
+
+    state.continueFromCurrentTranscript({ includeToolFailureInstruction: true });
+
+    expect(state.activePrompt).toEqual({
+      override: CONTINUE_AFTER_TOOL_FAILURE_PROMPT,
+      persisted: true,
+      internal: true,
+    });
+  });
+
   it("settles projection maintenance only for an owned transcript retry", async () => {
     const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
     const waitForProjection = vi

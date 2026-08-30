@@ -17,6 +17,68 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("guides a pending microphone request and clears guidance when voice connects", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "talk.catalog": videoTalkCatalog("openai"),
+          "talk.client.create": {
+            provider: "openai",
+            voiceSessionId: "voice-microphone-access-e2e",
+            transport: "webrtc",
+            clientSecret: "test-client-secret",
+          },
+        },
+      });
+      await installMicrophoneLossWebRtcFixture(page);
+      await page.addInitScript(() => {
+        const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        let release = () => {};
+        const permission = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const proof = { requested: false, release: () => release() };
+        Object.defineProperty(window, "openclawMicrophoneAccessE2e", { value: proof });
+        navigator.mediaDevices.getUserMedia = (constraints) => {
+          proof.requested = true;
+          return permission.then(() => getUserMedia(constraints));
+        };
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as Window & { openclawMicrophoneAccessE2e?: { requested: boolean } })
+                .openclawMicrophoneAccessE2e?.requested,
+          ),
+        )
+        .toBe(true);
+      await captureMicrophoneLossProof(page, "microphone-access-pending.png");
+      const guidance = page.locator('.agent-chat__talk-status[role="status"]');
+      await expect
+        .poll(() => guidance.allTextContents())
+        .toEqual([
+          expect.stringContaining(
+            "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
+          ),
+        ]);
+      await expect.poll(() => guidance.isVisible()).toBe(true);
+      await page.evaluate(() =>
+        (
+          window as Window & { openclawMicrophoneAccessE2e?: { release: () => void } }
+        ).openclawMicrophoneAccessE2e?.release(),
+      );
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
+      await expect.poll(() => guidance.count()).toBe(0);
+      await captureMicrophoneLossProof(page, "microphone-access-ready.png");
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+    });
+  });
+
   it("surfaces microphone loss and closes native browser call resources", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

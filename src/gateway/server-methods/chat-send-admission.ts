@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
+} from "../../agents/run-termination.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   interruptReplyRunTarget,
@@ -407,15 +410,35 @@ export async function admitChatSend(params: {
       identities: [sessionKey, backingSessionId],
       assertAllowed: () => assertChatWorkAdmissionAllowed(false),
       revalidateAllowed: () => assertChatWorkAdmissionAllowed(true),
-      onInterrupt: () => {
-        if (admittedRunAbort?.entry) {
-          admittedRunAbort.entry.abortStopReason = "restart";
+      onInterrupt: (reason) => {
+        const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
+        if (!admittedRunAbort) {
+          if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+            writePreRegisteredChatAbort({
+              context,
+              runId: clientRunId,
+              stopReason,
+              attemptId: pendingAttemptId,
+            });
+          }
+        } else if (!admittedRunAbort.controller.signal.aborted) {
+          if (admittedRunAbort.entry) {
+            admittedRunAbort.entry.abortStopReason = stopReason;
+          }
+          admittedRunAbort.controller.abort(
+            stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
+          );
         }
-        admittedRunAbort?.controller.abort(createAgentRunRestartAbortError());
       },
     });
   } catch (err) {
     clearPendingChatSendReservation();
+    const aborted =
+      context.chatRunState.hasAbortMarker(clientRunId) && context.dedupe.get(`chat:${clientRunId}`);
+    if (aborted) {
+      respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
+      return { ok: false as const };
+    }
     if (err instanceof Error && err.message === "goal-session-busy") {
       respond(
         false,
@@ -463,7 +486,7 @@ export async function admitChatSend(params: {
         activeRunAbort.entry.abortStopReason = "restart";
       }
       activeRunAbort.controller.abort();
-      activeRunAbort.cleanup({ force: true });
+      activeRunAbort.cleanup();
     }
     gatewayWorkAdmission.release();
     if (!context.dedupe.has(`chat:${clientRunId}`)) {
@@ -505,7 +528,7 @@ export async function admitChatSend(params: {
   let releaseGatewayRootContinuation = () => {};
   // Until dispatch takes custody, interruption and callback failures own the same three resources.
   const cleanupPreDispatchAdmission = () => {
-    activeRunAbort.cleanup({ force: true });
+    activeRunAbort.cleanup();
     gatewayWorkAdmission.release();
     releaseGatewayRootContinuation();
   };
@@ -600,15 +623,15 @@ export async function admitChatSend(params: {
   // handler disarms it once the media becomes referenced (durable admission
   // or ACK handing ownership to dispatch, which persists on all paths).
   let discardAbandonedPreparedMedia: (() => void) | undefined;
-  const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
-    activeRunAbort.cleanup(options);
+  const cleanupAdmittedRun: typeof activeRunAbort.cleanup = () => {
+    activeRunAbort.cleanup();
     releaseInitialGatewayWorkAdmission();
     releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };
   const rejectSessionRoutingChanged = () => {
-    cleanupAdmittedRun({ force: true });
+    cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);
     respondChatSessionRoutingChanged(respond);
   };

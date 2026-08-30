@@ -1125,10 +1125,9 @@ for later remote commands, sync the current checkout on every run, and stop it
 before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
-one-shot Testboxes. The built-in sync sanity check fails fast when
-`git status --short` on the synced box shows at least 200 tracked deletions,
-which catches disappearing root files such as `pnpm-lock.yaml`. For intentional
-large-deletion PRs, set `CRABBOX_ALLOW_MASS_DELETIONS=1` for the remote command.
+one-shot Testboxes. Native Blacksmith owns synchronization; Crabbox's direct
+SSH sync controls and mass-deletion sanity checks do not run on this delegated
+path.
 
 Crabbox also terminates a local Blacksmith CLI invocation that stays in the
 sync phase for more than five minutes without post-sync output. Set
@@ -1141,7 +1140,7 @@ Before a first run, check the wrapper from the repo root:
 node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 ```
 
-The repo wrapper refuses a stale Crabbox binary that does not advertise the selected provider, and Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
+The repo wrapper validates the selected Crabbox binary and provider before running. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
 
 ```bash
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
@@ -1215,9 +1214,16 @@ node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id>
 pnpm crabbox:stop -- <tbx_id>
 ```
 
-Reuse the lease, not stale source. Omit `--no-sync` so each run uploads the
-current checkout; use it only to rerun an unchanged, already-synced tree
-intentionally. Untrusted contributor/fork code must use
+Reuse the lease, not stale source. Blacksmith Testbox owns sync, including
+reused `--id` runs. Do not pass `--no-sync`: the wrapper rejects it before
+lease handling or delegation. A fingerprint cache hit is not a no-sync guarantee.
+
+Sync success is not proof of source identity. Verify the materialized Git tree
+before exact-candidate proof. Keep QA evidence outside the synced checkout and
+download it before another run. Do not bypass security exclusions, accept a
+mismatched tree, or silently switch providers.
+
+Untrusted contributor/fork code must use
 `CRABBOX_ENV_ALLOW=CI`, `--provider aws --no-hydrate`, and a fresh
 temporary remote `HOME` for every command; install dependencies inside that
 sanitized command before testing. Reuse only a newly warmed lease dedicated to

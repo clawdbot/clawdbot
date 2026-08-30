@@ -125,6 +125,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const transport = createTransport({ onStatus, onTalkEvent });
 
     const { start, ws } = await beginTransport(transport);
+    onStatus.mockClear();
     ws.emitOpen();
     ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
     await expect(start).resolves.toBe("ready");
@@ -484,6 +485,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
     const { start, ws } = await beginTransport(transport);
+    onStatus.mockClear();
 
     transport.stop();
     await expect(start).resolves.toBe("cancelled");
