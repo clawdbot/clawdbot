@@ -687,6 +687,66 @@ describe("createBackupArchive", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not promote a managed-skill link to its state ancestor into an archive root",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-ancestor-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          // Relative ancestor link: `../..` from <stateDir>/skills resolves to
+          // the directory holding the state asset.
+          await fs.symlink(path.join("..", ".."), state.statePath("skills", "escape"), "dir");
+
+          // An ancestor must not become a declared root: that would let the
+          // covered dedupe swallow the state asset and tar the whole ancestor
+          // tree. The planner declines, so the archive write stays fail-closed.
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not declare an external managed-skill link whose target is not a skill directory",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-unbounded-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const broadTarget = path.join(await fs.realpath(state.root), "broad");
+          await fs.mkdir(broadTarget, { recursive: true });
+          await fs.writeFile(path.join(broadTarget, "notes.txt"), "not a skill", "utf8");
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          await fs.symlink(
+            path.join("..", "..", "broad"),
+            state.statePath("skills", "broad"),
+            "dir",
+          );
+
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
   it("includes a configured external agent directory when workspaces are excluded", async () => {
     await withOpenClawTestState(
       {

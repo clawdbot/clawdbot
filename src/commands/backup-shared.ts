@@ -386,9 +386,9 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
 
 // Managed skill roots deliberately accept directory symlinks resolving outside
 // the root (the `skills` CLI symlink-mode layout), while the archive guard is
-// fail-closed on any link whose target is not a declared asset. Declaring each
-// accepted external target as its own asset keeps such layouts self-contained
-// instead of aborting the archive write.
+// fail-closed on any link whose target is not a declared asset. Declare only
+// bounded skill targets: a link to a state ancestor or any broad directory
+// would otherwise promote that whole tree to an archive root.
 async function resolveManagedSkillSymlinkTargetCandidates(stateDir: string): Promise<string[]> {
   const managedSkillsDir = path.join(stateDir, "skills");
   let entries: Dirent[];
@@ -403,10 +403,29 @@ async function resolveManagedSkillSymlinkTargetCandidates(stateDir: string): Pro
     if (!entry.isSymbolicLink()) {
       continue;
     }
-    const targetPath = await canonicalizeExistingPath(path.join(managedSkillsDir, entry.name));
-    if (!isPathWithin(targetPath, canonicalStateDir)) {
-      targets.push(targetPath);
+    const linkPath = path.join(managedSkillsDir, entry.name);
+    const targetPath = await canonicalizeExistingPath(linkPath);
+    // Neither side may contain the other: an external target that holds the
+    // state asset would swallow it (and everything else) via covered dedupe.
+    if (
+      isPathWithin(targetPath, canonicalStateDir) ||
+      isPathWithin(canonicalStateDir, targetPath)
+    ) {
+      continue;
     }
+    try {
+      if (!(await fs.stat(linkPath)).isDirectory()) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    // Skill loaders only admit directories holding a SKILL.md; anything else
+    // in the managed layout is not a skill worth a declared archive root.
+    if (!(await pathExists(path.join(targetPath, "SKILL.md")))) {
+      continue;
+    }
+    targets.push(targetPath);
   }
   return targets;
 }
