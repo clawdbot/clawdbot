@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
@@ -11,6 +12,7 @@ import {
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
+import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { finalizeTaskRecordByRunId, updateTaskStateByRunId } from "./task-registry-record-api.js";
@@ -21,7 +23,25 @@ import {
   loadTaskRegistryControlRuntime,
   tasks,
 } from "./task-registry-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type { TaskRecord, TaskRuntime } from "./task-registry.types.js";
+
+type CancelTaskByIdResult = {
+  found: boolean;
+  cancelled: boolean;
+  reason?: string;
+  task?: TaskRecord;
+};
+
+type SubagentKillResultHandling =
+  | {
+      handled: true;
+      isProvisionalSubagentKill: boolean;
+      result: CancelTaskByIdResult;
+    }
+  | {
+      handled: false;
+      isProvisionalSubagentKill: boolean;
+    };
 
 function ensureTaskCancellationReady(task: TaskRecord): void {
   const runId = task.runId?.trim();
@@ -38,11 +58,149 @@ function ensureTaskCancellationReady(task: TaskRecord): void {
   }
 }
 
+function handleSubagentKillResultForTask(params: {
+  task: TaskRecord;
+  childSessionKey: string;
+  runtime: Extract<TaskRuntime, "cli" | "subagent">;
+  isProvisionalSubagentKill: boolean;
+  result: Awaited<ReturnType<TaskRegistryControlRuntime["killSubagentRunAdmin"]>>;
+}): SubagentKillResultHandling {
+  let isProvisionalSubagentKill = params.isProvisionalSubagentKill;
+  const current = tasks.get(params.task.taskId);
+  if (current?.status === "cancelled" && current.error === SUBAGENT_KILL_TASK_ERROR) {
+    isProvisionalSubagentKill = true;
+  }
+  if (current?.status === "succeeded") {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: "Subagent completed while cancellation was in progress.",
+        task: cloneTaskRecord(current),
+      },
+    };
+  }
+  if (current && isTerminalTaskStatus(current.status) && current.status !== "cancelled") {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: `Subagent became ${current.status} while cancellation was in progress.`,
+        task: cloneTaskRecord(current),
+      },
+    };
+  }
+  if (current?.status === "cancelled" && !isProvisionalSubagentKill) {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: "Subagent was cancelled while cancellation was in progress.",
+        task: cloneTaskRecord(current),
+      },
+    };
+  }
+  if (params.result.found && params.result.targetState?.state === "terminal") {
+    // A subagent run becomes terminal before its task projection settles.
+    // Reconcile the original task scope: steer/orphan recovery may have
+    // replaced the registry run ID without remapping durable task rows.
+    const taskRunId = params.task.runId?.trim() || params.result.runId;
+    const reconciledTasks = finalizeTaskRecordByRunId({
+      runId: taskRunId,
+      runtime: params.runtime,
+      sessionKey: params.childSessionKey,
+      ...params.result.targetState.task,
+    });
+    const reconciled = reconciledTasks.find((candidate) => candidate.taskId === params.task.taskId);
+    if (!reconciled) {
+      return {
+        handled: true,
+        isProvisionalSubagentKill,
+        result: {
+          found: true,
+          cancelled: false,
+          reason: "Subagent became terminal, but task state reconciliation failed to persist.",
+          task: cloneTaskRecord(tasks.get(params.task.taskId) ?? params.task),
+        },
+      };
+    }
+    if (
+      params.result.targetState.task.status === "cancelled" &&
+      params.result.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
+    ) {
+      return {
+        handled: false,
+        isProvisionalSubagentKill: true,
+      };
+    }
+    const reason =
+      params.result.targetState.task.status === "succeeded"
+        ? "Subagent completed while cancellation was in progress."
+        : `Subagent became ${params.result.targetState.task.status} while cancellation was in progress.`;
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason,
+        task: cloneTaskRecord(reconciled),
+      },
+    };
+  }
+  if (params.result.found && params.result.targetState?.state === "finalizing") {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: "Subagent completion is still being finalized.",
+        task: cloneTaskRecord(current ?? params.task),
+      },
+    };
+  }
+  if (params.result.found && !params.result.killed && params.result.error) {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: formatErrorMessage(params.result.error),
+        task: cloneTaskRecord(current ?? params.task),
+      },
+    };
+  }
+  if (!params.result.found && !isProvisionalSubagentKill) {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: "Subagent task not found.",
+        task: cloneTaskRecord(current ?? params.task),
+      },
+    };
+  }
+  return {
+    handled: false,
+    isProvisionalSubagentKill,
+  };
+}
+
 export async function cancelTaskById(params: {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
-}): Promise<{ found: boolean; cancelled: boolean; reason?: string; task?: TaskRecord }> {
+}): Promise<CancelTaskByIdResult> {
   ensureTaskRegistryReady();
   const task = tasks.get(params.taskId.trim());
   if (!task) {
@@ -84,6 +242,28 @@ export async function cancelTaskById(params: {
     }
     const managedBacking = getManagedTaskBackingInstance(task);
     ensureTaskCancellationReady(task);
+    if (
+      task.runtime === "cli" &&
+      typeof childSessionKey === "string" &&
+      isSubagentSessionKey(childSessionKey)
+    ) {
+      const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
+      const result = await killSubagentRunAdmin({
+        cfg: params.cfg,
+        sessionKey: childSessionKey,
+      });
+      const handling = handleSubagentKillResultForTask({
+        task,
+        childSessionKey,
+        runtime: "cli",
+        isProvisionalSubagentKill,
+        result,
+      });
+      isProvisionalSubagentKill = handling.isProvisionalSubagentKill;
+      if (handling.handled) {
+        return handling.result;
+      }
+    }
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
     if (isBackgroundExecTask(task)) {
@@ -154,87 +334,16 @@ export async function cancelTaskById(params: {
             ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
             : {}),
         });
-        const current = tasks.get(task.taskId);
-        if (current?.status === "cancelled" && current.error === SUBAGENT_KILL_TASK_ERROR) {
-          isProvisionalSubagentKill = true;
-        }
-        if (current?.status === "succeeded") {
-          return {
-            found: true,
-            cancelled: false,
-            reason: "Subagent completed while cancellation was in progress.",
-            task: cloneTaskRecord(current),
-          };
-        }
-        if (current && isTerminalTaskStatus(current.status) && current.status !== "cancelled") {
-          return {
-            found: true,
-            cancelled: false,
-            reason: `Subagent became ${current.status} while cancellation was in progress.`,
-            task: cloneTaskRecord(current),
-          };
-        }
-        if (current?.status === "cancelled" && !isProvisionalSubagentKill) {
-          return {
-            found: true,
-            cancelled: false,
-            reason: "Subagent was cancelled while cancellation was in progress.",
-            task: cloneTaskRecord(current),
-          };
-        }
-        if (result.found && result.targetState?.state === "terminal") {
-          // A subagent run becomes terminal before its task projection settles.
-          // Reconcile the original task scope: steer/orphan recovery may have
-          // replaced the registry run ID without remapping durable task rows.
-          const taskRunId = task.runId?.trim() || result.runId;
-          const reconciledTasks = finalizeTaskRecordByRunId({
-            runId: taskRunId,
-            runtime: "subagent",
-            sessionKey: childSessionKey,
-            ...result.targetState.task,
-          });
-          const reconciled = reconciledTasks.find((candidate) => candidate.taskId === task.taskId);
-          if (!reconciled) {
-            return {
-              found: true,
-              cancelled: false,
-              reason: "Subagent became terminal, but task state reconciliation failed to persist.",
-              task: cloneTaskRecord(tasks.get(task.taskId) ?? task),
-            };
-          }
-          if (
-            result.targetState.task.status === "cancelled" &&
-            result.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
-          ) {
-            isProvisionalSubagentKill = true;
-          } else {
-            const reason =
-              result.targetState.task.status === "succeeded"
-                ? "Subagent completed while cancellation was in progress."
-                : `Subagent became ${result.targetState.task.status} while cancellation was in progress.`;
-            return {
-              found: true,
-              cancelled: false,
-              reason,
-              task: cloneTaskRecord(reconciled),
-            };
-          }
-        }
-        if (result.found && result.targetState?.state === "finalizing") {
-          return {
-            found: true,
-            cancelled: false,
-            reason: "Subagent completion is still being finalized.",
-            task: cloneTaskRecord(current ?? task),
-          };
-        }
-        if ((!result.found || !result.killed) && !isProvisionalSubagentKill) {
-          return {
-            found: true,
-            cancelled: false,
-            reason: result.found ? "Subagent was not running." : "Subagent task not found.",
-            task: cloneTaskRecord(current ?? task),
-          };
+        const handling = handleSubagentKillResultForTask({
+          task,
+          childSessionKey,
+          runtime: "subagent",
+          isProvisionalSubagentKill,
+          result,
+        });
+        isProvisionalSubagentKill = handling.isProvisionalSubagentKill;
+        if (handling.handled) {
+          return handling.result;
         }
       } else {
         return {

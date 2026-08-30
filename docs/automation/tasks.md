@@ -235,7 +235,7 @@ openclaw tasks notify <lookup> state_changes
     openclaw tasks cancel <lookup>
     ```
 
-    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
+    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Direct CLI-tracked tasks are registry-only because they have no separate child runtime handle. CLI rows backed by a `:subagent:` child session are the exception: cancellation first stops that backing subagent, then records the terminal task state. Status transitions to `cancelled` and a delivery notification is sent when applicable.
 
   </Accordion>
   <Accordion title="tasks retry | dismiss">

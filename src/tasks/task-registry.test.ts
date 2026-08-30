@@ -5183,6 +5183,235 @@ describe("task-registry", () => {
     },
   );
 
+  it("kills CLI-tracked subagent child sessions before cancelling the registry row", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: true,
+      });
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:mirror:subagent:child",
+        runId: "run-cancel-cli-subagent-child",
+        task: "Cancel child-backed CLI task",
+        deliveryStatus: "not_applicable",
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:mirror:subagent:child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("keeps opaque CLI child-session keys containing a subagent marker registry-only", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:main:matrix:group:!opaque:subagent:example.org",
+        runId: "run-cli-opaque-child-key",
+        task: "Cancel opaque CLI child-key task",
+        deliveryStatus: "not_applicable",
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("preserves CLI-tracked subagent success that wins during cancellation", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:mirror:subagent:completed-child",
+        runId: "run-cli-subagent-completed-child",
+        task: "Cancel completed child-backed CLI task",
+        deliveryStatus: "not_applicable",
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: task.runId!,
+        sessionKey: task.childSessionKey!,
+        cascadeKilled: 0,
+        targetState: {
+          state: "terminal",
+          task: {
+            status: "succeeded",
+            endedAt: 200,
+            terminalSummary: "child completed",
+          },
+        },
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:mirror:subagent:completed-child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "Subagent completed while cancellation was in progress.",
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "succeeded",
+        endedAt: 200,
+        error: undefined,
+        terminalSummary: "child completed",
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "succeeded",
+        endedAt: 200,
+        error: undefined,
+        terminalSummary: "child completed",
+      });
+    });
+  });
+
+  it("defers CLI-tracked subagent cancellation while completion is finalizing", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:mirror:subagent:finalizing-child",
+        runId: "run-cli-subagent-finalizing-child",
+        task: "Cancel finalizing child-backed CLI task",
+        deliveryStatus: "not_applicable",
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: task.runId!,
+        sessionKey: task.childSessionKey!,
+        cascadeKilled: 0,
+        targetState: { state: "finalizing" },
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:mirror:subagent:finalizing-child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "Subagent completion is still being finalized.",
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "running",
+        error: undefined,
+      });
+    });
+  });
+
+  it("preserves CLI-tracked subagent rows when backing child kill fails", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:mirror:subagent:kill-error-child",
+        runId: "run-cli-subagent-kill-error-child",
+        task: "Cancel child-backed CLI task after kill error",
+        deliveryStatus: "not_applicable",
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: task.runId!,
+        sessionKey: task.childSessionKey!,
+        cascadeKilled: 0,
+        error: new Error("backing child is still active"),
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:mirror:subagent:kill-error-child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "backing child is still active",
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "running",
+        error: undefined,
+      });
+    });
+  });
+
+  it("does not cancel CLI-tracked subagent rows when the backing subagent is missing", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:mirror:subagent:missing-child",
+        runId: "run-cli-subagent-missing-child",
+        task: "Cancel missing child-backed CLI task",
+        deliveryStatus: "not_applicable",
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: false,
+        killed: false,
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: "agent:mirror:subagent:missing-child",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "Subagent task not found.",
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "running",
+        error: undefined,
+      });
+    });
+  });
+
   it("cancels active cron tasks through the cron runtime abort handle", async () => {
     await withTaskRegistryTempDir(async () => {
       const abortController = new AbortController();
