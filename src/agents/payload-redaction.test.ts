@@ -286,4 +286,14 @@ describe("sanitizeDiagnosticPayload", () => {
     });
     expect(JSON.stringify(sanitized)).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
   });
+
+  it("omits auth profile ids at every nesting level", () => {
+    expect(
+      sanitizeDiagnosticPayload({
+        authProfileId: "provider-1:main",
+        nested: { authProfileId: "provider-1:oauth", kept: true },
+        provider: "provider-1",
+      }),
+    ).toEqual({ nested: { kept: true }, provider: "provider-1" });
+  });
 });

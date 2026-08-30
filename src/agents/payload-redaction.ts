@@ -13,7 +13,9 @@ function mediaDigest(source: string | Uint8Array): string {
 }
 
 const CORE_DIAGNOSTIC_PROJECTION = {
-  omitField: (key) => key === "providerReplay",
+  // Auth profile ids come from a tiny enumerable set, so hashing them would be
+  // a dictionary-attack away from plaintext; they stay out of captures entirely.
+  omitField: (key) => key === "providerReplay" || key === "authProfileId",
   propertyScope: "enumerable",
   projectBinary: (binary) => ({
     redacted: REDACTED_MEDIA_DATA,
