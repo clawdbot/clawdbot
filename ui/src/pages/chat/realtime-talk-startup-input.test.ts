@@ -180,7 +180,7 @@ describe("Realtime Talk microphone preparation", () => {
   });
 
   it.each([false, true])(
-    "rejects microphone loss during allocation without retiring its predecessor (replacement=%s)",
+    "rejects microphone loss during allocation after retiring any previous call (replacement=%s)",
     async (replacement) => {
       const previous = microphone();
       const candidate = microphone();
@@ -206,18 +206,19 @@ describe("Realtime Talk microphone preparation", () => {
       void starting.catch(() => undefined);
       await waitForFast(() => expect(creates).toBe(replacement ? 2 : 1));
       candidate.track.dispatchEvent(new Event("ended"));
-      allocation.resolve(clientSession());
+      allocation.resolve({ ...clientSession(), voiceSessionId: "voice-input-candidate" });
       await expect(starting).rejects.toThrow("Microphone");
       expect(candidate.track.stop).toHaveBeenCalledOnce();
       expect(transports).toHaveLength(replacement ? 1 : 0);
       if (replacement) {
-        expect(previous.track.stop).not.toHaveBeenCalled();
-        expect(transports[0]?.stop).not.toHaveBeenCalled();
-      } else {
-        await waitForFast(() =>
-          expect(request.mock.calls.some(([method]) => method === "talk.client.close")).toBe(true),
-        );
+        expect(previous.track.stop).toHaveBeenCalledOnce();
+        expect(transports[0]?.stop).toHaveBeenCalledOnce();
       }
+      await waitForFast(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "talk.client.close"),
+        ).toHaveLength(replacement ? 2 : 1),
+      );
     },
   );
 });
