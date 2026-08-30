@@ -746,6 +746,33 @@ describe("chat pane initialization", () => {
 });
 
 describe("chat pane keyboard shortcuts", () => {
+  it("keeps the letter-to-composer contract when a button is focused", () => {
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    pane.presented = true;
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    pane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const button = document.body.appendChild(document.createElement("button"));
+    button.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
+    button.focus();
+
+    try {
+      button.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
+      );
+
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      button.remove();
+    }
+  });
+
   it("does not steal typing focus from a shadow-root confirmation", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     const { pane } = createTestChatPane({

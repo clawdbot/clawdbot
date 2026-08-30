@@ -54,6 +54,42 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it("focuses the composer from the structural main focus anchor", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+    const main = document.createElement("main");
+    main.tabIndex = -1;
+    page.append(main);
+    main.focus();
+
+    main.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }));
+
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it("leaves Space with a focused agent-menu option", async () => {
+    const page = await mount(routeData("research"));
+    const menuItem = document.createElement("div");
+    menuItem.setAttribute("role", "menuitemradio");
+    menuItem.tabIndex = -1;
+    let selected = false;
+    menuItem.addEventListener("keydown", (event) => {
+      if (event.key === " ") {
+        selected = true;
+      }
+    });
+    page.append(menuItem);
+    menuItem.focus();
+
+    menuItem.dispatchEvent(
+      new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
+    );
+
+    expect(selected).toBe(true);
+    expect(document.activeElement).toBe(menuItem);
+    expect(message(page)).toBe("");
+  });
+
   it("leaves shortcuts, composition, and other form controls alone", async () => {
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
@@ -71,9 +107,6 @@ describe("new session draft route ownership", () => {
       expect(document.activeElement).not.toBe(textarea);
     }
 
-    const menuItem = document.createElement("div");
-    menuItem.setAttribute("role", "menuitemradio");
-    menuItem.tabIndex = -1;
     const openOverlay = Object.assign(document.createElement("div"), { open: true });
     const overlayItem = document.createElement("div");
     openOverlay.append(overlayItem);
@@ -82,8 +115,6 @@ describe("new session draft route ownership", () => {
       document.createElement("select"),
       document.createElement("textarea"),
       Object.assign(document.createElement("div"), { contentEditable: "true" }),
-      Object.assign(document.createElement("div"), { tabIndex: 0 }),
-      menuItem,
     ]) {
       page.append(control);
       control.focus();
