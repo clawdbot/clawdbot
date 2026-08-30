@@ -432,9 +432,11 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const configState = this.context.runtimeConfig.state;
     const configObject = currentConfigObject(configState);
     const configuredDreaming = resolveConfiguredDreaming(configObject);
-    // The status RPC can complete after config switches the engine Off. Keep the
-    // cached payload for a future refresh, but never present it as current runtime state.
-    const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
+    // The status RPC can complete after config disables Dreaming globally or switches
+    // the engine Off. Keep the cached payload for a future refresh, but never present
+    // it as current runtime state: a cached enabled value must not override the
+    // current global master setting or the current agent participation gate.
+    const dreamingStatus = configuredDreaming.enabled ? dreaming.dreamingStatus : null;
     const selectedAgentId = dreaming.selectedAgentId ?? "";
     const agentParticipation = resolveAgentDreamingParticipation(configObject, selectedAgentId);
     const agentIncluded = !configuredDreaming.engineOff && agentParticipation.enabled;
