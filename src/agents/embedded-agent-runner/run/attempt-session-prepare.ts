@@ -47,6 +47,7 @@ import {
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
+import { installStepAuditApi, STEP_AUDIT_FEEDBACK_MARKER } from "./attempt-step-audit.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
@@ -222,6 +223,15 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   input.onSessionCreated(activeSession);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
+  // Step-audit checkpoints: review plugins capture the transcript tail before
+  // each tool/text step and roll a rejected step back via the returned API
+  // (published on `globalThis.__openclawStepAuditRegistry` keyed by runId).
+  installStepAuditApi({
+    runId: attempt.runId,
+    activeSession,
+    sessionManager: input.sessionManager,
+    feedbackMarker: STEP_AUDIT_FEEDBACK_MARKER,
+  });
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
     applySystemPromptToSession(activeSession, nextSystemPrompt);

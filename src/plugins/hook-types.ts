@@ -475,6 +475,16 @@ export type PluginHookBeforeAgentFinalizeResult = {
     idempotencyKey?: string;
     maxAttempts?: number;
   };
+  /**
+   * Bypass the deterministic-side-effect safeguard for a `revise` request.
+   *
+   * By default a revision requested after the attempt already produced
+   * deterministic side effects (e.g. an executed tool) is ignored to avoid
+   * unsafe re-execution. Review-style hooks that verified the output *after*
+   * those side effects and explicitly want the attempt redone can set this to
+   * true to override the safeguard.
+   */
+  forceRevision?: boolean;
 };
 
 export type PluginHookBeforeCompactionEvent = {

@@ -138,7 +138,7 @@ export async function awaitAgentHarnessAgentEndHook(params: {
 /** Normalized before-finalize hook decision consumed by harness loops. */
 type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
-  | { action: "revise"; reason: string }
+  | { action: "revise"; reason: string; forceRevision?: boolean }
   | { action: "finalize"; reason?: string };
 
 /** Runs before-finalize hooks and normalizes finalize/revise/continue decisions. */
@@ -214,12 +214,22 @@ function normalizeBeforeAgentFinalizeResult(
           reason && reason.includes(retryInstruction)
             ? reason
             : [reason, retryInstruction].filter(Boolean).join("\n\n");
-        return { action: "revise", reason: revisedReason };
+        return {
+          action: "revise",
+          reason: revisedReason,
+          ...(result.forceRevision === true ? { forceRevision: true } : {}),
+        };
       }
       return { action: "continue" };
     }
     const reason = normalizeTrimmedString(result.reason);
-    return reason ? { action: "revise", reason } : { action: "continue" };
+    return reason
+      ? {
+          action: "revise",
+          reason,
+          ...(result.forceRevision === true ? { forceRevision: true } : {}),
+        }
+      : { action: "continue" };
   }
   return { action: "continue" };
 }
