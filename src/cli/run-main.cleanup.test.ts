@@ -382,10 +382,9 @@ describe("CLI process harness cleanup", () => {
   });
 
   it("rejects reuse of cleaned registrations without retiring unused cache entries", async () => {
-    const { setCachedPluginRegistry, getReusableCachedPluginRegistry } =
-      await import("../plugins/loader-cache.js");
+    const { pluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
     const unused = emptyRegistry.createEmptyPluginRegistry();
-    setCachedPluginRegistry("cleanup-unused", unused);
+    pluginLoaderCacheState.set("cleanup-unused", unused);
     const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
     const { runCli } = await import("./run-main.js");
     for (let invocation = 0; invocation < 2; invocation++) {
@@ -394,13 +393,13 @@ describe("CLI process harness cleanup", () => {
       runtime.withPluginRegistrationContext(registry, "fixture", () =>
         registryApi.registerAgentHarness(resource.harness),
       );
-      setCachedPluginRegistry("cleanup-used", registry);
+      pluginLoaderCacheState.set("cleanup-used", registry);
       dispatch.run = () =>
         scopes.withPluginRuntimeRegistryScope(registry, () => acquire("sequential"));
       try {
         await withCliProcessScope(() => runCli(argv));
-        expect(getReusableCachedPluginRegistry("cleanup-used")).toBeUndefined();
-        expect(getReusableCachedPluginRegistry("cleanup-unused")).toBe(unused);
+        expect(pluginLoaderCacheState.get("cleanup-used")).toBeUndefined();
+        expect(pluginLoaderCacheState.get("cleanup-unused")).toBe(unused);
         expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
       } finally {
         await resource.closeAndJoin();
