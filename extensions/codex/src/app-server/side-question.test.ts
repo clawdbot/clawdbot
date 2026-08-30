@@ -2703,6 +2703,47 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("withholds the blocking question tools from a side thread", async () => {
+    // A side thread returns text to whoever asked and owns no conversation, so a
+    // question tool offered here would register a question and then wait out its
+    // whole timeout on a prompt nobody was ever shown.
+    const boundNames: string[][] = [];
+    const bindToolSurface = vi.fn((tools: Array<{ name: string }>) => {
+      boundNames.push(tools.map((tool) => tool.name));
+      return tools;
+    });
+    createOpenClawCodingToolsMock.mockReturnValue([
+      { name: "message", execute: vi.fn() },
+      { name: "ask_user", execute: vi.fn() },
+      { name: "secrets", execute: vi.fn() },
+    ]);
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit(turnCompleted("side-thread", "turn-1", "Answered."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      return {};
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await runCodexAppServerSideQuestion(
+      sideParams({
+        hostCapabilities: {
+          ...TEST_HOST_CAPABILITIES,
+          bindToolSurface: bindToolSurface as never,
+        },
+      }),
+    );
+
+    expect(boundNames[0]).toEqual(["message"]);
+  });
+
   it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
     let active = true;
     let retainedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
