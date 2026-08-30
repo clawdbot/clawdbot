@@ -786,11 +786,6 @@ openclaw-chat-pane {
   }
 }
 
-.chat-header-session-menu--compact .session-menu__item {
-  flex: 0 0 34px;
-  min-height: 34px;
-}
-
 .chat-header-session-menu__trigger {
   position: relative;
 }

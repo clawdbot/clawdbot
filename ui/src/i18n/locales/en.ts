@@ -5502,6 +5502,8 @@ export const en: TranslationMap = {
       },
     },
     sessionHeader: {
+      options: "Chat options for {session}",
+      sessionActions: "Session actions",
       renameTooltip: "Rename session",
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",
@@ -5828,8 +5830,8 @@ export const en: TranslationMap = {
       sortCreated: "Created",
       sortSessions: "Filter & sort",
       sortUpdated: "Last updated",
-      sessionMenu: "Actions for {session}",
-      sessionMenuMany: "Actions for {count} sessions",
+      sessionMenu: "Session actions for {session}",
+      sessionMenuMany: "Session actions for {count} sessions",
       toolActivity: "Using {tool}",
       catalogDiscoveryHelp:
         "{error}. Configure native session discovery in Settings > Automation > Plugins.",

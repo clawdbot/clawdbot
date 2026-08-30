@@ -80,7 +80,7 @@ suite.define(() => {
         await session.hover();
         await session.locator("[data-session-menu]").click();
         const menuSurface = page.getByRole("menu", {
-          name: "Actions for Release notes",
+          name: "Session actions for Release notes",
           exact: true,
         });
         await menuSurface.waitFor({ state: "visible" });

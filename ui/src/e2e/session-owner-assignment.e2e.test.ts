@@ -145,7 +145,9 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installOwnerGateway(page);
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-        const menuTrigger = activePane.getByRole("button", { name: "Actions for Owner outcome" });
+        const menuTrigger = activePane.getByRole("button", {
+          name: "Chat options for Owner outcome",
+        });
         await menuTrigger.press("Enter");
         await chooseAssignToMe(page);
         await expectAssignmentRequest(gateway);

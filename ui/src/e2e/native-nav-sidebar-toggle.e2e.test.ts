@@ -828,7 +828,7 @@ suite.define(() => {
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.getByRole("button", { name: "Open session menu" }).click();
-    const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
+    const sessionMenu = page.getByRole("menu", { name: /Session actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");
     await expect.poll(() => sessionMenu.count()).toBe(0);

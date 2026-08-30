@@ -29,7 +29,7 @@ export function compactSessionOwnerOptions(
 }
 
 export function renderCompactSessionMenuNavigationItem(params: {
-  view: Exclude<CompactSessionMenuView, "root">;
+  view: string;
   label: string;
   icon: TemplateResult;
   disabled?: boolean;

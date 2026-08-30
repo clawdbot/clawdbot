@@ -231,7 +231,7 @@ suite.define(() => {
       await expect.poll(() => actionPointerEvents(childMenuButton)).toBe("auto");
       await childMenuButton.focus();
       await page.keyboard.press("Enter");
-      const childMenu = page.getByRole("menu", { name: "Actions for Verify tests" });
+      const childMenu = page.getByRole("menu", { name: "Session actions for Verify tests" });
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
       await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
@@ -295,14 +295,14 @@ suite.define(() => {
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
         .first();
-      const sessionMenu = page.getByRole("menu", { name: "Actions for Research notes" });
+      const sessionMenu = page.getByRole("menu", { name: "Session actions for Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       const openSessionMenu = async () => {
         await row.hover();
         await row.getByRole("button", { name: "Open session menu" }).click();
         await page
-          .getByRole("menu", { name: "Actions for Research notes" })
+          .getByRole("menu", { name: "Session actions for Research notes" })
           .waitFor({ state: "visible" });
       };
       const expectDesktopCollapsed = async () => {
@@ -455,7 +455,7 @@ suite.define(() => {
 
       await researchMenu.focus();
       await page.keyboard.press("Enter");
-      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      const menu = page.getByRole("menu", { name: "Session actions for Research notes" });
       await menu.waitFor({ state: "visible" });
 
       await expect

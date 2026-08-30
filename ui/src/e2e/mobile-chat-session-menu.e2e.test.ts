@@ -63,8 +63,8 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByRole("button", { name: "Actions for Mobile menu" }).click();
-        const menu = page.getByRole("menu", { name: "Actions for Mobile menu" });
+        await page.getByRole("button", { name: "Chat options for Mobile menu" }).click();
+        const menu = page.getByRole("menu", { name: "Chat options for Mobile menu" });
         const menuHost = page.locator("openclaw-chat-header-session-menu");
         await menu.waitFor({ state: "visible" });
         const rootItems = menuHost.locator(":scope > wa-dropdown > wa-dropdown-item");
@@ -74,10 +74,13 @@ suite.define(() => {
               items.map((item) => Math.round(item.getBoundingClientRect().height)),
             ),
           )
-          .toEqual(Array.from({ length: 15 }, () => 34));
+          .toEqual(Array.from({ length: 5 }, () => 40));
         await expect
           .poll(() => menu.evaluate((element) => element.getBoundingClientRect().height))
-          .toBeLessThan(550);
+          .toBeLessThan(300);
+        await captureUiProof(page, `mobile-more-followup-after-${colorScheme}.png`);
+
+        await menuHost.locator('wa-dropdown-item[value="compact:open-session"]').click();
         const deleteIconColor = await menuHost
           .locator('wa-dropdown-item[value="delete"] .session-menu__icon')
           .evaluate((element) => getComputedStyle(element).color);
@@ -85,11 +88,12 @@ suite.define(() => {
           .locator('wa-dropdown-item[value="delete"] .session-menu__text')
           .evaluate((element) => getComputedStyle(element).color);
         expect(deleteIconColor).toBe(deleteLabelColor);
-        await captureUiProof(page, `mobile-more-followup-after-${colorScheme}.png`);
+        await captureUiProof(page, `mobile-more-session-actions-after-${colorScheme}.png`);
 
         await expect
           .poll(() => page.getByRole("button", { name: "Session sharing" }).count())
           .toBe(0);
+        await menuHost.locator('wa-dropdown-item[value="compact:back"]').click();
         await menuHost.locator('wa-dropdown-item[value="compact:open-sharing"]').click();
         const publish = menuHost.locator(".chat-pane__publish-draft");
         await publish.waitFor();
@@ -106,7 +110,7 @@ suite.define(() => {
           .poll(() =>
             publish.evaluate((element) => Math.round(element.getBoundingClientRect().height)),
           )
-          .toBe(34);
+          .toBe(40);
         await captureUiProof(page, `mobile-more-sharing-followup-after-${colorScheme}.png`);
       } finally {
         await context.close();
@@ -142,7 +146,7 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator(".chat-pane__draft-indicator").waitFor();
-      await page.getByRole("button", { name: "Actions for Member draft" }).click();
+      await page.getByRole("button", { name: "Chat options for Member draft" }).click();
       const menuHost = page.locator("openclaw-chat-header-session-menu");
       await expect
         .poll(() => menuHost.locator('wa-dropdown-item[value="compact:open-sharing"]').count())

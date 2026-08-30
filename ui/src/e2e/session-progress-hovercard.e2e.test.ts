@@ -187,7 +187,7 @@ suite.define(() => {
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         const trigger = row.locator("[data-session-menu]");
         const card = page.locator(".session-progress-hovercard");
-        const menu = page.getByRole("menu", { name: "Actions for Hovered session" });
+        const menu = page.getByRole("menu", { name: "Session actions for Hovered session" });
         await row.waitFor({ state: "visible" });
         await row.hover();
         await card.waitFor({ state: "visible" });

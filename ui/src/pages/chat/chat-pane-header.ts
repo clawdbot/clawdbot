@@ -58,7 +58,7 @@ import {
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
+import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -260,7 +260,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const panelLayout = sidebarLayout ?? this.state?.sidebarLayout;
+    const sidePanelOpen = panelLayout?.open === true;
+    const panelActive = (slot: SidebarSlotId) =>
+      Boolean(panelLayout && isSidebarSlotVisible(panelLayout, slot));
     const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
@@ -293,30 +296,37 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const panelMenuActions: HeaderMenuQuickAction[] = [];
     if (sessionWorkspace.onToggleTerminal) {
       panelMenuActions.push({
+        kind: "toggle",
         id: "terminal",
         label: t("terminal.toggle"),
         icon: icons.terminal,
+        active: panelActive("terminal"),
         onActivate: sessionWorkspace.onToggleTerminal,
       });
     }
     if (sessionWorkspace.onToggleBrowser) {
       panelMenuActions.push({
+        kind: "toggle",
         id: "browser",
         label: t("browser.toggle"),
         icon: icons.globe,
+        active: panelActive("browser"),
         onActivate: sessionWorkspace.onToggleBrowser,
       });
     }
     if (desktopPanelAvailable && sessionWorkspace.onToggleDesktop) {
       panelMenuActions.push({
+        kind: "toggle",
         id: "desktop",
         label: t("desktop.toggle"),
         icon: icons.monitor,
+        active: panelActive("desktop"),
         onActivate: openDesktopPanel,
       });
     }
     if (discussion) {
       panelMenuActions.push({
+        kind: "toggle",
         id: "discussion",
         label: discussion.label,
         icon: icons.messageSquare,
@@ -326,6 +336,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     }
     if (sessionWorkspace.onOpenDiff) {
       panelMenuActions.push({
+        kind: "command",
         id: "changes",
         label: t("chat.sessionDiff.show"),
         icon: icons.diff,
@@ -334,6 +345,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     }
     if (backgroundTasks) {
       panelMenuActions.push({
+        kind: "toggle",
         id: "background-tasks",
         label: t(
           backgroundTasks.collapsed ? "chat.backgroundTasks.show" : "chat.backgroundTasks.collapse",
@@ -345,6 +357,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       });
     }
     panelMenuActions.push({
+      kind: "toggle",
       id: "session-files",
       label: t(
         sessionWorkspace.collapsed
@@ -357,6 +370,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onActivate: sessionWorkspace.onToggleCollapsed,
     });
     panelMenuActions.push({
+      kind: "toggle",
       id: "session-companion",
       label: t(sessionRailMode === "expanded" ? "chat.rail.collapse" : "chat.rail.show"),
       icon: icons.spark,
@@ -366,6 +380,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const layoutMenuActions: HeaderMenuQuickAction[] = [];
     if (this.onOpenSplitView) {
       layoutMenuActions.push({
+        kind: "command",
         id: "open-split-view",
         label: t("chat.splitView.open"),
         icon: icons.columns2,
@@ -374,6 +389,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     }
     if (!this.narrow && this.onSplitDown) {
       layoutMenuActions.push({
+        kind: "command",
         id: "split-down",
         label: t("chat.splitView.splitDown"),
         icon: icons.panelBottomOpen,
@@ -382,6 +398,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     }
     if (!this.narrow && this.onSplitRight) {
       layoutMenuActions.push({
+        kind: "command",
         id: "split-right",
         label: t("chat.splitView.splitRight"),
         icon: icons.panelRightOpen,

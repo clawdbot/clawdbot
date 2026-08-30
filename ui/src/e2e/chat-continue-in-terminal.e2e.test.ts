@@ -118,7 +118,7 @@ suite.define(() => {
         await activePane.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
         const menuTrigger = activePane.getByRole("button", {
-          name: "Actions for Terminal continuation",
+          name: "Chat options for Terminal continuation",
         });
         await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("false");
         await menuTrigger.press("Enter");
@@ -206,11 +206,12 @@ suite.define(() => {
           .waitFor();
 
         const menuTrigger = activePane.getByRole("button", {
-          name: "Actions for Terminal continuation",
+          name: "Chat options for Terminal continuation",
         });
         await menuTrigger.click();
         await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("true");
         const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
+        await dropdown.getByText("Session actions", { exact: true }).click();
         for (const label of compactManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }

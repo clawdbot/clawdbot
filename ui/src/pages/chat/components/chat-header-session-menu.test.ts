@@ -239,7 +239,7 @@ describe("chat header session menu", () => {
     ]);
     expect(
       menu.querySelector(".chat-header-session-menu__trigger")?.getAttribute("aria-label"),
-    ).toBe("Actions for Test session");
+    ).toBe("Chat options for Test session");
   });
 
   it("preserves row-discovered groups when the gateway catalog lags", async () => {
@@ -322,6 +322,10 @@ describe("chat header session menu", () => {
       [{ kind: "copy-session-id" }],
       [{ kind: "move-to-group", category: "Projects" }],
     ]);
+    for (const value of ["open-pr", "workboard", "stop-cloud-worker"]) {
+      select(menu, value);
+    }
+    expect(onAction).toHaveBeenCalledTimes(5);
   });
 
   it("shows Open in only for a known path and dispatches the selected editor", async () => {
@@ -378,6 +382,7 @@ describe("chat header session menu", () => {
     const menu = await mountMenu({
       panelActions: [
         {
+          kind: "toggle",
           id: "background-tasks",
           label: "Show background tasks",
           icon: icons.listChecks,
@@ -386,6 +391,7 @@ describe("chat header session menu", () => {
           onActivate: showTasks,
         },
         {
+          kind: "command",
           id: "changes",
           label: "Show session changes",
           icon: icons.diff,
@@ -394,6 +400,7 @@ describe("chat header session menu", () => {
       ],
       layoutActions: [
         {
+          kind: "command",
           id: "split-right",
           label: "Split right",
           icon: icons.panelRightOpen,
@@ -408,6 +415,7 @@ describe("chat header session menu", () => {
     );
     expect(panelItems.map(itemLabel)).toEqual(["Show background tasks", "Show session changes"]);
     expect(panelItems[0]?.checked).toBe(false);
+    expect(panelItems.map((entry) => entry.getAttribute("type"))).toEqual(["checkbox", "normal"]);
     expect(panelItems[0]?.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
     expect(
       Array.from(
@@ -466,15 +474,18 @@ describe("chat header session menu", () => {
       worktreePath: "/work/openclaw",
       panelActions: [
         {
+          kind: "toggle",
           id: "background-tasks",
           label: "Show background tasks",
           icon: icons.listChecks,
+          active: false,
           badge: 2,
           onActivate: showTasks,
         },
       ],
       layoutActions: [
         {
+          kind: "command",
           id: "split-right",
           label: "Split right",
           icon: icons.panelRightOpen,
@@ -504,21 +515,10 @@ describe("chat header session menu", () => {
     expect(rootLabels).toEqual([
       "Open command palette",
       "Limited access",
-      "Open in",
       "Panels",
       "Layout",
       "View",
-      "Pin session",
-      "Mark as unread",
-      "Rename…",
-      "Assign to…",
-      "Icon & color",
-      "Fork",
-      "Copy session ID",
-      "Move to group",
-      "Continue in terminal…",
-      "Archive session",
-      "Delete…",
+      "Session actions",
     ]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
     expect(
@@ -551,11 +551,45 @@ describe("chat header session menu", () => {
     select(menu, "compact:open-panels");
     await menu.updateComplete;
     const action = item(menu, "Show background tasks");
+    expect(action.getAttribute("type")).toBe("checkbox");
     expect(action.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
 
     select(menu, "quick:panels:background-tasks");
     expect(showTasks).toHaveBeenCalledOnce();
 
+    select(menu, "compact:back");
+    await menu.updateComplete;
+    select(menu, "compact:open-session");
+    await menu.updateComplete;
+    expect(
+      Array.from(
+        menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual([
+      "Back",
+      "Open in",
+      "Pin session",
+      "Mark as unread",
+      "Rename…",
+      "Assign to…",
+      "Icon & color",
+      "Fork",
+      "Copy session ID",
+      "Move to group",
+      "Continue in terminal…",
+      "Archive session",
+      "Delete…",
+    ]);
+    select(menu, "compact:open-group");
+    await menu.updateComplete;
+    expect(
+      Array.from(
+        menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual(["Back", "Projects", "New group…"]);
+    select(menu, "compact:back");
+    await menu.updateComplete;
+    expect(item(menu, "Open in")).toBeDefined();
     select(menu, "compact:open-assign-owner");
     await menu.updateComplete;
     expect(

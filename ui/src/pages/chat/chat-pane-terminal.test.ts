@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import type { HeaderMenuQuickAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
@@ -148,16 +149,25 @@ describe("chat pane terminal action", () => {
         container,
       );
     const panelActions = () =>
-      container.querySelector<
-        HTMLElement & { panelActions: Array<{ id: string; onActivate: () => void }> }
-      >("openclaw-chat-header-session-menu")?.panelActions ?? [];
+      container.querySelector<HTMLElement & { panelActions: HeaderMenuQuickAction[] }>(
+        "openclaw-chat-header-session-menu",
+      )?.panelActions ?? [];
 
     renderHeader();
     expect(container.querySelector('[aria-label="Toggle terminal"]')).toBeNull();
+    expect(panelActions().find((action) => action.id === "terminal")).toMatchObject({
+      kind: "toggle",
+      active: false,
+    });
     panelActions()
       .find((action) => action.id === "terminal")
       ?.onActivate();
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toContain("terminal");
+    renderHeader();
+    expect(panelActions().find((action) => action.id === "terminal")).toMatchObject({
+      kind: "toggle",
+      active: true,
+    });
 
     state.terminalAvailable = false;
     renderHeader();

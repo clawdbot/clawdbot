@@ -333,6 +333,8 @@ describe("session menu", () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const menu = await mountMenu({ cloudWorkerStopAllowed: true, onAction });
 
+    selectMenuValue(menu, "continue-in-terminal");
+    expect(onAction).not.toHaveBeenCalled();
     menuItem(menu, "Stop cloud worker…").click();
 
     expect(onAction).toHaveBeenCalledWith({ kind: "stop-cloud-worker" });

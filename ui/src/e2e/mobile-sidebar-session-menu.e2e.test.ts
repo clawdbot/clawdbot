@@ -50,7 +50,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible" });
       await row.getByRole("button", { name: "Open session menu" }).click();
 
-      const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
+      const menu = page.getByRole("menu", { name: "Session actions for Mobile sidebar menu" });
       await menu.waitFor({ state: "visible" });
       await captureUiProof(page, "mobile-sidebar-session-menu-after-root.png");
 
