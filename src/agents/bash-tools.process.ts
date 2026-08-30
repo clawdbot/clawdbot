@@ -357,12 +357,6 @@ export function createProcessTool(
             result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
           };
         }
-        if (scopedSession.finalizing) {
-          return {
-            ok: false as const,
-            result: failedResult(`Session ${params.sessionId} is finalizing.`),
-          };
-        }
         const stdin = resolveSessionStdin(scopedSession);
         if (!isWritableStdin(stdin)) {
           return {
@@ -663,9 +657,6 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          if (scopedSession.finalizing) {
-            return failText(`Session ${params.sessionId} is finalizing.`);
-          }
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
             const terminated = terminateSessionFallback(scopedSession);
@@ -715,9 +706,6 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
-            if (scopedSession.finalizing) {
-              return failText(`Session ${params.sessionId} is finalizing.`);
-            }
             const canceled = cancelManagedSession(scopedSession.id);
             if (canceled) {
               // Keep remove semantics deterministic: drop from process registry now.
