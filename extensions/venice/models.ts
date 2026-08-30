@@ -30,7 +30,6 @@ const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
 function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
     ...entry,
-    input: [...entry.input],
     compat: {
       supportsUsageInStreaming: false,
       ...entry.compat,

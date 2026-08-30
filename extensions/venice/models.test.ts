@@ -204,8 +204,7 @@ describe("venice-models", () => {
     stubVeniceModelsFetch([
       { id: "zai-org-glm-4.7" },
       { id: "claude-opus-5" },
-      { id: "stealth-ox-alpha" },
-      { id: "gemini-3-6-flash" },
+      { id: "unknown-model-without-pricing" },
     ]);
     const manifestCosts = new Map(
       manifest.modelCatalog.providers.venice.models.map(({ id, cost }) => [id, cost]),
@@ -217,11 +216,7 @@ describe("venice-models", () => {
       { id: "zai-org-glm-4.7", cost: manifestCosts.get("zai-org-glm-4.7") },
       { id: "claude-opus-5", cost: manifestCosts.get("claude-opus-5") },
       {
-        id: "stealth-ox-alpha",
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      {
-        id: "gemini-3-6-flash",
+        id: "unknown-model-without-pricing",
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ]);
