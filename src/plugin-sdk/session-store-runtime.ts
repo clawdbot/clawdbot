@@ -39,6 +39,7 @@ import type {
   InternalSessionEntry,
   SessionEntry,
 } from "../config/sessions/types.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
@@ -552,6 +553,16 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
       storeKeys: [params.sessionKey],
     },
   });
+  if (result.deleted) {
+    // Plugin SDK direct deletion is a second session lifecycle owner alongside
+    // the gateway delete path. Unbind conversation records targeting the
+    // deleted session so a stale runtime binding cannot keep outranking
+    // configured ACP routes for that conversation (issue #115354).
+    await getSessionBindingService().unbind({
+      targetSessionKey: params.sessionKey,
+      reason: "session-delete",
+    });
+  }
   return result.deleted;
 }
 
