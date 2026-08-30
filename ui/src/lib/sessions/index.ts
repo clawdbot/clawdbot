@@ -19,6 +19,7 @@ import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
+  isUiGlobalSessionKey,
   normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
@@ -296,13 +297,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ): boolean => {
+    const historyAgentId =
+      row?.agentId ??
+      (isUiGlobalSessionKey(row?.key) ? options?.selectedGlobalAgentId : undefined) ??
+      options?.resultAgentId ??
+      state.agentId;
     if (
       row &&
-      !deletions.acceptsGeneration(
-        row.key,
-        row.sessionId,
-        row.agentId ?? options?.resultAgentId ?? state.agentId,
-      )
+      (!deletions.acceptsGeneration(row.key, row.sessionId, historyAgentId) ||
+        deletions.deletionState(row.key, historyAgentId, row.sessionId))
     ) {
       return false;
     }
@@ -314,7 +317,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       reconcileSessionHistory(state.result, row, defaults, historyOptions, preserveCanonicalRow),
     );
     if (result === state.result) {
-      return false;
+      return true;
     }
     publish({
       ...state,

@@ -194,15 +194,25 @@ export function resolveUiConversationIdentity(
     return { sessionKey: raw };
   }
   const agentId = parsed ? normalizeAgentId(parsed.agentId) : resolveUiDefaultAgentId(host);
-  return {
-    sessionKey:
-      isMain && knownDefaults
-        ? isUiGlobalScopeConfigured(host)
-          ? "global"
-          : buildAgentMainSessionKey({ agentId, mainKey })
-        : normalizeSessionKeyForUiComparison(raw),
-    agentId,
-  };
+  let canonicalKey = normalizeSessionKeyForUiComparison(raw);
+  if (isMain && knownDefaults) {
+    const defaults = readSessionDefaults(host);
+    const advertised = normalizeOptionalString(defaults?.mainSessionKey);
+    // Hello's explicit target owns default-agent aliases only while its routing
+    // facts still agree with the current roster. Never redirect another agent.
+    const advertisedApplies =
+      advertised &&
+      agentId === resolveUiDefaultAgentId(host) &&
+      agentId === normalizeAgentId(defaults?.defaultAgentId) &&
+      agentId === parseAgentSessionKey(advertised)?.agentId &&
+      mainKey === normalizeMainKey(defaults?.mainKey);
+    canonicalKey = isUiGlobalScopeConfigured(host)
+      ? "global"
+      : advertisedApplies
+        ? normalizeSessionKeyForUiComparison(advertised)
+        : buildAgentMainSessionKey({ agentId, mainKey });
+  }
+  return { sessionKey: canonicalKey, agentId };
 }
 
 export function hasUiSessionDefaults(host: UiSessionDefaultsHost): boolean {

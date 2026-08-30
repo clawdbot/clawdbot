@@ -63,7 +63,18 @@ describe("task detail panel", () => {
       sessionKey: "main",
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
-      hello: null,
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
     };
     const container = document.createElement("div");
     document.body.append(container);

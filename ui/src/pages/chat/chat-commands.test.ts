@@ -498,6 +498,17 @@ describe("conversation reset confirmation", () => {
       ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "main",
+      hello: {
+        ...connectedSessionAccess().hello,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
       confirmConversationReset: vi.fn(async () => await confirmation),
     };
 

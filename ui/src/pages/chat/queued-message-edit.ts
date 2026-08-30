@@ -1,7 +1,7 @@
 // Control UI chat module owns editing a queued message in its queue row.
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
   anyChatOutboxPaneMatches,
@@ -10,6 +10,11 @@ import {
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
+import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  type ChatComposerPersistenceState,
+} from "./composer-persistence.ts";
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
@@ -18,21 +23,37 @@ import {
  * the replacement inherits.
  */
 export type QueuedMessageEdit = {
-  agentId?: string;
+  readonly agentId?: string;
+  readonly gatewayOwner: string;
+  readonly recoveryScope?: string;
   attachments: readonly ChatAttachment[];
   draftText: string;
   id: string;
   orderKey: number;
   revision: number;
   replyToId?: string;
-  sessionKey: string;
+  readonly sessionKey: string;
   source: ChatQueueItem;
   sourceWasDurable: boolean;
 };
 
-type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
-  chatQueuedEdit?: QueuedMessageEdit | null;
-};
+type QueuedMessageEditHost = ChatQueueScopedSessionHost &
+  Pick<ChatComposerPersistenceState, "client" | "connected"> & {
+    chatQueuedEdit?: QueuedMessageEdit | null;
+  };
+
+function currentQueuedMessageEditOwner(host: QueuedMessageEditHost) {
+  // Recovery resolves after hello. While offline, the client retains its last
+  // authenticated scope; a replacement client must establish its own scope.
+  if (host.connected && host.client && !host.client.recoveryScopeReady) {
+    return null;
+  }
+  return {
+    ...resolveStoredChatOutboxScope(host, host.sessionKey),
+    gatewayOwner: storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner,
+    recoveryScope: host.client?.recoveryScope?.trim() || undefined,
+  };
+}
 
 function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueueItem): boolean {
   return (
@@ -60,27 +81,21 @@ export const QUEUED_MESSAGE_RETRY_CONFLICT_ERROR =
 export const QUEUED_MESSAGE_STEER_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before steering it.";
 
-/**
- * The edit belongs to the scope it started in — session and agent, the pair every
- * outbox is keyed by. Reading it through here is what makes that true everywhere:
- * a pane showing another session, or the same raw global session after the
- * selected agent changed underneath it, sees no edit. So no lifecycle hook has to
- * remember to clear one, and no send can retire a row in the outbox it left.
- */
+/** Captured destinations and recovery owners never follow live alias/default changes. */
 export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMessageEdit | null {
   const edit = host.chatQueuedEdit;
-  if (!edit || !visibleSessionMatches(host, edit.sessionKey, edit.agentId)) {
+  const owner = currentQueuedMessageEditOwner(host);
+  if (
+    !edit ||
+    !owner ||
+    edit.gatewayOwner !== owner.gatewayOwner ||
+    edit.recoveryScope !== owner.recoveryScope ||
+    storedChatOutboxScopeKey(edit) !== storedChatOutboxScopeKey(owner)
+  ) {
     return null;
   }
-  // Route changes intentionally release the edit hold so another pane can
-  // drain or update the row. Do not revive a token whose source changed while
-  // away: its replacement CAS would reject the stale captured version and
-  // there would be no safe submit/cancel action to offer on return.
-  const source = readQueuedMessageById(host, edit.id);
-  if (!source || !queuedMessageEditSourceMatches(edit, source)) {
-    host.chatQueuedEdit = null;
-    return null;
-  }
+  // Custody outlives a source-version conflict. Admission checks the captured
+  // version; reading/rendering the correction must never discard unsaved text.
   return edit;
 }
 
@@ -113,10 +128,12 @@ export function beginQueuedMessageEdit(
   host: QueuedMessageEditHost,
   id: string,
 ): QueuedMessageEditResult {
+  const owner = currentQueuedMessageEditOwner(host);
   const item = readQueuedMessageById(host, id);
   // Local slash commands take a different enqueue path that cannot carry a
   // resumed position, so they keep the discard-and-retype flow for now.
   if (
+    !owner ||
     !item ||
     !isMovableChatQueueItem(item) ||
     item.localCommandName ||
@@ -129,16 +146,14 @@ export function beginQueuedMessageEdit(
   // drain refuses it while this edit owns it (see chat-outbox-drain). The draft
   // belongs to this token rather than the global composer, so editing a queued
   // row never overwrites text the operator is composing for a different send.
-  const agentId = scopedAgentIdForSession(host, host.sessionKey);
   host.chatQueuedEdit = {
-    ...(agentId ? { agentId } : {}),
+    ...owner,
     attachments: item.attachments ?? [],
     draftText: item.text,
     id,
     orderKey: chatQueueOrderKey(item),
     revision: 0,
     ...(item.replyToId ? { replyToId: item.replyToId } : {}),
-    sessionKey: host.sessionKey,
     source: { ...item },
     sourceWasDurable: isDurableQueuedMessage(host, id),
   };
@@ -188,8 +203,19 @@ export function retireEditedQueuedMessageSource(
   if (editOverride && host.chatQueuedEdit !== edit) {
     return;
   }
-  if (!edit || (!admittedDurably && isDurableQueuedMessage(host, edit.id))) {
+  if (!edit) {
     return;
+  }
+  if (!admittedDurably) {
+    const source = readQueuedMessageById(host, edit.id);
+    if (
+      edit.sourceWasDurable ||
+      isDurableQueuedMessage(host, edit.id) ||
+      !source ||
+      !queuedMessageEditSourceMatches(edit, source)
+    ) {
+      return;
+    }
   }
   host.chatQueuedEdit = null;
   removeVisibleOrScopedQueuedMessageWithoutReleasing(host, edit.id, edit.sessionKey);

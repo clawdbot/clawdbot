@@ -17,6 +17,18 @@ describe("optimistic session deletion", () => {
     "returns caller keys when $firstMode $firstKey shares its deletion with a $secondMode alias",
     async ({ firstKey, firstMode, secondMode }) => {
       const h = createSessionDeletionHarness();
+      h.gateway.snapshot.hello = {
+        type: "hello-ok",
+        protocol: 4,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      };
       const secondKey = firstKey === "main" ? "agent:main:main" : "main";
       const expectedSessionId = "main-id";
       const worktreePreserved = {

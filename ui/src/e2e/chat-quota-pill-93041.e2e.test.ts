@@ -497,6 +497,26 @@ suite.define(() => {
             ],
           },
           "sessions.list": selectedGlobalSessions,
+          // A Work main alias resolves to Work's canonical global history on
+          // the Gateway; it must not borrow the Main-owned list projection.
+          "chat.startup": {
+            cases: [
+              {
+                match: { sessionKey: "agent:work:main", agentId: "work" },
+                response: {
+                  messages: [],
+                  sessionId: "session:work:global",
+                  sessionInfo: {
+                    ...selectedGlobalSessions.sessions[0],
+                    agentId: "work",
+                    sessionId: "session:work:global",
+                    contextTokens: 300_000,
+                    totalTokens: 90_000,
+                  },
+                },
+              },
+            ],
+          },
         },
         sessionKey: "global",
         sessionScope: "global",
@@ -681,6 +701,15 @@ suite.define(() => {
         });
       }
       popover = await openVisibleQuotaPopover(page);
+      expect(
+        await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring")
+          .getAttribute("aria-label"),
+      ).toBe("Session context usage: 90k of 300k (30%)");
+      expect((await gateway.getRequests("chat.startup")).at(-1)?.params).toMatchObject({
+        sessionKey: "agent:work:main",
+        agentId: "work",
+      });
       await expect.poll(async () => popover.textContent()).toContain("Work Team");
       const settledText = (await popover.textContent()) ?? "";
       expect(settledText).toContain("work@example.test");

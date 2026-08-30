@@ -4,7 +4,6 @@ import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
-  resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -30,7 +29,7 @@ export function selectedChatSessionRow(state: ChatPageHost) {
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;
   }
-  const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
+  const selectedAgentId = resolveChatAgentId(state);
   if (
     state.sessionsResultAgentId &&
     normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId

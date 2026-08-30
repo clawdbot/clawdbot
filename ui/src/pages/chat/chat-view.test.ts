@@ -681,6 +681,9 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     runError: null,
     approvalCanGrant: false,
     sessions: null,
+    selectedSession: overrides.sessions?.sessions.find(
+      (session) => session.key === (overrides.sessionKey ?? "main"),
+    ),
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,

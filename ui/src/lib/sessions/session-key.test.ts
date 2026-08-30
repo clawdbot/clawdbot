@@ -7,6 +7,7 @@ import {
   isUiSelectedGlobalSessionKey,
   parseSessionKeyParts,
   resolveUiSessionNavigationParentKey,
+  resolveUiConversationIdentity,
   uiSessionEventMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
@@ -133,6 +134,36 @@ describe("UI session identity", () => {
     expect(isUiSelectedGlobalSessionKey(host, "agent:ops:main")).toBe(false);
     expect(isUiSelectedGlobalSessionKey(host, "agent:ops:other")).toBe(false);
   });
+
+  it.each([
+    ["main", undefined, "agent:ops:current", "ops"],
+    ["home", undefined, "agent:ops:current", "ops"],
+    ["agent:ops:main", undefined, "agent:ops:current", "ops"],
+    ["agent:ops:home", undefined, "agent:ops:current", "ops"],
+    ["agent:work:main", undefined, "agent:work:home", "work"],
+    ["main", { defaultId: "work", mainKey: "home" }, "agent:work:home", "work"],
+    ["main", { defaultId: "ops", mainKey: "next" }, "agent:ops:next", "ops"],
+    ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "ops"],
+  ] as const)(
+    "uses advertised main identity for %s without overriding current roster %j",
+    (key, agentsList, sessionKey, agentId) => {
+      const host = {
+        agentsList,
+        hello: {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "home",
+              mainSessionKey: "agent:ops:current",
+            },
+          },
+        },
+      };
+      expect(resolveUiConversationIdentity(host, key)).toEqual({ sessionKey, agentId });
+      expect(uiSessionEventMatches({ ...host, sessionKey }, key, agentId)).toBe(true);
+      expect(uiSessionEventMatches({ ...host, sessionKey }, key, "unrelated")).toBe(false);
+    },
+  );
 
   it.each([
     {

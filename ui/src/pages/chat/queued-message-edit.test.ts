@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -7,10 +8,14 @@ import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   admitQueuedMessageForSession,
+  removeQueuedMessageWithoutReleasing,
   subscribeChatOutboxProjection,
+  syncVisibleChatQueueProjection,
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import {
@@ -20,8 +25,10 @@ import {
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { renderChatComposer } from "./components/chat-composer.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import {
+  activeQueuedMessageEdit,
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
   isQueuedMessageBeingEdited,
@@ -32,7 +39,7 @@ import {
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 
-const SESSION_KEY = "agent:main";
+const SESSION_KEY = "agent:main:main";
 
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -212,25 +219,46 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("rejects a stale replacement after another pane changes the source version", async () => {
-    const { host, unsubscribe } = queueHost([{}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-1");
-    updateQueuedMessageEdit(host as never, "message 1, corrected");
-    const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
-    expect(
-      updateQueuedMessage(stalePane as never, "queued-1", (item) => ({
-        ...item,
-        orderKey: (item.orderKey ?? item.createdAt) + 10,
-      })),
-    ).not.toBeNull();
+  it.each(
+    [false, true].flatMap((roundTrip) =>
+      ["move", "remove"].map((mutation) => ({ roundTrip, mutation })),
+    ),
+  )(
+    "retains a stale edit after peer $mutation (route round trip: $roundTrip)",
+    async ({ roundTrip, mutation }) => {
+      const { host, unsubscribe } = queueHost([{}, {}]);
+      beginQueuedMessageEdit(host as never, "queued-1");
+      updateQueuedMessageEdit(host as never, "message 1, corrected");
+      const captured = host.chatQueuedEdit?.source;
+      if (roundTrip) {
+        host.sessionKey = "agent:main:elsewhere";
+        expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
+      }
+      const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
+      if (mutation === "remove") {
+        removeQueuedMessageWithoutReleasing(stalePane as never, "queued-1");
+      } else {
+        expect(
+          updateQueuedMessage(stalePane as never, "queued-1", (item) => ({
+            ...item,
+            orderKey: (item.orderKey ?? item.createdAt) + 10,
+          })),
+        ).not.toBeNull();
+      }
+      const expectedOrder = mutation === "remove" ? ["message 2"] : ["message 2", "message 1"];
 
-    await submitQueuedEdit(host);
+      host.sessionKey = SESSION_KEY;
+      await submitQueuedEdit(host);
 
-    expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
-    expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
-    expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
-    unsubscribe();
-  });
+      expect(host.chatQueuedEdit?.source).toBe(captured);
+      expect(storedOrder(host)).toEqual(expectedOrder);
+      expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
+      expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+      expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+      expect(storedOrder(host)).toEqual(expectedOrder);
+      unsubscribe();
+    },
+  );
 
   it("aborts a replacement when its edit is cancelled during history loading", async () => {
     const history = createDeferred<{ messages: unknown[] }>();
@@ -462,11 +490,16 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("edits one row at a time", () => {
+  it("edits one row at a time and rejects a submit naming another row", async () => {
     const { host, unsubscribe } = queueHost([{}, {}]);
     beginQueuedMessageEdit(host as never, "queued-1");
 
     expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("unavailable");
+    await handleSendChat(host as never, "wrong replacement", {
+      resumeQueuedMessageEditId: "queued-2",
+    });
+    expect(storedOrder(host)).toEqual(["message 1", "message 2"]);
+    expect(host.chatQueuedEdit?.id).toBe("queued-1");
     unsubscribe();
   });
 
@@ -479,6 +512,71 @@ describe("queued message edit round-trip", () => {
     expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("unavailable");
     unsubscribe();
   });
+
+  it.each([false, true])(
+    "keeps captured edit custody when main defaults change: %s",
+    async (changeMainKey) => {
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      };
+      const send = vi.fn(async () => ({ status: "started" }));
+      const { host, unsubscribe } = queueHost([{}], {
+        connected: true,
+        agentsList,
+        requestHandlers: { "chat.send": send },
+      });
+      const container = document.createElement("div");
+      try {
+        expect(beginQueuedMessageEdit(host, "queued-1")).toBe("started");
+        expect(updateQueuedMessageEdit(host, "Unsaved original correction")).toBe(true);
+        const captured = host.chatQueuedEdit!;
+        const originalOutboxes = listStoredChatOutboxes(host);
+        if (changeMainKey) {
+          applyChatAgentsList(host, { ...agentsList, mainKey: "current" }, host.client!);
+        }
+        host.sessionKey = "agent:main:current";
+        syncVisibleChatQueueProjection(host);
+        expect(host.chatQueue).toEqual([]);
+        const active = activeQueuedMessageEdit(host);
+        render(
+          renderChatComposer(
+            createComposerProps({
+              queue: host.chatQueue,
+              sessionKey: host.sessionKey,
+              queuedEdit: {
+                editingId: active?.id ?? null,
+                editingText: active?.draftText,
+                source: active?.source,
+              },
+            }),
+          ),
+          container,
+        );
+        await submitQueuedEdit(host);
+        expect(send).not.toHaveBeenCalled();
+        expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);
+        expect(host.chatQueuedEdit).toBe(captured);
+        expect.soft(active).toBeNull();
+        expect.soft(container.querySelector(".chat-queue__edit-input")).toBeNull();
+        expect.soft(cancelQueuedMessageEdit(host)).toBe(false);
+        expect.soft(host.chatQueuedEdit).toBe(captured);
+        // Returning the real routing facts restores the original owner, not a renamed token.
+        applyChatAgentsList(host, agentsList, host.client!);
+        host.sessionKey = SESSION_KEY;
+        syncVisibleChatQueueProjection(host);
+        expect(activeQueuedMessageEdit(host)?.draftText).toBe("Unsaved original correction");
+        expect(cancelQueuedMessageEdit(host)).toBe(true);
+        expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);
+      } finally {
+        render(null, container);
+        unsubscribe();
+        await resetComposerFixture();
+      }
+    },
+  );
 
   it("leaves the edit behind when the pane routes to another session", () => {
     const { host, unsubscribe } = queueHost([{}, {}]);

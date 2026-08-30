@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
+import {
+  readStoredOutboxStore,
+  storageTargetForGateway,
+  storedChatOutboxScopeKey,
+} from "../lib/chat/outbox-store.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
   createGatewayHarness,
@@ -301,7 +306,18 @@ describe("OpenClaw shell deleted-session recovery", () => {
         } else {
           h.sessions.reconcileChanged(currentDelete);
         }
-        await vi.waitFor(() => expect(storage.getItem(storageKey)).not.toContain("B draft"));
+        const target = storageTargetForGateway(gatewayUrl);
+        const scopeKey = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
+        const retired = h.sessions.state.deletedSessions.find(({ key }) => key === h.alpha.key)!;
+        await vi.waitFor(() => {
+          expect(storage.getItem(storageKey)).toBeNull();
+          const tombstone = readStoredOutboxStore(storage, target).sessions[scopeKey];
+          expect(tombstone).toEqual({
+            draftRevision: expect.any(Number),
+            updatedAt: expect.any(Number),
+          });
+          expect(tombstone?.draftRevision).toBeGreaterThan(retired.retireBeforeRevision);
+        });
         expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
         expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
         expect(h.sessions.deletionState(h.sibling.key)).toBeUndefined();
@@ -367,14 +383,18 @@ describe("OpenClaw shell deleted-session recovery", () => {
     shell.observeDeletedSessions(state);
 
     await vi.waitFor(() => {
-      const stored = JSON.parse(
-        storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`) ??
-          "{}",
-      ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
-      expect(stored.sessions?.[`${deletedKey}\u0000agent:main`]).toEqual({
+      expect(
+        storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`),
+      ).toBeNull();
+      const stored = readStoredOutboxStore(storage, storageTargetForGateway(gatewayUrl));
+      const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+      expect(stored.sessions[scopeKey]).toEqual({
         draftRevision: expect.any(Number),
         updatedAt: expect.any(Number),
       });
+      expect(stored.sessions[scopeKey]?.draftRevision).toBeGreaterThan(
+        deletedSessions[0]!.retireBeforeRevision,
+      );
       expect(toast.textContent).toContain(
         "Session deleted; browser draft remains. Clear site data.",
       );

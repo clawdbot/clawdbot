@@ -233,7 +233,7 @@ export async function handleSendChat(
   }
   const requestedEditId = opts?.resumeQueuedMessageEditId;
   const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
-  if (requestedEditId != null && !inlineEdit) {
+  if (requestedEditId != null && inlineEdit?.id !== requestedEditId) {
     return undefined;
   }
   const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;

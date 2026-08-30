@@ -20,6 +20,11 @@ import {
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { createSessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayHarness,
+  sessionsResult as sessionListFixture,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import {
   createTestGatewayClient,
@@ -37,12 +42,15 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
+import { getChatHistoryLoadState, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
+  refreshCurrentChatSessionList,
   getPendingChatPickerPatch,
   switchChatFastMode,
   switchChatThinkingLevel,
@@ -954,6 +962,220 @@ describe("refreshChat", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "same-owner equal timestamp control",
+      moveRoster: false,
+      historyUpdatedAt: 10,
+      workRefresh: "updated",
+    },
+    {
+      name: "different-owner older timestamp control",
+      moveRoster: true,
+      historyUpdatedAt: 9,
+      workRefresh: "updated",
+    },
+    {
+      name: "different-owner equal timestamp regression",
+      moveRoster: true,
+      historyUpdatedAt: 10,
+      workRefresh: "updated",
+    },
+    {
+      name: "missing Work row remains admissible",
+      moveRoster: true,
+      historyUpdatedAt: 10,
+      workRefresh: "missing",
+    },
+    {
+      name: "Main-only publication does not freeze Work history",
+      moveRoster: true,
+      historyUpdatedAt: 10,
+      workRefresh: "none",
+    },
+  ])("$name", async ({ moveRoster, historyUpdatedAt, workRefresh }) => {
+    vi.stubGlobal("requestIdleCallback", vi.fn());
+    const pendingHistory = createDeferred<ChatHistoryResult>();
+    const initialWork: GatewaySessionRow = {
+      key: "global",
+      kind: "global",
+      sessionId: "work-incarnation",
+      updatedAt: 10,
+      label: "Original Work label",
+      modelProvider: "test",
+      model: "model-old",
+      contextTokens: 1000,
+      totalTokens: 10,
+      hasActiveRun: false,
+      status: "done",
+    };
+    const newerWork: GatewaySessionRow = {
+      ...initialWork,
+      label: "Newer Work label",
+      model: "model-new",
+      contextTokens: 2000,
+    };
+    const mainRow: GatewaySessionRow = {
+      key: "global",
+      kind: "global",
+      sessionId: "main-incarnation",
+      updatedAt: 10,
+      label: "Main stays Main",
+      modelProvider: "test",
+      model: "model-main",
+      hasActiveRun: false,
+      status: "done",
+    };
+    let workListCount = 0;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.history") {
+        expect(params).toMatchObject({ sessionKey: "agent:work:main", agentId: "work" });
+        return pendingHistory.promise;
+      }
+      if (method === "sessions.list") {
+        if (params?.agentId === "work") {
+          workListCount += 1;
+          return sessionListFixture(
+            workListCount === 1 ? [initialWork] : workRefresh === "missing" ? [] : [newerWork],
+            workListCount,
+          );
+        }
+        if (params?.agentId === "main") {
+          return sessionListFixture([mainRow], 3);
+        }
+      }
+      throw new Error(`Unexpected RPC ${method}: ${JSON.stringify(params)}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const sessions = createSessionCapability(harness.gateway);
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.sessionKey = "agent:work:main";
+    state.assistantAgentId = "work";
+    state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main" }, { id: "work" }],
+    };
+    state.sessionsResult = null;
+    state.sessionsResultAgentId = null;
+    state.chatMessagesBySession = new Map();
+    pane.presented = false;
+    const release = sessions.subscribe(pane.applySessionsState.bind(pane));
+    try {
+      await refreshCurrentChatSessionList(state);
+      expect(selectedChatSessionRow(state)).toMatchObject(initialWork);
+      const previousSessionsResult = state.sessionsResult;
+      const issuedRevision = sessions.canonicalListRevision;
+      const refresh = refreshPageChat(state, {
+        awaitHistory: true,
+        deferBranches: true,
+        scheduleScroll: false,
+      });
+      // Observe the real coalesced load result without providing a fake historyLoad.
+      const historyLoad = loadChatHistory(state, { deferBranches: true });
+      expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
+      if (workRefresh !== "none") {
+        await refreshCurrentChatSessionList(state);
+        expect(state.sessionsResult).not.toBe(previousSessionsResult);
+      }
+      if (workRefresh === "updated") {
+        expect(selectedChatSessionRow(state)).toMatchObject(newerWork);
+      }
+      if (workRefresh === "missing") {
+        expect(selectedChatSessionRow(state)).toBeUndefined();
+      }
+      const publishedWorkProjection = state.sessionsResult;
+      if (moveRoster) {
+        await sessions.refresh({ agentId: "main", force: true });
+        expect(sessions.state.agentId).toBe("main");
+        expect(state.sessionsResult).toBe(publishedWorkProjection);
+        expect(state.sessionsResultAgentId).toBe("work");
+      }
+      const historyRow = {
+        ...initialWork,
+        updatedAt: historyUpdatedAt,
+        ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
+      };
+      pendingHistory.resolve({
+        messages: [{ role: "assistant", content: "History really applied" }],
+        sessionInfo: historyRow,
+      });
+      const historyResult = await historyLoad;
+      await refresh;
+      const afterResolution = selectedChatSessionRow(state);
+      expect(historyResult).toMatchObject({ sourceCanonicalListRevision: issuedRevision });
+      expect(getChatHistoryLoadState(state).phase).toBe("committed");
+      expect(state.chatMessages).toEqual([
+        { role: "assistant", content: "History really applied" },
+      ]);
+      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+      expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
+      if (moveRoster) {
+        expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
+      }
+      expect(afterResolution).toMatchObject(workRefresh === "updated" ? newerWork : historyRow);
+    } finally {
+      release();
+      pane.disconnectedCallback();
+      sessions.dispose();
+    }
+  });
+
+  it.each(["retired", "deleted"] as const)(
+    "rejects a %s global history generation without publishing it into another agent's pane",
+    async (generation) => {
+      const current = row("global", {
+        kind: "global",
+        sessionId: "work-current",
+        hasActiveRun: true,
+        status: "running",
+      });
+      const host = makeChatHost({
+        sessionKey: "agent:work:main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+        sessionsResult: createSessionsResult([row("agent:main:main")]),
+        sessionsResultAgentId: "main",
+        requestHandlers: {
+          "sessions.list": createSessionsResult([current]),
+          "chat.history": {
+            messages: [],
+            sessionInfo: {
+              ...current,
+              sessionId: generation === "retired" ? "work-retired" : current.sessionId,
+              hasActiveRun: false,
+              status: "done",
+              modelProvider: "openai",
+              totalTokens: 90_000,
+            },
+          },
+        },
+      });
+      host.sessions.reconcile(row("agent:main:main"), undefined, { resultAgentId: "main" });
+      await host.sessions.list({ agentId: "work" });
+      if (generation === "deleted") {
+        host.sessions.reconcileChanged(
+          {
+            sessionKey: "global",
+            agentId: "work",
+            sessionId: current.sessionId,
+            reason: "delete",
+          },
+          { resultAgentId: "main" },
+        );
+      }
+      const primary = host.sessions.state.result;
+      const pane = host.sessionsResult;
+      await refreshPageChat(asChatPageHost(host), { awaitHistory: true, scheduleScroll: false });
+      expect(host.sessions.state.result).toBe(primary);
+      expect(host.sessionsResult).toBe(pane);
+      expect(host.sessionsResultAgentId).toBe("main");
+      expect(selectedChatSessionRow(asChatPageHost(host))).toBeUndefined();
+      host.sessions.dispose();
+    },
+  );
+
   it("reconciles queued history over a prior terminal session row", async () => {
     const host = makeChatHost({
       requestHandlers: {
@@ -1009,7 +1231,15 @@ describe("refreshChat", () => {
       name: "drains a restored queue when global history answers an agent main alias",
       history: {
         messages: [],
-        sessionInfo: row("global", { kind: "global", hasActiveRun: false, status: "done" }),
+        sessionInfo: row("global", {
+          kind: "global",
+          sessionId: "work-current",
+          hasActiveRun: false,
+          status: "done",
+          modelProvider: "openai",
+          totalTokens: 90_000,
+          contextTokens: 300_000,
+        }),
       },
       overrides: {
         sessionKey: "agent:work:main",
@@ -1044,6 +1274,14 @@ describe("refreshChat", () => {
       },
       chatQueue: [{ id: "queued-1", text: message, createdAt: 1 }],
     });
+    if (overrides.sessionsResultAgentId) {
+      for (const session of overrides.sessionsResult.sessions) {
+        host.sessions.reconcile(session, overrides.sessionsResult.defaults, {
+          resultAgentId: overrides.sessionsResultAgentId,
+        });
+      }
+    }
+    const primaryResult = host.sessions.state.result;
     admitHostQueueItems(host);
 
     await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
@@ -1051,7 +1289,21 @@ describe("refreshChat", () => {
       setImmediate(resolve);
     });
 
-    expect(host.sessionsResult).toBe(host.sessions.state.result);
+    if (expectedSend.sessionKey === "global") {
+      expect(host.sessions.state.result).toBe(primaryResult);
+      expect(host.sessions.state.agentId).toBe("main");
+      expect(host.sessionsResultAgentId).toBe("work");
+      expect(selectedChatSessionRow(asChatPageHost(host))).toMatchObject({
+        key: "global",
+        modelProvider: "openai",
+        totalTokens: 90_000,
+        contextTokens: 300_000,
+        hasActiveRun: false,
+        status: "done",
+      });
+    } else {
+      expect(host.sessionsResult).toBe(host.sessions.state.result);
+    }
     expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
     expect(host.chatQueue).toEqual([]);
   });
