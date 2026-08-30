@@ -10,6 +10,11 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
+
+// The wizard resolves prompt copy from the shell locale on every prompt. The
+// asserted prompt text is the English copy, so pin the locale instead of
+// failing on non-English developer shells (wizardT re-reads the env per call).
+process.env.OPENCLAW_LOCALE = "en";
 import { zaloDmPolicy } from "./setup-core.js";
 import { zaloSetupAdapter, zaloSetupWizard } from "./setup-surface.js";
 
