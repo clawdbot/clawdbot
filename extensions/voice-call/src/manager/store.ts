@@ -219,7 +219,12 @@ export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
   return boundedCall;
 }
 
-/** Register a serialized call record event and its chunks, then prune old events. */
+/**
+ * Register a serialized call record event: metadata, then chunks, then prune.
+ * Each row commits independently; chunks must never exist without their
+ * metadata row, a failed write rolls its own rows back, and retention prunes
+ * only after the new snapshot has fully committed.
+ */
 function registerCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
@@ -234,35 +239,43 @@ function registerCallRecordEvent(
       `voice-call record exceeds SQLite chunk limit (${chunkCount}/${MAX_CHUNKS_PER_CALL_RECORD_EVENT})`,
     );
   }
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunk = buffer.subarray(
-      index * RAW_CALL_RECORD_CHUNK_BYTES,
-      (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
-    );
-    stores.chunks.register(buildChunkKey(eventKey, index), {
-      index,
-      dataBase64: chunk.toString("base64"),
-    });
-  }
   stores.events.register(eventKey, {
     chunkCount,
     byteLength: buffer.byteLength,
     persistedAt: order?.persistedAt,
     sequence: order?.sequence,
   });
+  try {
+    for (let index = 0; index < chunkCount; index += 1) {
+      const chunk = buffer.subarray(
+        index * RAW_CALL_RECORD_CHUNK_BYTES,
+        (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
+      );
+      stores.chunks.register(buildChunkKey(eventKey, index), {
+        index,
+        dataBase64: chunk.toString("base64"),
+      });
+    }
+  } catch (err) {
+    try {
+      deleteCallRecordEventRows(stores, eventKey);
+    } catch {
+      // Preserve the original write failure; startup reconciliation cleans up.
+    }
+    throw err;
+  }
   pruneCallRecordEvents(stores);
 }
 
-/** Delete metadata and all chunk rows for one call record event. */
+/** Delete chunk rows, then metadata last so interrupted deletes stay visible. */
 function deleteCallRecordEventRows(stores: CallRecordStateStores, eventKey: string): void {
   const meta = stores.events.lookup(eventKey);
+  if (meta) {
+    for (let index = 0; index < meta.chunkCount; index += 1) {
+      stores.chunks.delete(buildChunkKey(eventKey, index));
+    }
+  }
   stores.events.delete(eventKey);
-  if (!meta) {
-    return;
-  }
-  for (let index = 0; index < meta.chunkCount; index += 1) {
-    stores.chunks.delete(buildChunkKey(eventKey, index));
-  }
 }
 
 /** Keep only the newest bounded call record events. */
@@ -322,6 +335,36 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
     .map((entry) => entry.call);
 }
 
+/**
+ * Delete partial persistence debris: chunks with no metadata row (stranded by
+ * the old chunk-first write order) and metadata rows missing chunks, then
+ * prune overage a crash left unpruned so bounded caps hold again. Runs only
+ * from manager startup, before any new writes, so it cannot race a live write.
+ */
+function reconcileCallRecordEventRows(stores: CallRecordStateStores): void {
+  const storedChunkKeys = new Set(stores.chunks.entries().map((entry) => entry.key));
+  const referencedChunkKeys = new Set<string>();
+  for (const entry of stores.events.entries()) {
+    const chunkKeys: string[] = [];
+    for (let index = 0; index < entry.value.chunkCount; index += 1) {
+      chunkKeys.push(buildChunkKey(entry.key, index));
+    }
+    if (chunkKeys.every((key) => storedChunkKeys.has(key))) {
+      for (const key of chunkKeys) {
+        referencedChunkKeys.add(key);
+      }
+    } else {
+      deleteCallRecordEventRows(stores, entry.key);
+    }
+  }
+  for (const key of storedChunkKeys) {
+    if (!referencedChunkKeys.has(key)) {
+      stores.chunks.delete(key);
+    }
+  }
+  pruneCallRecordEvents(stores);
+}
+
 /** Persist one call record event to plugin state. */
 export function persistCallRecord(storePath: string, call: CallRecord): void {
   try {
@@ -345,10 +388,17 @@ export function loadActiveCallsFromStore(storePath: string): {
 } {
   const stores = tryCreateCallRecordStateStores(storePath);
   let calls: CallRecord[] = [];
-  try {
-    calls = stores ? readCallRecordEvents(stores) : [];
-  } catch (err) {
-    console.error("[voice-call] Failed to read SQLite call records:", err);
+  if (stores) {
+    try {
+      reconcileCallRecordEventRows(stores);
+    } catch (err) {
+      console.error("[voice-call] Failed to reconcile call record rows:", err);
+    }
+    try {
+      calls = readCallRecordEvents(stores);
+    } catch (err) {
+      console.error("[voice-call] Failed to read SQLite call records:", err);
+    }
   }
   if (calls.length === 0) {
     return {
