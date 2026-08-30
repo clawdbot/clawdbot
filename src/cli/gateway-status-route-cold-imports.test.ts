@@ -22,19 +22,26 @@ vi.mock("../config/io.runtime.js", async (importOriginal) => {
   return await importOriginal();
 });
 
-vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => ({
-    label: "Gateway",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-  }),
-  readGatewayServiceState: vi.fn(async () => ({
-    command: null,
-    env: {},
-    loadState: { status: "not-loaded" as const },
-    runtime: { status: "stopped" as const },
-  })),
+const fakeServiceResolver = vi.fn(() => ({
+  label: "Gateway",
+  loadedText: "loaded",
+  notLoadedText: "not loaded",
 }));
+const fakeServiceStateReader = vi.fn(async () => ({
+  command: null,
+  env: {},
+  loadState: { status: "not-loaded" as const },
+  runtime: { status: "stopped" as const },
+}));
+
+vi.mock("../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+  return {
+    ...actual,
+    resolveGatewayService: fakeServiceResolver,
+    readGatewayServiceState: fakeServiceStateReader,
+  };
+});
 
 vi.mock("../gateway/control-ui-links.js", () => ({
   resolveAdvertisedControlUiLinks: vi.fn(async () => ({

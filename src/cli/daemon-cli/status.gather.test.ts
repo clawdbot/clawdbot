@@ -348,6 +348,36 @@ function gatherStatus(overrides: Partial<Parameters<typeof gatherDaemonStatus>[0
   return gatherDaemonStatus({ rpc: {}, probe: true, deep: false, ...overrides });
 }
 
+async function withStatusConfig<T>(
+  rawConfig: string | undefined,
+  run: (configPath: string) => Promise<T>,
+  includeServiceEnv = false,
+): Promise<T> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
+  const configPath = path.join(tmp, "openclaw.json");
+  if (rawConfig !== undefined) {
+    await fs.writeFile(configPath, rawConfig);
+  }
+  setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+  serviceReadCommand.mockResolvedValueOnce({
+    programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+    ...(includeServiceEnv
+      ? {
+          environment: {
+            OPENCLAW_STATE_DIR: tmp,
+            OPENCLAW_CONFIG_PATH: configPath,
+          },
+        }
+      : {}),
+  });
+  try {
+    return await run(configPath);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
 describe("gatherDaemonStatus", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -1092,10 +1122,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(
-      configPath,
+    await withStatusConfig(
       JSON.stringify({
         gateway: {
           bind: "custom",
@@ -1103,95 +1130,63 @@ describe("gatherDaemonStatus", () => {
           controlUi: { enabled: true },
         },
       }),
-    );
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-      environment: {
-        OPENCLAW_STATE_DIR: tmp,
-        OPENCLAW_CONFIG_PATH: configPath,
+      async (configPath) => {
+        const status = await gatherStatus({ probe: false });
+
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
+        expect(loadConfigCalls).not.toHaveBeenCalled();
+        expect(status.config?.cli.path).toBe(configPath);
+        expect(status.config?.cli.exists).toBe(true);
+        expect(status.config?.cli.valid).toBe(true);
+        expect(status.config?.cli.controlUi).toEqual({ enabled: true });
+        expect(status.config?.daemon).toBe(status.config?.cli);
+        expect(status.gateway?.bindMode).toBe("custom");
+        expect(status.gateway?.customBindHost).toBe("10.0.0.5");
       },
-    });
-
-    try {
-      const status = await gatherStatus({ probe: false });
-
-      expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
-      expect(loadConfigCalls).not.toHaveBeenCalled();
-      expect(status.config?.cli.path).toBe(configPath);
-      expect(status.config?.cli.exists).toBe(true);
-      expect(status.config?.cli.valid).toBe(true);
-      expect(status.config?.cli.controlUi).toEqual({ enabled: true });
-      expect(status.config?.daemon).toBe(status.config?.cli);
-      expect(status.gateway?.bindMode).toBe("custom");
-      expect(status.gateway?.customBindHost).toBe("10.0.0.5");
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+      true,
+    );
   });
 
   it("uses the fast config path when the config file is missing", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "missing.json");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-      environment: {
-        OPENCLAW_STATE_DIR: tmp,
-        OPENCLAW_CONFIG_PATH: configPath,
+    await withStatusConfig(
+      undefined,
+      async (configPath) => {
+        const status = await gatherStatus({ probe: false });
+
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(status.config?.cli).toEqual({
+          path: configPath,
+          exists: false,
+          valid: true,
+        });
+        expect(status.config?.daemon).toBe(status.config?.cli);
+        expect(status.gateway).toMatchObject({
+          bindMode: "loopback",
+          port: 19001,
+        });
       },
-    });
-
-    try {
-      const status = await gatherStatus({ probe: false });
-
-      expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(status.config?.cli).toEqual({
-        path: configPath,
-        exists: false,
-        valid: true,
-      });
-      expect(status.config?.daemon).toBe(status.config?.cli);
-      expect(status.gateway).toMatchObject({
-        bindMode: "loopback",
-        port: 19001,
-      });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+      true,
+    );
   });
 
   it("keeps malformed JSON5 on the fast invalid-summary path", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(configPath, "{ gateway:");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-      environment: {
-        OPENCLAW_STATE_DIR: tmp,
-        OPENCLAW_CONFIG_PATH: configPath,
+    await withStatusConfig(
+      "{ gateway:",
+      async (configPath) => {
+        const status = await gatherStatus({ probe: false });
+
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(status.config?.cli).toMatchObject({
+          path: configPath,
+          exists: true,
+          valid: false,
+        });
+        expect(status.config?.cli.issues?.[0]?.message).toContain("JSON5 parse failed");
+        expect(status.config?.daemon).toBe(status.config?.cli);
       },
-    });
-
-    try {
-      const status = await gatherStatus({ probe: false });
-
-      expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(status.config?.cli).toMatchObject({
-        path: configPath,
-        exists: true,
-        valid: false,
-      });
-      expect(status.config?.cli.issues?.[0]?.message).toContain("JSON5 parse failed");
-      expect(status.config?.daemon).toBe(status.config?.cli);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+      true,
+    );
   });
 
   it.each([
@@ -1199,88 +1194,56 @@ describe("gatherDaemonStatus", () => {
     ["substitution", JSON.stringify({ gateway: { auth: { token: "${STATUS_TOKEN}" } } })],
     ["root env", JSON.stringify({ env: { STATUS_TOKEN: "value" } })],
   ])("uses full config IO for %s config", async (_name, rawConfig) => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(configPath, rawConfig);
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-    });
-
-    try {
+    await withStatusConfig(rawConfig, async (configPath) => {
       await gatherStatus({ probe: false });
 
       expect(createConfigIOCalls).toHaveBeenCalledOnce();
       expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "skip", false);
       expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    });
   });
 
   it("uses full config IO after a non-missing read failure", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(configPath, "{}");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-    });
-    readFileSpy.mockRejectedValueOnce(
-      Object.assign(new Error("permission denied"), { code: "EACCES" }),
-    );
-
-    try {
+    await withStatusConfig("{}", async (configPath) => {
+      readFileSpy.mockRejectedValueOnce(
+        Object.assign(new Error("permission denied"), { code: "EACCES" }),
+      );
       await gatherStatus({ probe: false });
 
       expect(createConfigIOCalls).toHaveBeenCalledOnce();
       expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "skip", false);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    });
   });
 
   it("uses full plugin-aware config validation for deep status", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
-    const configPath = path.join(tmp, "openclaw.json");
-    await fs.writeFile(
-      configPath,
+    await withStatusConfig(
       JSON.stringify({
         gateway: {
           bind: "loopback",
         },
       }),
+      async (configPath) => {
+        cliLoadedConfig = {
+          gateway: {
+            bind: "loopback",
+          },
+        };
+        cliConfigWarnings = [
+          {
+            path: "plugins.entries.test-bad-plugin",
+            message:
+              "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
+          },
+        ];
+
+        const status = await gatherStatus({ probe: false, deep: true });
+
+        expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
+        expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
+        expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
+        expect(status.config?.daemon).toBe(status.config?.cli);
+      },
     );
-    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    cliLoadedConfig = {
-      gateway: {
-        bind: "loopback",
-      },
-    };
-    cliConfigWarnings = [
-      {
-        path: "plugins.entries.test-bad-plugin",
-        message:
-          "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
-      },
-    ];
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-    });
-
-    try {
-      const status = await gatherStatus({ probe: false, deep: true });
-
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
-      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
-      expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
-      expect(status.config?.daemon).toBe(status.config?.cli);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {

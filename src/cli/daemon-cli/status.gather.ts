@@ -169,7 +169,7 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
   try {
     raw = await fs.readFile(configPath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
       return null;
     }
     return {
