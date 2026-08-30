@@ -22,21 +22,23 @@ function tableMarkdown(columns: number): string {
   ].join("\n");
 }
 
-function collectUrls(text: RichText, out: string[] = []): string[] {
+function collectLinkTargets(text: RichText, out: string[] = []): string[] {
   if (typeof text === "string") {
     return out;
   }
   if (Array.isArray(text)) {
     for (const part of text) {
-      collectUrls(part, out);
+      collectLinkTargets(part, out);
     }
     return out;
   }
   if (text.type === "url") {
     out.push(text.url);
+  } else if (text.type === "anchor_link") {
+    out.push(`#${text.anchor_name}`);
   }
   if ("text" in text) {
-    collectUrls(text.text, out);
+    collectLinkTargets(text.text, out);
   }
   return out;
 }
@@ -229,7 +231,7 @@ describe("markdownToTelegramRichBlocks", () => {
       return;
     }
     expect(hasStyle(paragraph.text, "bold")).toBe(true);
-    expect(collectUrls(paragraph.text)).toEqual(["https://example.com"]);
+    expect(collectLinkTargets(paragraph.text)).toEqual(["https://example.com"]);
   });
 
   it("degrades native lists beyond 16 nesting levels", () => {
@@ -264,24 +266,40 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(hasStyle(text, "strikethrough")).toBe(true);
     expect(hasStyle(text, "spoiler")).toBe(true);
     expect(hasStyle(text, "code")).toBe(true);
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectLinkTargets(text)).toEqual(["https://example.com"]);
   });
 
   it("handles overlapping bold and autolink", () => {
     const { blocks } = markdownToTelegramRichBlocks("**start https://example.com** end");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(hasStyle(text, "bold")).toBe(true);
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
   });
 
-  it.each([
-    { href: "https://example.com", target: { type: "url", url: "https://example.com" } },
-    { href: "#section", target: { type: "anchor_link", anchor_name: "section" } },
-  ])("preserves authored $href links with code-only labels", ({ href, target }) => {
-    const { blocks } = markdownToTelegramRichBlocks("[`foo`](" + href + ")");
-    expect(blocks).toEqual([
-      { type: "paragraph", text: { ...target, text: { type: "code", text: "foo" } } },
-    ]);
+  it.each(["https://example.com", "#section"])(
+    "preserves authored %s links with code-only labels",
+    (href) => {
+      for (const [prefix, suffix] of [
+        ["", ""],
+        ["", "bar"],
+        ["a", "z"],
+      ]) {
+        const markdown = `${prefix ? `\`${prefix}\`` : ""}[\`foo\`](${href})${suffix ? `\`${suffix}\`` : ""}`;
+        const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+        const text = blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+        expect(collectLinkTargets(text), markdown).toEqual([href]);
+        expect(hasStyle(text, "code"), markdown).toBe(true);
+        expect(plainText).toBe(`${prefix}foo${suffix}`);
+      }
+    },
+  );
+
+  it("preserves independently authored bold inside merged adjacent code spans", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks("`a`**`b`**`c`");
+    const text = blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+    expect(hasStyle(text, "code")).toBe(true);
+    expect(hasStyle(text, "bold")).toBe(true);
+    expect(plainText).toBe("abc");
   });
 
   it.each([
@@ -444,7 +462,7 @@ describe("markdownToTelegramRichBlocks", () => {
       skipEntityDetection: true,
     });
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
   });
 
   it("keeps explicit markdown links when entity detection is skipped", () => {
@@ -452,7 +470,7 @@ describe("markdownToTelegramRichBlocks", () => {
       skipEntityDetection: true,
     });
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectLinkTargets(text)).toEqual(["https://example.com"]);
   });
 
   it("keeps unsupported local links as visible text and wraps file refs as code", () => {
@@ -463,20 +481,20 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(plain).toContain("scripts/yougile.py");
     expect(plain).toContain("config");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
   });
 
   it("wraps auto-linked file refs as code so Telegram does not re-linkify them", () => {
     const { blocks } = markdownToTelegramRichBlocks("see README.md for details");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
     expect(hasStyle(text, "code")).toBe(true);
   });
 
   it("preserves authored file-style links while wrapping bare file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual(["https://README.md"]);
+    expect(collectLinkTargets(text)).toEqual(["https://README.md"]);
     expect(hasStyle(text, "code")).toBe(true);
   });
 
@@ -577,7 +595,7 @@ describe("splitTelegramRichBlocks", () => {
     const chunks = splitTelegramRichBlocks(blocks, { textLimit: 64 });
     const urls = chunks
       .flat()
-      .flatMap((block) => (block.type === "paragraph" ? collectUrls(block.text) : []));
+      .flatMap((block) => (block.type === "paragraph" ? collectLinkTargets(block.text) : []));
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((url) => url.startsWith("https://example.com/"))).toBe(true);
   });

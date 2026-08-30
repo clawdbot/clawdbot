@@ -309,7 +309,7 @@ function renderGoogleChatIR(ir: MarkdownIR, markers: GoogleChatMarkers): string 
           (span) => span.start < link.end && span.end > link.start,
         );
         return /[<>|]/u.test(href) || /[<>|*_~`]/u.test(label) || labelHasStyles
-          ? { start: link.start, end: link.end, open: "", close: ` (${href})` }
+          ? { start: link.end, end: link.end, open: "", close: ` (${href})` }
           : { start: link.start, end: link.end, open: `<${href}|`, close: ">" };
       },
     },

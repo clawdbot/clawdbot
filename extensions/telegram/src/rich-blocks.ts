@@ -43,8 +43,7 @@ const INLINE_STYLE_RANK: Record<string, number> = {
   bold: 1,
   italic: 2,
   strikethrough: 3,
-  // Authored links (rank 50) enclose equal-range code labels and remain clickable.
-  code: 51,
+  code: 4,
 };
 
 const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;
@@ -195,14 +194,10 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     const end = points[i + 1] ?? start;
     const covering = spans.filter((span) => span.start <= start && span.end > start);
     const annotation = covering.find((span) => span.kind === "annotation");
-    const codeIndex = covering.findIndex((span) => span.kind === "style" && span.style === "code");
     // Dominance applies only to the covered range. Surrounding formatting resumes
-    // after a transcript header or code span instead of being discarded wholesale.
-    const active = annotation
-      ? [annotation]
-      : codeIndex === -1
-        ? covering
-        : covering.slice(0, codeIndex + 1);
+    // after a transcript header. Code is already literal in IR; its merged range
+    // may contain independently authored styles and clickable links.
+    const active = annotation ? [annotation] : covering;
     let shared = 0;
     while (shared < stack.length && stack[shared] === active[shared]) {
       shared += 1;

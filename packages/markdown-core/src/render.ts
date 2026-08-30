@@ -359,6 +359,12 @@ export function renderMarkdownWithMarkers(
     const openingLinks = linkStarts.get(pos);
     if (openingLinks && openingLinks.length > 0) {
       for (const [index, link] of openingLinks.entries()) {
+        // A renderer can collapse a link to terminal text. Emit the insertion
+        // before new spans open; it must never enter the reopenable marker stack.
+        if (link.start === link.end) {
+          out += link.open + link.close;
+          continue;
+        }
         openingItems.push({
           end: link.end,
           open: link.open,
