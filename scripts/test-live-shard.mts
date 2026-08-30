@@ -224,6 +224,10 @@ function isExtensionInRange(file: string, start: string, end: string) {
   return first !== undefined && first >= start && first <= end;
 }
 
+function isSourceGatewayLiveTest(file: string) {
+  return file.startsWith("src/gateway/") || file.startsWith("src/system-agent/");
+}
+
 function isGatewayBackendLiveTest(file: string) {
   return (
     file === "src/gateway/gateway-acp-bind.live.test.ts" ||
@@ -291,13 +295,11 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-agents-zai-coding":
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
-      return files.filter(
-        (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),
-      );
+      return files.filter(isSourceGatewayLiveTest);
     case "native-live-src-gateway-core":
       return files.filter(
         (file) =>
-          (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/")) &&
+          isSourceGatewayLiveTest(file) &&
           !isGatewayBackendLiveTest(file) &&
           !isGatewayProfilesLiveTest(file),
       );
@@ -402,10 +404,10 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
  */
 export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
   const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
-  // Vision requests load provider and agent runtime plugins. Compile them before
-  // Vitest starts so cold source transforms do not consume the request deadline.
+  // Source gateways and vision requests load provider and agent runtime plugins.
+  // Compile them before Vitest so cold transforms do not consume live deadlines.
   if (
-    gatewayProfiles ||
+    files.some(isSourceGatewayLiveTest) ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {
