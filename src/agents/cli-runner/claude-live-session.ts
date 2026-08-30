@@ -22,7 +22,6 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
-import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
@@ -58,8 +57,6 @@ type ClaudeLiveTurn = {
   rawChars: number;
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
-  /** Last stdout/stderr time; null until the process emits anything this turn. */
-  lastOutputAtMs: number | null;
   timeoutTimer: NodeJS.Timeout | null;
   activeToolTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
@@ -720,44 +717,24 @@ function noteClaudeLiveProgress(
   emitClaudeLiveProgress(turn, "cli_live:stream_progress");
 }
 
-// The CLI emits a tool_use line, then nothing until the tool result, so a
-// quiet long-running tool is indistinguishable from a wedged process at the
-// stdout level. While observed tool calls are outstanding, extend the quiet
-// window to the blocked-tool floor instead of killing mid-tool.
-function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, delayMs: number): void {
-  if (turn.noOutputTimer) {
-    clearTimeout(turn.noOutputTimer);
-  }
-  turn.noOutputTimer = setTimeout(() => {
-    const quietSinceMs = turn.lastOutputAtMs ?? turn.startedAtMs;
-    if (turn.activeTools.size > 0) {
-      const quietBudgetMs = Math.max(session.noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
-      const remainingMs = quietSinceMs + quietBudgetMs - Date.now();
-      if (remainingMs > 0) {
-        armNoOutputTimer(session, turn, remainingMs);
-        return;
-      }
-    }
-    closeLiveSession(
-      session,
-      "abort",
-      createTimeoutError(
-        session,
-        `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
-        // Retryable only when the process never produced any output this turn.
-        turn.lastOutputAtMs === null ? "cli_no_output_timeout" : undefined,
-      ),
-    );
-  }, delayMs);
-}
-
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
   const turn = session.currentTurn;
   if (!turn) {
     return;
   }
-  turn.lastOutputAtMs = Date.now();
-  armNoOutputTimer(session, turn, session.noOutputTimeoutMs);
+  if (turn.noOutputTimer) {
+    clearTimeout(turn.noOutputTimer);
+  }
+  turn.noOutputTimer = setTimeout(() => {
+    closeLiveSession(
+      session,
+      "abort",
+      createTimeoutError(
+        session,
+        `CLI produced no output for ${Math.round(session.noOutputTimeoutMs / 1000)}s and was terminated.`,
+      ),
+    );
+  }, session.noOutputTimeoutMs);
 }
 
 function parseSessionId(parsed: Record<string, unknown>): string | undefined {
@@ -1192,7 +1169,6 @@ function createTurn(params: {
     rawLines: [],
     rawChars: 0,
     noOutputTimer: null,
-    lastOutputAtMs: null,
     timeoutTimer: null,
     activeToolTimer: null,
     activeTools: new Map(),
@@ -1219,7 +1195,17 @@ function createTurn(params: {
     resolve: params.resolve,
     reject: params.reject,
   };
-  armNoOutputTimer(params.session, turn, params.noOutputTimeoutMs);
+  turn.noOutputTimer = setTimeout(() => {
+    closeLiveSession(
+      params.session,
+      "abort",
+      createTimeoutError(
+        params.session,
+        `CLI produced no output for ${Math.round(params.noOutputTimeoutMs / 1000)}s and was terminated.`,
+        "cli_no_output_timeout",
+      ),
+    );
+  }, params.noOutputTimeoutMs);
   turn.timeoutTimer = setTimeout(() => {
     closeLiveSession(
       params.session,
