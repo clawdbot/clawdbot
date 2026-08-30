@@ -61,9 +61,11 @@ export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistor
     localMessages: params.localMessages,
     importedMessages,
   });
-  return messages.length > params.localMessages.length
-    ? { messages, imported: true }
-    : { messages: params.localMessages, imported: false };
+  // Identity, not length: replacing a persisted aggregate with the imported
+  // native turn can leave the count unchanged yet must count as an import.
+  return messages === params.localMessages
+    ? { messages: params.localMessages, imported: false }
+    : { messages, imported: true };
 }
 
 /** Acquires one request-local redacted view of the process-owned external snapshot. */
