@@ -19,7 +19,7 @@ const suite = createChatFlowE2eSuite();
 // Frozen proposal base 2d5228d4, built with startBundledControlUiE2eServer.
 const BASELINE_BUNDLE_SHA256 = "7970b72aaa5f99d8cf123fa61c96adec16359c8c473c33015f7a986e81ffa530";
 
-function createToolTitleFixture(count: number) {
+function createToolTitleFixture(count: number, options: { separateMessages?: boolean } = {}) {
   const items = Array.from({ length: count }, (_, index) => {
     const args = {
       task: `Inspect tool-title queue entry ${String(index + 1).padStart(3, "0")}`,
@@ -34,25 +34,44 @@ function createToolTitleFixture(count: number) {
       title: `Generated purpose ${String(index + 1).padStart(3, "0")}`,
     };
   });
-  return {
-    historyMessages: [
-      {
-        role: "assistant",
-        content: items.map((item) => ({
+  const toolMessages = items.flatMap((item, index) => [
+    {
+      role: "assistant",
+      content: [
+        {
           type: "toolCall",
           id: item.callId,
           name: "demo__show",
           arguments: item.args,
-        })),
-        timestamp: Date.UTC(2026, 7, 29, 12, 0),
-      },
-      ...items.map((item, index) => ({
-        role: "toolResult",
-        toolCallId: item.callId,
-        toolName: "demo__show",
-        content: [{ type: "text", text: `Completed fixture ${index + 1}` }],
-        timestamp: Date.UTC(2026, 7, 29, 12, 0, 1) + index,
-      })),
+        },
+      ],
+      timestamp: Date.UTC(2026, 7, 29, 12, 0) + index * 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: item.callId,
+      toolName: "demo__show",
+      content: [{ type: "text", text: `Completed fixture ${index + 1}` }],
+      timestamp: Date.UTC(2026, 7, 29, 12, 0) + index * 2 + 1,
+    },
+  ]);
+  return {
+    historyMessages: [
+      ...(options.separateMessages
+        ? toolMessages
+        : [
+            {
+              role: "assistant",
+              content: items.map((item) => ({
+                type: "toolCall",
+                id: item.callId,
+                name: "demo__show",
+                arguments: item.args,
+              })),
+              timestamp: Date.UTC(2026, 7, 29, 12, 0),
+            },
+            ...toolMessages.filter((message) => message.role === "toolResult"),
+          ]),
       {
         role: "assistant",
         content: [{ type: "text", text: "Tool-title stress fixture complete." }],
@@ -182,6 +201,56 @@ suite.define(() => {
           2,
         )}\n`,
       );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("resumes after an off-screen retained cursor in a virtualized transcript", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    try {
+      const page = await context.newPage();
+      const initialTime = new Date("2026-08-30T12:00:00Z");
+      await page.clock.setFixedTime(initialTime);
+      const fixture = createToolTitleFixture(120, { separateMessages: true });
+      const gateway = await installMockGateway(page, {
+        historyMessages: fixture.historyMessages,
+        methodResponses: { "chat.toolTitles": { titles: fixture.titles } },
+        sessionKey: "main",
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForRequests(gateway, "chat.toolTitles", 2);
+      await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
+      expect(await page.locator(".chat-tool-row").count()).toBeLessThan(120);
+      expect(
+        await page.getByText("Inspect tool-title queue entry 048", { exact: true }).count(),
+      ).toBe(0);
+
+      await page.clock.setFixedTime(new Date(initialTime.getTime() + 5 * 60_000 + 1));
+      await gateway.setHistoryMessages(fixture.historyMessages);
+      const historyCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: "main",
+        phase: "message",
+        sessionId: "control-ui-e2e-session",
+        updatedAt: initialTime.getTime() + 5 * 60_000 + 1,
+      });
+      await gateway.waitForRequest("chat.history", { after: historyCount });
+      await waitForRequests(gateway, "chat.toolTitles", 4);
+
+      const requests = await gateway.getRequests("chat.toolTitles");
+      const resumedIds = requests.slice(2).flatMap((request) => {
+        const params = requireRecord(request.params);
+        return Array.isArray(params.items)
+          ? params.items.map((item) => requireString(requireRecord(item).id, "tool title id"))
+          : [];
+      });
+      expect(resumedIds).toEqual(fixture.items.slice(48, 96).map((item) => item.requestId));
     } finally {
       await suite.closeBrowserContext(context);
     }

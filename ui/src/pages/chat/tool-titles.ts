@@ -28,25 +28,10 @@ const MIN_COMMAND_CHARS_FOR_TITLE = 12;
 const MIN_GENERIC_INPUT_CHARS_FOR_TITLE = 120;
 
 const TOOL_TITLES_CHANGED_EVENT = "openclaw:tool-titles-changed";
-const DEFAULT_RENDER_SOURCE = {};
 
 export function subscribeToolTitleChanges(listener: () => void): () => void {
   globalThis.addEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
   return () => globalThis.removeEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
-}
-
-export function releaseToolTitleRenderSource(renderSource: object): void {
-  renderEpochs.delete(renderSource);
-  renderOwners.delete(renderSource);
-  if (activeRenderSource === renderSource) {
-    activeRenderSource = DEFAULT_RENDER_SOURCE;
-    activeRenderEpoch = renderEpochs.get(DEFAULT_RENDER_SOURCE) ?? 0;
-  }
-  for (const [ownerKey, saturation] of saturatedSessions) {
-    if (saturation.searchRenderSource === renderSource) {
-      saturatedSessions.delete(ownerKey);
-    }
-  }
 }
 
 const titlesByKey = new Map<string, string>();
@@ -76,8 +61,7 @@ type PendingItem = {
 type SaturatedSession = {
   expiresAt: number;
   resumeAfterKey: string | null;
-  searchRenderSource: object | null;
-  searchRenderEpoch: number | null;
+  cursorMissingHistoryVersion: number | null;
 };
 type ToolTitlesResult = { titles?: Record<string, string>; disabled?: boolean };
 
@@ -89,10 +73,8 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let activeClient: GatewayBrowserClient | null = null;
 let activeSessionKey: string | null = null;
 let activeAgentId: string | null = null;
-let activeRenderSource = DEFAULT_RENDER_SOURCE;
-let activeRenderEpoch = 0;
-const renderEpochs = new WeakMap<object, number>();
-const renderOwners = new WeakMap<object, string>();
+let activeSchedulingEnabled = true;
+let activeHistoryVersion = 0;
 let fetcherGeneration = 0;
 let activeFlush: object | null = null;
 
@@ -181,46 +163,45 @@ function saturateSession(ownerKey: string, resumeAfterKey: string | null): void 
     {
       expiresAt: Date.now() + SATURATED_SESSION_RETRY_MS,
       resumeAfterKey,
-      searchRenderSource: null,
-      searchRenderEpoch: null,
+      cursorMissingHistoryVersion: null,
     },
     MAX_SATURATED_SESSIONS,
   );
 }
 
-function shouldSuppressSaturatedSession(ownerKey: string, requestKey: string): boolean {
+function resolveTranscriptStartIndex(
+  ownerKey: string,
+  requests: readonly { key: string }[],
+): number | null {
   const saturation = readLru(saturatedSessions, ownerKey);
   if (!saturation) {
-    return false;
+    return 0;
   }
   if (saturation.expiresAt > Date.now()) {
-    return true;
+    return null;
   }
   if (saturation.resumeAfterKey === null) {
     saturatedSessions.delete(ownerKey);
-    return false;
+    return 0;
   }
-  if (requestKey === saturation.resumeAfterKey) {
+  const cursorIndex = requests.findIndex((request) => request.key === saturation.resumeAfterKey);
+  if (cursorIndex >= 0) {
     // Resume after the last admitted row. Re-admitting LRU-evicted rows before
     // this cursor would spend every later bounded window without making progress.
     saturatedSessions.delete(ownerKey);
-    return true;
+    return cursorIndex + 1;
   }
-  if (saturation.searchRenderEpoch === null) {
-    saturation.searchRenderSource = activeRenderSource;
-    saturation.searchRenderEpoch = activeRenderEpoch;
-    return true;
+  if (saturation.cursorMissingHistoryVersion === null) {
+    saturation.cursorMissingHistoryVersion = activeHistoryVersion;
+    return null;
   }
-  if (
-    saturation.searchRenderSource !== activeRenderSource ||
-    saturation.searchRenderEpoch === activeRenderEpoch
-  ) {
-    return true;
+  if (saturation.cursorMissingHistoryVersion === activeHistoryVersion) {
+    return null;
   }
-  // The prior complete render did not contain the cursor, so retention or
-  // compaction removed it. Resume from this render's first remaining row.
+  // The prior complete projection did not contain the cursor, so retention or
+  // compaction removed it. Resume from this projection's first remaining row.
   saturatedSessions.delete(ownerKey);
-  return false;
+  return 0;
 }
 
 function discardQueuedOwner(ownerKey: string): void {
@@ -321,17 +302,40 @@ export function getToolCallTitle(name: string, args: unknown): string | undefine
   if (!request) {
     return undefined;
   }
-  const admissionSuppressed =
-    activeSessionKey !== null &&
-    shouldSuppressSaturatedSession(queueOwnerKey(activeSessionKey, activeAgentId), request.key);
-  const cached = readLru(titlesByKey, request.key);
-  if (cached) {
-    return cached;
+  return readLru(titlesByKey, request.key);
+}
+
+export function scheduleToolTitlesForTranscript(
+  candidates: readonly { name: string; args: unknown }[],
+): void {
+  if (!activeSchedulingEnabled || titlesDisabledByGateway || !activeClient || !activeSessionKey) {
+    return;
   }
-  if (!admissionSuppressed) {
-    scheduleTitleRequest(name, request);
+  const requests: Array<{ key: string; input: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const request = resolveToolTitleRequest(candidate.name, candidate.args);
+    if (!request || seen.has(request.key)) {
+      continue;
+    }
+    seen.add(request.key);
+    requests.push({ ...request, name: candidate.name });
   }
-  return undefined;
+  const ownerKey = queueOwnerKey(activeSessionKey, activeAgentId);
+  const startIndex = resolveTranscriptStartIndex(ownerKey, requests);
+  if (startIndex === null) {
+    return;
+  }
+  for (let index = startIndex; index < requests.length; index++) {
+    const request = requests[index];
+    if (!request) {
+      continue;
+    }
+    scheduleTitleRequest(request.name, request);
+    if (saturatedSessions.has(ownerKey)) {
+      break;
+    }
+  }
 }
 
 export function configureToolTitleFetcher(params: {
@@ -339,30 +343,21 @@ export function configureToolTitleFetcher(params: {
   sessionKey: string | null;
   /** Selected agent; required for global-session keys where the gateway would otherwise resolve the default agent. */
   agentId?: string | null;
-  /** Stable identity of the pane performing this render. */
-  renderSource?: object;
+  /** Only the active presented pane schedules work; sibling panes read the shared cache. */
+  schedulingEnabled?: boolean;
+  /** History owner revision; duplicate renders of one request retain the same value. */
+  historyVersion?: number;
 }): void {
   if (params.client !== activeClient) {
     retireTransientState();
     titlesDisabledByGateway = false;
     clearRetainedTitleState();
   }
-  const renderSource = params.renderSource ?? DEFAULT_RENDER_SOURCE;
-  const agentId = params.agentId ?? null;
-  const ownerKey = params.sessionKey ? queueOwnerKey(params.sessionKey, agentId) : null;
-  const previousOwnerKey = renderOwners.get(renderSource);
-  if (previousOwnerKey && previousOwnerKey !== ownerKey) {
-    releaseToolTitleRenderSource(renderSource);
-  }
-  if (ownerKey) {
-    renderOwners.set(renderSource, ownerKey);
-  }
   activeClient = params.client;
   activeSessionKey = params.sessionKey;
-  activeAgentId = agentId;
-  activeRenderSource = renderSource;
-  activeRenderEpoch = (renderEpochs.get(activeRenderSource) ?? 0) + 1;
-  renderEpochs.set(activeRenderSource, activeRenderEpoch);
+  activeAgentId = params.agentId ?? null;
+  activeSchedulingEnabled = params.schedulingEnabled !== false;
+  activeHistoryVersion = params.historyVersion ?? 0;
 }
 
 function scheduleTitleRequest(name: string, request: { key: string; input: string }): void {

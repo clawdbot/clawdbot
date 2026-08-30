@@ -6,7 +6,7 @@ import {
   configureToolTitleFetcher,
   getToolCallTitle,
   getToolTitlesVersion,
-  releaseToolTitleRenderSource,
+  scheduleToolTitlesForTranscript,
   subscribeToolTitleChanges,
 } from "./tool-titles.ts";
 
@@ -24,9 +24,14 @@ function requireFirstRequestParams(request: ReturnType<typeof vi.fn>): unknown {
   return call[1];
 }
 
+function renderToolTitle(name: string, args: unknown): string | undefined {
+  scheduleToolTitlesForTranscript([{ name, args }]);
+  return getToolCallTitle(name, args);
+}
+
 describe("getToolCallTitle", () => {
   it("returns undefined for eligible calls without a stored title", () => {
-    expect(getToolCallTitle("bash", { command: "git log --oneline -5" })).toBeUndefined();
+    expect(renderToolTitle("bash", { command: "git log --oneline -5" })).toBeUndefined();
   });
 });
 
@@ -42,10 +47,10 @@ describe("title fetch batching", () => {
       sessionKey: "main",
     });
 
-    getToolCallTitle("bash", { command: "short" });
-    getToolCallTitle("bash", { command: "git log --oneline -5" });
-    getToolCallTitle("demo__show", { value: "short" });
-    getToolCallTitle("demo__show", { value: "x".repeat(150) });
+    renderToolTitle("bash", { command: "short" });
+    renderToolTitle("bash", { command: "git log --oneline -5" });
+    renderToolTitle("demo__show", { value: "short" });
+    renderToolTitle("demo__show", { value: "x".repeat(150) });
     await vi.advanceTimersByTimeAsync(1_000);
 
     const items = (requireFirstRequestParams(request) as { items: unknown[] }).items;
@@ -60,12 +65,12 @@ describe("title fetch batching", () => {
       sessionKey: "main",
     });
 
-    getToolCallTitle("bash", { command: "12345678901" });
-    getToolCallTitle("bash", { command: "123456789012" });
-    getToolCallTitle("read", { path: `/${"x".repeat(500)}` });
-    getToolCallTitle("demo__show", "x".repeat(119));
-    getToolCallTitle("demo__show", "y".repeat(120));
-    getToolCallTitle("bash", { command: `${"z".repeat(1_999)}😀tail` });
+    renderToolTitle("bash", { command: "12345678901" });
+    renderToolTitle("bash", { command: "123456789012" });
+    renderToolTitle("read", { path: `/${"x".repeat(500)}` });
+    renderToolTitle("demo__show", "x".repeat(119));
+    renderToolTitle("demo__show", "y".repeat(120));
+    renderToolTitle("bash", { command: `${"z".repeat(1_999)}😀tail` });
     await vi.advanceTimersByTimeAsync(1_000);
 
     const items = (
@@ -89,8 +94,8 @@ describe("title fetch batching", () => {
       sessionKey: "main",
     });
     const args = { command: "pnpm test ui/src/pages/chat --reporter verbose" };
-    getToolCallTitle("bash", args);
-    getToolCallTitle("bash", { ...args });
+    renderToolTitle("bash", args);
+    renderToolTitle("bash", { ...args });
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect((requireFirstRequestParams(request) as { items: unknown[] }).items).toHaveLength(1);
@@ -107,9 +112,9 @@ describe("title fetch batching", () => {
       sessionKey: "main",
     });
     const args = { command: "pnpm run build --filter ui --mode production" };
-    expect(getToolCallTitle("bash", args)).toBeUndefined();
+    expect(renderToolTitle("bash", args)).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(getToolCallTitle("bash", args)).toBe("Build the Control UI");
+    expect(renderToolTitle("bash", args)).toBe("Build the Control UI");
   });
 
   it("evicts least-recently-used successful titles once retention is full", async () => {
@@ -127,11 +132,11 @@ describe("title fetch batching", () => {
       (_, index) => `printf 'successful-title-${index}'`,
     );
     for (const command of commands) {
-      getToolCallTitle("bash", { command });
+      renderToolTitle("bash", { command });
       await vi.advanceTimersByTimeAsync(300);
     }
 
-    const retained = commands.map((command) => getToolCallTitle("bash", { command }));
+    const retained = commands.map((command) => renderToolTitle("bash", { command }));
     expect(retained[0]).toBeUndefined();
     expect(retained.at(-1)).toBe(commands.at(-1));
     expect(retained.filter((title) => title !== undefined).length).toBeLessThan(commands.length);
@@ -154,9 +159,9 @@ describe("title fetch batching", () => {
     );
     const renderTranscript = () => {
       configureToolTitleFetcher({ client, sessionKey: "main" });
-      for (const command of commands) {
-        getToolCallTitle("bash", { command });
-      }
+      scheduleToolTitlesForTranscript(
+        commands.map((command) => ({ name: "bash", args: { command } })),
+      );
     };
 
     renderTranscript();
@@ -172,60 +177,49 @@ describe("title fetch batching", () => {
     expect(requestedIds.size).toBe(commands.length);
   });
 
-  it.each(["release", "owner-switch"] as const)(
-    "resumes when transcript retention removes the saturation cursor after %s",
-    async (transition) => {
-      vi.useFakeTimers();
-      const requestedIds = new Set<string>();
-      const request = vi.fn(async (_method: string, params: unknown) => {
-        const items = (params as { items: Array<{ id: string; input: string }> }).items;
-        for (const item of items) {
-          requestedIds.add(item.id);
-        }
-        return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
-      });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const firstPane = {};
-      const secondPane = {};
-      const commands = Array.from(
-        { length: 120 },
-        (_, index) => `printf 'retained-title-${index}'`,
-      );
-      const renderTranscript = (visibleCommands: string[], renderSource: object) => {
-        configureToolTitleFetcher({ client, sessionKey: "main", renderSource });
-        for (const command of visibleCommands) {
-          getToolCallTitle("bash", { command });
-        }
-      };
-
-      renderTranscript(commands, firstPane);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestedIds.size).toBe(48);
-
-      const retainedCommands = commands.filter((_, index) => index !== 47);
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
-      renderTranscript(retainedCommands, firstPane);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestedIds.size).toBe(48);
-
-      renderTranscript(retainedCommands, secondPane);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestedIds.size).toBe(48);
-
-      if (transition === "release") {
-        releaseToolTitleRenderSource(firstPane);
-      } else {
-        configureToolTitleFetcher({
-          client,
-          sessionKey: "other-session",
-          renderSource: firstPane,
-        });
+  it("resumes when transcript retention removes the saturation cursor", async () => {
+    vi.useFakeTimers();
+    const requestedIds = new Set<string>();
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      const items = (params as { items: Array<{ id: string; input: string }> }).items;
+      for (const item of items) {
+        requestedIds.add(item.id);
       }
-      renderTranscript(retainedCommands, secondPane);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestedIds.size).toBe(96);
-    },
-  );
+      return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const commands = Array.from({ length: 120 }, (_, index) => `printf 'retained-title-${index}'`);
+    let historyVersion = 0;
+    const renderTranscript = (visibleCommands: string[], version = ++historyVersion) => {
+      configureToolTitleFetcher({
+        client,
+        sessionKey: "main",
+        historyVersion: version,
+      });
+      scheduleToolTitlesForTranscript(
+        visibleCommands.map((command) => ({ name: "bash", args: { command } })),
+      );
+    };
+
+    renderTranscript(commands);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requestedIds.size).toBe(48);
+
+    const retainedCommands = commands.filter((_, index) => index !== 47);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const retainedHistoryVersion = ++historyVersion;
+    renderTranscript(retainedCommands, retainedHistoryVersion);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requestedIds.size).toBe(48);
+
+    renderTranscript(retainedCommands, retainedHistoryVersion);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requestedIds.size).toBe(48);
+
+    renderTranscript(retainedCommands);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requestedIds.size).toBe(96);
+  });
 
   it("evicts least-recently-used failures once retention is full", async () => {
     vi.useFakeTimers();
@@ -236,12 +230,12 @@ describe("title fetch batching", () => {
     });
     const commands = Array.from({ length: 240 }, (_, index) => `printf 'failed-title-${index}'`);
     for (const command of commands) {
-      getToolCallTitle("bash", { command });
+      renderToolTitle("bash", { command });
       await vi.advanceTimersByTimeAsync(300);
     }
 
-    getToolCallTitle("bash", { command: commands[0] });
-    getToolCallTitle("bash", { command: commands.at(-1) });
+    renderToolTitle("bash", { command: commands[0] });
+    renderToolTitle("bash", { command: commands.at(-1) });
     await vi.advanceTimersByTimeAsync(300);
 
     expect(request).toHaveBeenCalledTimes(commands.length + 1);
@@ -257,14 +251,14 @@ describe("title fetch batching", () => {
       sessionKey: "main",
     });
     const args = { command: "pnpm test ui/src/pages/chat --reporter verbose" };
-    getToolCallTitle("bash", args);
+    renderToolTitle("bash", args);
     await vi.advanceTimersByTimeAsync(300);
-    getToolCallTitle("bash", args);
+    renderToolTitle("bash", args);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(request).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(4 * 60_000);
-    getToolCallTitle("bash", args);
+    renderToolTitle("bash", args);
     await vi.advanceTimersByTimeAsync(300);
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -286,11 +280,11 @@ describe("title fetch batching", () => {
     });
     const commands = Array.from({ length: 240 }, (_, index) => `printf 'queued-title-${index}'`);
     for (const command of commands.slice(0, 24)) {
-      getToolCallTitle("bash", { command });
+      renderToolTitle("bash", { command });
     }
     await vi.advanceTimersByTimeAsync(300);
     for (const command of commands.slice(24)) {
-      getToolCallTitle("bash", { command });
+      renderToolTitle("bash", { command });
     }
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
@@ -310,7 +304,7 @@ describe("title fetch batching", () => {
     expect(requestedItems).toBe(48);
 
     for (const command of commands) {
-      getToolCallTitle("bash", { command });
+      renderToolTitle("bash", { command });
     }
     await vi.advanceTimersByTimeAsync(60_000);
     expect(request).toHaveBeenCalledTimes(2);
@@ -329,13 +323,13 @@ describe("title fetch batching", () => {
     for (let sessionIndex = 0; sessionIndex < 2; sessionIndex++) {
       configureToolTitleFetcher({ client, sessionKey: `session-${sessionIndex}` });
       for (let itemIndex = 0; itemIndex < 48; itemIndex++) {
-        getToolCallTitle("bash", {
+        renderToolTitle("bash", {
           command: `printf 'global-title-${sessionIndex}-${itemIndex}'`,
         });
       }
     }
     configureToolTitleFetcher({ client, sessionKey: "overflow-session" });
-    getToolCallTitle("bash", { command: "printf 'global-title-overflow'" });
+    renderToolTitle("bash", { command: "printf 'global-title-overflow'" });
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(
@@ -361,7 +355,7 @@ describe("title fetch batching", () => {
       client: { request } as unknown as GatewayBrowserClient,
       sessionKey: "main",
     });
-    getToolCallTitle("bash", { command: "pnpm test ui/src/pages/chat --reporter verbose" });
+    renderToolTitle("bash", { command: "pnpm test ui/src/pages/chat --reporter verbose" });
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(request).toHaveBeenCalledTimes(1);
@@ -391,7 +385,7 @@ describe("title fetch batching", () => {
         client: { request } as unknown as GatewayBrowserClient,
         sessionKey: "main",
       });
-      getToolCallTitle("bash", args);
+      renderToolTitle("bash", args);
       await vi.advanceTimersByTimeAsync(300);
 
       configureToolTitleFetcher({
@@ -407,7 +401,7 @@ describe("title fetch batching", () => {
       expect(dispatchEvent).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
       if (transition === "replace") {
-        getToolCallTitle("bash", args);
+        renderToolTitle("bash", args);
         await vi.advanceTimersByTimeAsync(300);
         expect(replacementRequest).toHaveBeenCalledOnce();
       }
@@ -433,9 +427,9 @@ describe("title fetch batching", () => {
       client: { request: firstRequest } as unknown as GatewayBrowserClient,
       sessionKey: "main",
     });
-    expect(getToolCallTitle("bash", args)).toBeUndefined();
+    expect(renderToolTitle("bash", args)).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(getToolCallTitle("bash", args)).toBe("First gateway title");
+    expect(renderToolTitle("bash", args)).toBe("First gateway title");
     const firstVersion = getToolTitlesVersion();
     dispatchEvent.mockClear();
 
@@ -444,12 +438,12 @@ describe("title fetch batching", () => {
       sessionKey: "main",
     });
     expect(getToolTitlesVersion()).toBe(firstVersion + 1);
-    expect(getToolCallTitle("bash", args)).toBeUndefined();
+    expect(renderToolTitle("bash", args)).toBeUndefined();
     expect(dispatchEvent).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(replacementRequest).toHaveBeenCalledOnce();
-    expect(getToolCallTitle("bash", args)).toBe("Replacement gateway title");
+    expect(renderToolTitle("bash", args)).toBe("Replacement gateway title");
   });
 
   it("stops requesting once a disabled response settles queued backlog", async () => {
@@ -463,14 +457,14 @@ describe("title fetch batching", () => {
       agentId: "a",
     });
     for (let index = 0; index < 25; index++) {
-      getToolCallTitle("bash", {
+      renderToolTitle("bash", {
         command: `pnpm run build --filter ui --mode production-${index}`,
       });
     }
     await vi.advanceTimersByTimeAsync(250);
     expect(vi.getTimerCount()).toBe(0);
     // A different eligible call after the disabled response must not schedule.
-    getToolCallTitle("bash", { command: "pnpm test ui/src/pages/chat --runInBand" });
+    renderToolTitle("bash", { command: "pnpm test ui/src/pages/chat --runInBand" });
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(request).toHaveBeenCalledTimes(1);
@@ -508,7 +502,7 @@ describe("title fetch batching", () => {
         sessionKey: "agent:a:main",
       });
       for (let itemIndex = 0; itemIndex < 24; itemIndex++) {
-        getToolCallTitle("bash", {
+        renderToolTitle("bash", {
           command: `pnpm test ui/src/pages/chat --unusable-${caseIndex}-${itemIndex}`,
         });
       }
@@ -519,12 +513,12 @@ describe("title fetch batching", () => {
       const otherSessionArgs = {
         command: `pnpm test ui/src/pages/chat --unusable-${caseIndex}-other-session`,
       };
-      getToolCallTitle("bash", otherSessionArgs);
+      renderToolTitle("bash", otherSessionArgs);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(
         request.mock.calls.map((call) => (call[1] as { sessionKey: string }).sessionKey),
       ).toEqual(["agent:a:main", "agent:b:main"]);
-      expect(getToolCallTitle("bash", otherSessionArgs)).toBe("Other session title");
+      expect(renderToolTitle("bash", otherSessionArgs)).toBe("Other session title");
       expect(vi.getTimerCount()).toBe(0);
       expect(request).toHaveBeenCalledTimes(2);
       configureToolTitleFetcher({ client: null, sessionKey: null });
@@ -549,13 +543,13 @@ describe("title fetch batching", () => {
       sessionKey: "global",
       agentId: "alice",
     });
-    getToolCallTitle("bash", { command: "pnpm run build --filter ui --mode development" });
+    renderToolTitle("bash", { command: "pnpm run build --filter ui --mode development" });
     configureToolTitleFetcher({
       client,
       sessionKey: "agent:b:main",
       agentId: "b",
     });
-    getToolCallTitle("bash", { command: "pnpm test ui/src/pages/chat --sequence.concurrent" });
+    renderToolTitle("bash", { command: "pnpm test ui/src/pages/chat --sequence.concurrent" });
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(requests).toEqual([
