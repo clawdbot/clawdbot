@@ -10,7 +10,11 @@ import {
   optionalStringEnum,
   stringEnum,
 } from "../schema/typebox.js";
-import { MAX_HOLD_SECONDS, MAX_WAIT_SECONDS } from "./computer-tool-shared.js";
+import {
+  COMPUTER_TOOL_LOCAL_ACTIONS,
+  MAX_HOLD_SECONDS,
+  MAX_WAIT_SECONDS,
+} from "./computer-tool-shared.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
 export const COMPUTER_TOOL_ACTIONS = COMPUTER_USE_V1_ACTION_NAMES;
@@ -23,14 +27,17 @@ const EXECUTION_OWNED_ACTIONS = new Set<ComputerUseV2ActionName>([
   "stop_recording",
   "replay_trajectory",
 ]);
-
 export function availableComputerActions(
   actions: readonly ComputerUseV2ActionName[],
   hasCleanupOwner: boolean,
 ): readonly ComputerUseV2ActionName[] {
+  const available = new Set<ComputerUseV2ActionName>(actions);
+  for (const action of COMPUTER_TOOL_LOCAL_ACTIONS) {
+    available.add(action);
+  }
   return hasCleanupOwner
-    ? actions
-    : actions.filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
+    ? [...available]
+    : [...available].filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
 }
 
 export function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
