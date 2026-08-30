@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -51,6 +51,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
+import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
@@ -154,7 +155,7 @@ const state = vi.hoisted(() => ({
     version: 0,
   })),
   prepareInternalSessionEffectsSessionMock: vi.fn(),
-  removeInternalSessionEffectsSessionMock: vi.fn(),
+  applySessionEntryLifecycleMutationMock: vi.fn(),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as SessionEntry | undefined,
   sessionStoreMock: undefined as unknown,
@@ -450,17 +451,10 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
   }),
 }));
 
-vi.mock("./internal-session-effects.js", () => ({
+vi.mock("./internal-session-effects.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./internal-session-effects.js")>()),
   prepareInternalSessionEffectsSession: (...args: unknown[]) =>
     state.prepareInternalSessionEffectsSessionMock(...args),
-  removeInternalSessionEffectsSession: (...args: unknown[]) =>
-    state.removeInternalSessionEffectsSessionMock(...args),
-  resolveInternalSessionEffectsTarget: ({ agentId, runId, storePath }: Record<string, string>) => ({
-    agentId,
-    sessionId: `internal-${runId}`,
-    sessionKey: `agent:${agentId}:internal-session-effects:${runId}`,
-    storePath,
-  }),
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -1203,7 +1197,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionFile: "sqlite:default:internal-session:/tmp/openclaw-session-store.json",
       sessionEntry: { sessionId: "internal-session", updatedAt: 1 },
     });
-    state.removeInternalSessionEffectsSessionMock.mockResolvedValue(undefined);
+    state.applySessionEntryLifecycleMutationMock.mockReset().mockResolvedValue(undefined);
+    // Keep tracking and deletion planning real; restore the storage fault boundary after each case.
+    vi.spyOn(sessionAccessor, "applySessionEntryLifecycleMutation").mockImplementation((...args) =>
+      state.applySessionEntryLifecycleMutationMock(...args),
+    );
   });
 
   afterEach(() => {
@@ -1352,7 +1350,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             sessionKey,
           );
           state.resolvedSessionKeyMock = sessionKey;
-          await replaceSessionEntry({ sessionKey, storePath }, entry);
+          await sessionAccessor.replaceSessionEntry({ sessionKey, storePath }, entry);
           const started = createDeferred();
           const releaseWriter = createDeferred();
           let writer: Promise<void> | undefined;
@@ -1413,7 +1411,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
             releaseWriter.resolve();
             expect(await command).toBe(outcome === "failed" ? failure : undefined);
-            expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+            expect(sessionAccessor.loadSessionEntry({ sessionKey, storePath })).toMatchObject({
               mainRestartRecovery: { chargedAttempts: 3, startedAttempt: 3 },
             });
             expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
@@ -2400,7 +2398,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(fallbackParams.model).toBe("explicit-model");
   });
 
-  it("uses rotated session identity for all post-run session persistence", async () => {
+  it("uses the accepted compaction identity for all post-run session persistence", async () => {
     setupSingleAttemptFallback();
     setupStoredSession();
     const rotatedEntry: SessionEntry = {
@@ -2423,10 +2421,27 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     result.meta.finalAssistantVisibleText = "ok";
     result.meta.agentMeta = {
       ...result.meta.agentMeta,
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.jsonl",
+      sessionId: "native-thread-session",
+      sessionFile: "/tmp/native-thread-session.jsonl",
     };
-    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runAgentAttemptMock.mockImplementationOnce(
+      async (
+        params: Parameters<typeof import("./command/attempt-execution.js").runAgentAttempt>[0],
+      ) => {
+        const target = expectDefined(params.sessionTarget, "accepted compaction target");
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          target: {
+            ...target,
+            sessionId: rotatedEntry.sessionId,
+            lifecycleRevision: undefined,
+            activeWriterRunId: undefined,
+          },
+        });
+        return result;
+      },
+    );
     state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
       state.sessionStoreMock = { "agent:main:main": rotatedEntry };
     });
@@ -3827,7 +3842,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         isControlUiVisible: false,
       }),
     );
-    expect(state.removeInternalSessionEffectsSessionMock).not.toHaveBeenCalled();
+    expect(state.applySessionEntryLifecycleMutationMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -3903,27 +3918,61 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it("removes the one-shot internal model-run SQLite session after success", async () => {
     setupSingleAttemptFallback();
     const result = makeSuccessResult("openai", "gpt-5.4");
-    state.runAgentAttemptMock.mockResolvedValue({
-      ...result,
-      meta: {
-        ...result.meta,
-        executionTrace: {
-          runner: "embedded",
-          fallbackUsed: false,
-          winnerProvider: "openai",
-          winnerModel: "gpt-5.4",
-        },
-        finalAssistantVisibleText: "ok",
-        agentMeta: {
-          provider: "openai",
-          model: "gpt-5.4",
-          sessionId: "rotated-model-run-session",
-          sessionFile: "sqlite:default:rotated-model-run-session:/tmp/openclaw-session-store.json",
-        },
+    state.runAgentAttemptMock.mockImplementationOnce(
+      async (
+        params: Parameters<typeof import("./command/attempt-execution.js").runAgentAttempt>[0],
+      ) => {
+        const target = expectDefined(params.sessionTarget, "internal model-run target");
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          target: {
+            ...target,
+            sessionId: "rotated-model-run-session",
+            lifecycleRevision: undefined,
+            activeWriterRunId: undefined,
+          },
+        });
+        return {
+          ...result,
+          meta: {
+            ...result.meta,
+            executionTrace: {
+              runner: "embedded",
+              fallbackUsed: false,
+              winnerProvider: "openai",
+              winnerModel: "gpt-5.4",
+            },
+            finalAssistantVisibleText: "ok",
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              sessionId: "rotated-model-run-session",
+              sessionFile:
+                "sqlite:default:rotated-model-run-session:/tmp/openclaw-session-store.json",
+            },
+          },
+        };
       },
-    });
+    );
 
-    await runInternalModelCommand("model-run-success");
+    const cleanupStarted = createDeferred();
+    const releaseCleanup = createDeferred();
+    state.applySessionEntryLifecycleMutationMock.mockImplementationOnce(async () => {
+      cleanupStarted.resolve();
+      await releaseCleanup.promise;
+    });
+    let settled = false;
+    const pending = runInternalModelCommand("model-run-success").finally(() => {
+      settled = true;
+    });
+    try {
+      await Promise.race([cleanupStarted.promise, pending]);
+      expect(settled).toBe(false);
+    } finally {
+      releaseCleanup.resolve();
+      await pending;
+    }
 
     expect(state.createTrajectoryRuntimeRecorderMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3931,17 +3980,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     );
     expect(state.persistCliTurnTranscriptMock).not.toHaveBeenCalled();
-    expect(state.removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith({
+    expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith({
       agentId: "default",
-      sessionId: "rotated-model-run-session",
-      sessionKey: "agent:default:internal-session-effects:run",
       storePath: "/tmp/openclaw-session-store.json",
-      sessionFile: "sqlite:default:internal-session:/tmp/openclaw-session-store.json",
-      sessionEntry: { sessionId: "internal-session", updatedAt: 1 },
+      removals: [
+        {
+          sessionKey: "agent:default:internal-session-effects:run",
+          expectedSessionId: "rotated-model-run-session",
+          archiveRemovedTranscript: false,
+        },
+      ],
+      skipMaintenance: true,
     });
     const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
     const cleanupOrder =
-      state.removeInternalSessionEffectsSessionMock.mock.invocationCallOrder[0] ?? 0;
+      state.applySessionEntryLifecycleMutationMock.mock.invocationCallOrder[0] ?? 0;
     expect(deliveryOrder).toBeLessThan(cleanupOrder);
   });
 
@@ -3951,13 +4004,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await expect(runInternalModelCommand("model-run-failure")).rejects.toThrow("probe failed");
 
-    expect(state.removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "internal-session",
-        sessionKey: "agent:default:internal-session-effects:run",
-        storePath: "/tmp/openclaw-session-store.json",
-      }),
-    );
+    expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith({
+      agentId: "default",
+      storePath: "/tmp/openclaw-session-store.json",
+      removals: [
+        {
+          sessionKey: "agent:default:internal-session-effects:run",
+          expectedSessionId: "internal-session",
+          archiveRemovedTranscript: false,
+        },
+      ],
+      skipMaintenance: true,
+    });
   });
 
   it("cleans the deterministic model-run session when preparation fails", async () => {
@@ -3971,11 +4029,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "session preparation failed",
     );
 
-    expect(state.removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith({
+    const target = resolveInternalSessionEffectsTarget({
       agentId: "default",
-      sessionId: "internal-model-run-prepare-failure",
-      sessionKey: "agent:default:internal-session-effects:model-run-prepare-failure",
+      runId: "model-run-prepare-failure",
       storePath: "/tmp/openclaw-session-store.json",
+    });
+    expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      removals: [
+        {
+          sessionKey: target.sessionKey,
+          expectedSessionId: target.sessionId,
+          archiveRemovedTranscript: false,
+        },
+      ],
+      skipMaintenance: true,
     });
   });
 
@@ -3984,15 +4053,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.storePathMock = "/tmp/openclaw-session-store.json";
     state.loadSessionEntryMock.mockReturnValue({ sessionId: "session-1", updatedAt: 1 });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    state.removeInternalSessionEffectsSessionMock.mockRejectedValue(
-      new Error("database is locked"),
-    );
+    state.applySessionEntryLifecycleMutationMock.mockRejectedValue(new Error("database is locked"));
 
     await expect(runInternalModelCommand("model-run-cleanup-failure")).resolves.toMatchObject({
       payloads: [{ text: "ok" }],
     });
 
-    expect(state.removeInternalSessionEffectsSessionMock).toHaveBeenCalled();
+    expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalled();
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {

@@ -3,7 +3,7 @@
  */
 import { join } from "node:path";
 import { vi, type Mock } from "vitest";
-import type { CompactResult } from "../../context-engine/types.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { createOpenClawCodingTools } from "../agent-tools.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -11,7 +11,11 @@ import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
-import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
+import {
+  agentSessionAutomaticCompaction,
+  agentSessionSetContextReplacementHook,
+} from "../sessions/agent-session-compaction.js";
+import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 type MockResolvedModel = {
@@ -37,7 +41,7 @@ type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock: Mock<() => Promise<CompactResult>> = vi.fn(async () => ({
+export const contextEngineCompactMock: Mock<ContextEngine["compact"]> = vi.fn(async () => ({
   ok: true as boolean,
   compacted: true as boolean,
   reason: undefined as string | undefined,
@@ -86,8 +90,9 @@ export const limitHistoryTurnsMock = vi.fn<typeof import("./history.js").limitHi
 );
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
-export const attemptServerEndpointCompactionMock: Mock<(_params?: unknown) => Promise<unknown>> =
-  vi.fn(async () => undefined);
+export const attemptServerEndpointCompactionMock: Mock<
+  (params: Parameters<typeof attemptServerEndpointCompaction>[0]) => Promise<unknown>
+> = vi.fn(async () => undefined);
 export const triggerInternalHookMock: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -164,6 +169,7 @@ export const runCliAgentMock = vi.fn(async () => ({
 }));
 export const resolveCliBackendConfigMock = vi.fn(() => null as Record<string, unknown> | null);
 function createMockCompactionSession() {
+  let onContextReplaced: ((tokensAfter: number) => void) | undefined;
   const session = {
     sessionId: "session-1",
     messages: sessionMessages.map((message) => structuredClone(message)),
@@ -182,14 +188,17 @@ function createMockCompactionSession() {
     },
     compact: vi.fn(async () => {
       sessionManualCompactionMock();
-      session.messages.splice(1);
-      return await sessionCompactImpl();
+      return await completeCompaction();
     }),
     [agentSessionAutomaticCompaction]: vi.fn(async () => {
       sessionAutomaticCompactionMock();
-      session.messages.splice(1);
-      return await sessionCompactImpl();
+      return await completeCompaction();
     }),
+    [agentSessionSetContextReplacementHook]: (
+      callback: ((tokensAfter: number) => void) | undefined,
+    ) => {
+      onContextReplaced = callback;
+    },
     setActiveToolsByName: vi.fn(),
     setBaseSystemPrompt: vi.fn((systemPrompt: string) => {
       session.agent.state.systemPrompt = systemPrompt;
@@ -197,6 +206,14 @@ function createMockCompactionSession() {
     abortCompaction: sessionAbortCompactionMock,
     dispose: vi.fn(),
   };
+  async function completeCompaction() {
+    const result = await sessionCompactImpl();
+    session.messages.splice(1);
+    onContextReplaced?.(
+      session.messages.reduce<number>((tokens, message) => tokens + estimateTokensMock(message), 0),
+    );
+    return result;
+  }
   return session;
 }
 export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?]) => ({
@@ -288,42 +305,6 @@ export const resolveSandboxContextMock = vi.fn(async () => null);
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);
-async function runCompactWithSafetyTimeoutMock(
-  compact: () => Promise<unknown>,
-  _timeoutMs?: number,
-  opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
-): Promise<unknown> {
-  const abortSignal = opts?.abortSignal;
-  if (!abortSignal) {
-    return await compact();
-  }
-  const cancelAndCreateError = () => {
-    opts?.onCancel?.();
-    const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
-    if (reason instanceof Error) {
-      return reason;
-    }
-    const err = new Error("aborted");
-    err.name = "AbortError";
-    return err;
-  };
-  if (abortSignal.aborted) {
-    throw cancelAndCreateError();
-  }
-  return await Promise.race([
-    compact(),
-    new Promise<never>((_, reject) => {
-      abortSignal.addEventListener(
-        "abort",
-        () => {
-          reject(cancelAndCreateError());
-        },
-        { once: true },
-      );
-    }),
-  ]);
-}
-export const compactWithSafetyTimeoutMock = vi.fn(runCompactWithSafetyTimeoutMock);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<{
     rotated: boolean;
@@ -617,8 +598,6 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
     reason: undefined,
     result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
   });
-  compactWithSafetyTimeoutMock.mockReset();
-  compactWithSafetyTimeoutMock.mockImplementation(runCompactWithSafetyTimeoutMock);
 
   resolveModelMock.mockReset();
   resolveModelMock.mockImplementation((provider?: string, modelId?: string) => ({
@@ -960,35 +939,15 @@ export async function loadCompactHooksHarness(): Promise<{
     })),
   }));
 
-  vi.doMock("./compaction-safety-timeout.js", () => {
+  vi.doMock("./compaction-safety-timeout.js", async () => {
+    const actual = await vi.importActual<typeof import("./compaction-safety-timeout.js")>(
+      "./compaction-safety-timeout.js",
+    );
     return {
-      compactWithSafetyTimeout: compactWithSafetyTimeoutMock,
+      compactWithSafetyTimeout: actual.compactWithSafetyTimeout,
       resolveCompactionTimeoutMs: vi.fn(() => 30_000),
-      // Mirror the real owner split: only this harness's canonical native
-      // delegate mock bypasses the outer watchdog; every custom wrapper stays bounded.
-      compactContextEngineWithSafetyTimeout: vi.fn(
-        (
-          contextEngine: {
-            info: { ownsCompaction?: boolean };
-            compact: (params: Record<string, unknown>) => Promise<unknown>;
-          },
-          params: Record<string, unknown>,
-          timeoutMs?: number,
-          abortSignal?: AbortSignal,
-        ) => {
-          if (
-            contextEngine.info.ownsCompaction !== true &&
-            contextEngine.compact === contextEngineCompactMock
-          ) {
-            return contextEngine.compact(abortSignal ? { ...params, abortSignal } : params);
-          }
-          return compactWithSafetyTimeoutMock(
-            () => contextEngine.compact(abortSignal ? { ...params, abortSignal } : params),
-            timeoutMs,
-            abortSignal ? { abortSignal } : undefined,
-          );
-        },
-      ),
+      // Exercise delegate tagging, progress resets, and caller cancellation at their real owner.
+      compactContextEngineWithSafetyTimeout: vi.fn(actual.compactContextEngineWithSafetyTimeout),
     };
   });
 
@@ -1033,23 +992,27 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSkillsPrompt: resolveSkillsPromptMock,
   }));
 
-  vi.doMock("../agent-scope.js", () => ({
-    listAgentEntries: vi.fn(() => []),
-    resolveAgentConfig: resolveAgentConfigMock,
-    resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
-      join(fixtureWorkspaceDir, "agents", agentId, "agent"),
-    ),
-    resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
-    resolveAgentWorkspaceDir: vi.fn(() => fixtureWorkspaceDir),
-    resolveDefaultAgentDir: resolveDefaultAgentDirMock,
-    resolveDefaultAgentId: vi.fn(() => "main"),
-    resolveAgentIdFromSessionKey: vi.fn(
-      (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-    ),
-    resolveRunModelFallbacksOverride: vi.fn(() => undefined),
-    resolveSessionAgentId: resolveSessionAgentIdMock,
-    resolveSessionAgentIds: resolveSessionAgentIdsMock,
-  }));
+  vi.doMock("../agent-scope.js", async () => {
+    const { listAgentIds } = await import("../agent-scope-config.js");
+    return {
+      listAgentEntries: vi.fn(() => []),
+      listAgentIds,
+      resolveAgentConfig: resolveAgentConfigMock,
+      resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
+        join(fixtureWorkspaceDir, "agents", agentId, "agent"),
+      ),
+      resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
+      resolveAgentWorkspaceDir: vi.fn(() => fixtureWorkspaceDir),
+      resolveDefaultAgentDir: resolveDefaultAgentDirMock,
+      resolveDefaultAgentId: vi.fn(() => "main"),
+      resolveAgentIdFromSessionKey: vi.fn(
+        (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
+      ),
+      resolveRunModelFallbacksOverride: vi.fn(() => undefined),
+      resolveSessionAgentId: resolveSessionAgentIdMock,
+      resolveSessionAgentIds: resolveSessionAgentIdsMock,
+    };
+  });
 
   vi.doMock("../auth-profiles/source-check.js", () => ({
     hasAnyAuthProfileStoreSource: vi.fn(() => false),

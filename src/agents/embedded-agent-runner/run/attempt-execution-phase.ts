@@ -21,10 +21,11 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttemptExecutionPhase(
-  input: EmbeddedAttemptExecutionPhaseInput,
+  input: EmbeddedAttemptExecutionPhaseInput & { attempt: EmbeddedRunAttemptInternalParams },
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
   const { sessionRuntime, systemPrompt, toolBase, toolCatalog } = input.prepared;
@@ -59,9 +60,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
   const { nestedToolActivities } = toolBase;
-  activeSession[agentSessionSetContextReplacementHook](() =>
-    toolBase.skillInstructionDeliveryCache.clear(),
-  );
+  activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    toolBase.skillInstructionDeliveryCache.clear();
+    attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
+  });
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({

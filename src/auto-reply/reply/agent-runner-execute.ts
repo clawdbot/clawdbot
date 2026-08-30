@@ -18,6 +18,7 @@ import {
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -386,7 +387,7 @@ export async function executePreparedReplyAgentRun(
       ? "superseded"
       : runOutcome.outcome.kind === "rejected"
         ? "failed"
-        : runOutcome.outcome.kind === "aborted" || runOutcome.outcome.abortReason
+        : runOutcome.outcome.kind === "aborted"
           ? "cancelled"
           : runOutcome.outcome.status,
     replyOperation,
@@ -394,6 +395,14 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = getActiveSessionEntry();
   const activeIsNewSession = getActiveIsNewSession();
 
+  if (runOutcome.outcome.kind !== "settled") {
+    // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
+    await accountAgentTurnCompaction({
+      compaction: runOutcome.outcome.compaction,
+      sessionStore: activeSessionStore,
+      replyOperation,
+    });
+  }
   if (operationSuperseded) {
     return { text: SILENT_REPLY_TOKEN };
   }

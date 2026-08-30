@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -18,10 +19,6 @@ const mocks = vi.hoisted(() => ({
   sessionLikelyHasOversizedToolResults: vi.fn(() => false),
   truncateOversizedToolResults: vi.fn(),
   warn: vi.fn(),
-}));
-
-vi.mock("./run/compaction-runtime.js", () => ({
-  compactEmbeddedRunForRecovery: mocks.compact,
 }));
 
 vi.mock("./context-engine-maintenance.js", () => ({
@@ -45,13 +42,19 @@ vi.mock("./provider-prompt-state.js", () => ({
 vi.mock("./tool-result-truncation.js", () => ({
   resolveLiveToolResultMaxChars: () => 32_000,
   sessionLikelyHasOversizedToolResults: mocks.sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInActiveTarget: mocks.truncateOversizedToolResults,
+  truncateOversizedToolResultsInSessionManager: mocks.truncateOversizedToolResults,
 }));
 
-vi.mock("./run/session-bootstrap.js", () => ({
-  isNoRealConversationCompactionNoop: mocks.isNoRealConversationCompactionNoop,
-  resetNoRealConversationTokenSnapshot: mocks.resetNoRealConversationTokenSnapshot,
-}));
+vi.mock("./run/session-bootstrap.js", async () => {
+  const { buildContextEngineCompactionSessionTarget } = await vi.importActual<
+    typeof import("./run/session-bootstrap.js")
+  >("./run/session-bootstrap.js");
+  return {
+    buildContextEngineCompactionSessionTarget,
+    isNoRealConversationCompactionNoop: mocks.isNoRealConversationCompactionNoop,
+    resetNoRealConversationTokenSnapshot: mocks.resetNoRealConversationTokenSnapshot,
+  };
+});
 
 type RecoveryInput = Parameters<typeof recoverEmbeddedRunOverflow>[0];
 type RecoveryInputOverrides = Omit<Partial<RecoveryInput>, "attempt"> & {
@@ -122,11 +125,18 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
       onAutoCompactionSucceeded: vi.fn(),
     },
     state: createEmbeddedRunContextRecoveryState(),
+    assertRecoveryActive: vi.fn(),
+    prepareRecoverySession: () => ({
+      sessionManager: SessionManager.inMemory("/tmp/workspace"),
+      assertActive: vi.fn(),
+      withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
+        await operation(),
+    }),
     contextEngine: {
       info: { id: "legacy", name: "Legacy" },
       ingest: vi.fn(),
       assemble: vi.fn(),
-      compact: vi.fn(),
+      compact: mocks.compact,
     },
     contextTokenBudget: 200_000,
     genericCompactionRecoveryAllowed: true,
@@ -168,11 +178,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
 
 describe("recoverEmbeddedRunOverflow", () => {
   beforeEach(() => {
-    mocks.compact.mockReset().mockResolvedValue({
-      result: successfulCompaction(),
-      runtimeContext: {},
-      runtimeSettings: {},
-    });
+    mocks.compact.mockReset().mockResolvedValue(successfulCompaction());
     mocks.debug.mockReset();
     mocks.getProviderPromptState.mockReset();
     mocks.info.mockReset();
@@ -182,7 +188,7 @@ describe("recoverEmbeddedRunOverflow", () => {
     mocks.markProviderPromptRejected.mockReset();
     mocks.resetNoRealConversationTokenSnapshot.mockReset();
     mocks.sessionLikelyHasOversizedToolResults.mockReset().mockReturnValue(false);
-    mocks.truncateOversizedToolResults.mockReset().mockResolvedValue({
+    mocks.truncateOversizedToolResults.mockReset().mockReturnValue({
       truncated: false,
       truncatedCount: 0,
       reason: "nothing to truncate",
@@ -268,16 +274,18 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ currentTokenCount: 12_000, trigger: "overflow" }),
+      expect.objectContaining({
+        currentTokenCount: 12_000,
+        runtimeContext: expect.objectContaining({ trigger: "overflow" }),
+      }),
     );
   });
 
   it("surfaces context overflow when compaction fails", async () => {
     mocks.compact.mockResolvedValueOnce({
-      result: { ok: false, compacted: false, reason: "nothing to compact" },
-      runtimeContext: {},
-      runtimeSettings: {},
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
     });
 
     const result = await recoverEmbeddedRunOverflow(makeInput());
@@ -304,12 +312,12 @@ describe("recoverEmbeddedRunOverflow", () => {
       },
     ] as EmbeddedRunAttemptResult["messagesSnapshot"];
     mocks.compact.mockResolvedValueOnce({
-      result: { ok: false, compacted: false, reason: "nothing to compact" },
-      runtimeContext: {},
-      runtimeSettings: {},
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
     });
     mocks.sessionLikelyHasOversizedToolResults.mockReturnValueOnce(true);
-    mocks.truncateOversizedToolResults.mockResolvedValueOnce({
+    mocks.truncateOversizedToolResults.mockReturnValueOnce({
       truncated: true,
       truncatedCount: 1,
     });
@@ -328,10 +336,7 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.truncateOversizedToolResults).toHaveBeenCalledWith(
       expect.objectContaining({
         projectionState,
-        scope: expect.objectContaining({
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-        }),
+        sessionManager: expect.any(SessionManager),
       }),
     );
   });
@@ -343,12 +348,12 @@ describe("recoverEmbeddedRunOverflow", () => {
       { role: "toolResult", content: [{ type: "text", text: "gamma delta ".repeat(800) }] },
     ] as EmbeddedRunAttemptResult["messagesSnapshot"];
     mocks.compact.mockResolvedValueOnce({
-      result: { ok: false, compacted: false, reason: "nothing to compact" },
-      runtimeContext: {},
-      runtimeSettings: {},
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
     });
     mocks.sessionLikelyHasOversizedToolResults.mockReturnValueOnce(true);
-    mocks.truncateOversizedToolResults.mockResolvedValueOnce({
+    mocks.truncateOversizedToolResults.mockReturnValueOnce({
       truncated: true,
       truncatedCount: 2,
     });
@@ -401,7 +406,7 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it("truncates the frozen projection after compaction for a mixed preflight route", async () => {
-    mocks.truncateOversizedToolResults.mockResolvedValueOnce({
+    mocks.truncateOversizedToolResults.mockReturnValueOnce({
       truncated: true,
       truncatedCount: 2,
     });
@@ -526,7 +531,8 @@ describe("recoverEmbeddedRunOverflow", () => {
         info: { id: "test", name: "Test", ownsCompaction: true },
         ingest: vi.fn(),
         assemble: vi.fn(),
-        compact: vi.fn(),
+        compact: mocks.compact,
+        maintain: mocks.maintenance,
       } as RecoveryInput["contextEngine"],
     });
 
@@ -569,11 +575,10 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({
         tokenBudget: 241_616,
         currentTokenCount: 268_138,
-        trigger: "overflow",
+        runtimeContext: expect.objectContaining({ trigger: "overflow" }),
       }),
     );
   });
@@ -594,10 +599,7 @@ describe("recoverEmbeddedRunOverflow", () => {
     );
 
     expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ tokenBudget: 200_000 }),
-    );
+    expect(mocks.compact).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 200_000 }));
   });
 
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
@@ -621,10 +623,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       );
 
       expect(result).toEqual({ action: "retry" });
-      expect(mocks.compact).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ tokenBudget: 200_000 }),
-      );
+      expect(mocks.compact).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 200_000 }));
     },
   );
 
@@ -635,7 +634,6 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({ currentTokenCount: 200_001 }),
     );
   });
@@ -674,9 +672,9 @@ describe("recoverEmbeddedRunOverflow", () => {
       unwindowedMessageCount: 0,
     };
     mocks.compact.mockResolvedValueOnce({
-      result: { ok: true, compacted: false, reason: "no real conversation messages" },
-      runtimeContext: {},
-      runtimeSettings: {},
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
     });
     mocks.isNoRealConversationCompactionNoop.mockReturnValueOnce(true);
 
@@ -691,9 +689,9 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(state.lastCompactionTokensAfter).toBeUndefined();
     expect(state.lastContextBudgetStatus).toBeUndefined();
     expect(mocks.resetNoRealConversationTokenSnapshot).toHaveBeenCalledWith({
-      config: {},
-      sessionKey: "agent:main:session-1",
-      agentId: "main",
+      sessionTarget: undefined,
+      sessionPersistence: undefined,
+      assertActive: expect.any(Function),
     });
   });
 
@@ -716,7 +714,8 @@ describe("recoverEmbeddedRunOverflow", () => {
         info: { id: "test", name: "Test", ownsCompaction: true },
         ingest: vi.fn(),
         assemble: vi.fn(),
-        compact: vi.fn(),
+        compact: mocks.compact,
+        maintain: mocks.maintenance,
       } as RecoveryInput["contextEngine"],
       adoptCompactionTranscript,
       getActiveSession: () => activeSession,

@@ -71,6 +71,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -88,7 +89,7 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 };
 
 export function prepareEmbeddedAttemptStream(input: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   activeSession: AgentSession;
   runtimeChannel?: string;
   hookRunner: HookRunner;
@@ -336,6 +337,9 @@ export function prepareEmbeddedAttemptStream(input: {
     silentExpected: attempt.silentExpected,
     suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
     config: attempt.config,
+    compactionCountOwner: attempt.compactionCountOwner,
+    onContextAccountingEvent: attempt.onContextAccountingEvent,
+    sessionPersistence: attempt.sessionPersistence,
     // Live events belong to the transcript session. The sandbox key is only
     // authority context and may intentionally point at a visible parent.
     sessionKey: attempt.sessionKey,

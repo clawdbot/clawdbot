@@ -1,0 +1,55 @@
+title: Gateway compaction preserves writer ownership and committed facts
+
+scenario:
+  id: gateway-compaction-abort
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.compaction-retry-policy
+    secondary:
+      - session-memory.compaction
+      - session-memory.pruning
+  objective: Verify that stock overflow compaction through the real Gateway cannot write after writer replacement or cancellation, while cancellation after its commit preserves completed accounting.
+  successCriteria:
+    - A real built Gateway receives a synthetic HTTP context overflow and starts an actual compaction summary request held by the provider fixture.
+    - The retained active transcript includes a completed assistant tool call paired with a 180000-character tool result before cancellation.
+    - chat.abort cancels the exact run, and releasing the summary does not change pre-existing durable rows, retained active entry identities, tool content, or compaction accounting.
+    - Replacing the original run's durable writer through the real claim owner in the isolated producer child preserves the same session and lifecycle revision; without chat.abort, releasing the summary cannot append a stale compaction, change checkpoints or accounting, or retry the old turn. The original lifecycle independently settles as failed, and its verified terminal fields are the only allowed replacement-row changes.
+    - A fresh turn on the same session reaches its own held provider request before final state assertions, proving the old session lane released without relying only on agent.wait.
+    - Interrupted turns deliver no final marker, while their same-session successors deliver exactly one recovery marker through QA Channel, matched to the exact successor run rather than rejected by an earlier run's warning.
+    - An independent summary failure while still active exercises tool-result truncation and recovers without a compaction count increment.
+    - A separate successful summary control commits and counts exactly one compaction.
+    - An ordinary explicitly enabled workspace hook proves its loaded gateway startup event, then holds session:compact:after after a real SQLite compaction; aborting the original caller must retain that compaction and settle count one while the hook is still held, before release or successor admission.
+    - The committed-cancellation case releases the hook in finally, observes hook settlement and the next same-session provider request, then joins only the owned Gateway before its final SQLite and delivery assertions; no second compaction or late original reply is allowed.
+    - The held internal after hook covers the enclosing ContextEngine cancellation race, not the earlier SDK session_compact extension-hook timing.
+  regressionRefs:
+    - https://github.com/openclaw/openclaw/issues/127523
+    - https://github.com/openclaw/openclaw/issues/127551
+  docsRefs:
+    - docs/concepts/compaction.md
+    - docs/automation/hooks.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-compaction-abort.ts
+    - test/e2e/qa-lab/runtime/gateway-compaction-provider.fixture.ts
+    - test/e2e/qa-lab/runtime/gateway-compaction-state.fixture.ts
+    - src/context-engine/delegate.ts
+    - src/agents/embedded-agent-runner/compaction-session-execution.ts
+    - src/agents/embedded-agent-runner/compaction-safety-timeout.ts
+    - src/agents/embedded-agent-runner/run/session-bootstrap.ts
+    - src/agents/embedded-agent-runner/run/compaction-runtime.ts
+    - src/agents/embedded-agent-runner/run/overflow-context-recovery.ts
+    - src/agents/embedded-agent-runner/tool-result-truncation.ts
+    - src/gateway/server-methods/chat-abort-handler.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/gateway-compaction-abort.ts
+    timeoutMs: 660000
+    summary: Run on Blacksmith Testbox after OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build. The producer launches an environment-isolated child before importing OpenClaw and uses a built dist Gateway with owned state and ports. Pending cancellation, real writer replacement, independent summary failure, success, and cancellation during a loaded internal after hook record SQLite snapshots, held-hook accounting, provider checkpoints, QA Channel delivery, owned-process settlement, and a standard evidence verdict.
+    config:
+      requiredProviderMode: mock-openai
+    args:
+      - --artifact-base
+      - ${outputDir}

@@ -6,10 +6,10 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
+  createOverflowRunParams,
   mockedClassifyFailoverReason,
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
-  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
@@ -109,36 +109,63 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     await state?.cleanup();
   });
 
-  it("keeps shared abort ownership open through a replay-safe retry", async () => {
-    const freezeAbort = vi.fn();
-    const replyOperation = {
-      freezeAbort,
-      markDeferredMaintenanceWaitEnded: vi.fn(),
-      markGlobalLaneWaitEnded: vi.fn(),
-      markWaitingForDeferredMaintenance: vi.fn(),
-      markWaitingForGlobalLane: vi.fn(),
-    } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
-    mockedRunEmbeddedAttempt
-      .mockImplementationOnce(async () => {
-        expect(freezeAbort).not.toHaveBeenCalled();
-        return codexClientClosedAttempt();
-      })
-      .mockImplementationOnce(async () => {
-        expect(freezeAbort).not.toHaveBeenCalled();
-        return successAttempt();
+  it.each(["active", "closed", "replaced"] as const)(
+    "retries without a durable writer only while its exact native admission is active (%s)",
+    async (owner) => {
+      const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+      const { createReplyOperation } = await import("../../auto-reply/reply/reply-run-registry.js");
+      const runId = `run-native-retry-${owner}`;
+      const sessionKey = `agent:main:${runId}`;
+      const admission = prepareSystemAgentRunAdmission({}, runId, "main", "native-retry-test");
+      const replacement = prepareSystemAgentRunAdmission({}, runId, "main", "replacement-test");
+      const replyOperation = createReplyOperation({
+        sessionKey,
+        sessionId: runId,
+        resetTriggered: false,
       });
+      const freezeAbort = vi.spyOn(replyOperation, "freezeAbort");
+      mockedRunEmbeddedAttempt
+        .mockImplementationOnce(async () => {
+          expect(freezeAbort).not.toHaveBeenCalled();
+          if (owner === "closed") {
+            admission.close();
+          }
+          if (owner === "replaced") {
+            await replacement.admit("embedded");
+          }
+          return codexClientClosedAttempt({ sessionIdUsed: runId });
+        })
+        .mockImplementationOnce(async () => {
+          expect(freezeAbort).not.toHaveBeenCalled();
+          return { ...successAttempt(), sessionIdUsed: runId };
+        });
 
-    await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-freeze-after-retry",
-      replyOperation,
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(freezeAbort).not.toHaveBeenCalled();
-  });
+      try {
+        const run = runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          sessionId: runId,
+          sessionKey,
+          provider: "codex",
+          model: "gpt-5.5",
+          runId,
+          preparedRunAdmission: admission,
+          replyOperation,
+        });
+        if (owner === "active") {
+          await run;
+        } else {
+          await expect(run).rejects.toThrow("admitted run authority is no longer active");
+        }
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(owner === "active" ? 2 : 1);
+        expect(freezeAbort).not.toHaveBeenCalled();
+      } finally {
+        admission.close();
+        replacement.close();
+        replyOperation.complete();
+        freezeAbort.mockRestore();
+      }
+    },
+  );
 
   it("does not replay after cancellation during replay-safe finalization", async () => {
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {

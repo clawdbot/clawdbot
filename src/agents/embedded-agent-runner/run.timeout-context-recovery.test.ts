@@ -10,10 +10,6 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("./run/compaction-runtime.js", () => ({
-  compactEmbeddedRunForRecovery: mocks.compact,
-}));
-
 vi.mock("./compaction-hooks.js", () => ({
   runPostCompactionSideEffects: mocks.postCompactionSideEffects,
 }));
@@ -68,11 +64,18 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
       onAutoCompactionSucceeded: vi.fn(),
     },
     state,
+    assertRecoveryActive: vi.fn(),
+    prepareRecoverySession: () => ({
+      sessionManager: undefined,
+      assertActive: vi.fn(),
+      withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
+        await operation(),
+    }),
     contextEngine: {
       info: { id: "legacy", name: "Legacy" },
       ingest: vi.fn(),
       assemble: vi.fn(),
-      compact: vi.fn(),
+      compact: mocks.compact,
     },
     contextTokenBudget: 200_000,
     genericCompactionRecoveryAllowed: true,
@@ -108,11 +111,7 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
 
 describe("recoverEmbeddedRunTimeout", () => {
   beforeEach(() => {
-    mocks.compact.mockReset().mockResolvedValue({
-      result: successfulCompaction(),
-      runtimeContext: {},
-      runtimeSettings: {},
-    });
+    mocks.compact.mockReset().mockResolvedValue(successfulCompaction());
     mocks.info.mockReset();
     mocks.postCompactionSideEffects.mockReset();
     mocks.warn.mockReset();
@@ -168,17 +167,19 @@ describe("recoverEmbeddedRunTimeout", () => {
     expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
 
     expect(mocks.compact).toHaveBeenCalledWith(
-      input,
       expect.objectContaining({
         tokenBudget: 200_000,
-        trigger: "timeout_recovery",
-        attempt: 1,
-        maxAttempts: 2,
+        runtimeContext: expect.objectContaining({
+          trigger: "timeout_recovery",
+          attempt: 1,
+          maxAttempts: 2,
+        }),
       }),
     );
     expect(input.runOwnsCompactionBeforeHook).toHaveBeenCalledWith("timeout recovery");
     expect(input.adoptCompactionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ compacted: true }),
+      undefined,
     );
     expect(input.runOwnsCompactionAfterHook).toHaveBeenCalledWith(
       "timeout recovery",
@@ -195,12 +196,39 @@ describe("recoverEmbeddedRunTimeout", () => {
     expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { sessionId: "session-1", tokensAfter: 80_000 },
+    { sessionId: "unaccepted-successor", tokensAfter: undefined },
+  ])(
+    "does not attribute $sessionId tokens to the predecessor when acceptance is cancelled",
+    async ({ sessionId, tokensAfter }) => {
+      const controller = new AbortController();
+      const callerError = new Error("caller cancelled successor acceptance");
+      mocks.compact.mockResolvedValueOnce(successfulCompaction({ sessionId }));
+      const input = makeInput({
+        assertRecoveryActive: () => controller.signal.throwIfAborted(),
+        adoptCompactionTranscript: vi.fn(async () => {
+          controller.abort(callerError);
+          throw callerError;
+        }),
+      });
+      input.runParams.abortSignal = controller.signal;
+
+      await expect(recoverEmbeddedRunTimeout(input)).rejects.toBe(callerError);
+
+      expect(input.state.autoCompactionCount).toBe(1);
+      expect(input.state.lastCompactionTokensAfter).toBe(tokensAfter);
+      expect(mocks.postCompactionSideEffects).not.toHaveBeenCalled();
+      expect(input.prepareCompactedTranscriptRetry).not.toHaveBeenCalled();
+    },
+  );
+
   it("counts compacted-false results against the shared retry cap", async () => {
     const state = createEmbeddedRunContextRecoveryState();
     mocks.compact.mockResolvedValue({
-      result: { ok: false, compacted: false, reason: "nothing to compact" },
-      runtimeContext: {},
-      runtimeSettings: {},
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
     });
 
     expect(await recoverEmbeddedRunTimeout(makeInput({ state }))).toBe(false);
@@ -225,25 +253,35 @@ describe("recoverEmbeddedRunTimeout", () => {
     );
   });
 
-  it("runs post-compaction side effects only for an engine-owned compaction", async () => {
-    const input = makeInput({
-      contextEngine: {
-        info: { id: "test", name: "Test", ownsCompaction: true },
-        ingest: vi.fn(),
-        assemble: vi.fn(),
-        compact: vi.fn(),
-      } as RecoveryInput["contextEngine"],
-      getActiveSession: () => ({ id: "rotated", file: "/tmp/rotated.jsonl" }),
-    });
+  it.each(["durable", "detached"] as const)(
+    "keeps %s recovery accounting separate from durable post-compaction effects",
+    async (sessionPersistence) => {
+      const input = makeInput({
+        contextEngine: {
+          info: { id: "test", name: "Test", ownsCompaction: true },
+          ingest: vi.fn(),
+          assemble: vi.fn(),
+          compact: mocks.compact,
+        } as RecoveryInput["contextEngine"],
+        getActiveSession: () => ({ id: "rotated", file: "/tmp/rotated.jsonl" }),
+      });
+      input.runParams.sessionPersistence = sessionPersistence;
 
-    expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
-
-    expect(mocks.postCompactionSideEffects).toHaveBeenCalledWith({
-      config: {},
-      sessionKey: "agent:main:session-1",
-      sessionId: "rotated",
-      agentId: "main",
-      sessionFile: "/tmp/rotated.jsonl",
-    });
-  });
+      expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
+      expect(input.state.autoCompactionCount).toBe(1);
+      expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
+      if (sessionPersistence === "detached") {
+        expect(mocks.postCompactionSideEffects).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.postCompactionSideEffects).toHaveBeenCalledWith({
+          config: {},
+          sessionKey: "agent:main:session-1",
+          sessionId: "rotated",
+          agentId: "main",
+          sessionFile: "/tmp/rotated.jsonl",
+          assertActive: input.assertRecoveryActive,
+        });
+      }
+    },
+  );
 });

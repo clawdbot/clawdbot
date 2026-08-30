@@ -1008,7 +1008,9 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
-  [agentSessionSetContextReplacementHook]: (callback: (() => void) | undefined) => void;
+  [agentSessionSetContextReplacementHook]: (
+    callback: ((tokensAfter: number) => void) | undefined,
+  ) => void;
 };
 
 type SessionPromptOverride = (

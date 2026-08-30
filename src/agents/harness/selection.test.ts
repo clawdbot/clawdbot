@@ -99,6 +99,15 @@ const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
   drainPendingContextEngineTurnsBeforeRun: vi.fn(async (_params: unknown) => {}),
 }));
 const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
+const privateHarnessParamCases = [
+  { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
+  {
+    field: "codeModeRecovery",
+    value: { kind: "resume", blockedActionKeys: new Set<string>(), mutationAttempt: "available" },
+  },
+  { field: "compactionCountOwner", value: "caller" },
+  { field: "onContextAccountingEvent", value: () => undefined },
+] as const;
 
 function createTranscriptRecorder(
   admission: ReturnType<typeof createTranscriptAnchor> & {
@@ -697,51 +706,54 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("routes settled turns only through an explicit harness finalizer", async () => {
-    const internalKey = "__openclawSourceReplyDeliveryRuntime";
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
-    let hostAuthorityActive = true;
-    const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
-      async ({ attempt, settledAttempt: _settledAttempt }) => {
-        hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
-        expect(attempt.operation).toBe("settled-tool-finalization");
-        expect(attempt).not.toHaveProperty("hostCapabilities");
-        expect(attempt).not.toHaveProperty(internalKey);
-        return {
-          assistant: createFinalAssistant(),
-        };
-      },
-    );
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt,
-      finalizeSettledTurn,
-    };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
-    const settledAttempt = createAttemptResult("settled");
+  it.each(privateHarnessParamCases)(
+    "routes settled turns through an explicit finalizer without $field",
+    async ({ field, value }) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
+      let hostAuthorityActive = true;
+      const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
+        async ({ attempt, settledAttempt: _settledAttempt }) => {
+          hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
+          expect(attempt.operation).toBe("settled-tool-finalization");
+          expect(attempt).not.toHaveProperty("hostCapabilities");
+          expect(attempt).not.toHaveProperty(field);
+          return {
+            assistant: createFinalAssistant(),
+          };
+        },
+      );
+      const harness: AgentHarness = {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt,
+        finalizeSettledTurn,
+      };
+      registerAgentHarness(harness, { ownerPluginId: "codex" });
+      const params = Object.assign(createAttemptParams(providerRuntimeConfig("codex", "codex")), {
+        [field]: value,
+      });
+      const settledAttempt = createAttemptResult("settled");
 
-    await expect(
-      runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
-    ).resolves.toMatchObject({
-      outcome: "answered",
-      result: {
-        assistant: { content: [{ type: "text", text: "final answer" }] },
-      },
-    });
-    expect(runAttempt).not.toHaveBeenCalled();
-    expect(hostAuthorityActive).toBe(false);
-    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
-    expect(finalizeSettledTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        settledAttempt,
-        attempt: expect.objectContaining({ provider: "codex" }),
-      }),
-    );
-  });
+      await expect(
+        runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
+      ).resolves.toMatchObject({
+        outcome: "answered",
+        result: {
+          assistant: { content: [{ type: "text", text: "final answer" }] },
+        },
+      });
+      expect(runAttempt).not.toHaveBeenCalled();
+      expect(hostAuthorityActive).toBe(false);
+      expect(params).toHaveProperty(field, value);
+      expect(finalizeSettledTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settledAttempt,
+          attempt: expect.objectContaining({ provider: "codex" }),
+        }),
+      );
+    },
+  );
 
   it("fails closed when the selected harness has no settled-turn finalizer", async () => {
     const harness: AgentHarness = {
@@ -809,29 +821,32 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("strips the internal source delivery controller at the plugin harness handoff", async () => {
-    const internalKey = "__openclawSourceReplyDeliveryRuntime";
-    let handedOffRuntime: unknown;
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt: async (attemptParams) => {
-          handedOffRuntime = (attemptParams as unknown as Record<string, unknown>)[internalKey];
-          return createAttemptResult("codex");
+  it.each(privateHarnessParamCases)(
+    "strips $field at the plugin harness handoff without mutating its owner",
+    async ({ field, value }) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        createAttemptResult("codex"),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt,
         },
-      },
-      { ownerPluginId: "codex" },
-    );
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+        { ownerPluginId: "codex" },
+      );
+      const params = Object.assign(createAttemptParams(providerRuntimeConfig("codex", "codex")), {
+        [field]: value,
+      });
 
-    await runAgentHarnessAttempt(params);
+      await runAgentHarnessAttempt(params);
 
-    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
-    expect(handedOffRuntime).toBeUndefined();
-  });
+      expect(params).toHaveProperty(field, value);
+      expect(runAttempt).toHaveBeenCalledOnce();
+      expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty(field);
+    },
+  );
 
   it("persists plugin trajectory events through the selected harness host capability", async () => {
     const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
@@ -1133,10 +1148,15 @@ describe("runAgentHarnessAttempt", () => {
     ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
     params.toolsAllow = ["openclaw"];
     params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
+    const onContextAccountingEvent = vi.fn();
+    Object.assign(params, { compactionCountOwner: "caller", onContextAccountingEvent });
 
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ compactionCountOwner: "caller", onContextAccountingEvent }),
+    );
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
