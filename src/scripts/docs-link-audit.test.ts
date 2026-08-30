@@ -27,7 +27,7 @@ describe("docs-link-audit", () => {
     expect(normalizeRoute("/plugins/building-plugins?tab=all")).toBe("/plugins/building-plugins");
   });
 
-  it("ignores links inside tilde and nested fences in the real audit CLI", () => {
+  it("ignores fenced links but audits links after indented code", () => {
     const tempDirs: string[] = [];
     const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-fence-");
     const docsRoot = path.join(fixtureRoot, "docs");
@@ -35,7 +35,7 @@ describe("docs-link-audit", () => {
     fs.writeFileSync(path.join(docsRoot, "docs.json"), '{"navigation":[]}', "utf8");
     fs.writeFileSync(
       path.join(docsRoot, "page.md"),
-      "# Page\n\n~~~bash\n[not a real link](/not-a-published-route)\n~~~not-a-closer\n[still not a real link](/still-not-a-published-route)\n~~~\n\n````md\n```text\n[not another real link](/another-not-a-published-route)\n```\n````\n\n[page](/page)\n",
+      "# Page\n\n~~~bash\n[not a real link](/not-a-published-route)\n~~~not-a-closer\n[still not a real link](/still-not-a-published-route)\n~~~\n\n````md\n```text\n[not another real link](/another-not-a-published-route)\n```\n````\n\n    ~~~\n[after indented code](/must-be-reported)\n\n[page](/page)\n",
       "utf8",
     );
 
@@ -45,8 +45,9 @@ describe("docs-link-audit", () => {
         output.push(args.join(" "));
       });
       try {
-        expect(runDocsLinkAuditCli({ args: [], docsDir: docsRoot })).toBe(0);
-        expect(output).toContain("broken_links=0");
+        expect(runDocsLinkAuditCli({ args: [], docsDir: docsRoot })).toBe(1);
+        expect(output).toContain("broken_links=1");
+        expect(output.some((line) => line.includes("/must-be-reported"))).toBe(true);
       } finally {
         logSpy.mockRestore();
       }
