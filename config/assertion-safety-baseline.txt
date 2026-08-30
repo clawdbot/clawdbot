@@ -1722,7 +1722,6 @@ src/agents/cli-runner/cli-run-transcript.ts	3
 src/agents/cli-runner/delivery-evidence.ts	2
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	3
-src/agents/cli-runner/helpers.ts	1
 src/agents/cli-runner/prepare.ts	5
 src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-namespaces.ts	5
