@@ -1063,6 +1063,8 @@ function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
     jobName === "Run QA Lab parity report" ||
     jobName.startsWith("Run QA Lab runtime-pair lane (") ||
     jobName === "Verify QA Lab runtime-pair lanes" ||
+    jobName === "Run QA Lab live Telegram lane" ||
+    jobName.startsWith("Run package acceptance / Telegram package acceptance / ") ||
     jobName === "Run QA Lab live Discord lane" ||
     jobName === "Run QA Lab live WhatsApp lane" ||
     jobName === "Run QA Lab live Slack lane"
@@ -1080,18 +1082,21 @@ function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
   }
   return (
     releaseProfile === "beta" &&
-    (jobName.startsWith("Run package acceptance / Telegram package acceptance / ") ||
-      (jobName.startsWith("Run repo/live E2E validation / ") &&
-        (jobName.includes("Docker live") ||
-          jobName.includes("Live media suites") ||
-          jobName.includes("validate_live_provider_suites") ||
-          jobName.includes("validate_release_live_cache") ||
-          jobName.includes("prepare_live_test_image"))))
+    jobName.startsWith("Run repo/live E2E validation / ") &&
+    (jobName.includes("Docker live") ||
+      jobName.includes("Live media suites") ||
+      jobName.includes("validate_live_provider_suites") ||
+      jobName.includes("validate_release_live_cache") ||
+      jobName.includes("prepare_live_test_image"))
   );
 }
 
 function isReleaseChecksChild(key) {
   return ["releaseChecks", "releaseChecksIndependent", "releaseChecksCandidate"].includes(key);
+}
+
+function isAdvisoryChild(key, releaseProfile) {
+  return key === "npmTelegram" || (key === "productPerformance" && releaseProfile === "beta");
 }
 
 function failedJobsForPolicy(child, releaseProfile, workflowRef) {
@@ -1109,7 +1114,7 @@ function failedJobsForPolicy(child, releaseProfile, workflowRef) {
         workflowRef,
       });
     }
-    return !(child.key === "productPerformance" && releaseProfile === "beta");
+    return !isAdvisoryChild(child.key, releaseProfile);
   });
 }
 
@@ -1120,7 +1125,7 @@ export function terminalPolicyPass(child, releaseProfile, workflowRef) {
   if (child.conclusion === "success") {
     return true;
   }
-  if (child.key === "productPerformance" && releaseProfile === "beta") {
+  if (isAdvisoryChild(child.key, releaseProfile)) {
     return true;
   }
   if (isReleaseChecksChild(child.key)) {

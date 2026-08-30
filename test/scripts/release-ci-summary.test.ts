@@ -1526,9 +1526,15 @@ describe("release CI summary child correlation", () => {
     ).toThrow("manifest parent job was redispatched during recovery");
   });
 
-  it("accepts beta advisory release-check failures through canonical policy", () => {
+  it.each([
+    ["beta", "Run QA Lab parity lane (core)"],
+    ...["beta", "stable", "full"].flatMap((profile) => [
+      [profile, "Run QA Lab live Telegram lane"],
+      [profile, "Run package acceptance / Telegram package acceptance / Run Telegram package E2E"],
+    ]),
+  ])("accepts %s advisory %s failures through canonical policy", (releaseProfile, jobName) => {
     const fixture = trustedMainPackageFixture();
-    fixture.manifest.releaseProfile = "beta";
+    fixture.manifest.releaseProfile = releaseProfile;
     fixture.childRun.conclusion = "failure";
     const originalClient = { ...fixture.client };
     fixture.client.getParentJobs = (requestedRunId: string) =>
@@ -1538,7 +1544,7 @@ describe("release CI summary child correlation", () => {
               completed_at: "2026-07-10T01:10:00Z",
               conclusion: "failure",
               id: 86293408711,
-              name: "Run QA Lab parity lane (core)",
+              name: jobName,
               run_attempt: 1,
               started_at: "2026-07-10T01:00:00Z",
               status: "completed",

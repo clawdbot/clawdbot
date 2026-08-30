@@ -834,6 +834,66 @@ describe("release decision policy", () => {
     expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
   });
 
+  it.each(["beta", "stable", "full"])(
+    "keeps Telegram execution failures advisory for %s releases",
+    (releaseProfile) => {
+      const result = classifyReleaseSnapshot({
+        children: [
+          child("releaseChecks", {
+            conclusion: "failure",
+            jobs: [
+              { conclusion: "failure", name: "Run QA Lab live Telegram lane", status: "completed" },
+              {
+                conclusion: "failure",
+                name: "Run package acceptance / Telegram package acceptance / Run Telegram package E2E",
+                status: "completed",
+              },
+              { conclusion: "success", name: "Verify release checks", status: "completed" },
+            ],
+            status: "completed",
+          }),
+          child("npmTelegram", {
+            conclusion: "failure",
+            jobs: [{ conclusion: "failure", name: "Telegram package E2E", status: "completed" }],
+            runId: "202",
+            status: "completed",
+          }),
+        ],
+        releaseProfile,
+        workflowRef: "main",
+      });
+      expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
+    },
+  );
+
+  it("keeps non-Telegram failures and Telegram provenance errors strict", () => {
+    const result = classifyReleaseSnapshot({
+      children: [
+        child("releaseChecks", {
+          conclusion: "failure",
+          jobs: [
+            { conclusion: "failure", name: "Run install smoke", status: "completed" },
+            { conclusion: "success", name: "Verify release checks", status: "completed" },
+          ],
+          status: "completed",
+        }),
+        child("npmTelegram", {
+          conclusion: "failure",
+          errors: [{ kind: "identity_mismatch", message: "wrong workflow SHA", runId: "202" }],
+          runId: "202",
+          status: "completed",
+        }),
+      ],
+      releaseProfile: "stable",
+      workflowRef: "main",
+    });
+    expect(result).toMatchObject({
+      blockers: [expect.objectContaining({ job: "Run install smoke" })],
+      errors: [expect.objectContaining({ kind: "identity_mismatch" })],
+      state: "orchestration_error",
+    });
+  });
+
   it("preserves a blocker and an API error independently", () => {
     const result = classifyReleaseSnapshot({
       children: [
