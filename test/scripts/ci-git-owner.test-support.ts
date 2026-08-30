@@ -87,6 +87,8 @@ export async function runCiGitStep(options: {
   step?: string;
   env?: Record<string, string>;
   fetchResults: FetchResult[];
+  cloneResults?: FetchResult[];
+  worktreeResults?: FetchResult[];
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
@@ -209,6 +211,8 @@ export async function runCiGitStep(options: {
           mergeBase: options.mergeBase,
           workingDirectory: step["working-directory"],
           fetchResults: options.fetchResults,
+          cloneResults: options.cloneResults,
+          worktreeResults: options.worktreeResults,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
           consumers: Boolean(options.prepare || externalOwner),
@@ -276,6 +280,11 @@ ${run}`;
           ...report.commands
             .filter(({ tool, args }) => tool === "git" && args[0] === "fetch")
             .map(({ cwd }) => cwd),
+          ...report.commands
+            .filter(
+              ({ tool, args }) => tool === "git" && (args[0] === "clone" || args[0] === "worktree"),
+            )
+            .map(({ cwd, args }) => path.resolve(cwd, args.at(args[0] === "clone" ? -1 : -2)!)),
         ])) {
           expect(readFileSync(path.join(directory, ".git/preexisting.lock"), "utf8")).toBe(
             "not invocation-owned\n",
@@ -313,6 +322,12 @@ ${run}`;
         trustedZizmor: readOutput("temp/zizmor-base.yml"),
         runnerTemp: path.join(root, "temp"),
         fetches: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "fetch"),
+        clones: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "clone"),
+        worktrees: report.commands.filter(
+          ({ tool, args }) => tool === "git" && args[0] === "worktree",
+        ),
+        go: report.commands.filter(({ tool }) => tool === "go"),
+        crabbox: report.commands.filter(({ tool }) => tool === "crabbox"),
         checkouts: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "checkout",
         ),
