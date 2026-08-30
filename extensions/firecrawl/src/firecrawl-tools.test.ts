@@ -1279,8 +1279,7 @@ describe("firecrawl tools", () => {
   it("dispatches search and fetch with their capability-local credentials and endpoints", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       requests.push({
         url,
         authorization: new Headers(init?.headers).get("Authorization"),
