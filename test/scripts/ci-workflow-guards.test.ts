@@ -4567,6 +4567,7 @@ server.listen(0, "127.0.0.1", () => {
     const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
       name: string;
       command: string;
+      target_script?: string;
     }>;
     expect(repoE2eRows.map((row) => row.command)).toEqual([
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
@@ -4574,6 +4575,9 @@ server.listen(0, "127.0.0.1", () => {
       "pnpm test:e2e:agent-plugin-gateway",
     ]);
     expect(new Set(repoE2eRows.map((row) => row.name)).size).toBe(9);
+    expect(repoE2eRows.find((row) => row.name === "Agent plugin Gateway")).toMatchObject({
+      target_script: "test:e2e:agent-plugin-gateway",
+    });
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
     expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
     expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
@@ -4588,9 +4592,17 @@ server.listen(0, "127.0.0.1", () => {
     expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
-      run: "${{ matrix.command }}",
-      env: { OPENCLAW_E2E_WORKERS: "2", OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+      env: {
+        OPENCLAW_E2E_WORKERS: "2",
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
+        TARGET_REQUIRED_SCRIPT: "${{ matrix.target_script || '' }}",
+      },
     });
+    const repoE2eRun = repoE2eSteps[repoE2eIndex]?.run;
+    expect(repoE2eRun).toContain("OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+    expect(repoE2eRun).toContain("Selected target does not provide required repo E2E capability");
+    expect(repoE2eRun).toContain("selected target does not provide this newer repo E2E capability");
+    expect(repoE2eRun).toContain("${{ matrix.command }}");
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );

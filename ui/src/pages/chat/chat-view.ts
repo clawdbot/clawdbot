@@ -2,7 +2,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type {
-  ProgressCard,
   SessionPlacementDiskSpace,
   SessionSharingRole,
   SessionSuggestion,
@@ -12,23 +11,16 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-catalog.ts";
-import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
-import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { getChatHistoryLoadState, retryChatHistoryLoad } from "./chat-history.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
@@ -39,16 +31,9 @@ import {
   renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
-import type {
-  CapabilityMenuProps,
-  ChatComposerDisabledBanner,
-  ChatComposerProps,
-  ChatQueuedEditProps,
-} from "./components/chat-composer-types.ts";
+import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
-import type { MessageReplyTarget } from "./components/chat-message.ts";
-import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
@@ -61,11 +46,6 @@ import {
 } from "./components/chat-thread-interactions.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
-import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
-import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "./realtime-talk.ts";
-import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 export type ChatProps = Omit<
@@ -83,57 +63,16 @@ export type ChatProps = Omit<
   | "onOpenSession"
   | "onSend"
 > &
+  Omit<ChatComposerProps, "anchoredNotices" | "disabled" | "onOpenImage"> &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
     historyState?: ChatState;
     onSessionKeyChange: (next: string) => void;
     thinkingLevel: string | null;
-    sending: boolean;
-    canAbort?: boolean;
     startupStatus?: ChatRunStartupStatus | null;
-    compactionStatus?: CompactionStatus | null;
-    fallbackStatus?: FallbackStatus | null;
-    progressCard?: ProgressCard | null;
-    progressCardHasActiveRun?: boolean;
-    collapseTaskProgress?: boolean;
-    onDismissProgressCard?: (card: ProgressCard) => void;
-    gatewayQuestionPrompts?: readonly QuestionPrompt[];
-    onGatewayQuestionChange?: () => void;
-    onGatewayQuestionSubmit?: (
-      id: string,
-      answers: Record<string, string[]>,
-    ) => void | Promise<void>;
-    onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
-    draft: string;
-    modelCatalog: readonly ModelCatalogEntry[];
-    modelSwitching: boolean;
-    queuedOutboxCount?: number;
-    realtimeTalkActive?: boolean;
-    realtimeTalkStatus?: RealtimeTalkStatus;
-    realtimeTalkDetail?: string | null;
-    realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
-    realtimeTalkVideoStream?: MediaStream | null;
-    realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
-    realtimeTalkVideoCapable?: boolean;
-    realtimeTalkVideoPending?: boolean;
-    realtimeTalkCameraError?: boolean;
-    connected: boolean;
-    offline?: boolean;
-    gatewayClient?: GatewayBrowserClient | null;
-    composerHoldToRecord?: boolean;
-    onComposerHoldToRecordChange?: (enabled: boolean) => void;
-    onOpenTalkSettings?: () => void;
-    onOpenDictationSettings?: () => void;
-    suggestionComposer?: boolean;
-    onTypingChange?: (typing: boolean, preview?: string) => void;
-    canSend: boolean;
-    disabledReason: string | null;
-    disabledReasonTone?: "info" | "danger";
-    disabledBanner?: ChatComposerDisabledBanner;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
-    runError?: { summary: string } | null;
     inlineApproval?: ExecApprovalRequest | null;
     approvalBusy?: boolean;
     approvalCanGrant: boolean;
@@ -144,48 +83,14 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
-    toolOverrides?: SessionToolOverrides;
-    capabilityMenu?: CapabilityMenuProps;
     swarmSessions?: readonly GatewaySessionRow[];
-    providerUsage?: ProviderUsageDisplayProps;
     focusMode?: boolean;
     chatMessageMaxWidth?: string | null;
-    sendShortcut?: ChatSendShortcut;
-    followUpMode?: ControlUiFollowUpMode;
-    attachmentLimits?: { maxBytes: number; maxImageBytes: number };
-    attachments?: ChatAttachment[];
-    getAttachments?: () => ChatAttachment[];
-    pendingAttachmentReads?: number;
-    getPendingAttachmentReads?: () => number;
-    readSignal?: AbortSignal;
-    onPendingReadsChange?: (delta: 1 | -1) => void;
-    onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
-    onRemoveAttachment?: (attachment: ChatAttachment) => void;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
     onRefresh: () => void;
     onToggleFocusMode?: () => void;
-    getDraft?: () => string;
-    onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
-    onSlashIntent?: () => void | Promise<void>;
-    onSlashCommand?: (command: string) => void;
-    onSend: ChatComposerProps["onSend"];
-    onToggleRealtimeTalk?: () => void;
-    onToggleRealtimeCamera?: () => void;
-    onSwitchRealtimeCamera?: () => void;
     onDismissError?: () => void;
-    onDismissRealtimeTalkError?: () => void;
-    onAbort?: () => void;
-    onQueueRemove: (id: string) => void;
-    onQueueRetry?: (id: string) => void;
-    onQueueSteer?: (id: string) => void;
-    onQueueMove?: (id: string, toIndex: number) => void;
-    queuedEdit?: ChatQueuedEditProps;
-    onGoalAction?: ChatComposerProps["onGoalAction"];
-    onGoalSubmit?: ChatComposerProps["onGoalSubmit"];
-    goalDraftMode?: ChatComposerProps["goalDraftMode"];
-    onGoalDraftModeChange?: ChatComposerProps["onGoalDraftModeChange"];
-    currentSessionId?: string | null;
     onClearHistory?: () => void;
     agentsList: {
       agents: Array<{
@@ -195,15 +100,10 @@ export type ChatProps = Omit<
       }>;
       defaultId?: string;
     } | null;
-    currentAgentId: string;
     onAgentChange: (agentId: string) => void;
     onNavigateToAgent?: () => void;
     onSessionSelect?: (sessionKey: string) => void;
     onRevealWorkspaceFile?: (path: string) => void;
-    composerControls?: TemplateResult | typeof nothing;
-    permissionPicker?: ChatPermissionPickerProps;
-    replyTarget?: MessageReplyTarget | null;
-    onClearReply?: () => void;
     header?: TemplateResult | typeof nothing;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;

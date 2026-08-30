@@ -695,98 +695,109 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime).toEqual(expect.objectContaining({ ready: true }));
   });
 
-  it("reports the runtime-selected automatic providers instead of registry row order", async () => {
-    const transcriptionSlow = {
-      id: "transcription-slow",
-      label: "Transcription Slow",
-      autoSelectOrder: 20,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
-    };
-    const transcriptionFast = {
-      id: "transcription-fast",
-      label: "Transcription Fast",
-      models: ["transcribe-model"],
-      autoSelectOrder: 10,
-      isConfigured: vi.fn(
-        ({ providerConfig }) =>
-          providerConfig.enabled === true && providerConfig.model === "transcribe-model",
-      ),
-    };
-    const realtimeSlow = {
-      id: "realtime-slow",
-      label: "Realtime Slow",
-      autoSelectOrder: 20,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
-      createBridge: vi.fn(),
-    };
-    const realtimeFast = {
-      id: "realtime-fast",
-      label: "Realtime Fast",
-      autoSelectOrder: 10,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
-      createBridge: vi.fn(),
-    };
-    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
-      transcriptionSlow,
-      transcriptionFast,
-    ] as never);
-    mocks.listRealtimeVoiceProviders.mockReturnValue([realtimeSlow, realtimeFast] as never);
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
-      provider: realtimeFast,
-      providerConfig: { enabled: true },
-    } as never);
+  it.each(["realtime-fast", "realtime-fast-alias"])(
+    "reports the runtime-selected automatic providers and configured rows for %s",
+    async (configKey) => {
+      const transcriptionSlow = {
+        id: "transcription-slow",
+        label: "Transcription Slow",
+        autoSelectOrder: 20,
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+      };
+      const transcriptionFast = {
+        id: "transcription-fast",
+        label: "Transcription Fast",
+        models: ["transcribe-model"],
+        autoSelectOrder: 10,
+        isConfigured: vi.fn(
+          ({ providerConfig }) =>
+            providerConfig.enabled === true && providerConfig.model === "transcribe-model",
+        ),
+      };
+      const realtimeSlow = {
+        id: "realtime-slow",
+        label: "Realtime Slow",
+        autoSelectOrder: 20,
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+        createBridge: vi.fn(),
+      };
+      const realtimeFast = {
+        id: "realtime-fast",
+        aliases: ["realtime-fast-alias"],
+        label: "Realtime Fast",
+        autoSelectOrder: 10,
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+        createBridge: vi.fn(),
+      };
+      mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+        transcriptionSlow,
+        transcriptionFast,
+      ] as never);
+      mocks.listRealtimeVoiceProviders.mockReturnValue([realtimeSlow, realtimeFast] as never);
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider: realtimeFast,
+        providerConfig: { enabled: true },
+      } as never);
 
-    const respond = vi.fn();
-    await callTalkHandler("talk.catalog", {
-      params: {},
-      client: { connect: { scopes: ["operator.read"] } },
-      respond,
-      context: {
-        getRuntimeConfig: () =>
-          ({
-            agents: {
-              defaults: {
-                voiceModel: { primary: "transcription-fast/transcribe-model" },
-              },
-            },
-            talk: {
-              realtime: {
-                providers: {
-                  "realtime-slow": { enabled: true },
-                  "realtime-fast": { enabled: true },
+      const respond = vi.fn();
+      await callTalkHandler("talk.catalog", {
+        params: {},
+        client: { connect: { scopes: ["operator.read"] } },
+        respond,
+        context: {
+          getRuntimeConfig: () =>
+            ({
+              agents: {
+                defaults: {
+                  voiceModel: { primary: "transcription-fast/transcribe-model" },
                 },
               },
-            },
-            plugins: {
-              entries: {
-                "voice-call": {
-                  config: {
-                    streaming: {
-                      providers: {
-                        "transcription-slow": { enabled: true },
-                        "transcription-fast": { enabled: true },
+              talk: {
+                realtime: {
+                  providers: {
+                    "realtime-slow": { enabled: true },
+                    [configKey]: { enabled: true },
+                  },
+                },
+              },
+              plugins: {
+                entries: {
+                  "voice-call": {
+                    config: {
+                      streaming: {
+                        providers: {
+                          "transcription-slow": { enabled: true },
+                          "transcription-fast": { enabled: true },
+                        },
                       },
                     },
                   },
                 },
               },
-            },
-          }) as OpenClawConfig,
-      },
-    });
+            }) as OpenClawConfig,
+        },
+      });
 
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      transcription: {
-        ready: true,
-        activeProvider: "transcription-fast",
-        providers: [
-          { id: "transcription-slow", configured: true },
-          { id: "transcription-fast", configured: true },
-        ],
-      },
-      realtime: { ready: true, activeProvider: "realtime-fast" },
-    });
-  });
+      expect(mockCallArg(respond, 0, 1)).toMatchObject({
+        transcription: {
+          ready: true,
+          activeProvider: "transcription-fast",
+          providers: [
+            { id: "transcription-slow", configured: true },
+            { id: "transcription-fast", configured: true },
+          ],
+        },
+        realtime: {
+          ready: true,
+          activeProvider: "realtime-fast",
+          providers: [
+            { id: "realtime-slow", configured: true },
+            { id: "realtime-fast", configured: true },
+          ],
+        },
+      });
+    },
+  );
 
   it("includes a provider-map transcription provider missing from the active registry", async () => {
     const openai = {

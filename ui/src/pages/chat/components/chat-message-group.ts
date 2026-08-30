@@ -122,16 +122,18 @@ function requestMissingFullMessage(
   details: MessageActionDetails | null,
   opts: RenderMessageGroupOptions,
 ) {
-  if (!details?.shouldFetchFullMessage || !details.messageId) {
+  const messageId = details?.fullMessage?.messageId;
+  if (!messageId) {
     return;
   }
-  const expansion = opts.getAssistantMessageExpansion?.(details.messageId);
+  // Projected rows can share a source ID; a preceding row may have started its load.
+  const expansion = opts.getAssistantMessageExpansion?.(messageId);
   // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
   if (
     !expansion ||
     (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
   ) {
-    opts.onToggleAssistantMessageExpanded?.(details.messageId);
+    opts.onToggleAssistantMessageExpanded?.(messageId);
   }
 }
 
@@ -143,19 +145,14 @@ function buildGroupedMessageRenderOptions(
   actionDetails?: MessageActionDetails | null,
 ): GroupedMessageRenderOptions {
   let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
-  if (
-    actionDetails?.shouldFetchFullMessage &&
-    actionDetails.messageId &&
-    opts.loadFullAssistantMessage &&
-    opts.onToggleAssistantMessageExpanded
-  ) {
-    const messageId = actionDetails.messageId;
-    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+  const fullMessage = actionDetails?.fullMessage;
+  if (fullMessage && opts.loadFullAssistantMessage && opts.onToggleAssistantMessageExpanded) {
+    const { messageId, state: expansion } = fullMessage;
     const retriesExhausted =
       expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
     assistantMessageDisclosure = {
       expanded: expansion?.status === "loaded",
-      ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
+      ...(expansion?.status === "loaded" ? { markdown: actionDetails?.markdown } : {}),
       // Manual re-entry once the bounded automatic retries gave up.
       ...(retriesExhausted
         ? { onRetryFullMessage: () => opts.onToggleAssistantMessageExpanded?.(messageId) }
