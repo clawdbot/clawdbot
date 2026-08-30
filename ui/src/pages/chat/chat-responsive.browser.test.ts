@@ -4130,6 +4130,22 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .locator(".agent-chat__input")
           .evaluate((node) => getComputedStyle(node).overflowY),
       ).toBe("auto");
+      expect(
+        await page.locator(".agent-chat__goal-mode").evaluate((node) => {
+          const style = getComputedStyle(node);
+          return {
+            borderBottomStyle: style.borderBottomStyle,
+            borderLeftStyle: style.borderLeftStyle,
+            borderRadius: style.borderRadius,
+            marginBottom: style.marginBottom,
+          };
+        }),
+      ).toEqual({
+        borderBottomStyle: "solid",
+        borderLeftStyle: "none",
+        borderRadius: "0px",
+        marginBottom: "0px",
+      });
       expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
 
       const scrolled = await page.evaluate(() => {
@@ -4152,12 +4168,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
+          scrollTop: composer?.scrollTop ?? 0,
           send: rectFor(".chat-send-btn"),
         };
       });
 
       const scrolledShell = expectControlRect(scrolled.shell, "scrolled composer shell");
       const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
+      expect(scrolled.scrollTop).toBeGreaterThan(0);
       for (const [label, control] of [
         ["composer metadata", scrolled.meta],
         ["composer model control", scrolled.model],
@@ -4192,9 +4210,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(popover.y).toBeLessThan(composer.y);
       const visibleAboveComposer = await page.evaluate(
         ({ composerTop, popoverCenterX, popoverTop }) =>
-          document
-            .elementFromPoint(popoverCenterX, Math.max(popoverTop + 1, composerTop - 1))
-            ?.closest(".context-usage__popover") !== null,
+          Boolean(
+            document
+              .elementFromPoint(popoverCenterX, Math.max(popoverTop + 1, composerTop - 1))
+              ?.closest(".context-usage__popover"),
+          ),
         {
           composerTop: composer.y,
           popoverCenterX: popover.x + popover.width / 2,
