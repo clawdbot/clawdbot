@@ -82,7 +82,12 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const index = json(path.join(result.reportSet!, "index.json"));
       expect(index.complete).toBe(true);
       expect(index.entries[1].attempts[0].outcome.code).toBe(1);
-      if (mode === "unhandled") expect(json(index.entries[1].attempts[0].json).success).toBe(true);
+      if (mode === "unhandled") {
+        const part = index.entries[1].attempts[0].json;
+        expect(json(part).success).toBe(true);
+        expect(json(`${part}.capture.json`).ended.unhandledErrors).toBe(1);
+        expect(result.stderr).toContain("owned unhandled rejection");
+      }
     },
   );
 
@@ -108,12 +113,91 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const result = await run(mode);
       expect(result.code !== 0 || result.signal !== null, result.stderr).toBe(true);
       const index = json(path.join(result.reportSet!, "index.json"));
+      const first = index.entries[0].attempts[0];
+      const staged = path.join(result.reportSet!, "aggregate.json");
       if (mode === "cancel" || mode === "batch-cancel") {
         expect(result.signal).toBe("SIGTERM");
-        expect(index.entries[0].attempts[0].outcome.signal).toBe("SIGTERM");
+        expect(first.outcome.signal).toBe("SIGTERM");
+        const events = fs
+          .readFileSync(path.join(path.dirname(result.output), "executed.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(events.map((event) => event.name)).toEqual(["alpha/one"]);
+        const capture = json(`${first.json}.capture.json`);
+        expect(fs.readFileSync(path.join(capture.root, "ready"), "utf8")).toBe(
+          String(events[0].pid),
+        );
+        expect(() => process.kill(events[0].pid, 0)).toThrow(
+          expect.objectContaining({ code: "ESRCH" }),
+        );
+      } else if (mode === "fail-fast" || mode === "batch-fail-fast") {
+        const report = json(first.json);
+        expect(inventory(report)).toEqual([
+          ["alpha/one", "failed"],
+          ["alpha/two", "passed"],
+        ]);
+        expect(report.testResults[0].assertionResults[0].failureMessages.join("\n")).toContain(
+          "expected 1 to be 2",
+        );
+        expect(first.outcome.code).toBe(1);
+        expect(json(`${first.json}.capture.json`).ended.reason).toBe("failed");
+      } else if (mode === "tuple") {
+        expect(result.stderr).toContain("cannot preserve config-owned reporter options");
+      } else {
+        const capture = json(`${first.json}.capture.json`);
+        expect(capture.ended.reason).toBe("passed");
+        if (mode === "child-write") {
+          expect(fs.statSync(first.json).isDirectory()).toBe(true);
+          expect(first.outcome.code).toBe(1);
+          expect(result.stderr).toContain("EISDIR");
+        } else {
+          const original = mode === "missing" ? `${first.json}.native-original` : first.json;
+          expect(inventory(json(original))).toEqual(expected.slice(0, 2));
+          expect(first.outcome.code).toBe(0);
+        }
+        if (mode === "missing") {
+          expect(fs.existsSync(first.json)).toBe(false);
+          expect(index.error).toContain("missing Vitest JSON report");
+        } else if (mode === "coverage-missing") {
+          const lcov = path.join(capture.coverageDirectory, "lcov.info");
+          expect(fs.readFileSync(`${lcov}.native-original`, "utf8")).toContain("covered.ts");
+          expect(fs.existsSync(lcov)).toBe(false);
+          expect(index.error).toContain(lcov);
+        } else if (mode === "teardown-timeout") {
+          expect(capture.processTimedOut).toBe(true);
+          expect(index.error).toContain("completion evidence missing or interrupted");
+        } else if (mode !== "child-write") {
+          const second = index.entries[1].attempts[0];
+          expect(inventory(json(second.json))).toEqual(expected.slice(2));
+          expect(second.outcome.code).toBe(0);
+          expect(index.merge.code).toBe(mode === "publish-write" ? 0 : 1);
+          if (mode === "corrupt") {
+            expect(fs.readFileSync(first.blob, "utf8")).toBe("owned corruption");
+            expect(() => json(`${first.blob}.native-original`)).not.toThrow();
+            expect(result.stderr).toContain('"owned corruption" is not valid JSON');
+          } else if (mode === "merge-failure") {
+            expect(result.stderr).toContain("owned native merge failure");
+          } else if (mode === "identity") {
+            expect(result.stderr).toContain("Native merge project identity changed");
+          } else if (mode === "final-write") {
+            expect(fs.statSync(staged).isDirectory()).toBe(true);
+            expect(index.error).toContain("EISDIR");
+          } else if (mode === "publish-write") {
+            expect(inventory(json(staged))).toEqual(expected);
+            expect(fs.readFileSync(path.join(result.output, "old"), "utf8")).toBe("old");
+            expect(fs.readFileSync(path.join(index.publication, "report.json"))).toEqual(
+              fs.readFileSync(staged),
+            );
+            expect(index.error).toMatch(/rename/);
+          }
+        }
       }
       expect(index.complete).toBe(false);
       expect(index.error).not.toBe("");
+      expect(index.aggregate).toBe("");
+      if (!["corrupt", "merge-failure", "identity", "final-write", "publish-write"].includes(mode))
+        expect(index.merge).toBeNull();
       if (["missing", "corrupt", "merge-failure", "final-write", "identity"].includes(mode))
         expect(fs.readFileSync(result.output, "utf8")).toBe("old report");
       if (["fail-fast", "cancel", "batch-fail-fast", "batch-cancel"].includes(mode))
