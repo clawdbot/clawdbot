@@ -138,7 +138,10 @@ child.on("exit", (code, signal) => {
             }
           }
           inspected();
-          return failure === "inspection" ? undefined : command;
+          if (failure === "inspection") {
+            throw new processSnapshot.ProcessInspectionError("unavailable");
+          }
+          return command;
         },
       );
       const started = CodexAppServerClient.start({
@@ -174,9 +177,7 @@ child.on("exit", (code, signal) => {
         expect(error).toBeInstanceOf(Error);
         expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
         expect((error as Error).message).toContain(
-          failure === "inspection"
-            ? "Cannot register the Codex child process command"
-            : "512-row limit",
+          failure === "inspection" ? "Cannot inspect Codex processes" : "512-row limit",
         );
         expect((error as Error).message).toContain("launcher startup diagnostic");
         expect(
