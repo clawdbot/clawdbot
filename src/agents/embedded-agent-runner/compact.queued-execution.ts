@@ -9,7 +9,10 @@ import {
   withOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptWriteContext,
 } from "../../config/sessions/transcript-write-context.js";
-import { inheritRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
+import {
+  bindContextEngineCompaction,
+  inheritRuntimeCompactionDelegate,
+} from "../../context-engine/compaction-watchdog.js";
 import {
   resolveCompactionSuccessorTranscript,
   type ContextEngine,
@@ -49,7 +52,7 @@ export type QueuedCompactionHostOptions = {
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
 };
 
-export function buildContextEngineCompactionSessionTarget(
+export function projectQueuedCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
 ): ContextEngineSessionTarget {
   const agentId = params.sessionTarget?.agentId ?? params.agentId;
@@ -243,11 +246,11 @@ export async function executeQueuedContextEngineCompaction(input: {
         // Queued callers keep result-based failures; recovery rejects cancellation.
         let result: Awaited<ReturnType<typeof contextEngine.compact>>;
         try {
-          const compactionSessionTarget = buildContextEngineCompactionSessionTarget(params);
+          const compactionSessionTarget = projectQueuedCompactionSessionTarget(params);
+          const compact = bindContextEngineCompaction(contextEngine);
           const ownedCompactor: Pick<ContextEngine, "compact" | "info"> = {
             info: contextEngine.info,
-            // oxlint-disable-next-line typescript/unbound-method -- tag inheritance uses identity, not invocation.
-            compact: inheritRuntimeCompactionDelegate(contextEngine.compact, (backendParams) => {
+            compact: inheritRuntimeCompactionDelegate(compact, (backendParams) => {
               // Retained backend work keeps the original owner and the timer's
               // composed signal, never a later accepted successor's authority.
               const writeContext = createTranscriptWriteContext(
@@ -255,9 +258,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                 expectedEntry,
                 backendParams.abortSignal,
               );
-              return withOwnedSessionTranscriptWrites(writeContext, () =>
-                contextEngine.compact(backendParams),
-              );
+              return withOwnedSessionTranscriptWrites(writeContext, () => compact(backendParams));
             }),
           };
           result = await compactContextEngineWithSafetyTimeout(
@@ -392,7 +393,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               contextEngine,
               sessionId: postCompactionSessionId,
               sessionKey: contextEngineSessionKey ?? params.sessionKey,
-              sessionTarget: buildContextEngineCompactionSessionTarget({
+              sessionTarget: projectQueuedCompactionSessionTarget({
                 ...params,
                 sessionFile: postCompactionSessionFile,
                 sessionId: postCompactionSessionId,

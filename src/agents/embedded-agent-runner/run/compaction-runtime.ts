@@ -6,7 +6,10 @@ import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
 } from "../../../config/sessions/transcript-write-context.js";
-import { inheritRuntimeCompactionDelegate } from "../../../context-engine/compaction-watchdog.js";
+import {
+  bindContextEngineCompaction,
+  inheritRuntimeCompactionDelegate,
+} from "../../../context-engine/compaction-watchdog.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
@@ -209,11 +212,11 @@ export async function compactEmbeddedRunForRecovery(
   };
   let result: CompactionResult;
   try {
+    const compact = bindContextEngineCompaction(input.contextEngine);
     result = await compactContextEngineWithSafetyTimeout(
       {
         info: input.contextEngine.info,
-        // oxlint-disable-next-line typescript/unbound-method -- tag inheritance uses identity, not invocation.
-        compact: inheritRuntimeCompactionDelegate(input.contextEngine.compact, (backendParams) =>
+        compact: inheritRuntimeCompactionDelegate(compact, (backendParams) =>
           owner.withTranscriptWrites(backendParams.abortSignal, () => {
             // The watchdog may copy runtimeContext to install its progress callback.
             // Attach private facts to the object the delegate actually receives.
@@ -226,7 +229,7 @@ export async function compactEmbeddedRunForRecovery(
                 },
               });
             }
-            return input.contextEngine.compact(backendParams);
+            return compact(backendParams);
           }),
         ),
       },

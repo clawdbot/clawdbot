@@ -44,7 +44,6 @@ scenario:
     - src/gateway/server-methods/chat-abort-handler.ts
   execution:
     kind: script
-    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-compaction-abort.ts
     timeoutMs: 660000
     summary: Run on Blacksmith Testbox after OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build. The producer launches an environment-isolated child before importing OpenClaw and uses a built dist Gateway with owned state and ports. Pending cancellation, real writer replacement, independent summary failure, success, and cancellation during a loaded internal after hook record SQLite snapshots, held-hook accounting, provider checkpoints, QA Channel delivery, owned-process settlement, and a standard evidence verdict.

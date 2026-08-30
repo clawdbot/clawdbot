@@ -40,7 +40,7 @@ import { resolveSessionPlacementSandbox } from "../session-placement-admission.j
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import { compactNativeCliSession } from "./compact.js";
 import {
-  buildContextEngineCompactionSessionTarget,
+  projectQueuedCompactionSessionTarget,
   executeQueuedContextEngineCompaction,
   type QueuedCompactionHostOptions,
 } from "./compact.queued-execution.js";
@@ -149,7 +149,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       contextEngine: params.contextEngine,
       sessionId: params.compactParams.sessionId,
       sessionKey: params.contextEngineSessionKey ?? params.compactParams.sessionKey,
-      sessionTarget: buildContextEngineCompactionSessionTarget(params.compactParams),
+      sessionTarget: projectQueuedCompactionSessionTarget(params.compactParams),
       sessionFile: params.compactParams.sessionFile,
       reason: "turn",
       runtimeContext: params.contextEngineRuntimeContext,
@@ -666,7 +666,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
   const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = params.params;
   return {
     ...runtimeParams,
-    sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
+    sessionTarget: projectQueuedCompactionSessionTarget(params.params),
     ...buildEmbeddedCompactionRuntimeContext({
       ...params.params,
       agentDir: params.agentDir,

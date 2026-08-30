@@ -1,10 +1,15 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
   compact: vi.fn(),
@@ -103,17 +108,18 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
   const promptError = Object.hasOwn(overrides, "promptError")
     ? overrides.promptError
     : overflowError();
-  const attempt = {
+  const attempt = makeAttemptResult({
     terminal: promptError
-      ? { kind: "failed" as const, source: "prompt" as const, error: promptError }
-      : { kind: "ok" as const },
+      ? { kind: "failed", source: "prompt", error: promptError }
+      : { kind: "ok" },
     sessionIdUsed: "session-1",
+    assistantTexts: [],
     messagesSnapshot: [],
     replayMetadata: { replaySafe: true, hadPotentialSideEffects: false },
     ...overrides.attempt,
-  } as EmbeddedRunAttemptResult;
+  });
 
-  return {
+  const input: RecoveryInput = {
     runParams: {
       runId: "run-1",
       sessionId: "session-1",
@@ -126,6 +132,34 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     },
     state: createEmbeddedRunContextRecoveryState(),
     assertRecoveryActive: vi.fn(),
+    // This leaf doubles orchestration; real admission and writer fencing have composed coverage.
+    prepareRecoveryOwner: () => {
+      const assertActive = () => {
+        input.runParams.abortSignal?.throwIfAborted();
+        input.assertRecoveryActive();
+      };
+      assertActive();
+      const session = input.getActiveSession();
+      return {
+        session: {
+          ...session,
+          target: {
+            ...session.target,
+            agentId: session.target?.agentId ?? input.sessionAgentId,
+            sessionId: session.id,
+            sessionKey: session.target?.sessionKey ?? input.resolvedSessionKey,
+            storePath:
+              session.target?.storePath ?? path.join(input.workspaceDir, "openclaw-agent.sqlite"),
+          },
+        },
+        assertActive,
+        withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
+          signal?.throwIfAborted();
+          assertActive();
+          return await run();
+        },
+      };
+    },
     prepareRecoverySession: () => ({
       sessionManager: SessionManager.inMemory("/tmp/workspace"),
       assertActive: vi.fn(),
@@ -150,7 +184,10 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
       sourceTextByKey: new Map(),
     },
     attemptCompactionCount: 0,
-    runtimeAuthPlan: {},
+    runtimeAuthPlan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+    },
     resolvedSessionKey: "agent:main:session-1",
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
@@ -161,7 +198,15 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     thinkLevel: "off",
     authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
-    buildRuntimeSettings: () => ({}),
+    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
+      buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: input.provider,
+        requestedModel: input.modelId,
+        resolvedModel: input.modelId,
+        promptTokenBudget: tokenBudget,
+        degradedReason,
+      }),
     onCompactionHookMessages: vi.fn(async () => {}),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
@@ -171,9 +216,11 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     markOwnedTranscriptRetry: vi.fn(),
     armPostCompactionGuard: vi.fn(),
+    usageAccumulator: createUsageAccumulator(),
     ...overrides,
     attempt,
-  } as RecoveryInput;
+  };
+  return input;
 }
 
 describe("recoverEmbeddedRunOverflow", () => {

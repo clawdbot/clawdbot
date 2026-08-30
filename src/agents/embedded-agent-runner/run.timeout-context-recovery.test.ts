@@ -1,7 +1,12 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
   compact: vi.fn(),
@@ -46,13 +51,14 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     state = createEmbeddedRunContextRecoveryState(),
     ...inputOverrides
   } = overrides;
-  const attempt = {
+  const attempt = makeAttemptResult({
     terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
     sessionIdUsed: "session-1",
+    assistantTexts: [],
     messagesSnapshot: [],
     ...attemptOverride,
-  } as EmbeddedRunAttemptResult;
-  return {
+  });
+  const input: RecoveryInput = {
     runParams: {
       runId: "run-1",
       sessionId: "session-1",
@@ -65,6 +71,34 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     },
     state,
     assertRecoveryActive: vi.fn(),
+    // This leaf doubles orchestration; real admission and writer fencing have composed coverage.
+    prepareRecoveryOwner: () => {
+      const assertActive = () => {
+        input.runParams.abortSignal?.throwIfAborted();
+        input.assertRecoveryActive();
+      };
+      assertActive();
+      const session = input.getActiveSession();
+      return {
+        session: {
+          ...session,
+          target: {
+            ...session.target,
+            agentId: session.target?.agentId ?? input.sessionAgentId,
+            sessionId: session.id,
+            sessionKey: session.target?.sessionKey ?? input.resolvedSessionKey,
+            storePath:
+              session.target?.storePath ?? path.join(input.workspaceDir, "openclaw-agent.sqlite"),
+          },
+        },
+        assertActive,
+        withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
+          signal?.throwIfAborted();
+          assertActive();
+          return await run();
+        },
+      };
+    },
     prepareRecoverySession: () => ({
       sessionManager: undefined,
       assertActive: vi.fn(),
@@ -86,7 +120,10 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     timedOutByRunBudget: false,
     lastRunPromptUsage: { input: 150_000, total: 150_000 },
     attempt,
-    runtimeAuthPlan: {},
+    runtimeAuthPlan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+    },
     resolvedSessionKey: "agent:main:session-1",
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
@@ -97,7 +134,15 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     thinkLevel: "off",
     authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
-    buildRuntimeSettings: () => ({}),
+    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
+      buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: input.provider,
+        requestedModel: input.modelId,
+        resolvedModel: input.modelId,
+        promptTokenBudget: tokenBudget,
+        degradedReason,
+      }),
     onCompactionHookMessages: vi.fn(async () => {}),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
@@ -105,8 +150,10 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     armPostCompactionGuard: vi.fn(),
+    usageAccumulator: createUsageAccumulator(),
     ...inputOverrides,
-  } as unknown as RecoveryInput;
+  };
+  return input;
 }
 
 describe("recoverEmbeddedRunTimeout", () => {
