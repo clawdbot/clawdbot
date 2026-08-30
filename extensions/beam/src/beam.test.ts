@@ -152,13 +152,9 @@ describe("Beam receiver", () => {
   it("attributes each uploaded snapshot to its verified publisher, never payload claims", async () => {
     const store = memoryStore();
     let profileId: string | undefined = "uploader-profile";
-    const endpoint = await serve(
-      createBeamRequestHandler({
-        store,
-        resolveClient: () => ({ ...writeClient(), profileId }),
-        resolveControlUiBasePath: rootControlUiBasePath,
-      }),
-    );
+    const endpoint = await serve(store, {
+      resolveClient: () => ({ ...writeClient(), profileId }),
+    });
     const upload = (body = sampleUpload()) =>
       fetch(endpoint, {
         method: "POST",
