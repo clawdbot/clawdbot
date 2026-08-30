@@ -45,6 +45,7 @@ export type QaSuiteSummaryJson = {
   };
   evidence?: QaEvidenceSummaryJson;
   run: {
+    status: "running" | "completed";
     startedAt: string;
     finishedAt: string;
     providerMode: QaProviderMode;
