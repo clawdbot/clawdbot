@@ -359,7 +359,7 @@ export function stripLeadingInboundMetadata(text: string): string {
 
 /** Extracts the sender label from injected inbound metadata when present. */
 export function extractInboundSenderLabel(text: string): string | null {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text.includes(INBOUND_CONTEXT_MARKER)) {
     return null;
   }
 
