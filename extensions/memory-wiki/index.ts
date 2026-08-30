@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { definePluginEntry, type OpenClawConfig } from "./api.js";
-import { registerWikiCli } from "./src/cli.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
@@ -251,7 +250,8 @@ export default definePluginEntry({
       { name: "wiki_get" },
     );
     api.registerCli(
-      ({ program }) => {
+      async ({ program }) => {
+        const { registerWikiCli } = await import("./src/cli.js");
         registerWikiCli(program, { config, resolveConfig, getAppConfig });
       },
       {

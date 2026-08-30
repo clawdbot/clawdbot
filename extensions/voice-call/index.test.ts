@@ -207,6 +207,7 @@ async function registerVoiceCallCli(
   program: Command,
   pluginConfig: Record<string, unknown> = { provider: "mock" },
 ) {
+  let registrar: ((ctx: RegisterCliContext) => void | Promise<void>) | undefined;
   const { register } = plugin as unknown as {
     register: RegisterVoiceCall;
   };
@@ -223,15 +224,20 @@ async function registerVoiceCallCli(
     logger: noopLogger,
     registerGatewayMethod: () => {},
     registerTool: () => {},
-    registerCli: (fn: (ctx: RegisterCliContext) => void) =>
-      fn({
-        program,
-        config: {},
-        workspaceDir: undefined,
-        logger: noopLogger,
-      }),
+    registerCli: (fn: (ctx: RegisterCliContext) => void | Promise<void>) => {
+      registrar = fn;
+    },
     registerService: () => {},
     resolvePath: (p: string) => p,
+  });
+  if (!registrar) {
+    throw new Error("voice-call CLI registrar was not registered");
+  }
+  await registrar({
+    program,
+    config: {},
+    workspaceDir: undefined,
+    logger: noopLogger,
   });
 }
 

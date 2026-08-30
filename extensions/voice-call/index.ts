@@ -18,7 +18,6 @@ import {
 } from "./api.js";
 import { VOICE_CALL_CLI_DESCRIPTOR } from "./cli-output-mode.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
-import { registerVoiceCallCli } from "./src/cli.js";
 import {
   createVoiceCallCommandService,
   VoiceCallCommandInputError,
@@ -547,14 +546,16 @@ export default definePluginEntry({
     }));
 
     api.registerCli(
-      ({ program }) =>
+      async ({ program }) => {
+        const { registerVoiceCallCli } = await import("./src/cli.js");
         registerVoiceCallCli({
           program,
           config,
           ensureRuntime,
           stateRuntime: api.runtime.state,
           logger: api.logger,
-        }),
+        });
+      },
       { commands: ["voicecall"], descriptors: [VOICE_CALL_CLI_DESCRIPTOR] },
     );
 
