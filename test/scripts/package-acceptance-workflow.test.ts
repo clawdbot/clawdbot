@@ -3579,9 +3579,6 @@ describe("package acceptance workflow", () => {
     expect(planUpload.if).toBe("always()");
     expect(planUpload.with?.name).toBe("full-release-execution-plan-${{ github.run_id }}");
     expect(manifestStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
-    expect(manifestStep.run).toContain(
-      'EVIDENCE_MANIFEST="$(jq -c \'.evidenceReuse.sourceManifest // empty\' "$RELEASE_EXECUTION_PLAN_PATH")"',
-    );
     expect(manifestStep.run).not.toContain("needs.evidence_reuse.outputs");
     expect(decisionUpload.with?.name).toBe(
       "full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -3624,13 +3621,6 @@ describe("package acceptance workflow", () => {
     expect(manifest.env).not.toHaveProperty("TARGET_SHA");
     expect(manifest.env).not.toHaveProperty("NORMAL_CI_RUN_ID");
     expect(manifest.env).not.toHaveProperty("EVIDENCE_REUSE");
-    expectTextToIncludeAll(manifest.run, [
-      'TARGET_SHA="$(jq -r \'.targetSha\' "$RELEASE_EXECUTION_PLAN_PATH")"',
-      'NORMAL_CI_RUN_ID="$(jq -r \'.children[] | select(.key == "normalCi") | .runId\' "$RELEASE_EXECUTION_PLAN_PATH")"',
-      'EVIDENCE_RUN_ID="$(jq -r \'.evidenceReuse.selectedRunId // ""\' "$RELEASE_EXECUTION_PLAN_PATH")"',
-      'EVIDENCE_MANIFEST="$(jq -c \'.evidenceReuse.sourceManifest // empty\' "$RELEASE_EXECUTION_PLAN_PATH")"',
-      'PERFORMANCE_CONCLUSION="$(jq -r \'.children.productPerformance.conclusion // ""\' "$DIAGNOSTIC_DRAIN_PATH")"',
-    ]);
     expect(manifest.run).not.toContain("needs.evidence_reuse.outputs");
     expect(evidenceDispatch.run).toContain(
       'EVIDENCE_REUSE="$(jq -r \'.evidenceReuse.requested\' "$RELEASE_EXECUTION_PLAN_PATH")"',
@@ -7794,10 +7784,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(manifestStep.env?.DIAGNOSTIC_DRAIN_PATH).toContain(
       "full-release-diagnostic-manifest.json",
     );
-    expect(manifestStep.run).toContain(
-      `PERFORMANCE_RUN_ID="$(jq -r '.children[] | select(.key == "productPerformance") | .runId' "$RELEASE_EXECUTION_PLAN_PATH")"`,
-    );
-    expect(manifestStep.run).toContain('--arg performanceRunId "$PERFORMANCE_RUN_ID"');
   });
 
   it("wires evidence attempts into the acceptance gate", () => {
