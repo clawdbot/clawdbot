@@ -108,6 +108,43 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
+  it("shows a metered channel's remaining allowance beside probe health", () => {
+    const summary = createHealthSummary({
+      channels: {
+        line: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          healthState: "healthy",
+          probe: { ok: true, elapsedMs: 41, quota: { kind: "limited", limit: 200, used: 200 } },
+        },
+      },
+      channelOrder: ["line"],
+      channelLabels: { line: "LINE" },
+    });
+
+    // Without this an operator only reads "ok" while the account can no longer send.
+    expect(formatHealthChannelLines(summary)).toStrictEqual(["LINE: ok (41ms) - quota 200/200"]);
+  });
+
+  it("says nothing about an allowance a channel does not meter", () => {
+    const summary = createHealthSummary({
+      channels: {
+        line: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          healthState: "healthy",
+          probe: { ok: true, elapsedMs: 41, quota: { kind: "unlimited" } },
+        },
+      },
+      channelOrder: ["line"],
+      channelLabels: { line: "LINE" },
+    });
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual(["LINE: ok (41ms)"]);
+  });
+
   it("formats statusState without inferring from linked", () => {
     const summary = createHealthSummary({
       channels: {

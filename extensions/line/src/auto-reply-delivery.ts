@@ -16,8 +16,17 @@ import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { createLineQuickReply } from "./rich-messages.js";
-import { findLineHttpError, resolveLineNonDispatchRetryable } from "./send-retry.js";
-import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
+import {
+  explainLineRefusal,
+  findLineHttpError,
+  resolveLineNonDispatchRetryable,
+} from "./send-retry.js";
+import type {
+  LineChannelData,
+  LineMessageQuota,
+  LineQuickReplyItem,
+  LineTemplateMessagePayload,
+} from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -47,6 +56,10 @@ type LineAutoReplyDeps = {
     messages: messagingApi.Message[],
     opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
+  readAccountMessageQuota?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => Promise<LineMessageQuota | undefined>;
   onReplyError?: (err: unknown) => void;
 };
 
@@ -388,8 +401,20 @@ export async function deliverLineAutoReply(params: {
     if (!visibleReplySent) {
       // No user-visible content landed, so this is a full delivery failure.
       // Throwing lets the caller surface or replace it instead of recording a
-      // successful empty reply.
-      throw toLineDeliveryError(deliveryError);
+      // successful empty reply. This route reaches the same push API as durable
+      // delivery, so it reports a spent allowance through the same explanation
+      // rather than leaving the operator with LINE's bare status line.
+      const readQuota = deps.readAccountMessageQuota;
+      const refusal = readQuota
+        ? await explainLineRefusal({
+            error: deliveryError,
+            readQuota: () => readQuota({ cfg: params.cfg, accountId }),
+          })
+        : undefined;
+      const named = toLineDeliveryError(deliveryError);
+      throw refusal && refusal.reason !== named.message
+        ? new Error(refusal.reason, { cause: deliveryError })
+        : named;
     }
     // Other visible content landed; preserve that evidence so downstream
     // recovery does not replay text the user already saw.

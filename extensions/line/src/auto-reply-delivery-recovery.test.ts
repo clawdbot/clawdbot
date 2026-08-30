@@ -23,6 +23,42 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     });
 
   it.each([
+    {
+      label: "names the spent allowance once the reply token is gone",
+      used: 200,
+      expected: "LINE refused the message: 200/200 monthly messages used.",
+    },
+    {
+      label: "keeps LINE's own words when the allowance still has room",
+      used: 12,
+      expected: "429 - provider rejected the request",
+    },
+  ])("$label", async ({ used, expected }) => {
+    // The reply token is already spent, so this common inbound route reaches the
+    // push API directly; before this it reported LINE's bare status line and the
+    // bot went quiet with no reason an operator could act on.
+    const rejection = createHttpError(429);
+    const pushMessagesLine = vi.fn(async () => {
+      throw rejection;
+    });
+    const { deps } = createDeps({
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
+      readAccountMessageQuota: async () => ({ kind: "limited", limit: 200, used }) as const,
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        replyTokenUsed: true,
+        payload: { text: "an answer nobody will see" },
+        lineData: {},
+        deps,
+      }),
+    ).rejects.toThrow(expected);
+    expect(pushMessagesLine).toHaveBeenCalled();
+  });
+
+  it.each([
     { label: "an actual LINE HTTP timeout", error: createHttpError(408) },
     { label: "an actual LINE upstream failure", error: createHttpError(503) },
     {

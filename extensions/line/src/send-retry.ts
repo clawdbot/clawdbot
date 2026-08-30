@@ -5,7 +5,7 @@ import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
-import { isLineMessageQuotaExhausted } from "./message-quota.js";
+import { describeLineQuotaRefusal, isLineMessageQuotaExhausted } from "./message-quota.js";
 import type { LineMessageQuota } from "./types.js";
 
 /** The LINE HTTP response carried by an error graph, when the request reached LINE. */
@@ -122,3 +122,31 @@ export const runLinePushWithRetries: typeof runLinePushAttempts = (fn, label) =>
     throw error;
   });
 };
+
+/**
+ * The single explanation every LINE refusal report goes through.
+ *
+ * Both the durable outbound adapter and the direct inbound reply sender end at
+ * the same push API and can be refused for the same spent allowance, so they
+ * share one verdict and one operator-facing reason instead of each deciding for
+ * itself. The allowance is read at most once per refusal.
+ */
+export async function explainLineRefusal(params: {
+  error: unknown;
+  readQuota: () => Promise<LineMessageQuota | undefined>;
+}): Promise<{ retryable: boolean | undefined; reason: string }> {
+  let quota: LineMessageQuota | undefined;
+  let read = false;
+  const readOnce = async () => {
+    if (!read) {
+      read = true;
+      quota = await params.readQuota();
+    }
+    return quota;
+  };
+  const retryable = await resolveLineRefusalRetryable({ error: params.error, readQuota: readOnce });
+  const reason =
+    describeLineQuotaRefusal(quota) ??
+    (params.error instanceof Error ? params.error.message : "LINE rejected the message");
+  return { retryable, reason };
+}

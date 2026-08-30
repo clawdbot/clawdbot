@@ -29,6 +29,7 @@ import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
+import { readLineAccountMessageQuota as readAccountMessageQuota } from "./message-quota.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
@@ -266,6 +267,7 @@ export async function monitorLineProvider(
                       createFlexMessage,
                       buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
+                      readAccountMessageQuota,
                       onReplyError: (replyErr) => {
                         logVerbose(
                           `line: reply token failed, falling back to push: ${String(replyErr)}`,

@@ -78,6 +78,12 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
   const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asNullableRecord(record.webhook);
   const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
+  // A metered channel reports the allowance its provider still grants. Showing it
+  // beside probe health is the only place an operator sees the wall coming before
+  // sends start failing; channels without a limit report nothing here.
+  const quota = asNullableRecord(record.quota);
+  const quotaUsed = quota && typeof quota.used === "number" ? quota.used : null;
+  const quotaLimit = quota && typeof quota.limit === "number" ? quota.limit : null;
 
   const usernames = new Set<string>();
   if (botUsername) {
@@ -99,6 +105,9 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
     }
     if (webhookUrl) {
       label += ` - webhook ${webhookUrl}`;
+    }
+    if (quotaUsed !== null && quotaLimit !== null) {
+      label += ` - quota ${quotaUsed}/${quotaLimit}`;
     }
     return label;
   }
