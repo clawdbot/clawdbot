@@ -1,103 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
-// Qa Lab plugin module owns Telegram live adapter API and credential behavior.
-import type { TelegramBotMessage, TelegramBotUpdate } from "@openclaw/telegram/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  parseStrictPositiveInteger,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import {
-  computeBackoff,
-  sleepWithAbort,
-  type BackoffPolicy,
-} from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { z } from "zod";
-
-export type TelegramQaRuntimeEnv = {
-  groupId: string;
-  driverToken: string;
-  sutToken: string;
-};
-
-export type TelegramBotIdentity = {
-  id: number;
-  is_bot: boolean;
-  first_name: string;
-  username?: string;
-};
-
-type TelegramApiEnvelope<T> = {
-  ok: boolean;
-  result?: T;
-  description?: string;
-  error_code?: number;
-  parameters?: unknown;
-};
-
-export class TelegramQaApiError extends Error {
-  override readonly name = "TelegramQaApiError";
-  readonly ok = false;
-
-  constructor(
-    readonly method: string,
-    readonly error_code: number,
-    readonly description: string,
-    readonly parameters: unknown,
-    readonly status: number,
-    options?: { cause?: unknown },
-  ) {
-    super(`${method} failed (${error_code}): ${description}`, options);
-  }
-}
-
-type TelegramReplyMarkup = {
-  inline_keyboard?: Array<Array<{ text?: string }>>;
-};
-
-type TelegramRichMessage = {
-  markdown?: string;
-  html?: string;
-  blocks?: unknown[];
-};
-
-type TelegramMessage = Pick<TelegramBotMessage, "date" | "message_id"> &
-  Partial<Pick<TelegramBotMessage, "caption" | "text">> & {
-    audio?: unknown;
-    chat: { id: number };
-    document?: unknown;
-    from?: Pick<NonNullable<TelegramBotMessage["from"]>, "id" | "is_bot" | "username">;
-    photo?: unknown[];
-    rich_message?: TelegramRichMessage;
-    reply_markup?: TelegramReplyMarkup;
-    reply_to_message?: { message_id?: number };
-    sticker?: unknown;
-    video?: unknown;
-    voice?: unknown;
-  };
-
-export type TelegramUpdate = Pick<TelegramBotUpdate, "update_id"> & {
-  edited_message?: TelegramMessage;
-  message?: TelegramMessage;
-};
-
-type TelegramObservedMessage = {
-  updateId: number;
-  messageId: number;
-  chatId: number;
-  senderId: number;
-  senderIsBot: boolean;
-  senderUsername?: string;
-  text: string;
-  caption?: string;
-  replyToMessageId?: number;
-  timestamp: number;
-  inlineButtons: string[];
-  mediaKinds: string[];
-};
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type TelegramChannelStatus = {
   accountId?: string;
@@ -114,179 +19,16 @@ type TelegramGatewayClient = {
 };
 
 const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
-const TELEGRAM_QA_POLL_RETRY_BACKOFF: BackoffPolicy = {
-  initialMs: 250,
-  maxMs: 2_000,
-  factor: 2,
-  jitter: 0,
-};
-const TELEGRAM_QA_ENV_FIELDS = [
-  { field: "groupId", envKey: "OPENCLAW_QA_TELEGRAM_GROUP_ID" },
-  { field: "driverToken", envKey: "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN" },
-  { field: "sutToken", envKey: "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN" },
-] as const;
-
-const telegramQaCredentialPayloadSchema = z.object({
-  groupId: z.string().trim().min(1),
-  driverToken: z.string().trim().min(1),
-  sutToken: z.string().trim().min(1),
-});
-
-function resolveEnvValue(
-  env: NodeJS.ProcessEnv,
-  key: (typeof TELEGRAM_QA_ENV_FIELDS)[number]["envKey"],
-) {
-  const value = env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing ${key}.`);
-  }
-  return value;
-}
-
-export function resolveTelegramQaRuntimeEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): TelegramQaRuntimeEnv {
-  return parseTelegramQaCredentialPayload(
-    Object.fromEntries(
-      TELEGRAM_QA_ENV_FIELDS.map(({ envKey, field }) => [field, resolveEnvValue(env, envKey)]),
-    ),
-  );
-}
-
-export function parseTelegramQaCredentialPayload(payload: unknown): TelegramQaRuntimeEnv {
-  const parsed = telegramQaCredentialPayloadSchema.parse(payload);
-  if (!/^-?\d+$/u.test(parsed.groupId)) {
-    throw new Error("Telegram credential payload groupId must be a numeric Telegram chat id.");
-  }
-  return parsed;
-}
-
-function flattenInlineButtons(replyMarkup?: TelegramReplyMarkup) {
-  return (replyMarkup?.inline_keyboard ?? [])
-    .flat()
-    .map((button) => button.text?.trim())
-    .filter((text): text is string => Boolean(text));
-}
-
-function detectMediaKinds(message: TelegramMessage) {
-  const kinds: string[] = [];
-  if (Array.isArray(message.photo) && message.photo.length > 0) {
-    kinds.push("photo");
-  }
-  for (const kind of ["document", "audio", "video", "voice", "sticker"] as const) {
-    if (message[kind]) {
-      kinds.push(kind);
-    }
-  }
-  return kinds;
-}
-
-function flattenTelegramRichText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((part) => flattenTelegramRichText(part)).join("");
-  }
-  if (!isRecord(value)) {
-    return "";
-  }
-  if ("text" in value) {
-    return flattenTelegramRichText(value.text);
-  }
-  if (typeof value.alternative_text === "string") {
-    return value.alternative_text;
-  }
-  return typeof value.expression === "string" ? value.expression : "";
-}
-
-function flattenTelegramRichTableCells(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return flattenTelegramRichBlock(value);
-  }
-  return value
-    .map((row) => {
-      const cells = Array.isArray(row) ? row : [row];
-      return cells
-        .map((cell) => flattenTelegramRichBlock(cell))
-        .filter((cell) => cell.trim())
-        .join("\t");
-    })
-    .filter((row) => row.trim())
-    .join("\n");
-}
-
-function flattenTelegramRichBlocks(value: unknown): string {
-  const blocks = Array.isArray(value) ? value : [value];
-  return blocks
-    .map((block) => flattenTelegramRichBlock(block))
-    .filter((part) => part.trim())
-    .join("\n");
-}
-
-function flattenTelegramRichBlock(value: unknown): string {
-  if (typeof value === "string" || Array.isArray(value)) {
-    return flattenTelegramRichText(value);
-  }
-  if (!isRecord(value)) {
-    return "";
-  }
-  const parts = [
-    "text" in value ? flattenTelegramRichText(value.text) : "",
-    "summary" in value ? flattenTelegramRichText(value.summary) : "",
-    typeof value.label === "string" ? value.label : "",
-    typeof value.expression === "string" ? value.expression : "",
-    "blocks" in value ? flattenTelegramRichBlocks(value.blocks) : "",
-    "items" in value ? flattenTelegramRichBlocks(value.items) : "",
-    "cells" in value ? flattenTelegramRichTableCells(value.cells) : "",
-    "caption" in value ? flattenTelegramRichBlock(value.caption) : "",
-    "credit" in value ? flattenTelegramRichText(value.credit) : "",
-  ];
-  return parts.filter((part) => part.trim()).join("\n");
-}
-
-function selectTelegramObservedText(message: TelegramMessage) {
-  return (
-    message.text ||
-    message.caption ||
-    message.rich_message?.markdown ||
-    message.rich_message?.html ||
-    flattenTelegramRichBlocks(message.rich_message?.blocks) ||
-    ""
-  );
-}
-
-export function normalizeTelegramObservedMessage(
-  update: TelegramUpdate,
-): TelegramObservedMessage | null {
-  const message = update.edited_message ?? update.message;
-  if (!message?.from?.id) {
-    return null;
-  }
-  return {
-    updateId: update.update_id,
-    messageId: message.message_id,
-    chatId: message.chat.id,
-    senderId: message.from.id,
-    senderIsBot: message.from.is_bot,
-    senderUsername: message.from.username,
-    text: selectTelegramObservedText(message),
-    caption: message.caption,
-    replyToMessageId: message.reply_to_message?.message_id,
-    timestamp: message.date * 1_000,
-    inlineButtons: flattenInlineButtons(message.reply_markup),
-    mediaKinds: detectMediaKinds(message),
-  };
-}
 
 export function buildTelegramQaConfig(
   baseCfg: OpenClawConfig,
   params: {
+    apiRoot: string;
     groupId: string;
-    sutToken: string;
-    driverBotId: number;
-    sutAccountId: string;
     requireMention: boolean;
+    sutAccountId: string;
+    sutToken: string;
+    testerUserId: string;
   },
 ): OpenClawConfig {
   return {
@@ -329,11 +71,12 @@ export function buildTelegramQaConfig(
           [params.sutAccountId]: {
             enabled: true,
             botToken: params.sutToken,
+            apiRoot: params.apiRoot,
             dmPolicy: "disabled",
             groups: {
               [params.groupId]: {
                 groupPolicy: "allowlist",
-                allowFrom: [String(params.driverBotId)],
+                allowFrom: [params.testerUserId],
                 requireMention: params.requireMention,
               },
             },
@@ -342,135 +85,6 @@ export function buildTelegramQaConfig(
       },
     },
   };
-}
-
-export async function callTelegramApi<T>(
-  token: string,
-  method: string,
-  body?: Record<string, unknown>,
-  timeoutMs = 15_000,
-): Promise<T> {
-  const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 15_000);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `https://api.telegram.org/bot${token}/${method}`,
-    init: {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body ?? {}),
-    },
-    timeoutMs: requestTimeoutMs,
-    policy: { hostnameAllowlist: ["api.telegram.org"] },
-    auditContext: "qa-lab-telegram-live",
-    capture: false,
-  });
-  try {
-    let payload: TelegramApiEnvelope<T>;
-    try {
-      const parsed = await readProviderJsonResponse<unknown>(
-        response,
-        `qa-lab-telegram-live.${method}`,
-      );
-      if (!isRecord(parsed)) {
-        throw new Error(`qa-lab-telegram-live.${method}: malformed JSON response`);
-      }
-      payload = parsed as TelegramApiEnvelope<T>;
-    } catch (error) {
-      if (!response.ok) {
-        throw new TelegramQaApiError(
-          method,
-          response.status,
-          `${method} failed with status ${response.status}`,
-          undefined,
-          response.status,
-          { cause: error },
-        );
-      }
-      throw error;
-    }
-    if (!response.ok || !payload.ok) {
-      const description =
-        payload.description?.trim() || `${method} failed with status ${response.status}`;
-      throw new TelegramQaApiError(
-        method,
-        typeof payload.error_code === "number" ? payload.error_code : response.status,
-        description,
-        payload.parameters,
-        response.status,
-      );
-    }
-    if (payload.result === undefined) {
-      throw new Error(`${method} returned no result`);
-    }
-    return payload.result;
-  } finally {
-    await release();
-  }
-}
-
-export function isRecoverableTelegramQaPollError(error: unknown): boolean {
-  if (error && typeof error === "object" && "error_code" in error) {
-    const errorCode = (error as { error_code?: unknown }).error_code;
-    if (typeof errorCode === "number") {
-      return errorCode === 429 || errorCode >= 500;
-    }
-  }
-  const message = formatErrorMessage(error).toLowerCase();
-  return [
-    "fetch failed",
-    "aborted due to timeout",
-    "operation was aborted",
-    "request timed out",
-    "aborterror",
-    "econnreset",
-    "etimedout",
-    "socket hang up",
-    "terminated",
-  ].some((fragment) => message.includes(fragment));
-}
-
-function readTelegramQaRetryAfterMs(error: unknown) {
-  if (!(error instanceof TelegramQaApiError) || error.error_code !== 429) {
-    return undefined;
-  }
-  const retryAfter = isRecord(error.parameters) ? error.parameters.retry_after : undefined;
-  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter >= 0
-    ? retryAfter * 1_000
-    : undefined;
-}
-
-function resolveTelegramPollRetryDelayMs(error: unknown, attempt: number) {
-  return (
-    readTelegramQaRetryAfterMs(error) ??
-    computeBackoff(TELEGRAM_QA_POLL_RETRY_BACKOFF, Math.max(1, attempt))
-  );
-}
-
-export async function waitForTelegramPollRetryDelay(
-  error: unknown,
-  attempt: number,
-  abortSignal: AbortSignal,
-) {
-  await sleepWithAbort(resolveTelegramPollRetryDelayMs(error, attempt), abortSignal, {
-    ref: false,
-  });
-}
-
-export async function flushTelegramUpdates(token: string) {
-  const startedAt = Date.now();
-  let offset = 0;
-  while (Date.now() - startedAt < 15_000) {
-    const updates = await callTelegramApi<TelegramUpdate[]>(
-      token,
-      "getUpdates",
-      { offset, timeout: 0, allowed_updates: ["message", "edited_message"] },
-      15_000,
-    );
-    if (updates.length === 0) {
-      return offset;
-    }
-    offset = (updates.at(-1)?.update_id ?? offset) + 1;
-  }
-  throw new Error("timed out after 15000ms draining Telegram updates");
 }
 
 function resolveTelegramQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {

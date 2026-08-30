@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import secrets
+import select
 import shutil
 import stat
 import subprocess
@@ -152,7 +153,7 @@ def ensure_prebuilt_tdjson():
                 )
             with tempfile.TemporaryDirectory(dir=cache_dir, prefix=".extract-") as temp:
                 with tarfile.open(archive) as tar:
-                    tar.extractall(temp, filter="data")
+                    tar.extractall(temp)
                 Path(temp, "package").replace(cache_dir / "package")
         finally:
             archive.unlink(missing_ok=True)
@@ -977,6 +978,105 @@ def command_chats(args):
     print_result({"ok": True, "configuredChat": configured, "chats": rows}, args.json, getattr(args, "output", ""))
 
 
+def serve_message(message, users):
+    normalized = normalize_message(message, users)
+    message_id = normalized.get("messageId")
+    return {
+        "messageId": message_id,
+        "botApiMessageId": message_id >> 20 if isinstance(message_id, int) else None,
+        "chatId": normalized.get("chatId"),
+        "senderId": normalized.get("senderId"),
+        "senderUsername": normalized.get("senderUsername"),
+        "replyToMessageId": normalized.get("replyToMessageId"),
+        "timestamp": int(message.get("date") or 0) * 1000,
+        "text": normalized.get("text", ""),
+    }
+
+
+def serve_update(update, users, known_messages):
+    update_type = update.get("@type")
+    if update_type == "updateNewMessage":
+        message = update.get("message") or {}
+        normalized = serve_message(message, users)
+        if isinstance(normalized["messageId"], int):
+            known_messages[normalized["messageId"]] = normalized
+        return {"kind": "message", **normalized}
+    if update_type != "updateMessageContent":
+        return None
+    message_id = update.get("message_id")
+    known = known_messages.get(message_id)
+    if not known:
+        return None
+    content = update.get("new_content") or {}
+    normalized = {**known, "text": message_content_text(content)}
+    known_messages[message_id] = normalized
+    return {"kind": "edit", **normalized}
+
+
+def message_content_text(content):
+    for key in ("text", "caption"):
+        formatted = content.get(key)
+        if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
+            return formatted["text"]
+    return ""
+
+
+def write_ndjson(payload):
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+
+def command_serve(args):
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    chat_id = driver.resolve_chat(args.chat)
+    tester = driver.client.request({"@type": "getMe"})
+    write_ndjson(
+        {
+            "type": "ready",
+            "chatId": chat_id,
+            "user": public_user(tester),
+        }
+    )
+    known_messages = {}
+    while True:
+        update = driver.client.next_update(timeout=0.1)
+        if update:
+            event = serve_update(update, driver.client.users, known_messages)
+            if event:
+                write_ndjson({"type": "update", "update": event})
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if not readable:
+            continue
+        line = sys.stdin.readline()
+        if not line:
+            return
+        request_id = None
+        try:
+            request = json.loads(line)
+            request_id = request.get("id")
+            if not isinstance(request_id, str) or not request_id:
+                raise DriverError("serve command requires a string id")
+            if request.get("method") != "send":
+                raise DriverError("serve command method must be send")
+            text = request.get("text")
+            if not isinstance(text, str) or not text:
+                raise DriverError("serve send command requires text")
+            reply_to = request.get("replyToMessageId")
+            sent = driver.send_text(chat_id, text, reply_to=reply_to)
+            normalized = serve_message(sent, driver.client.users)
+            known_messages[normalized["messageId"]] = normalized
+            write_ndjson({"type": "response", "id": request_id, "result": normalized})
+        except (DriverError, ValueError, TypeError) as error:
+            write_ndjson(
+                {
+                    "type": "response",
+                    "id": request_id,
+                    "error": str(error),
+                }
+            )
+
+
 def public_chat(chat, source):
     return {
         "id": chat.get("id"),
@@ -1072,6 +1172,11 @@ def main():
     add_common(chats)
     chats.add_argument("--limit", type=int, default=50)
     chats.set_defaults(func=command_chats)
+
+    serve = sub.add_parser("serve")
+    serve.add_argument("--chat", default="")
+    serve.add_argument("--timeout-ms", type=int, default=120000)
+    serve.set_defaults(func=command_serve)
 
     args = parser.parse_args()
     if args.command == "send" and not args.text and not args.photo:

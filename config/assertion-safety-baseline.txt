@@ -1039,7 +1039,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.message-observations.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts	1
-extensions/qa-lab/src/live-transports/telegram/telegram-api.runtime.ts	3
+extensions/qa-lab/src/live-transports/telegram/telegram-api.runtime.ts	1
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
 extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	6

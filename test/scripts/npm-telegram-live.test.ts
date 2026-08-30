@@ -270,11 +270,20 @@ describe("package Telegram live Docker E2E", () => {
     ).rejects.toThrow("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   });
 
-  it("mounts the QA taxonomy without exposing the repository root", () => {
+  it("mounts the QA taxonomy and userbot skill without exposing the repository root", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
     expect(script).toContain('-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/.agents:/app/.agents:ro"');
     expect(script).not.toContain('-v "$ROOT_DIR:/app');
+  });
+
+  it("requires Convex leases instead of static Telegram credentials", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("Telegram package QA requires Convex credential mode.");
+    expect(script).not.toContain("OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN");
+    expect(script).not.toContain("OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN");
   });
 
   it("mounts configured output paths before entering the container", () => {
