@@ -48,6 +48,7 @@ describe("legacy transcript row classification", () => {
 
   it.each([1, 2, 3, 4])("preserves recognized and opaque rows from version %s", (version) => {
     const unindexedHook = { type: "message", message: { role: "custom", content: "context" } };
+    const legacyMetadata = { type: "thinking_level_change", thinkingLevel: "low" };
     const opaqueRows = [
       { type: "session", id: "later-header", version: 1 },
       { type: "plugin_state", id: "opaque", payload: { keep: "exact" } },
@@ -57,6 +58,7 @@ describe("legacy transcript row classification", () => {
       { type: "session", version, sessionId: "legacy-header" },
       { ...unindexedHook, id: "hook", parentId: null },
       unindexedHook,
+      legacyMetadata,
       ...opaqueRows,
     ];
     fs.writeFileSync(transcriptPath, rows.map((row) => JSON.stringify(row)).join("\n"));
@@ -88,7 +90,16 @@ describe("legacy transcript row classification", () => {
     } else {
       expect(events[2]).toEqual(unindexedHook);
     }
-    expect(events.slice(3)).toEqual(opaqueRows);
+    expect(events[3]).toEqual(
+      version === 1
+        ? {
+            ...legacyMetadata,
+            id: expect.stringMatching(/^[a-f0-9]{16}-3$/),
+            parentId: expect.stringMatching(/^[a-f0-9]{16}-2$/),
+          }
+        : legacyMetadata,
+    );
+    expect(events.slice(4)).toEqual(opaqueRows);
   });
 
   it.each([1, 3])("enforces the target limit even during v%s prefix recovery", (version) => {
