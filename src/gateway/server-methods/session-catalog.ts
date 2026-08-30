@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isControlUiReservedRouteSegment } from "@openclaw/session-url-contract";
 import {
   ErrorCodes,
   errorShape,
@@ -15,11 +14,9 @@ import {
   validateSessionsCatalogContinueParams,
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
-  validateSessionCatalogShareRoute,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
@@ -39,7 +36,8 @@ import {
   allowProcessHomeFallback,
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
-  resolveSessionCatalogRegistry,
+  catalogRegistrationSnapshot,
+  type CatalogRegistrationSnapshot,
 } from "./session-catalog-provider-access.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 import {
@@ -76,70 +74,10 @@ function catalogError(error: unknown): { code: string; message: string } {
   };
 }
 
-type CatalogRegistrationSnapshot = {
-  registry: PluginRegistry | null;
-  source: PluginRegistry["sessionCatalogs"] | undefined;
-  registrations: PluginRegistry["sessionCatalogs"];
-  providers: SessionCatalogProvider[];
-  shareRoutes: ReadonlyMap<SessionCatalogProvider, SessionCatalogShareRoute>;
-};
-
-let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
-
-function catalogRegistrationSnapshot(): CatalogRegistrationSnapshot {
-  const registry = resolveSessionCatalogRegistry();
-  const source = registry?.sessionCatalogs;
-  if (
-    cachedCatalogRegistrations?.registry === registry &&
-    cachedCatalogRegistrations.source === source
-  ) {
-    return cachedCatalogRegistrations;
-  }
-  const sortedRegistrations = (source ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
-  );
-  const providerList = sortedRegistrations.map((entry) => entry.provider);
-  const validRoutes = providerList.flatMap((provider) =>
-    provider.shareRoute &&
-    validateSessionCatalogShareRoute(provider.shareRoute) &&
-    !isControlUiReservedRouteSegment(provider.shareRoute.routeSegment)
-      ? [{ provider, route: provider.shareRoute }]
-      : [],
-  );
-  const routeCounts = new Map<string, number>();
-  for (const { route } of validRoutes) {
-    routeCounts.set(route.routeSegment, (routeCounts.get(route.routeSegment) ?? 0) + 1);
-  }
-  const shareRoutes = new Map(
-    validRoutes
-      .filter(({ route }) => routeCounts.get(route.routeSegment) === 1)
-      .map(({ provider, route }) => [provider, route] as const),
-  );
-  // Plugin registration arrays are process-stable until the active registry seam changes. Hoisting
-  // this sort avoids rebuilding identical order every poll; registry/list identity invalidates it.
-  // A stale snapshot would route requests to retired plugin instances, so callers share this owner.
-  cachedCatalogRegistrations = {
-    registry,
-    source,
-    registrations: sortedRegistrations,
-    providers: providerList,
-    shareRoutes,
-  };
-  return cachedCatalogRegistrations;
-}
-
-function providers(): SessionCatalogProvider[] {
-  return catalogRegistrationSnapshot().providers;
-}
-
 export function resolveSessionCatalogProvider(
   catalogId: string,
 ): SessionCatalogProvider | undefined {
-  return providers().find((candidate) => candidate.id === catalogId);
-}
-
-function registrations() {
-  return catalogRegistrationSnapshot().registrations;
+  return catalogRegistrationSnapshot().providers.find((candidate) => candidate.id === catalogId);
 }
 
 type SessionCatalogCreateTargetResolution =
@@ -231,7 +169,9 @@ export function resolveRegisteredCatalogCreateTarget(
   agentId: string,
   config: OpenClawConfig,
 ): SessionCatalogCreateTargetResolution {
-  const registration = registrations().find((entry) => entry.provider.id === catalogId);
+  const registration = catalogRegistrationSnapshot().registrations.find(
+    (entry) => entry.provider.id === catalogId,
+  );
   if (!registration) {
     return {
       ok: false,
@@ -338,7 +278,9 @@ async function authorizeCatalogRequest(params: {
 }
 
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
-  const registration = registrations().find((candidate) => candidate.provider.id === catalogId);
+  const registration = catalogRegistrationSnapshot().registrations.find(
+    (candidate) => candidate.provider.id === catalogId,
+  );
   if (!registration) {
     respond(
       false,

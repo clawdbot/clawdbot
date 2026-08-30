@@ -1,5 +1,3 @@
-import { buildControlUiCatalogSharePath } from "@openclaw/session-url-contract";
-import type { SessionCatalog } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
@@ -25,7 +23,6 @@ export function composerDraftSearch(draft: string): string {
 }
 const SESSION_KEY_UUID_SUFFIX_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-type SessionCatalogShareRoute = NonNullable<SessionCatalog["shareRoute"]>;
 
 type SessionNavigationContext<TRouteId extends string> = Pick<
   ApplicationContext<TRouteId>,
@@ -40,7 +37,6 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   fallbackAgentId?: never;
   basePath?: never;
   row?: never;
-  catalogShareRoute?: SessionCatalogShareRoute;
   mainKey?: never;
   shortIdLength?: number;
   exactKey?: boolean;
@@ -56,7 +52,6 @@ type ExplicitSessionNavigationTargetParams = {
   fallbackAgentId: string;
   basePath?: string;
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
-  catalogShareRoute?: SessionCatalogShareRoute;
   mainKey?: string | null;
   shortIdLength?: number;
   exactKey?: boolean;
@@ -146,15 +141,6 @@ export function sessionNavigationTarget<TRouteId extends string>(
   }
 
   const catalogKey = parseCatalogSessionKey(row?.key ?? sessionKey);
-  const catalogShareRoute = params.catalogShareRoute;
-  const catalogSharePath =
-    catalogKey && catalogShareRoute?.hostId === catalogKey.hostId
-      ? buildControlUiCatalogSharePath({
-          shareRoute: catalogShareRoute,
-          threadId: catalogKey.threadId,
-          basePath,
-        })
-      : null;
   const targetKey = catalogKey
     ? buildAgentMainSessionKey({
         agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
@@ -167,8 +153,8 @@ export function sessionNavigationTarget<TRouteId extends string>(
     mainKey,
     shortIdLength: params.shortIdLength,
   });
-  const pathname = catalogSharePath ?? sessionPath ?? pathForRoute(params.face, basePath);
-  const search = catalogKey && !catalogSharePath ? catalogSessionSearch(catalogKey) : undefined;
+  const pathname = sessionPath ?? pathForRoute(params.face, basePath);
+  const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;
   // A cached row carries the authoritative boardFace, so the caller's face is already
   // correct. Only an uncached key made it a guess: mark the in-app navigation so the
   // chat loader re-derives the face from the gateway and replaces the URL.

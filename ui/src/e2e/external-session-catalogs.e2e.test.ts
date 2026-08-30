@@ -344,6 +344,14 @@ suite.define(() => {
       methodResponses: {
         // Beam rows live in the plugin catalog, not the native session store.
         "sessions.describe": { session: null },
+        "agents.list": {
+          agents: [
+            { id: "research", name: "Research" },
+            { id: "other", name: "Other" },
+          ],
+          defaultId: "research",
+          mainKey: "main",
+        },
         "sessions.catalog.list": {
           catalogs: [
             {
@@ -384,7 +392,7 @@ suite.define(() => {
       },
     });
 
-    const assertCatalogOwner = async () => {
+    const assertCatalogOwner = async (agentId = "research") => {
       await expect
         .poll(() =>
           page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible").evaluateAll((panes) =>
@@ -397,9 +405,7 @@ suite.define(() => {
             }),
           ),
         )
-        .toEqual([
-          { sessionKey: `agent:research:catalog:beam:gateway:${fullId}`, agentId: "research" },
-        ]);
+        .toEqual([{ sessionKey: `agent:${agentId}:catalog:beam:gateway:${fullId}`, agentId }]);
     };
 
     try {
@@ -452,17 +458,24 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe(prettyPath);
       expect(new URL(page.url()).search).toBe("");
 
-      await page.goto(new URL("/openclaw/chat", suite.server.baseUrl).href);
+      await page.screenshot({
+        path: path.join(artifactDir, "beam-pretty-route.png"),
+        fullPage: true,
+      });
+
+      await page.goto(new URL("/openclaw/chat/other", suite.server.baseUrl).href);
       const beamRow = page.locator("a", { hasText: "Pretty Beam route" }).first();
       await beamRow.waitFor();
       await beamRow.click();
       await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
-      await assertCatalogOwner();
-      expect(new URL(page.url()).pathname).toBe(prettyPath);
-      expect(new URL(page.url()).search).toBe("");
-      await page.screenshot({
-        path: path.join(artifactDir, "beam-pretty-route.png"),
-        fullPage: true,
+      await assertCatalogOwner("other");
+      expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(
+        `/openclaw/chat/other?catalog=beam&host=gateway&thread=${fullId}`,
+      );
+      expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
+        agentId: "other",
+        catalogId: "beam",
+        threadId: fullId,
       });
     } finally {
       await suite.closeBrowserContext(context);

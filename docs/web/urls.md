@@ -212,6 +212,9 @@ a separate transcript or storage path. It stays in the browser address bar
 while the catalog transcript renders. Normal Gateway authentication still
 applies; the URL identifies a Beam row but does not authorize access.
 
+Share links open in chat under the default agent. Sidebar and dashboard navigation
+keep the explicit catalog-query URL so the selected agent and view are preserved.
+
 New URLs use the first 12 lowercase hexadecimal characters of the 32-character
 Beam id. Twelve characters provide 48 bits; against Beam's 500-row retention
 bound, the probability that any pair shares that prefix is about 1 in 2.26
