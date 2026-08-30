@@ -30,6 +30,7 @@ import {
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
+import { resolveMSTeamsReplyPresentation } from "./presentation.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -85,6 +86,8 @@ type MSTeamsReplyRenderOptions = {
 export type MSTeamsRenderedMessage = {
   text?: string;
   mediaUrl?: string;
+  /** Adaptive Card carrying a reply's portable presentation. */
+  card?: Record<string, unknown>;
 };
 
 type MSTeamsSendRetryOptions = {
@@ -229,8 +232,14 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
+    const presentation = resolveMSTeamsReplyPresentation(payload);
+    if (presentation?.kind === "card") {
+      // The card is the whole message: its body already carries the reply's text.
+      out.push({ card: presentation.card });
+      continue;
+    }
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: formatMSTeamsMarkdown(payload.text ?? "", tableMode),
+      text: formatMSTeamsMarkdown(presentation?.text ?? payload.text ?? "", tableMode),
     });
 
     if (!reply.hasContent) {
@@ -286,6 +295,14 @@ async function buildActivity(
   activity.channelData = {
     feedbackLoopEnabled: options?.feedbackLoopEnabled ?? false,
   };
+
+  if (msg.card) {
+    activity.entities = [AI_GENERATED_ENTITY];
+    activity.attachments = [
+      { contentType: "application/vnd.microsoft.card.adaptive", content: msg.card },
+    ];
+    return activity;
+  }
 
   if (msg.text) {
     // Parse mentions from text (format: @[Name](id))
@@ -409,7 +426,7 @@ export async function sendMSTeamsMessages(params: {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 }): Promise<string[]> {
   const messages = params.messages.filter(
-    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
+    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl || m.card,
   );
   if (messages.length === 0) {
     return [];
