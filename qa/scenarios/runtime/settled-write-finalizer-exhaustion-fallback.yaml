@@ -6,8 +6,8 @@ scenario:
   coverage:
     primary:
       - agent-runtime.failure-recovery-empty-response-recovery
-      - agent-runtime.failure-recovery-retry-policy
     secondary:
+      - agent-runtime.failure-recovery-retry-policy
       - channels.qa-channel-final-reply
   objective: Verify an exhausted finalizer produces one visible fallback without replaying a settled write.
   successCriteria:
