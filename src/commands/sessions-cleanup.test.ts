@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -554,14 +554,17 @@ describe("sessionsCleanupCommand", () => {
     expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
-    const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
-    expect(tableHeaderLines.length).toBeGreaterThan(0);
-    const freshKeepLines = logs.filter((line) => line.includes("fresh") && line.includes("keep"));
-    expect(freshKeepLines.length).toBeGreaterThan(0);
-    const stalePruneLines = logs.filter(
-      (line) => line.includes("stale") && line.includes("prune-stale"),
-    );
-    expect(stalePruneLines.length).toBeGreaterThan(0);
+    const actionKeys = logs
+      .flatMap((entry) => stripAnsi(entry).split("\n"))
+      .map((line) =>
+        line
+          .split(/[|│]/u)
+          .slice(1, 3)
+          .map((cell) => cell.trim()),
+      );
+    expect(actionKeys).toContainEqual(["Action", "Key"]);
+    expect(actionKeys).toContainEqual(["keep", "fresh"]);
+    expect(actionKeys).toContainEqual(["prune-stale", "stale"]);
   });
 
   it("finishes a large distinct-label preview with the normal CLI process stack", () => {
