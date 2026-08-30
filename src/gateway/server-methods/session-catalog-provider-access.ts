@@ -46,7 +46,7 @@ export function listSessionCatalogProvider(
   return sessionCatalogListAdmission.run(() => provider.list(params));
 }
 
-export function resolveSessionCatalogRegistry(): PluginRegistry | null {
+function resolveSessionCatalogRegistry(): PluginRegistry | null {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
 }
 
