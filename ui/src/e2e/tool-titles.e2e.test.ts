@@ -376,6 +376,105 @@ suite.define(() => {
     }
   });
 
+  it("keeps a same-session sibling pane inside the cursor-search render", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const sessionKey = "agent:main:session-a";
+    await context.addInitScript(
+      ({ settingsKey, selectedSessionKey }) => {
+        localStorage.setItem(
+          settingsKey,
+          JSON.stringify({
+            chatSplitLayout: {
+              activePaneId: "p1",
+              columns: [
+                {
+                  id: "c1",
+                  panes: [{ id: "p1", sessionKey: selectedSessionKey }],
+                  paneWeights: [1],
+                },
+                {
+                  id: "c2",
+                  panes: [{ id: "p2", sessionKey: selectedSessionKey }],
+                  paneWeights: [1],
+                },
+              ],
+              columnWeights: [0.5, 0.5],
+            },
+          }),
+        );
+      },
+      {
+        selectedSessionKey: sessionKey,
+        settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+      },
+    );
+
+    try {
+      const page = await context.newPage();
+      const initialTime = new Date("2026-08-30T12:00:00Z");
+      await page.clock.setFixedTime(initialTime);
+      const fixture = createToolTitleFixture(120);
+      const retainedHistory = removeToolTitleFixtureItem(fixture, 47);
+      const gateway = await installMockGateway(page, {
+        historyMessages: fixture.historyMessages,
+        methodResponses: { "chat.toolTitles": { titles: fixture.titles } },
+        sessionKey,
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count()).toBe(2);
+      const summaries = panes.locator(".chat-activity-group__summary");
+      await expect.poll(() => summaries.count()).toBe(2);
+      await summaries.nth(0).click();
+      const allRows = panes.locator(".chat-tool-row");
+      const rows = panes.nth(0).locator(".chat-tool-row");
+      await expect.poll(() => allRows.count()).toBe(240);
+      await expect.poll(() => rows.count()).toBe(120);
+      await waitForRequests(gateway, "chat.toolTitles", 2);
+      await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
+
+      await page.clock.setFixedTime(new Date(initialTime.getTime() + 5 * 60_000 + 1));
+      await gateway.setHistoryMessages(retainedHistory);
+      const firstHistoryCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: sessionKey,
+        phase: "reset",
+        reason: "reset",
+        sessionId: "control-ui-e2e-session",
+        updatedAt: initialTime.getTime() + 5 * 60_000 + 1,
+      });
+      await gateway.waitForRequest("chat.history", { after: firstHistoryCount });
+      if ((await allRows.count()) === 0) {
+        await summaries.nth(0).click();
+      }
+      await expect.poll(() => allRows.count()).toBe(238);
+      await expect.poll(() => rows.count()).toBe(119);
+      await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
+
+      const secondHistoryCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: sessionKey,
+        phase: "message",
+        sessionId: "control-ui-e2e-session",
+        updatedAt: initialTime.getTime() + 5 * 60_000 + 2,
+      });
+      await gateway.waitForRequest("chat.history", { after: secondHistoryCount });
+      if ((await allRows.count()) === 0) {
+        await summaries.nth(0).click();
+      }
+      await expect.poll(() => allRows.count()).toBe(238);
+      await waitForRequests(gateway, "chat.toolTitles", 4);
+      await expectRequestCountStable(gateway, "chat.toolTitles", 4, 500);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("invalidates a rendered title when the gateway client is replaced", async () => {
     const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({

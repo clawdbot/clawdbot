@@ -28,6 +28,7 @@ const MIN_COMMAND_CHARS_FOR_TITLE = 12;
 const MIN_GENERIC_INPUT_CHARS_FOR_TITLE = 120;
 
 const TOOL_TITLES_CHANGED_EVENT = "openclaw:tool-titles-changed";
+const DEFAULT_RENDER_SOURCE = {};
 
 export function subscribeToolTitleChanges(listener: () => void): () => void {
   globalThis.addEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
@@ -61,6 +62,7 @@ type PendingItem = {
 type SaturatedSession = {
   expiresAt: number;
   resumeAfterKey: string | null;
+  searchRenderSource: object | null;
   searchRenderEpoch: number | null;
 };
 type ToolTitlesResult = { titles?: Record<string, string>; disabled?: boolean };
@@ -73,8 +75,10 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let activeClient: GatewayBrowserClient | null = null;
 let activeSessionKey: string | null = null;
 let activeAgentId: string | null = null;
+let activeRenderSource = DEFAULT_RENDER_SOURCE;
+let activeRenderEpoch = 0;
+const renderEpochs = new WeakMap<object, number>();
 let fetcherGeneration = 0;
-let fetcherRenderEpoch = 0;
 let activeFlush: object | null = null;
 
 /** FNV-1a over name + serialized args; stable across renders of one call. */
@@ -162,6 +166,7 @@ function saturateSession(ownerKey: string, resumeAfterKey: string | null): void 
     {
       expiresAt: Date.now() + SATURATED_SESSION_RETRY_MS,
       resumeAfterKey,
+      searchRenderSource: null,
       searchRenderEpoch: null,
     },
     MAX_SATURATED_SESSIONS,
@@ -187,10 +192,14 @@ function shouldSuppressSaturatedSession(ownerKey: string, requestKey: string): b
     return true;
   }
   if (saturation.searchRenderEpoch === null) {
-    saturation.searchRenderEpoch = fetcherRenderEpoch;
+    saturation.searchRenderSource = activeRenderSource;
+    saturation.searchRenderEpoch = activeRenderEpoch;
     return true;
   }
-  if (saturation.searchRenderEpoch === fetcherRenderEpoch) {
+  if (
+    saturation.searchRenderSource !== activeRenderSource ||
+    saturation.searchRenderEpoch === activeRenderEpoch
+  ) {
     return true;
   }
   // The prior complete render did not contain the cursor, so retention or
@@ -315,6 +324,8 @@ export function configureToolTitleFetcher(params: {
   sessionKey: string | null;
   /** Selected agent; required for global-session keys where the gateway would otherwise resolve the default agent. */
   agentId?: string | null;
+  /** Stable identity of the pane performing this render. */
+  renderSource?: object;
 }): void {
   if (params.client !== activeClient) {
     retireTransientState();
@@ -324,7 +335,9 @@ export function configureToolTitleFetcher(params: {
   activeClient = params.client;
   activeSessionKey = params.sessionKey;
   activeAgentId = params.agentId ?? null;
-  fetcherRenderEpoch += 1;
+  activeRenderSource = params.renderSource ?? DEFAULT_RENDER_SOURCE;
+  activeRenderEpoch = (renderEpochs.get(activeRenderSource) ?? 0) + 1;
+  renderEpochs.set(activeRenderSource, activeRenderEpoch);
 }
 
 function scheduleTitleRequest(name: string, request: { key: string; input: string }): void {
