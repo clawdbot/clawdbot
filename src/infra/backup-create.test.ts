@@ -8,7 +8,7 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { backupVerifyCommand } from "../commands/backup-verify.js";
+import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -606,6 +606,87 @@ describe("createBackupVolatileStatCache", () => {
 });
 
 describe("createBackupArchive", () => {
+  it.runIf(process.platform !== "win32")(
+    "archives an external managed-skill symlink target as a declared skill-link asset",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const skillTarget = path.join(await fs.realpath(state.root), "agents-skills", "demo");
+          await fs.mkdir(skillTarget, { recursive: true });
+          await fs.writeFile(
+            path.join(skillTarget, "SKILL.md"),
+            "---\nname: demo\ndescription: Symlinked managed skill\n---\n",
+            "utf8",
+          );
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          // Relative target, the exact shape the `skills` CLI symlink mode writes.
+          await fs.symlink(
+            path.join("..", "..", "agents-skills", "demo"),
+            state.statePath("skills", "demo"),
+            "dir",
+          );
+
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+          });
+          expect(archive.assets).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ kind: "skill-link", sourcePath: skillTarget }),
+            ]),
+          );
+          const entries = await listArchiveEntries(archive.archivePath);
+          expect(entries.some((entry) => entry.endsWith("/agents-skills/demo/SKILL.md"))).toBe(
+            true,
+          );
+
+          await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
+            ok: true,
+          });
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps managed-skill symlinks resolving inside the state asset undeclared",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-internal-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const skillTarget = state.statePath("skill-sources", "demo");
+          await fs.mkdir(skillTarget, { recursive: true });
+          await fs.writeFile(path.join(skillTarget, "SKILL.md"), "---\nname: demo\n---\n", "utf8");
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          await fs.symlink(
+            path.join("..", "skill-sources", "demo"),
+            state.statePath("skills", "demo"),
+            "dir",
+          );
+
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+          });
+          expect(archive.assets.some((asset) => asset.kind === "skill-link")).toBe(false);
+          const entries = await listArchiveEntries(archive.archivePath);
+          expect(entries.some((entry) => entry.endsWith("/skill-sources/demo/SKILL.md"))).toBe(
+            true,
+          );
+        },
+      );
+    },
+  );
+
   it("includes a configured external agent directory when workspaces are excluded", async () => {
     await withOpenClawTestState(
       {

@@ -1,4 +1,5 @@
 // Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -55,7 +56,7 @@ export function resolveRequiredBackupPath(
   return resolveUserPath(trimmed);
 }
 
-type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent";
+type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "skill-link";
 type BackupSkipReason = "covered" | "missing" | "regenerable" | "unresolved";
 
 export type BackupAsset = {
@@ -102,6 +103,8 @@ function backupAssetPriority(kind: BackupAssetKind): number {
       return 3;
     case "agent":
       return 4;
+    case "skill-link":
+      return 5;
   }
   throw new Error("Unsupported backup asset kind");
 }
@@ -249,6 +252,10 @@ async function resolveBackupPlanFromPaths(params: {
       sourcePath: path.resolve(workspaceDir),
     })),
     ...agentRoots.map((root) => ({ kind: "agent" as const, sourcePath: root.sourcePath })),
+    ...(await resolveManagedSkillSymlinkTargetCandidates(stateDir)).map((sourcePath) => ({
+      kind: "skill-link" as const,
+      sourcePath,
+    })),
   ];
 
   const candidates: BackupAssetCandidate[] = await Promise.all(
@@ -375,6 +382,33 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
     return priorityDelta;
   }
   return left.canonicalPath.localeCompare(right.canonicalPath);
+}
+
+// Managed skill roots deliberately accept directory symlinks resolving outside
+// the root (the `skills` CLI symlink-mode layout), while the archive guard is
+// fail-closed on any link whose target is not a declared asset. Declaring each
+// accepted external target as its own asset keeps such layouts self-contained
+// instead of aborting the archive write.
+async function resolveManagedSkillSymlinkTargetCandidates(stateDir: string): Promise<string[]> {
+  const managedSkillsDir = path.join(stateDir, "skills");
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(managedSkillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  const targets: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) {
+      continue;
+    }
+    const targetPath = await canonicalizeExistingPath(path.join(managedSkillsDir, entry.name));
+    if (!isPathWithin(targetPath, canonicalStateDir)) {
+      targets.push(targetPath);
+    }
+  }
+  return targets;
 }
 
 async function canonicalizeExistingPath(targetPath: string): Promise<string> {
