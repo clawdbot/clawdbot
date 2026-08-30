@@ -382,20 +382,6 @@ export async function installPluginFromManagedNpmRoot(
     if (!packageManifestResult.ok) {
       return packageManifestResult;
     }
-    if (
-      !npmPackageIdentityMatchesResolution({
-        expectedPackageName: params.packageName,
-        resolution: params.npmResolution,
-        manifest: packageManifestResult.manifest,
-      })
-    ) {
-      const payloadName = packageManifestResult.manifest?.name?.trim() || "unknown";
-      const payloadVersion = packageManifestResult.manifest?.version?.trim() || "unknown";
-      return {
-        ok: false,
-        error: `npm install staged package identity mismatch for ${params.packageName}: expected ${params.npmResolution.resolvedSpec ?? params.packageName}, got ${payloadName}@${payloadVersion}`,
-      };
-    }
     const requiredPlatformPackageNames = resolveRequiredPlatformPackageNames(
       packageManifestResult.manifest
         ? runtime.getPackageManifestMetadata(packageManifestResult.manifest)
@@ -547,6 +533,21 @@ export async function installPluginFromManagedNpmRoot(
       return {
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
+      };
+    }
+
+    if (
+      !npmPackageIdentityMatchesResolution({
+        expectedPackageName: params.packageName,
+        resolution: params.npmResolution,
+        manifest: packageManifestResult.manifest,
+      })
+    ) {
+      const payloadName = packageManifestResult.manifest?.name?.trim() || "unknown";
+      const payloadVersion = packageManifestResult.manifest?.version?.trim() || "unknown";
+      return {
+        ok: false,
+        error: `npm install staged package identity mismatch for ${params.packageName}: expected ${params.npmResolution.resolvedSpec ?? params.packageName}, got ${payloadName}@${payloadVersion}`,
       };
     }
 
