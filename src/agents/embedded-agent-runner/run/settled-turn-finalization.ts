@@ -1,4 +1,8 @@
-import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+  type ReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { appendAssistantMirrorMessageByIdentity } from "../../../plugin-sdk/session-transcript-runtime.js";
@@ -102,6 +106,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   }
   const settledFailureSignal = prepared.failureSignal;
   const settledTerminalToolFailure = prepared.terminalToolFailure;
+  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
+    attempt: input.finalization.preparedAttempt,
+    sessionId: initial.sessionIdUsed,
+  });
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
@@ -224,7 +232,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   });
   // The isolated finalizer cannot call a message tool. Its answer is
   // host-owned recovery output and must cross that source-reply suppression.
-  finalizedPrepared.payloadsWithToolMedia?.forEach(markReplyPayloadForSourceSuppressionDelivery);
+  finalizedPrepared.payloadsWithToolMedia?.forEach((payload) => {
+    markReplyPayloadForSourceSuppressionDelivery(payload);
+    if (sessionWriterDeliveryAuthority) {
+      setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority });
+    }
+  });
   // A failure-honest final answer cannot turn a settled cron denial into success.
   prepared = {
     ...finalizedPrepared,
@@ -243,6 +256,33 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     lastRunPromptUsage,
     finalizationOutcome:
       finalizationOutcome === "empty" ? ("completed-empty" as const) : finalizationOutcome,
+  };
+}
+
+function resolveSessionWriterDeliveryAuthority(input: {
+  attempt: EmbeddedRunAttemptParams;
+  sessionId: string;
+}): ReplyPayloadMetadata["sessionWriterDeliveryAuthority"] {
+  const sessionKey = input.attempt.sessionTarget?.sessionKey ?? input.attempt.sessionKey;
+  const expectedLifecycleRevision = input.attempt.sessionTarget?.expectedLifecycleRevision;
+  const expectedWriterRunId = input.attempt.sessionTarget?.expectedWriterRunId;
+  if (
+    !sessionKey ||
+    (expectedLifecycleRevision === undefined && expectedWriterRunId === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    ...(input.attempt.sessionTarget?.agentId || input.attempt.agentId
+      ? { agentId: input.attempt.sessionTarget?.agentId ?? input.attempt.agentId }
+      : {}),
+    expectedSessionId: input.sessionId,
+    ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+    ...(expectedWriterRunId !== undefined ? { expectedWriterRunId } : {}),
+    sessionKey,
+    ...(input.attempt.sessionTarget?.storePath
+      ? { storePath: input.attempt.sessionTarget.storePath }
+      : {}),
   };
 }
 

@@ -336,6 +336,14 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
         assistantTranscriptOwned: true,
         deliverDespiteSourceReplySuppression: true,
+        sessionWriterDeliveryAuthority: {
+          agentId: "main",
+          expectedLifecycleRevision: "revision-a",
+          expectedSessionId: "session-settled",
+          expectedWriterRunId: "run-settled",
+          sessionKey: "agent:main:settled",
+          storePath: "/tmp/sessions.json",
+        },
       },
     );
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith({
