@@ -125,6 +125,29 @@ export function markTaskLostById(params: {
   });
 }
 
+function updateTasksByRunId(params: {
+  runId: string;
+  patch: Partial<TaskRecord>;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
+    return [];
+  }
+  const updated: TaskRecord[] = [];
+  for (const match of matches) {
+    if (!hasAuthoritativeTaskBacking(match)) {
+      continue;
+    }
+    const task = updateTask(match.taskId, params.patch);
+    if (task) {
+      updated.push(task);
+    }
+  }
+  return updated;
+}
+
 export function createTaskRecord(params: {
   runtime: TaskRuntime;
   taskKind?: string;
@@ -410,37 +433,18 @@ function updateTaskDeliveryByRunId(params: {
   error?: string;
 }) {
   ensureTaskRegistryReady();
-  const matches = getTasksByRunScope(params);
-  if (matches.length === 0) {
-    return [];
+  const patch: Partial<TaskRecord> = {
+    deliveryStatus: params.deliveryStatus,
+  };
+  if (params.error !== undefined) {
+    patch.error = params.error;
   }
-  const updated: TaskRecord[] = [];
-  for (const match of matches) {
-    if (!hasAuthoritativeTaskBacking(match)) {
-      continue;
-    }
-    if (
-      params.deliveryStatus === "failed" &&
-      match.runtime === "subagent" &&
-      match.status === "succeeded" &&
-      match.terminalOutcome === "blocked" &&
-      (match.deliveryStatus === "session_queued" || match.deliveryStatus === "delivered")
-    ) {
-      updated.push(cloneTaskRecord(match));
-      continue;
-    }
-    const patch: Partial<TaskRecord> = {
-      deliveryStatus: params.deliveryStatus,
-    };
-    if (params.error !== undefined) {
-      patch.error = params.error;
-    }
-    const task = updateTask(match.taskId, patch);
-    if (task) {
-      updated.push(task);
-    }
-  }
-  return updated;
+  return updateTasksByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    patch,
+  });
 }
 
 export function markTaskRunningByRunId(params: {
