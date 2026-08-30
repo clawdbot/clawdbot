@@ -36,8 +36,8 @@ describe("listTaskRecordPage", () => {
     try {
       const page = listTaskRecordPage({ offset: 4, limit: 3 });
       const sortSizes = [
-        ...sortSpy.mock.instances.map((values) => values.length),
-        ...toSortedSpy.mock.instances.map((values) => values.length),
+        ...sortSpy.mock.instances.map((values) => (values as unknown[]).length),
+        ...toSortedSpy.mock.instances.map((values) => (values as unknown[]).length),
       ];
 
       expect(page.tasks).toHaveLength(3);
