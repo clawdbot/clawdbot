@@ -16,6 +16,7 @@ import { createGitHubPublicationRuntime } from "./github-publication-runtime.js"
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
+import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementChangePublisher } from "./server-worker-placement-change-events.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
@@ -85,6 +86,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
     runId: string;
   }) => Promise<void>;
   getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
+  cancelSessionWork: WorkerPlacementSessionWorkCancellation;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   info?: (message: string) => void;
   warn: (message: string) => void;
@@ -139,6 +141,7 @@ export function createGatewayWorkerPlacementRuntime(
   const reclaimBarriers = createGatewayWorkerPlacementReclaimBarriers({
     placements: params.placements,
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+    cancelSessionWork: params.cancelSessionWork,
     revokeSessionAuthority: params.revokeSessionAuthority,
   });
   const runMoveBarrier = createGatewayWorkerPlacementMoveBarrier({

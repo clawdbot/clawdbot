@@ -5,6 +5,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -364,6 +365,75 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     modelHasVision: true,
     config,
   };
+}
+
+export async function withWorkerCompactionAdoption<T>(
+  runId: string,
+  task: (
+    adopt: (sessionId: string) => Promise<string | undefined>,
+    turn: SessionPlacementTurnParams,
+  ) => Promise<T>,
+): Promise<T> {
+  const { createEmbeddedRunCompactionRuntime } =
+    await import("../../agents/embedded-agent-runner/run/compaction-runtime.js");
+  const { createEmbeddedRunSessionPromptState } =
+    await import("../../agents/embedded-agent-runner/run/session-prompt-state.js");
+  const { claimAgentSessionWriter } =
+    await import("../../agents/embedded-agent-runner/run/session-bootstrap.js");
+  const { getAgentRunLifecycleGeneration } = await import("../../infra/agent-run-registry.js");
+  const { preparedRunAdmission, ...params } = turn(runId);
+  try {
+    const admittedRunContext = await preparedRunAdmission.admit("embedded");
+    const writerFence = await claimAgentSessionWriter(params);
+    const runParams = {
+      ...params,
+      admittedRunContext,
+      sessionTarget: { ...sessionTarget, ...writerFence },
+    };
+    const sessionPromptState = createEmbeddedRunSessionPromptState({
+      runParams,
+      sessionAgentId: sessionTarget.agentId,
+      resolvedSessionKey: sessionTarget.sessionKey,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+    });
+    const unexpected = async (): Promise<never> => {
+      throw new Error("unexpected context-engine execution during successor acceptance");
+    };
+    const runtime = createEmbeddedRunCompactionRuntime({
+      runParams,
+      contextEngine: {
+        info: { id: "worker-successor-fixture", name: "Worker successor fixture" },
+        ingest: unexpected,
+        assemble: unexpected,
+        compact: unexpected,
+      },
+      hookRunner: null,
+      hookContext: {
+        agentId: sessionTarget.agentId,
+        sessionId: SESSION_ID,
+        sessionKey: sessionTarget.sessionKey,
+        workspaceDir: params.workspaceDir,
+      },
+      sessionPromptState,
+    });
+    return await task(
+      (sessionId) =>
+        runtime.adoptCompactionTranscript({
+          ok: true,
+          compacted: true,
+          result: {
+            summary: "Engine-owned successor context",
+            tokensBefore: 4_096,
+            tokensAfter: 2_048,
+            sessionId,
+            sessionTarget: { ...sessionTarget, sessionId },
+          },
+        }),
+      runParams,
+    );
+  } finally {
+    preparedRunAdmission.close();
+  }
 }
 
 export function hasLoneSurrogate(value: string): boolean {

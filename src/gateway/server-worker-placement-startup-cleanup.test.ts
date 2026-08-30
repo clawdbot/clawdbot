@@ -211,6 +211,7 @@ describe("worker placement startup cleanup ownership", () => {
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        cancelSessionWork: vi.fn(async () => {}),
         placements,
         environments,
         gatewayNamespace: "gateway-test",
@@ -313,6 +314,7 @@ describe("worker placement startup cleanup ownership", () => {
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements,
       environments,
       gatewayNamespace: "gateway-test",

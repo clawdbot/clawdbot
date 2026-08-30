@@ -221,12 +221,12 @@ function normalizedEvidence(options: {
   const trustedWorkflowFullRef = protectedTagRoute
     ? `refs/tags/${trustedWorkflowRef}`
     : "refs/heads/main";
-  const validationInputs =
+  const validationInputs: Record<string, string> | null =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
   const npmTelegramRequired =
     validationInputs !== null &&
-    (validationInputs.npmTelegramPackageSpec.length > 0 ||
-      validationInputs.releasePackageSpec.length > 0);
+    !validationInputs.telegramWaiver &&
+    Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
   const manifest = {
     version: 4,
     workflowName: "Full Release Validation",
@@ -657,35 +657,47 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it("reuses strict evidence through the exact lightweight protected tooling tag", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+  it.each(["", "2026.8.1-owner-approved"])(
+    "reuses strict protected-tag evidence with Telegram waiver %j",
+    (telegramWaiver) => {
+      const { clone, priorSha } = getSharedRepo();
+      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+      const record = normalizedEvidence({
+        producerSha: VERIFIER_SHA,
+        targetSha: priorSha,
+        trustedWorkflowRef,
+        workflowRef: producerRef,
+        validationInputs: telegramWaiver
+          ? {
+              ...DEFAULT_INPUTS,
+              telegramWaiver,
+              targetVersion: "2026.8.1",
+              releasePackageSpec: "openclaw@2026.8.1",
+            }
+          : DEFAULT_INPUTS,
+      });
+      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      validatorPath,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
+      const result = runResolver({
+        binDir,
+        fixtures,
+        repoDir: clone,
+        targetSha: priorSha,
+        inputs: record.validationInputs,
+        trustedWorkflowRef,
+        validatorPath,
+        verifierOnMain: false,
+        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
-  });
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({
+        evidence_run_id: "111",
+        reuse: "true",
+      });
+    },
+  );
 
   it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
     const { clone, priorSha } = getSharedRepo();
@@ -1157,6 +1169,18 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       label: "different package Telegram deferral",
       recordOptions: {
         validationInputs: { ...DEFAULT_INPUTS, skipPackageTelegramE2e: "true" },
+      },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
+      label: "owner-waived Telegram evidence for an unwaived request",
+      recordOptions: {
+        validationInputs: {
+          ...DEFAULT_INPUTS,
+          telegramWaiver: "2026.8.1-owner-approved",
+          targetVersion: "2026.8.1",
+        },
       },
       resolverOptions: {},
     },

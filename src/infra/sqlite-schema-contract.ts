@@ -138,8 +138,14 @@ export function collectSqliteSchemaIssues(
         !allowedMissingTables.has(tableName),
       ),
     );
+    const actualIndexFingerprints = new Set(
+      actualTable.indexes.map((index) => JSON.stringify(index)),
+    );
+    const expectedIndexFingerprints = new Set(
+      expectedTable.indexes.map((index) => JSON.stringify(index)),
+    );
     for (const expectedIndex of expectedTable.indexes) {
-      if (!actualTable.indexes.some((actualIndex) => isEqual(actualIndex, expectedIndex))) {
+      if (!actualIndexFingerprints.has(JSON.stringify(expectedIndex))) {
         const objectName = expectedIndex.name ?? tableName;
         const namedIndexPresent = expectedIndex.name
           ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)
@@ -159,10 +165,7 @@ export function collectSqliteSchemaIssues(
       }
     }
     for (const actualIndex of actualTable.indexes) {
-      if (
-        actualIndex.unique === 1 &&
-        !expectedTable.indexes.some((expectedIndex) => isEqual(actualIndex, expectedIndex))
-      ) {
+      if (actualIndex.unique === 1 && !expectedIndexFingerprints.has(JSON.stringify(actualIndex))) {
         const objectName = actualIndex.name ?? tableName;
         add(
           "unexpected-unique-index",
@@ -404,9 +407,9 @@ function collectSqliteTableContract(
   }
 
   const quotedTable = quoteSqliteIdentifier(tableName);
-  const tableList = (database.prepare("PRAGMA table_list").all() as SqliteTableListRow[]).find(
-    (entry) => entry.name === tableName,
-  );
+  const tableList = (
+    database.prepare(`PRAGMA table_list(${quotedTable})`).all() as SqliteTableListRow[]
+  ).find((entry) => entry.name === tableName);
   if (!tableList) {
     throw new Error(`Could not inspect SQLite table options for ${tableName}.`);
   }

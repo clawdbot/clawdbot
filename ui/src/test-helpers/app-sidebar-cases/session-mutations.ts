@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  pauseSessionPlacementRecovery,
+  readSessionPlacementRecovery,
+} from "../../lib/sessions/session-placement-recovery.ts";
+import {
   createGatewayHarness,
   createSessionState,
   createSessionsHarness,
@@ -54,10 +58,10 @@ describe("AppSidebar session mutation feedback", () => {
         : Promise.reject(new Error(`unexpected request: ${method}`));
     };
     const gateway = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    const { sidebar, context } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
-    return { gateway, harness, sidebar };
+    return { gateway, harness, sidebar, context };
   }
 
   async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
@@ -244,7 +248,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("reconciles and stops an idle active cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
-    const { gateway, harness, sidebar } = await mountMutationHarness({
+    const { gateway, harness, sidebar, context } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
@@ -279,6 +283,12 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(actions, "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:a",
+      "Worker stop requested. Review the initial message before retrying.",
+      { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
+    );
+    expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:a", agentId: "main" },
@@ -289,7 +299,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("reclaims a pending cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
-    const { gateway, harness, sidebar } = await mountMutationHarness({
+    const { gateway, harness, sidebar, context } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
@@ -317,6 +327,12 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:a",
+      "Worker stop requested. Review the initial message before retrying.",
+      { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
+    );
+    expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:a", agentId: "main" },

@@ -91,6 +91,9 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
     const sessionManager = SessionManager.inMemory();
     const appliedChanges: string[] = [];
     const read = fakeTool("read", "Inspect current file contents");
+    const computer = fakeTool("computer", "Observe the computer");
+    computer.catalogMode = "direct-only";
+    computer.parameters = { type: "object", properties: { action: { type: "string" } } };
     const applyPatch = pluginToolWithExecute("apply_patch", "Apply a patch", async () => {
       appliedChanges.push("first hunk applied");
       throw new Error("second hunk is ambiguous");
@@ -105,7 +108,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
       serverName: "remote",
       toolName: "mutate",
     });
-    const coreTools = [read, applyPatch, write, message, shell, remoteMutation];
+    const coreTools = [read, computer, applyPatch, write, message, shell, remoteMutation];
     hoisted.createOpenClawCodingToolsMock.mockImplementation((rawOptions) => {
       const options = rawOptions as {
         includeToolSearchControls?: boolean;
@@ -172,7 +175,17 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
             }
           }
           if (phase === "resume") {
-            if (turn === 0) {
+            if (turn === 0 || turn === 7) {
+              return streamAssistant([
+                {
+                  type: "toolCall",
+                  id: `computer-observe-${turn}`,
+                  name: "computer",
+                  arguments: { action: "list_windows" },
+                },
+              ]);
+            }
+            if (turn === 1) {
               return streamAssistant([
                 {
                   type: "toolCall",
@@ -182,7 +195,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
                 },
               ]);
             }
-            if (turn === 1) {
+            if (turn === 2) {
               return streamAssistant([
                 {
                   type: "toolCall",
@@ -192,7 +205,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
                 },
               ]);
             }
-            if (turn === 2) {
+            if (turn === 3) {
               return streamAssistant([
                 {
                   type: "toolCall",
@@ -202,7 +215,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
                 },
               ]);
             }
-            if (turn === 3) {
+            if (turn === 4) {
               return streamAssistant([
                 {
                   type: "toolCall",
@@ -212,7 +225,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
                 },
               ]);
             }
-            if (turn === 4) {
+            if (turn === 5) {
               return streamAssistant([
                 {
                   type: "toolCall",
@@ -222,7 +235,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
                 },
               ]);
             }
-            if (turn === 5) {
+            if (turn === 6) {
               return streamAssistant([
                 {
                   type: "toolCall",
@@ -364,12 +377,13 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
     });
     const resumeTools = providerContexts.at(-1)?.tools?.map((tool) => tool.name) ?? [];
     expect(resumeTools).toEqual(
-      expect.arrayContaining(["tool_search", "tool_describe", "tool_call"]),
+      expect.arrayContaining(["computer", "tool_search", "tool_describe", "tool_call"]),
     );
     expect(resumeTools).not.toContain("write");
     expect(resumeTools).not.toContain("apply_patch");
     expect(resumeTools).not.toContain("exec");
     expect(write.execute).toHaveBeenCalledOnce();
+    expect(computer.execute).toHaveBeenCalledTimes(2);
     expect(applyPatch.execute).toHaveBeenCalledOnce();
     expect(read.execute).toHaveBeenCalledTimes(2);
     expect(message.execute).not.toHaveBeenCalled();

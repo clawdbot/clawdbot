@@ -675,37 +675,40 @@ describe("cli session history", () => {
     },
   );
 
-  it("consumes each local media-bearing turn only once", () => {
-    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
-    const localEntryId = "local-repeated-image";
-    const importedMessages = ["first-image-user", "second-image-user"].map((externalId, index) => ({
-      role: "user",
-      content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
-      timestamp: timestamp + index * 60_000,
-      __openclaw: {
-        importedFrom: "claude-cli",
-        cliSessionId: "session-1",
-        externalId,
-      },
-    }));
-
-    const merged = mergeImportedChatHistoryMessages({
-      localMessages: [
-        {
+  it.each([1, 2])(
+    "consumes each local media-bearing turn only once with %i matching local rows",
+    (localCount) => {
+      const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+      const localEntryId = "local-repeated-image";
+      const importedMessages = ["first-image-user", "second-image-user", "third-image-user"]
+        .slice(0, localCount + 1)
+        .map((externalId, index) => ({
           role: "user",
-          content: "look at this",
-          timestamp,
+          content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
+          timestamp: timestamp + index * 60_000,
           __openclaw: {
-            id: localEntryId,
-            media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+            importedFrom: "claude-cli",
+            cliSessionId: "session-1",
+            externalId,
           },
+        }));
+      const localMessages = Array.from({ length: localCount }, () => ({
+        role: "user",
+        content: "look at this",
+        timestamp,
+        __openclaw: {
+          id: localEntryId,
+          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
         },
-      ],
-      importedMessages,
-    });
+      }));
 
-    expect(merged).toEqual([expect.any(Object), importedMessages[1]]);
-  });
+      const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+      expect(merged).toEqual([...localMessages, importedMessages[localCount]]);
+      expect(merged[0]).toBe(localMessages[0]);
+      expect(merged.at(-1)).toBe(importedMessages[localCount]);
+    },
+  );
 
   it("retains mention-only imports near unrelated local image turns", () => {
     const timestamp = Date.parse("2026-03-26T16:29:54.500Z");

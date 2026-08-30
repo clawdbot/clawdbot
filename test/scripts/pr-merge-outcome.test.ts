@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -10,21 +12,19 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
 const scripts = join(process.cwd(), "scripts");
 const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
 const lockRef = "refs/openclaw/pr-operation-locks/123";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
 
-function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
-  const root = realpathSync(temps.make("pr-merge-outcome-"));
-  const remote = join(root, "remote.git");
-  const repo = join(root, "repo");
-  mkdirSync(repo);
+function createFixtureGit(repo: string) {
   const git = (args: string[], input?: string, cwd = repo) =>
     execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
@@ -32,14 +32,6 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
-  git(["init", "-q", "-b", "main"]);
-  git(["config", "user.name", "Merge Fixture"]);
-  git(["config", "user.email", "fixture@example.invalid"]);
-  git(["init", "-q", "--bare", remote]);
-  git(["remote", "add", "origin", remote]);
-  // Production URLs still use the real Git transport, redirected only in this disposable repo.
-  git(["config", `url.${remote}.insteadOf`, "https://github.com/fixture/repo"]);
-  git(["config", "--add", `url.${remote}.insteadOf`, "https://github.com/fixture/repo.git"]);
   const tree = (owner: string, sibling = "stable\n") => {
     const a = git(["hash-object", "-w", "--stdin"], owner);
     const b = git(["hash-object", "-w", "--stdin"], sibling);
@@ -47,14 +39,48 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
   };
   const commit = (contents: string, parents: string[], message = "Fixture commit\n") =>
     git(["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])], message);
+  return { git, tree, commit };
+}
+
+function createFixtureTemplate(directory: string) {
+  const root = realpathSync(directory);
+  const repo = join(root, "repo");
+  const remote = join(root, "remote.git");
+  mkdirSync(repo);
+  const { git, tree, commit } = createFixtureGit(repo);
+  git(["init", "-q", "-b", "main"]);
+  git(["config", "user.name", "Merge Fixture"]);
+  git(["config", "user.email", "fixture@example.invalid"]);
+  git(["init", "-q", "--bare", remote]);
   const base = commit(tree("before\n"), []);
+  git(["update-ref", "refs/heads/main", base]);
+  return { repo, remote, base };
+}
+
+function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
+  const root = realpathSync(temps.make("pr-merge-outcome-"));
+  const remote = join(root, "remote.git");
+  const repo = join(root, "repo");
+  const template = (fixtureTemplate ??= createFixtureTemplate(
+    templateDirs.make("pr-merge-outcome-template-"),
+  ));
+  // Only the common base is reused. Source commits stay fresh, loose and private
+  // so corruption, GC, attribution and multi-commit rebase cases keep their proof.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.repo, repo, copyOptions);
+  cpSync(template.remote, remote, copyOptions);
+  const { base } = template;
+  const { git, tree, commit } = createFixtureGit(repo);
+  git(["remote", "add", "origin", remote]);
+  // Production URLs still use the real Git transport, redirected only in this disposable repo.
+  git(["config", `url.${remote}.insteadOf`, "https://github.com/fixture/repo"]);
+  git(["config", "--add", `url.${remote}.insteadOf`, "https://github.com/fixture/repo.git"]);
   const sourceCommits: string[] = [];
   let head = base;
   for (const [owner, sibling] of sourceVersions) {
     head = commit(tree(owner, sibling), [head], sourceMessage);
     sourceCommits.push(head);
   }
-  git(["update-ref", "refs/heads/main", base]);
   git(["update-ref", "refs/heads/topic", head]);
   git(["push", "-q", "origin", "main", "topic:refs/pull/123/head", "topic"]);
   const worktree = join(repo, ".worktrees/pr-123");

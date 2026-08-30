@@ -450,8 +450,13 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
-  it("allows the experience review live file to be skipped until its env is enabled", () => {
-    const reviewFile = "src/skills/workshop/experience-review.live.test.ts";
+  it.each([
+    ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
+    [
+      "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
+      "OPENCLAW_LIVE_OPENAI_COMPACTION",
+    ],
+  ])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
     const payload = {
       numPassedTests: 1,
       numTotalTests: 2,
@@ -473,12 +478,25 @@ describe("scripts/test-live-shard", () => {
     });
     expect(
       validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW: "1",
+        [optInEnv]: "1",
       }),
     ).toEqual({
       ok: false,
       reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
     });
+    const passingPayload = {
+      ...payload,
+      numPassedTests: 2,
+      testResults: payload.testResults.map((result) => ({
+        ...result,
+        assertionResults: [{ status: "passed" }],
+      })),
+    };
+    expect(
+      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
+        [optInEnv]: "1",
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows GPT-Live files to be skipped until their shared opt-in is enabled", () => {

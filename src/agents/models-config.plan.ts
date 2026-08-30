@@ -9,7 +9,7 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.j
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { modelKey, normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
+import { modelKey, createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -126,16 +126,12 @@ function buildSourceModelInputOmissions(
   sourceProviders: Record<string, ProviderConfig> | undefined,
   manifestPlugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] | undefined,
 ): ReadonlySet<string> {
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
   return new Set(
     Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
       (provider.models ?? [])
         .filter((model) => !Object.hasOwn(model, "input"))
-        .map((model) =>
-          modelKey(
-            providerId,
-            normalizeConfiguredProviderCatalogModelId(providerId, model.id, { manifestPlugins }),
-          ),
-        ),
+        .map((model) => modelKey(providerId, normalizeModelId(providerId, model.id))),
     ),
   );
 }

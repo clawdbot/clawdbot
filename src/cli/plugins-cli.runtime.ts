@@ -220,7 +220,7 @@ async function runPluginsEnableCommandUnlocked(
     );
     return defaultRuntime.exit(1);
   }
-  if (!plugin.enabled) {
+  if (!plugin.enabled || opts.acceptCapabilities) {
     const { resolvePluginCapabilityConsent } = await import("../plugins/capability-consent.js");
     const { ManagedPluginLifecycleError } =
       await import("../plugins/management-lifecycle-error.js");

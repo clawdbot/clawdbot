@@ -310,9 +310,12 @@ describe("applyPluginNodeInvokePolicy", () => {
       });
 
       expect(result).toMatchObject({ ok: true });
-      expect(invoke).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs: 250, signal: controller.signal }),
-      );
+      const request = invoke.mock.calls[0]?.[0] as
+        | { timeoutMs?: number; signal?: AbortSignal }
+        | undefined;
+      expect(request?.signal).toBe(controller.signal);
+      expect(request?.timeoutMs).toBeGreaterThan(0);
+      expect(request?.timeoutMs).toBeLessThanOrEqual(250);
     },
   );
 

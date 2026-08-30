@@ -99,7 +99,7 @@ suite.define(() => {
         "sessions.dispatch": {
           ok: true,
           key: sessionKey,
-          sessionId: "session-device-dispatch",
+          sessionId: `session:${sessionKey}`,
           placement: { state: "active", generation: 1 },
         },
         "sessions.describe": {
@@ -588,7 +588,6 @@ suite.define(() => {
             repositoryStatus: "git",
           },
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-          "sessions.describe": { session: { sessionId: "session-device-recovery" } },
           "sessions.send": { runId: "run-device-recovery", status: "started" },
         },
       });

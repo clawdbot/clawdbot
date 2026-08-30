@@ -1,5 +1,6 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   assignSessionOwner,
@@ -20,7 +21,23 @@ import {
 
 mockSessionsConfig();
 
+import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 import { sessionsCommand } from "./sessions.js";
+
+function singleSessionTableCells(logs: string[]): string[] {
+  const lines = stripAnsi(logs.join("\n"))
+    .split("\n")
+    .filter((line) => /^[│|]/u.test(line))
+    .map((line) =>
+      line
+        .split(/[│|]/u)
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    );
+  const [header = [], ...rows] = lines;
+  expect(rows.length).toBeGreaterThan(0);
+  return header.map((_, index) => rows.map((row) => row[index]).join(""));
+}
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -55,10 +72,66 @@ describe("sessionsCommand", () => {
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
-    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
-    expect(row).toBe(
-      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       visibility:shared id:abc123",
+    expect(singleSessionTableCells(logs)).toEqual([
+      "direct",
+      "agent:main:+15555550123",
+      "45m ago",
+      "test:opus",
+      "OpenAI Codex",
+      "2.0k/200k (1%)",
+      "visibility:shared id:abc123",
+    ]);
+  });
+
+  it.each([
+    { name: "listing", run: sessionsCommand, options: {} },
+    { name: "cleanup dry-run", run: sessionsCleanupCommand, options: { dryRun: true } },
+  ])("aligns $name columns for Unicode keys and full model names", async ({ run, options }) => {
+    const entries = [
+      { key: "agent:main:main", model: "gpt-5.6-sol" },
+      { key: "agent:main:東京", model: "gemini-3-flash-preview" },
+      { key: "agent:main:e\u0301", model: "gpt-5.6-sol" },
+      { key: "agent:main:👩‍💻", model: "claude-sonnet-4-6" },
+    ];
+    const store = await writeStore(
+      Object.fromEntries(
+        entries.map(({ key, model }, index) => [
+          key,
+          { sessionId: `row-${index}`, updatedAt: Date.now(), model, systemSent: true },
+        ]),
+      ),
     );
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
+    try {
+      const { runtime, logs } = makeRuntime();
+      await run({ store, ...options }, runtime);
+      const lines = stripAnsi(logs.join("\n")).split("\n");
+      const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
+      expect(header).toContain("Flags");
+      for (const { key, model } of entries) {
+        const row = lines.find((line) => line.includes(key)) ?? "";
+        expect(row).toContain(key);
+        expect(row).toContain(model);
+        expect(row).toContain("system");
+        for (const [title, value] of [
+          ["Key", key],
+          ["Model", model],
+          ["Flags", "system"],
+        ] as const) {
+          expect(visibleWidth(row.slice(0, row.indexOf(value)))).toBe(
+            visibleWidth(header.slice(0, header.indexOf(title))),
+          );
+        }
+      }
+    } finally {
+      cleanupStore(store);
+      if (columns) {
+        Object.defineProperty(process.stdout, "columns", columns);
+      } else {
+        Reflect.deleteProperty(process.stdout, "columns");
+      }
+    }
   });
 
   it("shows recorded totals without a percentage when freshness provenance is missing", async () => {
@@ -113,10 +186,15 @@ describe("sessionsCommand", () => {
 
     expect(logs.join("\n")).toContain("Runtime");
 
-    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
-    );
+    expect(singleSessionTableCells(logs)).toEqual([
+      "direct",
+      "agent:main:main",
+      "1m ago",
+      "claude-opus-4-7",
+      "Claude CLI",
+      "unknown/200k (?%)",
+      "visibility:shared id:main-session",
+    ]);
   });
 
   it("renders configured CLI runtime when the session stores a canonical provider", async () => {
@@ -147,10 +225,15 @@ describe("sessionsCommand", () => {
 
     cleanupStore(store);
 
-    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
-    );
+    expect(singleSessionTableCells(logs)).toEqual([
+      "direct",
+      "agent:main:main",
+      "1m ago",
+      "claude-opus-4-7",
+      "Claude CLI",
+      "unknown/200k (?%)",
+      "visibility:shared id:main-session",
+    ]);
   });
 
   it("renders recorded runtime with current context after a same-model runtime change", async () => {
@@ -338,9 +421,9 @@ describe("sessionsCommand", () => {
 
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
-    const row = logs.find((line) => line.includes(sessionKey)) ?? "";
-    expect(row).toContain(
-      "visibility:suggest owner:profile-owner participants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1",
+    // Flags may wrap between words or within a long participant identifier.
+    expect(singleSessionTableCells(logs).at(-1)?.replace(/\s/gu, "")).toBe(
+      "visibility:suggestowner:profile-ownerparticipants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1id:shared-session",
     );
 
     const payload = await runSessionsJson<{

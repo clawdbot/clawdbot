@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -13,8 +12,10 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
+  selectResolvedUserProfile,
   selectResolvedUserProfileById,
   normalizeUserProfileAvatarMime,
+  userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import {
@@ -42,7 +43,7 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
             ...(hasEnsuredUserProfileRoleSchema(database.db) ? (["role"] as const) : []),
             "created_at",
             "updated_at",
-            sql`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+            userProfileAvatarPresence,
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),
@@ -170,15 +171,31 @@ export function readUserProfileAliases(
   return aliases;
 }
 
+const userProfileDisplaySelection = [
+  "id",
+  "display_name",
+  "avatar_mime",
+  "avatar_sha256",
+  "merged_into",
+  "updated_at",
+  userProfileAvatarPresence,
+] as const;
+
+/** Reads merge-aware display data without loading avatar bytes. */
 export function getUserProfileDisplay(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileDisplay {
-  const profile = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      tableExists(db, "user_profiles") ? selectResolvedUserProfileById(db, profileId) : undefined,
-    options,
-  );
+  const profile = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "user_profiles")) {
+      return undefined;
+    }
+    return selectResolvedUserProfile(
+      db,
+      profileId,
+      userProfilesDb(db).selectFrom("user_profiles").select(userProfileDisplaySelection),
+    );
+  }, options);
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
@@ -191,6 +208,6 @@ export function getUserProfileDisplay(
     id: profile.id,
     displayName: profile.display_name,
     avatarRevision,
-    hasAvatar: profile.avatar !== null,
+    hasAvatar: profile.has_avatar === 1,
   };
 }

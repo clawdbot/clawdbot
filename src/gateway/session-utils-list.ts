@@ -48,16 +48,14 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   deriveSessionTitle,
+  buildStoreChildSessionIndex,
+  getSingleRowChildSessionCandidates,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
-import {
-  buildSessionListRowContext,
-  buildSessionListRowMetadataContext,
-  buildSingleRowStoreChildSessionsByKey,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import {
   appendStoredSessionModelSearchFields,
@@ -452,7 +450,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const configuredAgentIds = new Set(listAgentIds(cfg));
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
-    rowContext ??= buildSessionListRowContext({ store, now, userProfileIdentityById });
+    rowContext ??= buildSessionListRowMetadataContext({ now, userProfileIdentityById });
     return rowContext;
   };
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
@@ -482,27 +480,29 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     involvingActorId: params.involvingActorId,
     ownerFirstActorId: params.ownerFirstActorId,
   });
-  const fullRowContext =
-    rowContext ||
+  // The two registry caches can differ after an external worker write. Preserve
+  // live child reads where the existing short-list path did not prepare a snapshot.
+  const usePreparedChildReads =
+    Boolean(rowContext) ||
     hasSpawnedByFilter ||
     filteredSessionKeys.size > 0 ||
-    selection.entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
-      ? getRowContext()
-      : undefined;
-  if (fullRowContext && filteredSessionKeys.size > 0) {
-    // The predicate replaces a filtered-store object; keep its hidden child links out too.
-    for (const [parentKey, childKeys] of fullRowContext.storeChildSessionsByKey) {
-      fullRowContext.storeChildSessionsByKey.set(
-        parentKey,
-        childKeys.filter((key) => !filteredSessionKeys.has(key)),
-      );
-    }
-  }
+    selection.entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE;
   const sharedRowContext =
-    fullRowContext ??
-    (selection.entries.length > 0
-      ? buildSessionListRowMetadataContext({ now, userProfileIdentityById })
-      : undefined);
+    usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
+  const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
+  const childCandidates =
+    !usePreparedChildReads && selection.entries.length > 0
+      ? getSingleRowChildSessionCandidates({ storePath, store })
+      : undefined;
+  const storeChildSessionsByKey = buildStoreChildSessionIndex({
+    store,
+    keys: selection.entries.map(([key]) => key),
+    now,
+    subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
+    candidates: childCandidates,
+    excludedChildKeys: filteredSessionKeys,
+    requireCurrentController: !usePreparedChildReads,
+  });
   populateSessionListAcpMetadata({
     cfg,
     entries: selection.entries,
@@ -518,8 +518,8 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     now,
     configuredAgentIds,
     rowContext: sharedRowContext,
-    storeChildSessionsByKey: fullRowContext?.storeChildSessionsByKey,
-    storePath: hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath),
+    storeChildSessionsByKey,
+    storePath,
   };
 }
 
@@ -628,14 +628,6 @@ export async function listSessionsFromStoreAsync(
         !parseAgentSessionKey(key) && typeof opts.agentId === "string"
           ? normalizeAgentId(opts.agentId)
           : undefined;
-      const storeChildSessionsByKey =
-        list.storeChildSessionsByKey ??
-        buildSingleRowStoreChildSessionsByKey({
-          store,
-          storePath: list.storePath,
-          key,
-          now: list.now,
-        });
       const row = buildGatewaySessionRow({
         cfg,
         storePath: list.storePath,
@@ -647,7 +639,7 @@ export async function listSessionsFromStoreAsync(
         now: list.now,
         includeDerivedTitles: false,
         includeLastMessage: false,
-        storeChildSessionsByKey,
+        storeChildSessionsByKey: list.storeChildSessionsByKey,
         rowContext: list.rowContext,
         configuredAgentIds: list.configuredAgentIds,
         skipTranscriptUsageFallback: true,

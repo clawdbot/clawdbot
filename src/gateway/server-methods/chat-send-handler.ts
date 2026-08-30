@@ -234,7 +234,7 @@ async function handleChatSendWithOptions(
             operation: goalOperation,
           });
         if (goalResult && (!persistedUserTurn || mutation?.replayed)) {
-          admitted.value.cleanupAdmittedRun({ force: true });
+          admitted.value.cleanupAdmittedRun();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           respond(true, { ...goalResult, replayed: true }, undefined, {
             cached: true,

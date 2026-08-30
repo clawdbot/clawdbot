@@ -7,6 +7,10 @@ import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
+import {
+  installSessionPlacementAdmissionProvider,
+  resolveSessionPlacementForcedTerminalSettlement,
+} from "../../agents/session-placement-admission.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -38,6 +42,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
+  withWorkerCompactionAdoption,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -106,24 +111,38 @@ describe("worker turn launcher local placement", () => {
       }),
     ).toThrow("transcript identity is no longer current");
   });
-  it("atomically claims and releases a local turn around the local loop", async () => {
+  it("keeps the exact local claim cleanup across compaction successor acceptance", async () => {
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const uninstall = installSessionPlacementAdmissionProvider(provider);
+    try {
+      const result = await provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-local" },
+        turn("run-local"),
+        async () => {
+          const placement = placements.get(SESSION_ID);
+          expect(placement?.turnClaim).toMatchObject({ owner: "local", runId: "run-local" });
+          const settle = resolveSessionPlacementForcedTerminalSettlement();
+          if (!settle) {
+            throw new Error("expected exact local claim cleanup");
+          }
+          await withWorkerCompactionAdoption("run-local", async (adopt) => {
+            await expect(adopt("session-local-successor")).resolves.toBe(SESSION_ID);
+            expect(loadSessionEntry(sessionTarget)?.sessionId).toBe("session-local-successor");
+            expect(placements.get(SESSION_ID)).toEqual(placement);
+            expect(placements.get("session-local-successor")).toBeUndefined();
+            await settle();
+            expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+          });
+          return { payloads: [{ text: "local" }], meta: { durationMs: 1 } };
+        },
+      );
 
-    const result = await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-local" },
-      turn("run-local"),
-      async () => {
-        expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
-          owner: "local",
-          runId: "run-local",
-        });
-        return { payloads: [{ text: "local" }], meta: { durationMs: 1 } };
-      },
-    );
-
-    expect(result.payloads).toEqual([{ text: "local" }]);
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      expect(result.payloads).toEqual([{ text: "local" }]);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    } finally {
+      uninstall();
+    }
   });
 
   it("leaves no placement row for an auxiliary model run without a session key", async () => {
@@ -559,76 +578,98 @@ describe("worker turn launcher local placement", () => {
         prepareComputer: vi.fn(async () => (nodeDeviceId ? computer : undefined)),
       };
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      const successorGate = vi.spyOn(provider, "assertCompactionSuccessorAllowed");
       let retainedNodeAuthority: (() => void) | undefined;
-      const runLocal = vi.fn(async () => {
-        order.push("local");
-        expect(inputTurn.prompt).toContain(`${originalPrompt}\n\nCurrent attachment originals`);
-        expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
-        if (nodeDeviceId) {
-          const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
-          expect(assertCurrent).toBeTypeOf("function");
-          const request = {
+      const runLocal = vi.fn(() =>
+        withWorkerCompactionAdoption("run-remote-exec", async (adopt) => {
+          order.push("local");
+          expect(inputTurn.prompt).toContain(`${originalPrompt}\n\nCurrent attachment originals`);
+          expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
+          const placementBefore = placements.get(SESSION_ID);
+          const entryBefore = loadSessionEntry(sessionTarget);
+          expect(placementBefore?.turnClaim).toMatchObject({
+            owner: "local",
             runId: "run-remote-exec",
-            agentId: "main",
-            nodeId: nodeDeviceId,
-            workspace: {
-              workspaceDir: remote,
-              environmentId: ENVIRONMENT_ID,
-              sessionId: SESSION_ID,
-              sessionKey: SESSION_KEY,
-              ownerEpoch: OWNER_EPOCH,
-            },
-          };
-          retainedNodeAuthority = () => assertCurrent!(request);
-          retainedNodeAuthority();
-          for (const changed of [
-            { ...request, runId: "other" },
-            { ...request, nodeId: "other" },
-            ...[
-              { ownerEpoch: OWNER_EPOCH + 1 },
-              { environmentId: "other" },
-              { sessionId: "other" },
-              { workspaceDir: "/other" },
-            ].map((workspace) =>
-              Object.assign({}, request, {
-                workspace: Object.assign({}, request.workspace, workspace),
-              }),
-            ),
-          ]) {
-            expect(() => assertCurrent!(changed)).toThrow("no longer current");
+          });
+          await expect(adopt(SESSION_ID)).resolves.toBeUndefined();
+          expect(successorGate).not.toHaveBeenCalled();
+          await expect(adopt("session-remote-successor")).rejects.toThrow(
+            /worker placement.*same session ID/u,
+          );
+          expect(placements.get(SESSION_ID)).toEqual(placementBefore);
+          expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
+          expect(placements.get("session-remote-successor")).toBeUndefined();
+          if (nodeDeviceId) {
+            const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
+            expect(assertCurrent).toBeTypeOf("function");
+            const request = {
+              runId: "run-remote-exec",
+              agentId: "main",
+              nodeId: nodeDeviceId,
+              workspace: {
+                workspaceDir: remote,
+                environmentId: ENVIRONMENT_ID,
+                sessionId: SESSION_ID,
+                sessionKey: SESSION_KEY,
+                ownerEpoch: OWNER_EPOCH,
+              },
+            };
+            retainedNodeAuthority = () => assertCurrent!(request);
+            retainedNodeAuthority();
+            for (const changed of [
+              { ...request, runId: "other" },
+              { ...request, nodeId: "other" },
+              ...[
+                { ownerEpoch: OWNER_EPOCH + 1 },
+                { environmentId: "other" },
+                { sessionId: "other" },
+                { workspaceDir: "/other" },
+              ].map((workspace) =>
+                Object.assign({}, request, {
+                  workspace: Object.assign({}, request.workspace, workspace),
+                }),
+              ),
+            ]) {
+              expect(() => assertCurrent!(changed)).toThrow("no longer current");
+            }
+            const original = environments.get(ENVIRONMENT_ID)!;
+            if (original.state !== "attached") {
+              throw new Error("expected an attached environment");
+            }
+            for (const changed of [
+              { ...original, nodeDeviceId: "replacement" },
+              { ...original, leaseId: "replacement" },
+            ]) {
+              vi.mocked(environments.get).mockReturnValueOnce(changed);
+              await Promise.resolve();
+              expect(retainedNodeAuthority).toThrow("no longer current");
+            }
           }
-          const original = environments.get(ENVIRONMENT_ID)!;
-          if (original.state !== "attached") {
-            throw new Error("expected an attached environment");
-          }
-          for (const changed of [
-            { ...original, nodeDeviceId: "replacement" },
-            { ...original, leaseId: "replacement" },
-          ]) {
-            vi.mocked(environments.get).mockReturnValueOnce(changed);
-            await Promise.resolve();
-            expect(retainedNodeAuthority).toThrow("no longer current");
-          }
-        }
-        return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
-      });
-
-      const operation = provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-remote-exec",
-        },
-        inputTurn,
-        runLocal,
+          return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
+        }),
       );
 
-      if (closeFails) {
-        await expect(operation).rejects.toThrow("computer close failed");
-      } else {
-        await operation;
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      try {
+        const operation = provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-remote-exec",
+          },
+          inputTurn,
+          runLocal,
+        );
+        if (closeFails) {
+          await expect(operation).rejects.toThrow("computer close failed");
+        } else {
+          await operation;
+        }
+      } finally {
+        uninstall();
       }
+
       expect(inputTurn.prompt).toBe(originalPrompt);
       expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
       expect(closeComputer).toHaveBeenCalledTimes(nodeDeviceId ? 1 : 0);

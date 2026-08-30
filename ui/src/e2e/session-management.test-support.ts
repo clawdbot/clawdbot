@@ -12,6 +12,7 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
@@ -40,6 +41,7 @@ export function sessionRow(
   updatedAt: number,
   options: {
     archived?: boolean;
+    archivedAt?: number;
     sessionId?: string;
     category?: string;
     pinned?: boolean;
@@ -57,21 +59,7 @@ export function sessionRow(
     worktree?: { id?: string; branch?: string; repoRoot?: string };
   } = {},
 ) {
-  return {
-    contextTokens: null,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    sessionId: `session:${key}`,
-    kind: "direct",
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-  };
+  return createControlUiSessionRow(key, label, updatedAt, options);
 }
 
 export function sessionsListResponse(

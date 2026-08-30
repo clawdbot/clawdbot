@@ -234,6 +234,19 @@ defers the Package Acceptance Telegram E2E to a follow-up beta. The input is
 rejected for `stable` and `full`, recorded in validation evidence, and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
+For the release owner's explicit 2026.8.1 exception, pass
+`-f telegram_waiver=2026.8.1-owner-approved`. This is accepted only when the
+actual target package is `2026.8.1` and the profile is `stable` or `full`.
+It omits source Telegram QA, Package Acceptance Telegram E2E, and the
+published-package Telegram E2E; their evidence states **waived / not run**,
+never passed. Telegram unit tests and every other selected gate remain active,
+including stable soak and performance checks. An explicit Telegram rerun or
+suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
+that selects Telegram, conflicts with the waiver and is rejected. The declaration and
+target version bind the immutable execution plan, manifest, and reuse identity;
+the publisher carries the waiver into release verification notes. The beta-only
+package deferral above remains unchanged.
+
 ## Top-level stages
 
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs

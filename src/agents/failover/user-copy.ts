@@ -79,7 +79,7 @@ export function formatBillingErrorMessage(
     : "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
 }
 
-export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
 /** Surface only bounded numeric limit facts, never arbitrary provider-controlled error text. */
 export function renderFormatErrorCopy(raw: string): string {

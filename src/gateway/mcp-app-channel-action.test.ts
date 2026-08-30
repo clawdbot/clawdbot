@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   peekRuntime: vi.fn(),
 }));
 
-vi.mock("../agents/agent-bundle-mcp-runtime.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: mocks.peekRuntime,
 }));
 vi.mock("../agents/mcp-ui-resource.js", () => ({

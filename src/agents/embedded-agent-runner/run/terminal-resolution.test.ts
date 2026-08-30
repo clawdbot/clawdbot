@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { classifyAgentExecResult } from "../../../commands/agent-exec.js";
+import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,

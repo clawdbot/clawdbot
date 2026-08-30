@@ -20,27 +20,13 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import {
-  completeDeferredSessionMcpRuntimeRetirement,
   disposeAllSessionMcpRuntimes,
-  getAdvertisedScopedMcpCatalog,
-  getOrCreateRequesterScopedMcpRuntime,
-  getOrCreateSessionMcpRuntime,
   getSessionMcpRuntimeManagerForTesting,
-  peekSessionMcpRuntime,
-  rememberAdvertisedScopedMcpCatalog,
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-manager-api.js";
-import {
-  createSessionMcpRuntimeManager,
-  setDefaultCreateSessionMcpRuntime,
-} from "./agent-bundle-mcp-manager.js";
+import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
-import {
-  loadSessionMcpConfig,
-  resolveSessionMcpConfigSummary,
-} from "./agent-bundle-mcp-runtime-config.js";
+import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
@@ -582,6 +568,9 @@ export function createSessionMcpRuntime(params: {
       const tools: McpCatalogTool[] = (retryBaseCatalog?.tools ?? []).filter(
         (tool) => !retryServerNames?.has(tool.serverName),
       );
+      const policyTools: McpCatalogTool[] = (retryBaseCatalog?.policyTools ?? []).filter(
+        (tool) => !retryServerNames?.has(tool.serverName),
+      );
       const sessionDeniedTools: McpCatalogTool[] = (
         retryBaseCatalog?.sessionDeniedTools ?? []
       ).filter((tool) => !retryServerNames?.has(tool.serverName));
@@ -651,6 +640,7 @@ export function createSessionMcpRuntime(params: {
           serverName: string;
           serverEntry: McpServerCatalog | null;
           toolEntries: McpCatalogTool[];
+          policyToolEntries: McpCatalogTool[];
           diagnostics: McpToolCatalogDiagnostic[];
         };
 
@@ -807,9 +797,13 @@ export function createSessionMcpRuntime(params: {
                   codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const [tool, deniedBySession] of [
-                  ...normalizedTools.tools.map((entry) => [entry, false] as const),
-                  ...normalizedTools.deniedTools.map((entry) => [entry, true] as const),
+                const policyToolEntries: McpCatalogTool[] = [];
+                for (const [tool, excludedFromOpenClawCatalog, deniedBySession] of [
+                  ...normalizedTools.tools.map((entry) => [entry, false, false] as const),
+                  ...normalizedTools.deniedTools.map((entry) => [entry, false, true] as const),
+                  ...normalizedTools.excludedTools.map(
+                    (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
+                  ),
                 ]) {
                   const toolName = tool.name;
                   const { _meta: metadata } = tool;
@@ -823,7 +817,7 @@ export function createSessionMcpRuntime(params: {
                       ? rawResourceUri
                       : undefined;
                   const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
-                  toolEntries.push({
+                  const entry: McpCatalogTool = {
                     serverName,
                     safeServerName,
                     toolName,
@@ -833,14 +827,22 @@ export function createSessionMcpRuntime(params: {
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
+                    ...(excludedFromOpenClawCatalog
+                      ? { excludedFromOpenClawCatalog: true as const }
+                      : {}),
                     ...(deniedBySession ? { deniedBySession: true } : {}),
                     codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
-                  });
+                  };
+                  policyToolEntries.push(entry);
+                  if (!entry.excludedFromOpenClawCatalog) {
+                    toolEntries.push(entry);
+                  }
                 }
                 return {
                   serverName,
                   serverEntry,
                   toolEntries,
+                  policyToolEntries,
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
@@ -873,6 +875,7 @@ export function createSessionMcpRuntime(params: {
                   serverName,
                   serverEntry: null,
                   toolEntries: [],
+                  policyToolEntries: [],
                   diagnostics: diags,
                 } as ServerResult;
               }
@@ -891,7 +894,7 @@ export function createSessionMcpRuntime(params: {
           if (!result) {
             continue;
           }
-          const { serverEntry, toolEntries, diagnostics: serverDiags } = result;
+          const { serverEntry, toolEntries, policyToolEntries, diagnostics: serverDiags } = result;
           if (serverEntry) {
             servers[result.serverName] = serverEntry;
           }
@@ -902,6 +905,7 @@ export function createSessionMcpRuntime(params: {
               tools.push(tool);
             }
           }
+          policyTools.push(...policyToolEntries);
           diagnostics.push(...serverDiags);
         }
 
@@ -911,6 +915,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(policyTools.length > 0 ? { policyTools } : {}),
           ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
@@ -1097,23 +1102,6 @@ export function createSessionMcpRuntime(params: {
   };
   return runtime;
 }
-
-setDefaultCreateSessionMcpRuntime(createSessionMcpRuntime);
-
-export {
-  completeDeferredSessionMcpRuntimeRetirement,
-  disposeAllSessionMcpRuntimes,
-  getAdvertisedScopedMcpCatalog,
-  getOrCreateRequesterScopedMcpRuntime,
-  getOrCreateSessionMcpRuntime,
-  peekSessionMcpRuntime,
-  rememberAdvertisedScopedMcpCatalog,
-  resolveSessionMcpConfigSummary,
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-};
-export { createSessionMcpRuntimeManager };
-export { mergeMcpToolCatalogs };
 
 export const testing = {
   buildMcpClientCapabilities,

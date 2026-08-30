@@ -880,7 +880,7 @@ describe("createChildAdapter", () => {
       "/d",
       "/s",
       "/c",
-      "pnpm.cmd --version",
+      '""pnpm.cmd" "--version""',
     ]);
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.options?.windowsHide).toBe(true);

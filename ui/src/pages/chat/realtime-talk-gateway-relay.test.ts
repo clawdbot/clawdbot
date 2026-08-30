@@ -184,7 +184,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     audioCurrentTime = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
-      getTracks: () => [{ stop: vi.fn() }],
+      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
     }));
     Object.defineProperty(globalThis.navigator, "mediaDevices", {
       configurable: true,
@@ -222,6 +222,32 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
     transport.stop();
+  });
+
+  it("closes relay resources on microphone loss even when status delivery throws", async () => {
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    const addListener = vi.spyOn(track, "addEventListener");
+    getUserMedia.mockResolvedValueOnce({ getTracks: () => [track] });
+    const client = createClient();
+    const onStatus = vi.fn(() => {
+      throw new Error("status failed");
+    });
+    const transport = createTransport({ client, callbacks: { onStatus } });
+    await startTransport(transport);
+
+    const ended = addListener.mock.calls[0]?.[1];
+    expect(() => {
+      if (typeof ended === "function") {
+        ended(new Event("ended"));
+      }
+    }).toThrow("status failed");
+    expect(onStatus).toHaveBeenCalledWith("error", expect.stringContaining("Microphone"));
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(listeners.size).toBe(0);
+    expect(processors[0]?.onaudioprocess).toBeNull();
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
+    transport.stop();
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
   it("keeps the microphone processor inaudible locally", async () => {
@@ -262,7 +288,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     const start = transport.start();
     transport.stop();
-    resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
+    resolveMedia({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
+    } as unknown as MediaStream);
     await expect(start).resolves.toBe("cancelled");
 
     expect(stopTrack).toHaveBeenCalledOnce();
@@ -306,7 +334,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(onTranscript).not.toHaveBeenCalled();
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
 
-    resolveMedia({ getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream);
+    resolveMedia({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
+    } as unknown as MediaStream);
     await expect(start).resolves.toBe("ready");
     expect(onStatus).not.toHaveBeenCalled();
     expect(onTranscript).not.toHaveBeenCalled();
@@ -341,7 +371,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
     }
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-    resolveMedia({ getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream);
+    resolveMedia({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
+    } as unknown as MediaStream);
 
     await expect(start).rejects.toThrow(
       "Realtime relay emitted too much data before browser setup completed",
@@ -369,7 +401,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-    resolveMedia({ getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream);
+    resolveMedia({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
+    } as unknown as MediaStream);
     await expect(start).rejects.toThrow(
       "Realtime relay emitted too much data before browser setup completed",
     );
@@ -397,7 +431,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "close",
       reason: "error",
     });
-    resolveMedia({ getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream);
+    resolveMedia({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
+    } as unknown as MediaStream);
 
     await expect(start).rejects.toThrow("provider rejected setup");
     expect(onStatus).not.toHaveBeenCalled();
@@ -814,7 +850,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     async (callbackKind) => {
       const stopTrack = vi.fn();
       getUserMedia.mockResolvedValue({
-        getTracks: () => [{ stop: stopTrack }],
+        getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
       } as unknown as MediaStream);
       const throwingCallback = vi.fn(() => {
         throw new Error("consumer failed");

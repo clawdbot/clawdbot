@@ -383,7 +383,7 @@ suite.define(() => {
         await codeModeRow.locator("wa-switch").click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
-        expect(patchParams.sessionKey).toBe("main");
+        expect(patchParams.sessionKey).toBe("agent:main:main");
         expect(JSON.parse(String(patchParams.raw))).toEqual({
           tools: { codeMode: { enabled: "auto" } },
         });
@@ -495,7 +495,7 @@ suite.define(() => {
         const applyParams = mutationParams(await gateway.waitForRequest("config.apply"));
         expect(applyParams.baseHash).toBe("mock-config-hash-2");
         expect(applyParams.raw).toBe(rawDraft);
-        expect(applyParams.sessionKey).toBe("main");
+        expect(applyParams.sessionKey).toBe("agent:main:main");
         await expect.poll(() => saveIndicator.textContent()).toContain("Applying");
         await capture(page, "03-applying.png");
 

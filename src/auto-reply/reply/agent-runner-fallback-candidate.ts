@@ -13,6 +13,10 @@ import { CommandLane } from "../../process/lanes.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
+import {
+  invalidateTurnCompactionContext,
+  recordTurnCompaction,
+} from "./agent-runner-compaction-accounting.js";
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
 import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
@@ -192,6 +196,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
       },
       runCandidate: async (provider, model, runOptions) => {
+        invalidateTurnCompactionContext(params.state.compaction);
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
         const runtime = params.timing.measureSync("fallback_resolve_runtime", () =>
@@ -235,7 +240,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
           (info) => {
             if (
-              params.state.autoCompactionCount > 0 &&
+              params.state.compaction.count > 0 &&
               (info.phase === "model_call_started" || info.phase === "process_spawned")
             ) {
               params.state.postCompactionModelAttempted = true;
@@ -313,9 +318,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
           messageToolDeliveryState,
-          onCompactionFacts: (facts) => {
-            params.state.autoCompactionCount += facts.totalCount;
-            params.state.postCompactionModelAttempted ||= facts.postCompactionModelAttempted;
+          onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
+            if (accounting) {
+              recordTurnCompaction(params.state.compaction, accounting);
+            }
+            params.state.postCompactionModelAttempted ||= postCompactionModelAttempted;
           },
         });
         params.state.bootstrapPromptWarningSignaturesSeen =

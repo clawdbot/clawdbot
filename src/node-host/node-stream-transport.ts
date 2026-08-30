@@ -1,4 +1,5 @@
 import net from "node:net";
+import type { Duplex } from "node:stream";
 import { WebSocket, type ClientOptions, type RawData } from "ws";
 import {
   buildCloudflareAccessHeaders,
@@ -81,10 +82,29 @@ async function sendAttachMetadata(
   }
 }
 
-function createNodeStreamSplice(params: { socket: net.Socket; ws: WebSocket; streamName: string }) {
+function createNodeStreamSplice(params: { socket: Duplex; ws: WebSocket; streamName: string }) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
   let settled = false;
   let finish!: (error?: Error) => void;
+  const resumeWebSocket = () => params.ws.resume();
+  const onMessage = (data: RawData, isBinary: boolean) => {
+    if (params.socket.destroyed || params.socket.writableEnded) {
+      return;
+    }
+    if (!isBinary) {
+      finish(new Error(`gateway sent non-binary ${params.streamName} stream data`));
+      return;
+    }
+    if (!params.socket.write(websocketDataBuffer(data))) {
+      params.ws.pause();
+    }
+  };
+  const stopInbound = () => {
+    params.ws.off("message", onMessage);
+    params.socket.off("drain", resumeWebSocket);
+    // A closed target cannot emit drain, but WebSocket close frames still need reads.
+    params.ws.resume();
+  };
   const done = new Promise<void>((resolve, reject) => {
     finish = (error?: Error) => {
       if (settled) {
@@ -92,22 +112,15 @@ function createNodeStreamSplice(params: { socket: net.Socket; ws: WebSocket; str
       }
       settled = true;
       clearInterval(resumeTimer);
+      stopInbound();
       if (error) {
         reject(error);
       } else {
         resolve();
       }
     };
-    params.ws.on("message", (data, isBinary) => {
-      if (!isBinary) {
-        finish(new Error(`gateway sent non-binary ${params.streamName} stream data`));
-        return;
-      }
-      if (!params.socket.write(websocketDataBuffer(data))) {
-        params.ws.pause();
-        params.socket.once("drain", () => params.ws.resume());
-      }
-    });
+    params.ws.on("message", onMessage);
+    params.socket.on("drain", resumeWebSocket);
     params.socket.on("data", (chunk) => {
       if (params.ws.readyState !== WebSocket.OPEN) {
         return;
@@ -128,7 +141,16 @@ function createNodeStreamSplice(params: { socket: net.Socket; ws: WebSocket; str
     });
     params.ws.once("close", () => finish());
     params.ws.once("error", (error) => finish(error));
-    params.socket.once("close", () => finish());
+    params.socket.once("close", () => {
+      stopInbound();
+      if (params.socket.readableEnded && params.ws.readyState === WebSocket.OPEN) {
+        // Let the Gateway receive the last frames and close acknowledgement before
+        // the control-channel invocation can retire its desktop/portal stream.
+        params.ws.close();
+      } else {
+        finish();
+      }
+    });
     params.socket.once("error", (error) => finish(error));
   });
   void done.catch(() => undefined);
@@ -152,23 +174,16 @@ export async function runNodeStreamTransport(params: {
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   attachPath: string;
   expectedAttachPath: string;
-  port: number;
+  target: { stream: Duplex } | { port: number };
   metadata: Record<string, string | boolean>;
   streamName: string;
   signal: AbortSignal;
-  connectAfterGatewayAttach?: boolean;
   emitStatus?: (status: string) => Promise<void>;
 }): Promise<void> {
-  const socket = params.connectAfterGatewayAttach
-    ? new net.Socket()
-    : net.createConnection(params.port, "127.0.0.1");
+  const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
   socket.pause();
-  const wsUrl = attachWebSocketUrl(params);
-  const ws = new WebSocket(
-    wsUrl,
-    websocketOptions(params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
-  );
+  let ws: WebSocket | undefined;
   let aborted: boolean = params.signal.aborted;
   let resolveAbort!: () => void;
   const abort = new Promise<void>((resolve) => {
@@ -177,7 +192,7 @@ export async function runNodeStreamTransport(params: {
   const onAbort = () => {
     aborted = true;
     socket.destroy();
-    ws.terminate();
+    ws?.terminate();
     resolveAbort();
   };
   params.signal.addEventListener("abort", onAbort, { once: true });
@@ -185,22 +200,27 @@ export async function runNodeStreamTransport(params: {
     onAbort();
   }
   try {
-    if (params.connectAfterGatewayAttach) {
-      // Attach first so a refused target closes a claimed ticket instead of leaving it pending.
-      await Promise.race([waitForWebSocketOpen(ws), abort]);
-      if (!aborted) {
-        // Like Gateway-local portals, reach dev servers bound to either localhost family.
-        socket.connect({ port: params.port, host: "localhost", autoSelectFamily: true });
-        await Promise.race([waitForSocketConnect(socket), abort]);
-      }
-    } else {
-      await Promise.race([
-        Promise.all([waitForSocketConnect(socket), waitForWebSocketOpen(ws)]),
-        abort,
-      ]);
+    if (aborted) {
+      return;
+    }
+    ws = new WebSocket(
+      attachWebSocketUrl(params),
+      websocketOptions(params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
+    );
+    await Promise.race([waitForWebSocketOpen(ws), abort]);
+    if (aborted) {
+      return;
+    }
+    if ("port" in params.target && socket instanceof net.Socket) {
+      // Portals attach first so a refused target closes the claimed ticket.
+      socket.connect({ port: params.target.port, host: "localhost", autoSelectFamily: true });
+      await Promise.race([waitForSocketConnect(socket), abort]);
     }
     if (aborted) {
       return;
+    }
+    if (socket.destroyed) {
+      throw socket.errored ?? new Error(`${params.streamName} stream target closed before attach`);
     }
     ws.pause();
     const splice = createNodeStreamSplice({ socket, ws, streamName: params.streamName });
@@ -215,7 +235,7 @@ export async function runNodeStreamTransport(params: {
   } finally {
     params.signal.removeEventListener("abort", onAbort);
     socket.destroy();
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       ws.close();
     }
   }

@@ -211,20 +211,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("blocks shell env var injection tokens in python scripts before execution", async () => {
+  it.each([
+    ["a bare one-character token", "$A", "payload = $A"],
+    ["a bare multi-character token", "$DM_JSON", "payload = $DM_JSON"],
+    ["a token after a string", "$B", 'text = "$A"\npayload = $B'],
+    ["a token in an f-string replacement", "$P", 'result = f"{ "$A" + $P }"'],
+    ["a token after a backslash in an f-string", "$A", 'result = f"\\{$A}"'],
+    ["a token after a lambda colon in an f-string", "$F", 'result = f"{lambda value: $F}"'],
+    ["a token after a CR-only string line", "$C", 'text = "ok"\rpayload = $C'],
+    ["a token after a CR-only unterminated string", "$E", 'text = "ok\rpayload = $E'],
+    ["a token after a CR-only comment", "$D", "# note\rpayload = $D"],
+  ])("blocks %s in python scripts before execution", async (_name, token, source) => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
-
-      await fs.writeFile(
-        pyPath,
-        [
-          "import json",
-          "# model accidentally wrote shell syntax:",
-          "payload = $DM_JSON",
-          "print(payload)",
-        ].join("\n"),
-        "utf-8",
-      );
+      await fs.writeFile(pyPath, source, "utf-8");
 
       const tool = createPreflightTool();
 
@@ -233,7 +233,54 @@ describeNonWin("exec script preflight", () => {
           command: "python bad.py",
           workdir: tmp,
         }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      ).rejects.toThrow(`exec preflight: detected likely shell variable injection (${token})`);
+    });
+  });
+
+  it("allows one-character dollar text in Python strings and comments", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "valid.py"),
+        [
+          'value = "$A"',
+          "other = '''$_'''",
+          'raw = r"$Q"',
+          'hash_text = "# $R"',
+          "nested = f\"{ '$S' }\"",
+          'braces = f"{{ $T }}"',
+          'continued = "text \\\r\n$U"',
+          "class Echo:",
+          "    def __format__(self, spec):",
+          "        return spec",
+          'format_text = f"{Echo():$W}"',
+          "élambda = Echo()",
+          'unicode_format = f"{élambda:$Y}"',
+          "# $P",
+          'print(f"{value}:{other}:{raw}:{hash_text}:{nested}:{braces}:{continued}:{format_text}:{unicode_format}")',
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const result = await runExecPreflight({ command: "python3 valid.py", workdir: tmp });
+
+      expect(result.details).toMatchObject({
+        status: "completed",
+        aggregated: "$A:$_:$Q:# $R:$S:{ $T }:text $U:$W:$Y",
+      });
+    });
+  });
+
+  it("allows valid one-character dollar-prefixed identifiers in node scripts", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "valid.js"),
+        'const $A = "node"; const $_ = "ok"; process.stdout.write(`${$A}-${$_}`);',
+        "utf-8",
+      );
+
+      const result = await runExecPreflight({ command: "node valid.js", workdir: tmp });
+
+      expect(result.details).toMatchObject({ status: "completed", aggregated: "node-ok" });
     });
   });
 

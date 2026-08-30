@@ -19,11 +19,7 @@ import {
 } from "./network-errors.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
-import {
-  getTelegramRichRawApi,
-  TELEGRAM_RICH_TEXT_LIMIT,
-  type TelegramInputRichMessage,
-} from "./rich-message.js";
+import { TELEGRAM_RICH_TEXT_LIMIT, type TelegramInputRichMessage } from "./rich-message.js";
 import {
   withTelegramPlainFallback,
   warnTelegramRichBlocksDegradations,
@@ -289,7 +285,7 @@ export function createTelegramDraftStream(params: {
         plainText: page.plainText,
         warn: (message) => params.warn?.(message),
         sendFormatted: async () => ({
-          message: await getTelegramRichRawApi(params.api).sendRichMessage({
+          message: await params.api.raw.sendRichMessage({
             chat_id: chatId,
             rich_message: richMessage,
             ...sendMessageParams,
@@ -364,7 +360,7 @@ export function createTelegramDraftStream(params: {
           plainText: page.plainText,
           warn: (message) => params.warn?.(message),
           sendFormatted: async () => {
-            await getTelegramRichRawApi(params.api).editMessageText({
+            await params.api.raw.editMessageText({
               chat_id: chatId,
               message_id: targetMessageId,
               rich_message: richMessage,

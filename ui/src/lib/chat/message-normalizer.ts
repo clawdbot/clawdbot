@@ -126,6 +126,14 @@ const rawMessageSchema = z
     timestamp: optionalMessageNumberSchema,
     id: optionalMessageStringSchema,
     senderLabel: optionalMessageStringSchema,
+    senderSession: z
+      .object({
+        sessionKey: optionalMessageStringSchema.transform((value) => value?.trim() || undefined),
+        agentId: optionalMessageStringSchema.transform((value) => value?.trim() || undefined),
+      })
+      .refine((value) => Boolean(value.sessionKey || value.agentId))
+      .optional()
+      .catch(undefined),
     toolCallId: optionalMessageStringSchema,
     tool_call_id: optionalMessageStringSchema,
     toolUseId: optionalMessageStringSchema,
@@ -142,21 +150,10 @@ type RawCanvasPreview = z.infer<typeof rawCanvasPreviewSchema>;
 
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
-  if (lower === "user") {
-    return "user";
+  if (["user", "assistant", "system"].includes(lower)) {
+    return lower;
   }
-  if (lower === "assistant") {
-    return "assistant";
-  }
-  if (lower === "system") {
-    return "system";
-  }
-  if (
-    lower === "toolresult" ||
-    lower === "tool_result" ||
-    lower === "tool" ||
-    lower === "function"
-  ) {
+  if (["toolresult", "tool_result", "tool", "function"].includes(lower)) {
     return "tool";
   }
   return role;
@@ -649,6 +646,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
+    ...(m.senderSession ? { senderSession: m.senderSession } : {}),
     ...(sender ? { sender } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText

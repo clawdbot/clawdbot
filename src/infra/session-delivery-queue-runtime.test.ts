@@ -154,6 +154,72 @@ describe("session delivery queue runtime", () => {
     });
   });
 
+  it("recomputes a future claim timer after the wall clock jumps forward", async () => {
+    vi.useFakeTimers();
+    const initialTime = new Date("2026-07-15T00:00:00.000Z");
+    const dayMs = 24 * 60 * 60 * 1_000;
+    vi.setSystemTime(initialTime);
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+        const { id } = await enqueueClaimedSessionDelivery(
+          {
+            kind: "agentTurn",
+            sessionKey: "agent:main:main",
+            message: "generated image ready",
+            messageId: "image:task-future-clock-jump:agent-loop",
+            idempotencyKey: "image:task-future-clock-jump:agent-loop",
+          },
+          2 * dayMs,
+        );
+        const deliver = vi.fn(async () => {});
+        startSessionDeliveryRuntime({ deliver, log: logger });
+
+        await scheduleSessionDelivery(id);
+        vi.setSystemTime(new Date(initialTime.getTime() + dayMs));
+        await scheduleSessionDelivery(id);
+
+        await vi.advanceTimersByTimeAsync(dayMs - 1);
+        expect(deliver).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+      });
+    });
+  });
+
+  it("preempts a released claim after the wall clock jumps past its lease", async () => {
+    const initialTime = Date.now();
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(initialTime);
+    try {
+      await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+          const { id } = await enqueueClaimedSessionDelivery(
+            {
+              kind: "agentTurn",
+              sessionKey: "agent:main:main",
+              message: "generated image ready",
+              messageId: "image:task-expired-clock-jump:agent-loop",
+              idempotencyKey: "image:task-expired-clock-jump:agent-loop",
+            },
+            60_000,
+          );
+          const deliver = vi.fn(async () => {});
+          startSessionDeliveryRuntime({ deliver, log: logger });
+
+          await scheduleSessionDelivery(id);
+          wallClock.mockReturnValue(initialTime + 24 * 60 * 60 * 1_000);
+          await releaseSessionDeliveryClaim(id);
+          await scheduleSessionDelivery(id);
+
+          await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+          expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+        });
+      });
+    } finally {
+      wallClock.mockRestore();
+    }
+  });
+
   it("coalesces duplicate schedules while the same entry is draining", async () => {
     vi.useFakeTimers();
     await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {

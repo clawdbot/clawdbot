@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -402,7 +403,7 @@ suite.define(() => {
         ...coldOpenScenario(),
         sessionKey: HIDDEN_BOARD_SESSION_KEY,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, HIDDEN_BOARD_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
@@ -528,7 +529,7 @@ suite.define(() => {
       const page = await context.newPage();
       await seedRetainedDesktopSlot(page);
       const gateway = await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
 
       const desktop = page.locator("openclaw-desktop-panel");
@@ -565,7 +566,7 @@ suite.define(() => {
     try {
       const page = await context.newPage();
       const gateway = await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
       await openChatSidePanelType(page, "Desktop");
 

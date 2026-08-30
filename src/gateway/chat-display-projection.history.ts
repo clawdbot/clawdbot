@@ -26,13 +26,11 @@ import {
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
 
-function digestTtsSupplementText(text: string): string {
-  return createHash("sha256").update(text.trim()).digest("hex");
-}
+type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
 
 function readTtsSupplementMarker(
   message: Record<string, unknown>,
-): { textSha256?: string; spokenText?: string } | undefined {
+): TtsSupplementMarker | undefined {
   const marker = readRecord(message.openclawTtsSupplement);
   if (!marker) {
     return undefined;
@@ -48,16 +46,16 @@ function readTtsSupplementMarker(
   return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
 }
 
-function isAssistantTtsSupplementMessage(message: Record<string, unknown>): boolean {
-  if (asRoleContentMessage(message)?.role !== "assistant") {
-    return false;
-  }
-  if (!readTtsSupplementMarker(message)) {
-    return false;
+function readAssistantTtsSupplementMarker(
+  message: Record<string, unknown>,
+): TtsSupplementMarker | undefined {
+  const marker = readTtsSupplementMarker(message);
+  if (!marker || asRoleContentMessage(message)?.role !== "assistant") {
+    return undefined;
   }
   const content = message.content;
   if (!Array.isArray(content)) {
-    return false;
+    return undefined;
   }
   let hasSupplementBlock = false;
   for (const block of content) {
@@ -71,33 +69,18 @@ function isAssistantTtsSupplementMessage(message: Record<string, unknown>): bool
     }
     const text = typeof record.text === "string" ? record.text.trim() : "";
     if (text && text !== "Audio reply") {
-      return false;
+      return undefined;
     }
   }
-  return hasSupplementBlock;
+  return hasSupplementBlock ? marker : undefined;
 }
 
-function ttsSupplementMatchesAssistant(
-  marker: { textSha256?: string; spokenText?: string },
-  message: Record<string, unknown>,
-): boolean {
-  if (asRoleContentMessage(message)?.role !== "assistant") {
-    return false;
-  }
-  if (isProjectedSessionsSendForwardedMessage(message)) {
-    return false;
-  }
-  if (readTtsSupplementMarker(message)) {
-    return false;
-  }
-  const text = extractProjectedText(message.content ?? message.text).trim();
-  if (!text) {
-    return false;
-  }
-  if (marker.textSha256 && digestTtsSupplementText(text) === marker.textSha256) {
-    return true;
-  }
-  return Boolean(marker.spokenText && text === marker.spokenText);
+function readTtsSupplementTargetText(message: Record<string, unknown>): string {
+  return asRoleContentMessage(message)?.role === "assistant" &&
+    !isProjectedSessionsSendForwardedMessage(message) &&
+    !readTtsSupplementMarker(message)
+    ? extractProjectedText(message.content ?? message.text).trim()
+    : "";
 }
 
 function mergeTtsSupplementContent(
@@ -127,18 +110,30 @@ function mergeTtsSupplementContent(
 export function mergeTtsSupplementMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  if (!messages.some(isAssistantTtsSupplementMessage)) {
+  if (!messages.some(readAssistantTtsSupplementMarker)) {
     return messages;
   }
+  const targetTexts: Array<string | undefined> = [];
+  const targetHashes: Array<string | undefined> = [];
   const merged: Array<Record<string, unknown>> = [];
   let changed = false;
   for (const message of messages) {
-    const marker = readTtsSupplementMarker(message);
-    if (marker && isAssistantTtsSupplementMessage(message)) {
+    const marker = readAssistantTtsSupplementMarker(message);
+    if (marker) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
         const candidate = merged[i];
-        if (candidate && ttsSupplementMatchesAssistant(marker, candidate)) {
+        if (!candidate) {
+          continue;
+        }
+        const text = (targetTexts[i] ??= readTtsSupplementTargetText(candidate));
+        if (
+          text &&
+          ((marker.textSha256 &&
+            (targetHashes[i] ??= createHash("sha256").update(text).digest("hex")) ===
+              marker.textSha256) ||
+            (marker.spokenText && text === marker.spokenText))
+        ) {
           targetIndex = i;
           break;
         }
@@ -148,6 +143,9 @@ export function mergeTtsSupplementMessages(
           expectDefined(merged[targetIndex], "merged entry at target index"),
           message,
         );
+        // Appended media can carry text. Only this replaced position loses its
+        // prepared facts; other positions still refer to their original messages.
+        targetTexts[targetIndex] = targetHashes[targetIndex] = undefined;
         changed = true;
         continue;
       }
@@ -235,14 +233,17 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
 }
 
-function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+function shouldHideProjectedHistoryMessage(
+  message: Record<string, unknown>,
+  roleContent: RoleContentMessage | null,
+  heartbeatUser: boolean,
+): boolean {
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
   if (isProjectedSessionsSendForwardedMessage(message)) {
     return false;
   }
-  const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
   }
@@ -262,10 +263,7 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
-    return true;
-  }
-  return isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isHeartbeatOkResponse(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
@@ -388,13 +386,14 @@ export function filterVisibleProjectedHistoryMessages(
       continue;
     }
     const currentRoleContent = asRoleContentMessage(current);
-    const next = messages[i + 1];
+    const heartbeatUser = Boolean(
+      currentRoleContent && isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT),
+    );
+    const next = heartbeatUser ? messages[i + 1] : undefined;
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
-      currentRoleContent &&
       next &&
       nextRoleContent &&
-      isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
       isHeartbeatOkResponse(nextRoleContent) &&
       !isProjectedSessionsSendForwardedMessage(next)
     ) {
@@ -403,9 +402,9 @@ export function filterVisibleProjectedHistoryMessages(
       i++;
       continue;
     }
-    if (shouldHideProjectedHistoryMessage(current)) {
+    if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= isHeartbeatHistoryTurnBoundaryMessage(current);
+      pendingTurnBoundary ||= heartbeatUser && !isSessionsSendInterSessionUserMessage(current);
       continue;
     }
     if (
@@ -461,13 +460,17 @@ function extractPromptPrefixField(text: string, field: string): string | undefin
   return normalizeOptionalString(match?.[1]);
 }
 
-function resolveSessionsSendForwardedSenderLabel(message: Record<string, unknown>): string {
+function resolveSessionsSendForwardedSenderSession(
+  message: Record<string, unknown>,
+): { sessionKey?: string; agentId?: string } | undefined {
   const provenance = normalizeInputProvenance(message.provenance);
   const text = extractProjectedText(message.content ?? message.text);
   const sourceSessionKey =
     provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
   const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
-  return agentId ? `Forwarded from ${agentId}` : "Forwarded agent message";
+  return sourceSessionKey
+    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }
+    : undefined;
 }
 
 export function projectSessionsSendInterSessionMessages(
@@ -479,10 +482,14 @@ export function projectSessionsSendInterSessionMessages(
       return message;
     }
     changed = true;
+    const senderSession = resolveSessionsSendForwardedSenderSession(message);
     const next: Record<string, unknown> = {
       ...message,
       role: "assistant",
-      senderLabel: resolveSessionsSendForwardedSenderLabel(message),
+      senderLabel: senderSession?.agentId
+        ? `Forwarded from ${senderSession.agentId}`
+        : "Forwarded agent message",
+      ...(senderSession ? { senderSession } : {}),
     };
     if ("content" in next) {
       next.content = stripInterSessionPromptPrefixFromContent(next.content);

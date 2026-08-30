@@ -529,7 +529,7 @@ describe("question gateway methods", () => {
               ),
             ).toEqual({ aborted: true });
           } finally {
-            registration.cleanup({ force: true });
+            registration.cleanup();
           }
         }
         try {

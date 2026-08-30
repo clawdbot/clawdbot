@@ -5,7 +5,7 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   openRealtimeTalkCamera,
-  openRealtimeTalkInput,
+  RealtimeTalkInputController,
 } from "./realtime-talk-input.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
@@ -19,8 +19,121 @@ function legacyWebKitOverconstrainedError(): Error & { constraint: string } {
   });
 }
 
+function microphoneFixture() {
+  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+  const addEventListener = vi.spyOn(track, "addEventListener");
+  return {
+    track,
+    addEventListener,
+    stream: { getTracks: () => [track] } as unknown as MediaStream,
+  };
+}
+
+function microphoneEndedListener(
+  addEventListener: ReturnType<typeof microphoneFixture>["addEventListener"],
+): EventListener {
+  const listener = addEventListener.mock.calls.at(-1)?.[1];
+  if (typeof listener !== "function") {
+    throw new Error("expected microphone ended listener");
+  }
+  return listener;
+}
+
+const ownedInputs = new Set<RealtimeTalkInputController>();
+
+function createMicrophoneInput(onEnded: (detail: string) => void = () => undefined) {
+  const input = new RealtimeTalkInputController(onEnded);
+  ownedInputs.add(input);
+  return input;
+}
+
+function openMicrophone(inputDeviceId: string | undefined) {
+  return createMicrophoneInput().open(inputDeviceId);
+}
+
 afterEach(() => {
+  ownedInputs.forEach((input) => input.stop());
+  ownedInputs.clear();
   vi.unstubAllGlobals();
+});
+
+describe("realtime Talk microphone lifetime", () => {
+  it("releases input before a throwing microphone-loss callback", async () => {
+    const { track, addEventListener, stream } = microphoneFixture();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => stream) } });
+    const onEnded = vi.fn(() => {
+      expect(input.stream).toBeNull();
+      expect(track.stop).toHaveBeenCalledOnce();
+      throw new Error("consumer failed");
+    });
+    const input = createMicrophoneInput(onEnded);
+    await input.open(undefined);
+    const ended = microphoneEndedListener(addEventListener);
+
+    expect(() => ended(new Event("ended"))).toThrow("consumer failed");
+    expect(() => ended(new Event("ended"))).not.toThrow();
+    input.stop();
+    expect(onEnded).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+    track.dispatchEvent(new Event("ended"));
+    expect(onEnded).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a replacement input alive when a retired track reports ended", async () => {
+    const previous = microphoneFixture();
+    const replacement = microphoneFixture();
+    const otherConsumer = vi.fn();
+    previous.track.addEventListener("ended", otherConsumer);
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi
+          .fn()
+          .mockResolvedValueOnce(previous.stream)
+          .mockResolvedValueOnce(replacement.stream),
+      },
+    });
+    const onEnded = vi.fn();
+    const input = createMicrophoneInput(onEnded);
+    await input.open(undefined);
+    const ended = microphoneEndedListener(previous.addEventListener);
+    await input.open("replacement");
+
+    ended(new Event("ended"));
+    previous.track.dispatchEvent(new Event("ended"));
+    expect(otherConsumer).toHaveBeenCalledOnce();
+    expect(input.stream).toBe(replacement.stream);
+    expect(previous.track.stop).toHaveBeenCalledOnce();
+    expect(replacement.track.stop).not.toHaveBeenCalled();
+    input.stop();
+    expect(replacement.track.stop).toHaveBeenCalledOnce();
+    expect(onEnded).not.toHaveBeenCalled();
+  });
+
+  it("cancels permission acquisition without retaining late microphone access", async () => {
+    const { track, addEventListener, stream } = microphoneFixture();
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn(
+          () =>
+            new Promise<MediaStream>((resolve) => {
+              resolveMedia = resolve;
+            }),
+        ),
+      },
+    });
+    const onEnded = vi.fn();
+    const input = createMicrophoneInput(onEnded);
+    const opening = input.open(undefined);
+    input.stop();
+    await expect(opening).rejects.toMatchObject({ name: "AbortError" });
+
+    resolveMedia(stream);
+    await vi.waitFor(() => expect(track.stop).toHaveBeenCalledOnce());
+    expect(input.stream).toBeNull();
+    expect(addEventListener).not.toHaveBeenCalled();
+    expect(onEnded).not.toHaveBeenCalled();
+  });
 });
 
 describe("realtime Talk microphone inputs", () => {
@@ -145,7 +258,7 @@ describe("realtime Talk microphone inputs", () => {
     const getUserMedia = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkInput(undefined)).rejects.toThrow(
+    await expect(openMicrophone(undefined)).rejects.toThrow(
       "Microphone access is blocked. Allow it in browser site settings to list inputs.",
     );
   });
@@ -156,7 +269,7 @@ describe("realtime Talk microphone inputs", () => {
     });
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkInput("missing-mic")).rejects.toThrow(
+    await expect(openMicrophone("missing-mic")).rejects.toThrow(
       "The selected microphone is unavailable",
     );
     expect(getUserMedia).toHaveBeenCalledWith({
@@ -174,7 +287,7 @@ describe("realtime Talk microphone inputs", () => {
     const getUserMedia = vi.fn(async () => stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkInput(" usb-mic ")).resolves.toBe(stream);
+    await expect(openMicrophone(" usb-mic ")).resolves.toBe(stream);
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         autoGainControl: true,
@@ -185,34 +298,12 @@ describe("realtime Talk microphone inputs", () => {
     });
   });
 
-  it("settles microphone cancellation before browser permission resolves", async () => {
-    const stop = vi.fn();
-    let resolveMedia: (stream: MediaStream) => void = () => undefined;
-    const pending = new Promise<MediaStream>((resolve) => {
-      resolveMedia = resolve;
-    });
-    vi.stubGlobal("navigator", {
-      mediaDevices: { getUserMedia: vi.fn(() => pending) },
-    });
-    const controller = new AbortController();
-
-    const opening = openRealtimeTalkInput(undefined, { signal: controller.signal });
-    controller.abort();
-
-    await expect(opening).rejects.toMatchObject({ name: "AbortError" });
-    resolveMedia({ getTracks: () => [{ stop }] } as unknown as MediaStream);
-    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
-  });
-
-  it("does not request microphone or camera media after cancellation", async () => {
+  it("does not request camera media after cancellation", async () => {
     const getUserMedia = vi.fn();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const controller = new AbortController();
     controller.abort();
 
-    await expect(
-      openRealtimeTalkInput(undefined, { signal: controller.signal }),
-    ).rejects.toMatchObject({ name: "AbortError" });
     await expect(
       openRealtimeTalkCamera(undefined, { signal: controller.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
@@ -229,11 +320,11 @@ describe("realtime Talk microphone inputs", () => {
     vi.stubGlobal("navigator", {
       mediaDevices: { getUserMedia: vi.fn(() => pending) },
     });
-    const controller = new AbortController();
-    const opening = openRealtimeTalkInput(undefined, { signal: controller.signal });
+    const input = createMicrophoneInput();
+    const opening = input.open(undefined);
 
     resolveMedia({ getTracks: () => [{ stop }] } as unknown as MediaStream);
-    controller.abort();
+    input.stop();
 
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
     expect(stop).toHaveBeenCalledOnce();
@@ -263,7 +354,7 @@ describe("realtime Talk microphone inputs", () => {
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkInput("usb-mic")).resolves.toBe(audio);
+    await expect(openMicrophone("usb-mic")).resolves.toBe(audio);
     await expect(openRealtimeTalkCamera(undefined)).resolves.toBe(camera);
     expect(getUserMedia).toHaveBeenNthCalledWith(1, {
       audio: {
@@ -317,7 +408,7 @@ describe("realtime Talk microphone inputs", () => {
     const getUserMedia = vi.fn(async () => stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkInput(undefined)).resolves.toBe(stream);
+    await expect(openMicrophone(undefined)).resolves.toBe(stream);
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         autoGainControl: true,

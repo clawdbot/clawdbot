@@ -287,8 +287,11 @@ export function installGoogleLiveTestFixture(): void {
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
     googleLiveTestFixture.stopInputTrack = vi.fn();
+    const inputTrack = Object.assign(new EventTarget(), {
+      stop: googleLiveTestFixture.stopInputTrack,
+    });
     googleLiveTestFixture.getUserMedia = vi.fn(async () => ({
-      getTracks: () => [{ stop: googleLiveTestFixture.stopInputTrack }],
+      getTracks: () => [inputTrack],
     }));
     vi.stubGlobal("navigator", {
       mediaDevices: {

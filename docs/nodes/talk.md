@@ -38,6 +38,10 @@ their current ephemeral-token and WebRTC data-channel flow.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+Google Live saves complete utterances during the call, including Gemini 3.1
+transcriptions that omit an explicit transcription-finished flag. Partial text
+stays provisional until the provider's completion boundary.
+
 Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
@@ -49,6 +53,11 @@ camera track. Google Live receives bounded JPEG frames directly from the
 browser at up to one frame per second, while `describe_view` reports the
 camera-stream state. In both cases, camera frames bypass the Gateway, and
 stopping Talk releases the camera and microphone tracks.
+
+If the microphone disconnects or its permission is revoked, browser Talk ends
+the call and shows an error. Choose an available **Microphone input**, restore
+permission if needed, and start Talk again. An unexpected GPT-Live connection
+loss also ends the call with an error; automatic reconnection is not supported.
 
 ## Behavior (macOS)
 

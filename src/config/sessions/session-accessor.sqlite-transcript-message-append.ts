@@ -143,9 +143,12 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     message: finalMessage,
   };
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
-    dedupeByMessageIdempotency:
-      options.idempotencyLookup !== "caller-checked" &&
-      options.idempotencyLookup !== "scan-assistant",
+    idempotencyKeyMode:
+      options.idempotencyLookup === "caller-checked"
+        ? "relocate-owner"
+        : options.idempotencyLookup === "scan-assistant"
+          ? "preserve-owner"
+          : "dedupe",
   });
   if (!appended && idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByScopedIdempotencyKey(

@@ -142,6 +142,23 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(readyEvent.transport).toBe("provider-websocket");
   });
 
+  it("closes Google audio and its socket when the microphone ends", async () => {
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    googleLiveTestFixture.getUserMedia.mockResolvedValueOnce({ getTracks: () => [track] });
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus });
+    const ws = await startTransport(transport);
+
+    track.dispatchEvent(new Event("ended"));
+
+    expect(onStatus).toHaveBeenLastCalledWith("error", expect.stringContaining("Microphone"));
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(ws.readyState).toBe(3);
+    expect(inputProcessors[0]?.onaudioprocess).toBeNull();
+    expect(audioContexts.every((context) => context.close.mock.calls.length === 1)).toBe(true);
+    transport.stop();
+  });
+
   it("releases owned media when the live socket closes", async () => {
     const onStatus = vi.fn();
     const onTranscript = vi.fn();
@@ -421,6 +438,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ]);
     expect(onTranscript).toHaveBeenCalledWith({ role: "user", text: "hello", final: true });
     expect(onTranscript).toHaveBeenCalledWith({ role: "assistant", text: "hi", final: false });
+    expect(onTranscript).toHaveBeenLastCalledWith({ role: "assistant", text: "hi", final: true });
+    expect(onTranscript).toHaveBeenCalledTimes(3);
     const audioEvent = onTalkEvent.mock.calls[2]?.[0];
     expect(audioEvent?.payload).toStrictEqual({ byteLength: 4, mimeType: "audio/pcm;rate=24000" });
     expect(audioEvent?.sessionId).toBe("main:google:provider-websocket");

@@ -309,10 +309,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "ScheduleWakeup,mcp__other__*",
         ],
-        toolAvailability: {
-          native: [],
-          openClaw: ["openclaw"],
-        },
+        toolAvailability: { native: [], openClaw: ["openclaw"] },
       }),
     ).toEqual([
       "-p",
@@ -333,6 +330,8 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__openclaw",
+      "--disallowedTools",
+      "ScheduleWakeup,mcp__other__*",
     ]);
   });
 
@@ -384,10 +383,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "ScheduleWakeup,mcp__other__*",
         ],
-        toolAvailability: {
-          native: [],
-          openClaw: ["message"],
-        },
+        toolAvailability: { native: [], openClaw: ["message"] },
       }),
     ).toEqual([
       "-p",
@@ -406,6 +402,8 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__message",
+      "--disallowedTools",
+      "ScheduleWakeup,mcp__other__*",
     ]);
   });
 
@@ -464,7 +462,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "--tools",
       "",
       "--disallowedTools",
-      "mcp__*",
+      "mcp__*,mcp__other__*",
     ]);
   });
 

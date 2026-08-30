@@ -84,6 +84,23 @@ test("drains every pending Test Server update", async () => {
   await new Promise((resolve) => upstreamServer.close(resolve));
 });
 
+test("reports the drain HTTP status without leaking the upstream response", async () => {
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ ok: false, description: "private bot identity and token" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  try {
+    await assert.rejects(proxy.drainUpdates("123:ABC"), {
+      message: "Telegram Test Bot API getUpdates failed while draining stale updates (HTTP 409).",
+    });
+  } finally {
+    await proxy.close();
+  }
+});
+
 test("holds one upstream-accepted method response until explicit release", async () => {
   const upstreamServer = http.createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/json" });

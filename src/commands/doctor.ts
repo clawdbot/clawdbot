@@ -1,4 +1,5 @@
 /** Top-level doctor command wrapper, including post-upgrade probe mode. */
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -45,8 +46,8 @@ function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): s
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+  const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
-    const outputRuntime = runtime ?? defaultRuntime;
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
     const report = await runDoctorStateSqliteCompact();
     if (options.json) {
@@ -62,11 +63,9 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       );
       outputRuntime.log(`- integrity-check=${report.integrityCheck}, path=${report.path}`);
     }
-    outputRuntime.exit(0);
-    return;
+    exitCliAfterOutput(outputRuntime, 0);
   }
   if (options?.sessionSqlite) {
-    const outputRuntime = runtime ?? defaultRuntime;
     const sessionSqliteMode = options.sessionSqlite;
     const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
     const runSessionSqlite = async () =>
@@ -135,11 +134,9 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
         }
       }
     }
-    outputRuntime.exit(report.totals.issues > 0 ? 1 : 0);
-    return;
+    exitCliAfterOutput(outputRuntime, report.totals.issues > 0 ? 1 : 0);
   }
   if (options?.postUpgrade) {
-    const outputRuntime = runtime ?? defaultRuntime;
     const report = await runPostUpgradeProbes({});
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
@@ -152,8 +149,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       }
     }
     const hasError = report.findings.some((f) => f.level === "error");
-    outputRuntime.exit(hasError ? 1 : 0);
-    return;
+    exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
   await doctorHealth.runDoctorHealthFlow(runtime, options);

@@ -171,7 +171,7 @@ suite.define(() => {
     // the live terminal projection or its retained local timestamps.
     await gateway.setMethodResponse("chat.history", {
       messages,
-      sessionId: "control-ui-e2e-session",
+      sessionId: `session:${sessionKey}`,
       sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
     });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
@@ -208,7 +208,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["run-continuing"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -246,7 +246,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["newer-run"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -289,7 +289,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["run-reconnected"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -394,7 +394,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: activeStartedAt,
@@ -419,7 +419,7 @@ suite.define(() => {
           activeRunIds: [runId],
           displayName: staleActiveLabel,
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           label: staleActiveLabel,
           model: "gpt-5.5",
@@ -440,7 +440,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: Date.now() - 1_000,
@@ -486,7 +486,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: lateStaleActiveUpdatedAt - 11_000,
@@ -539,7 +539,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: Date.now() - 1_000,
@@ -559,7 +559,7 @@ suite.define(() => {
         timestamp: Date.now(),
       },
       runId,
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
       stopReason: "end_turn",
       yielded: true,
@@ -597,7 +597,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("chat", {
       errorMessage: diagnostic,
       runId,
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "aborted",
     });
 

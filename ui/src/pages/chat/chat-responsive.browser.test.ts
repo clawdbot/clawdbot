@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import {
@@ -828,6 +829,19 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   }
 }
 
+async function waitForViewportSize(page: Page, width: number, height: number) {
+  await expectBrowser
+    .poll(
+      () =>
+        page.evaluate(() => ({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        })),
+      { timeout: 5_000 },
+    )
+    .toEqual({ width, height });
+}
+
 async function openBrowserPage(
   width: number,
   height: number,
@@ -837,15 +851,28 @@ async function openBrowserPage(
     executablePath: chromiumExecutablePath,
     headless: true,
   });
-  if (options.isolated) {
-    return await sharedBrowser.newPage({ hasTouch: options.hasTouch, viewport: { width, height } });
+  let page: Page | undefined;
+  try {
+    if (options.isolated) {
+      page = await sharedBrowser.newPage({
+        hasTouch: options.hasTouch,
+        viewport: { width, height },
+      });
+    } else {
+      // Static setContent fixtures do not mutate context-owned storage or routes,
+      // so they can share one context while their pages remain concurrent.
+      sharedLayoutContext ??= await sharedBrowser.newContext();
+      page = await sharedLayoutContext.newPage();
+      await page.setViewportSize({ width, height });
+    }
+    await waitForViewportSize(page, width, height);
+    return page;
+  } catch (error) {
+    if (page) {
+      await closeBrowserPage(page);
+    }
+    throw error;
   }
-  // Static setContent fixtures do not mutate context-owned storage or routes,
-  // so they can share one context while their pages remain concurrent.
-  sharedLayoutContext ??= await sharedBrowser.newContext();
-  const page = await sharedLayoutContext.newPage();
-  await page.setViewportSize({ width, height });
-  return page;
 }
 
 async function closeBrowserPage(page: Page): Promise<void> {
@@ -2908,6 +2935,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         for (const width of [320, 560]) {
           await page.setViewportSize({ width, height: 852 });
           const failedCard = cards.filter({ hasText: "settings.toml" });
+          // The viewport ACK does not settle the retained pane's responsive geometry.
+          await failedCard.scrollIntoViewIfNeeded();
+          await waitForLayoutSettled(
+            page,
+            ".chat-main__conversation, .chat-assistant-attachment-card, .chat-assistant-attachment-card__status-reason",
+          );
           const mobileStatusLayout = await failedCard.evaluate((card) => {
             const badge = card.querySelector<HTMLElement>(
               ".chat-assistant-attachment-card__status-badge",
@@ -3153,11 +3186,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       // The resting shape is two stacked regions, not one line that may grow
       // into two: a draft that fits on a single line still leaves the surface at
       // its multiline floor, with the whole action row below the editor.
-      const [surface, editor, actionRow] = await Promise.all([
-        getRect(page, ".agent-chat__composer-shell > .agent-chat__input"),
-        getRect(page, ".agent-chat__composer-combobox > textarea"),
-        getRect(page, ".agent-chat__composer-footer"),
-      ]);
+      // Shell/card entry animations move all boxes together; compare one browser snapshot.
+      const { surface, editor, actionRow } = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const [element, ...others] = document.querySelectorAll<HTMLElement>(selector);
+          if (!element || others.length > 0) {
+            throw new Error(`Expected one layout element: ${selector}`);
+          }
+          const {
+            x,
+            y,
+            width: rectWidth,
+            height: rectHeight,
+            top,
+            bottom,
+          } = element.getBoundingClientRect();
+          return { x, y, width: rectWidth, height: rectHeight, top, bottom };
+        };
+        return {
+          surface: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+          editor: rectFor(".agent-chat__composer-combobox > textarea"),
+          actionRow: rectFor(".agent-chat__composer-footer"),
+        };
+      });
+      for (const rect of [surface, editor, actionRow]) {
+        expectFiniteRect(rect);
+      }
       expect(surface.height).toBeGreaterThanOrEqual(98);
       expect(actionRow.top).toBeGreaterThanOrEqual(editor.bottom - 1);
       expect(surface.bottom - actionRow.bottom).toBeGreaterThanOrEqual(0);
@@ -3694,6 +3748,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         };
         return {
+          viewport: {
+            width: window.innerWidth,
+            height: window.innerHeight,
+          },
           controls: rectFor(".agent-chat__composer-controls"),
           footer: rectFor(".agent-chat__composer-footer"),
           input: rectFor(".agent-chat__input"),
@@ -3704,6 +3762,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
+      expect(layout.viewport).toEqual({ width: 320, height: 568 });
       expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
       for (const control of [layout.status, layout.settings]) {
         expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
@@ -3716,7 +3775,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         layout.input.x + layout.input.width + 1,
       );
       expect(layout.typing.x).toBeGreaterThanOrEqual(0);
-      expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(320);
+      expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(layout.viewport.width);
       expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       for (const [left, right] of [

@@ -6,10 +6,8 @@
  */
 import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
-import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
 import type { AgentTool } from "./runtime/index.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
@@ -116,8 +114,7 @@ export function buildSystemPromptReport(params: {
   bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
   sandbox?: SessionSystemPromptReport["sandbox"];
   systemPrompt: string;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
+  injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
   tools: AgentTool[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
@@ -147,10 +144,7 @@ export function buildSystemPromptReport(params: {
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
       promptChars: params.skillsPrompt.length,
       hash: sha256(params.skillsPrompt),

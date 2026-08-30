@@ -1,15 +1,17 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedClassifyFailoverReason,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 describe("runEmbeddedAgent Code Mode reconciliation", () => {
@@ -17,10 +19,16 @@ describe("runEmbeddedAgent Code Mode reconciliation", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.code-mode-reconciliation" });
     mockedClassifyFailoverReason.mockReturnValue(null);
     useOpenAIPlatformAuthFixture();
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("continues a settled partial mutation through inspection and bounded recovery", async () => {
@@ -71,7 +79,7 @@ describe("runEmbeddedAgent Code Mode reconciliation", () => {
       .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["Recovery completed."] }));
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       config: {
         agents: {
           defaults: {
@@ -132,7 +140,7 @@ describe("runEmbeddedAgent Code Mode reconciliation", () => {
       );
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       config: {
         agents: {
           defaults: {

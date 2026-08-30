@@ -9,7 +9,7 @@ import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
-import { buildTelegramRichMarkdownPlan, getTelegramRichRawApi } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import {
   isTelegramMessageHasNoTextError,
@@ -210,7 +210,7 @@ async function editMessageTelegramWithContext(
           ),
         sendRich: (richMessage) =>
           edit(() =>
-            getTelegramRichRawApi(api).editMessageText({
+            api.raw.editMessageText({
               chat_id: chatId,
               message_id: messageId,
               rich_message: richMessage,

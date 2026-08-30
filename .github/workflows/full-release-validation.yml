@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      telegram_waiver:
+        description: Explicit owner-approved Telegram integration waiver for stable 2026.8.1 only
+        required: false
+        default: ""
+        type: string
       provider:
         description: Provider lane for cross-OS onboarding and the end-to-end agent turn
         required: false
@@ -179,6 +184,7 @@ jobs:
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
+      target_version: ${{ steps.release_inputs.outputs.target_version }}
       plugin_candidate_required: ${{ steps.candidate_request.outputs.plugin_required }}
       release_candidate_artifact_required: ${{ steps.candidate_request.outputs.release_artifact_required }}
       candidate_request_json: ${{ steps.candidate_request.outputs.request_json }}
@@ -321,10 +327,17 @@ jobs:
           submodules: false
 
       - name: Validate release inputs
+        id: release_inputs
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
@@ -338,6 +351,24 @@ jobs:
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
           target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
+          if [[ -n "${TELEGRAM_WAIVER:-}" ]]; then
+            TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
+          import { normalizeReleaseTelegramWaiver } from './workflow/scripts/full-release-validation-policy.mjs';
+          normalizeReleaseTelegramWaiver({
+            telegramWaiver: process.env.TELEGRAM_WAIVER,
+            targetVersion: process.env.TARGET_VERSION,
+            releaseProfile: process.env.RELEASE_PROFILE,
+            rerunGroup: process.env.RERUN_GROUP,
+            liveSuiteFilter: process.env.LIVE_SUITE_FILTER,
+            releasePackageSpec: process.env.RELEASE_PACKAGE_SPEC,
+            packageAcceptancePackageSpec: process.env.PACKAGE_ACCEPTANCE_PACKAGE_SPEC,
+            npmTelegramPackageSpec: process.env.NPM_TELEGRAM_PACKAGE_SPEC,
+          });
+          NODE
+          fi
+          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+            printf 'target_version=%s\n' "$target_version" >> "$GITHUB_OUTPUT"
+          fi
           extended_stable_line=""
           release_version_pattern=""
           expected_version=""
@@ -417,6 +448,7 @@ jobs:
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           FAIL_FAST: ${{ inputs.fail_fast }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ steps.filters.outputs.live_suite_filter }}
@@ -434,6 +466,9 @@ jobs:
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
+            if [[ -n "$TELEGRAM_WAIVER" ]]; then
+              echo "- Telegram integration checks: waived/not run (\`${TELEGRAM_WAIVER}\`); not a pass"
+            fi
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
@@ -466,7 +501,9 @@ jobs:
             if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
               echo "- Published release package: \`${RELEASE_PACKAGE_SPEC}\`"
             fi
-            if [[ "$RERUN_GROUP" == "npm-telegram" && -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
+            if [[ -n "$TELEGRAM_WAIVER" ]]; then
+              echo "- Source, Package Acceptance, and published-package Telegram E2E: waived/not run"
+            elif [[ "$RERUN_GROUP" == "npm-telegram" && -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Published-package Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             elif [[ "$RERUN_GROUP" == "npm-telegram" && -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
               echo "- Published-package Telegram E2E: \`${RELEASE_PACKAGE_SPEC}\`"
@@ -535,6 +572,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           WORKFLOW_REF: ${{ github.ref_name }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
@@ -550,6 +588,7 @@ jobs:
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           TRUSTED_WORKFLOW_JSON: ${{ needs.resolve_target.outputs.trusted_workflow_json }}
@@ -570,6 +609,8 @@ jobs:
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
             --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
+            --arg telegramWaiver "$TELEGRAM_WAIVER" \
+            --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             '{
@@ -587,7 +628,7 @@ jobs:
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-            }')"
+            } + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
@@ -952,6 +993,7 @@ jobs:
                 -f phase="$PHASE"
                 -f allow_unreleased_changelog="$ALLOW_UNRELEASED_CHANGELOG"
                 -f skip_package_telegram_e2e="$SKIP_PACKAGE_TELEGRAM_E2E"
+                -f telegram_waiver="$TELEGRAM_WAIVER"
                 -f rerun_group="$RERUN_GROUP"
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
@@ -1118,6 +1160,7 @@ jobs:
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ""
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
         run: *full_release_child_dispatch
 
   release_checks_candidate:
@@ -1156,12 +1199,13 @@ jobs:
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.resolve_target.outputs.release_candidate_artifact_required == 'true' && needs.candidate_acquisition.outputs.candidate_artifact_json || '' }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
         run: *full_release_child_dispatch
 
   npm_telegram:
     name: Run package Telegram E2E
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.telegram_waiver == '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1270,6 +1314,8 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_run_id }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
@@ -1346,6 +1392,8 @@ jobs:
               --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
               --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
               --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
+              --arg telegramWaiver "$TELEGRAM_WAIVER" \
+              --arg targetVersion "$TARGET_VERSION" \
               --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
               --arg dockerPreflightResult "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" \
@@ -1406,6 +1454,8 @@ jobs:
                 evidencePolicy: $evidencePolicy,
                 evidenceChangedPaths: $evidenceChangedPaths,
                 rerunGroup: $rerunGroup,
+                telegramWaiver: $telegramWaiver,
+                targetVersion: $targetVersion,
                 releasePackageSpec: $releasePackageSpec,
                 packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
                 npmTelegramPackageSpec: $npmTelegramPackageSpec,
@@ -1797,6 +1847,8 @@ jobs:
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
@@ -1937,6 +1989,8 @@ jobs:
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
             --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
+            --arg telegramWaiver "$TELEGRAM_WAIVER" \
+            --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             --argjson childEvidence "$CHILD_EVIDENCE" \
@@ -1958,7 +2012,7 @@ jobs:
               sourceParentRunAttempt: ($sourceParentRunAttempt | tonumber),
               candidateBinding: $candidateBinding,
               childEvidence: $childEvidence,
-              validationInputs: {
+              validationInputs: ({
                 provider: $provider,
                 mode: $mode,
                 targetContextRef: $targetContextRef,
@@ -1973,7 +2027,7 @@ jobs:
                 skipPackageTelegramE2e: $skipPackageTelegramE2e,
                 allowUnreleasedChangelog: $allowUnreleasedChangelog,
                 pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-              },
+              } + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)),
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
                 performanceBlocking: ($releaseProfile != "beta"),

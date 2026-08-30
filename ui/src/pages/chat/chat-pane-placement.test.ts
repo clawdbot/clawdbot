@@ -168,38 +168,59 @@ describe("chat pane placement", () => {
     );
   });
 
-  it("reclaims an active placement after the operator confirms", async () => {
-    vi.stubGlobal(
-      "confirm",
-      vi.fn(() => {
-        throw new Error("native confirm must not be used");
-      }),
-    );
-    const request = vi.fn(async () => ({ ok: true }));
-    const refreshReplacement = vi.fn(async () => undefined);
-    const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: { refreshReplacement } as unknown as SessionCapability,
-    });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    } as never;
-    const session = activePlacementSession();
+  it.each(["cloud", "device"] as const)(
+    "reclaims an active %s placement after the operator confirms",
+    async (runner) => {
+      vi.stubGlobal(
+        "confirm",
+        vi.fn(() => {
+          throw new Error("native confirm must not be used");
+        }),
+      );
+      const request = vi.fn(async () => ({ ok: true }));
+      const refreshReplacement = vi.fn(async () => undefined);
+      const { pane } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+        sessions: { refreshReplacement } as unknown as SessionCapability,
+      });
+      pane.context.gateway.snapshot.hello = {
+        features: { methods: ["sessions.reclaim"] },
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      } as never;
+      const session = activePlacementSession();
+      if (runner === "device") {
+        session.placement.runner = { kind: "device", status: "available" };
+      }
 
-    const reclaim = pane.reclaimHeaderPlacement(session);
-    const actions = await waitForConfirmDialogActions();
-    expect(actions.textContent).toContain("Stop worker");
-    answerConfirmDialog(actions, "confirm");
-    await reclaim;
+      const reclaim = pane.reclaimHeaderPlacement(session);
+      const actions = await waitForConfirmDialogActions();
+      expect(actions.textContent).toContain(
+        runner === "device" ? "Stop device worker" : "Stop worker",
+      );
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+        runner === "device" ? "Stop the device worker" : "Stop the cloud worker",
+      );
+      expect(pane.context.placementStartup.pause).not.toHaveBeenCalled();
+      answerConfirmDialog(actions, "confirm");
+      await reclaim;
 
-    expect(request).toHaveBeenCalledWith(
-      "sessions.reclaim",
-      { key: session.key, agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
-    );
-    expect(refreshReplacement).toHaveBeenCalledWith("main");
-  });
+      expect(request).toHaveBeenCalledWith(
+        "sessions.reclaim",
+        { key: session.key, agentId: "main" },
+        { timeoutMs: 10 * 60_000 },
+      );
+      expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+        session.key,
+        "Worker stop requested. Review the initial message before retrying.",
+        expect.objectContaining({
+          readSessionPlacementRecovery: expect.any(Function),
+          pauseSessionPlacementRecovery: expect.any(Function),
+        }),
+      );
+      expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
+      expect(refreshReplacement).toHaveBeenCalledWith("main");
+    },
+  );
 
   it("shows authoritative device targets to writers and moves to the selected device", async () => {
     const request = vi.fn(async (method: string) => {

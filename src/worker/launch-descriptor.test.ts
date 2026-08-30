@@ -106,6 +106,19 @@ describe("worker launch descriptor", () => {
     });
   });
 
+  it("rejects a launch version inherited from the prototype", () => {
+    const descriptor = launchDescriptor();
+    const { version, ...ownFields } = descriptor;
+    const candidate = Object.assign(
+      Object.create({ version }) as Record<string, unknown>,
+      ownFields,
+    );
+
+    expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+      "invalid worker launch descriptor",
+    );
+  });
+
   it("accepts the permission context pair only when both fields are present", () => {
     const descriptor = launchDescriptor();
     const {
@@ -333,15 +346,29 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
     descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
     expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
-    for (const computer of [
+    const { computer, ...assignmentFields } = descriptor.assignment;
+    const inheritedComputerAssignment = Object.assign(
+      Object.create({ computer }),
+      assignmentFields,
+    );
+    expect(() =>
+      parseWorkerLaunchDescriptor({
+        ...descriptor,
+        assignment: inheritedComputerAssignment,
+      }),
+    ).toThrow("invalid worker launch descriptor");
+    const { nodeId, ...computerFields } = descriptor.assignment.computer;
+    const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
+    for (const candidateComputer of [
       undefined,
       { ...descriptor.assignment.computer, gatewayUrl: "ws://other" },
       { ...descriptor.assignment.computer, nodeId: "" },
+      inheritedNodeIdComputer,
     ]) {
       expect(() =>
         parseWorkerLaunchDescriptor({
           ...descriptor,
-          assignment: { ...descriptor.assignment, computer },
+          assignment: { ...descriptor.assignment, computer: candidateComputer },
         }),
       ).toThrow("invalid worker launch descriptor");
     }

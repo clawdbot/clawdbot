@@ -563,6 +563,11 @@ By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so t
 attachment limits take effect together. Automatic reloads preserve manually
 stopped accounts; use an explicit channel start to resume those accounts.
 
+Model runtime selection keeps your authored settings separate from catalog defaults.
+Hot reload and secrets reload preserve that distinction: catalog compatibility
+metadata does not become a custom request override that switches a native runtime
+back to OpenClaw.
+
 | Category            | Fields                                                                  | Gateway restart needed?      |
 | ------------------- | ----------------------------------------------------------------------- | ---------------------------- |
 | Channels            | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels       | No (restarts that channel)   |

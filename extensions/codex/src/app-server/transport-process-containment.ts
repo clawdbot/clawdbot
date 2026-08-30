@@ -38,7 +38,9 @@ export async function terminateCodexAppServerOrphan(
   let gone = false;
   try {
     if (contained) {
-      const current = await readCodexAppServerProcess(expected.pid, deadline);
+      const current = await readCodexAppServerProcess(expected.pid, deadline).catch(
+        () => undefined,
+      );
       if (current && isSameLiveRoot(current, contained.root, true)) {
         // Keep the verified leader stopped until its whole group is killed;
         // a QA-owned child may share its parent's group and must use its PID.
@@ -46,7 +48,7 @@ export async function terminateCodexAppServerOrphan(
       }
     }
     while (Date.now() < deadline) {
-      const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+      const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
       if (!snapshot?.some((row) => row.pid === process.pid)) {
         return false;
       }
@@ -82,7 +84,8 @@ async function containDescendants(
   if (process.platform === "win32" || !rootPid || !child.kill) {
     return undefined;
   }
-  const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+  // Inspection failures never grant containment or signal authority.
+  const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
   if (!snapshot || Date.now() >= deadline) {
     return undefined;
   }
@@ -177,7 +180,7 @@ async function quiesceDescendants(
     if (Date.now() >= deadline) {
       return undefined;
     }
-    const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
     if (!snapshot || Date.now() >= deadline) {
       return undefined;
     }
@@ -325,7 +328,7 @@ async function signalSameRoot(
   signal: NodeJS.Signals,
   deadline: number,
 ): Promise<boolean> {
-  const current = await readCodexAppServerProcess(root.pid, deadline);
+  const current = await readCodexAppServerProcess(root.pid, deadline).catch(() => undefined);
   return Boolean(current && isSameLiveRoot(current, root) && signalProcess(current.pid, signal));
 }
 
@@ -358,7 +361,7 @@ async function signalSameProcess(
 ): Promise<boolean> {
   // Portable Node POSIX signals are PID-based, so never retain numeric authority:
   // take this final identity snapshot synchronously immediately before every signal.
-  const current = await readCodexAppServerProcess(expected.pid, deadline);
+  const current = await readCodexAppServerProcess(expected.pid, deadline).catch(() => undefined);
   return Boolean(
     current && isSameLiveProcess(current, expected) && signalProcess(current.pid, signal),
   );

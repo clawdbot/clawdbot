@@ -24,6 +24,11 @@ import {
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
+import {
   createModelCatalog,
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
@@ -556,6 +561,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
     sessionKey: state.sessionKey,
+    selectedSession: state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    ),
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
     onFastModeSelect: (value, targetSessionKey) =>
@@ -649,10 +657,23 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
 
 function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
   const transcript = createTestTranscript();
+  const sessionKey = overrides.sessionKey ?? "main";
+  const sessionHost = overrides.sessionHost;
+  const exactSelectedSession = overrides.sessions?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, sessionKey),
+  );
+  const selectedSession = Object.hasOwn(overrides, "selectedSession")
+    ? overrides.selectedSession
+    : (exactSelectedSession ??
+      (sessionHost && isUiGlobalScopeConfigured(sessionHost)
+        ? overrides.sessions?.sessions.find((row) =>
+            uiSessionRowMatchesSelectedChat(sessionHost, row.key, sessionKey),
+          )
+        : undefined));
   return {
     transcript,
     paneId: "single",
-    sessionKey: "main",
+    sessionKey,
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
     showThinking: false,
@@ -681,6 +702,7 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     runError: null,
     approvalCanGrant: false,
     sessions: null,
+    selectedSession,
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
@@ -7756,6 +7778,42 @@ describe("chat model controls", () => {
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="openrouter"]')
         ?.textContent,
     ).toContain("272k active · 1M max");
+  });
+
+  it("uses selected global session model and speed instead of agent defaults", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-default",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-default", name: "Default GPT", provider: "openai" },
+        { id: "gpt-session", name: "Session GPT", provider: "openai" },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-default",
+      defaultsProvider: "openai",
+      model: "gpt-session",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
+    const selectedSession = expectDefined(state.sessionsResult.sessions[0], "selected session");
+    selectedSession.key = "global";
+    selectedSession.kind = "global";
+    selectedSession.fastMode = true;
+    selectedSession.effectiveFastMode = true;
+
+    const container = renderModelControls(state, {
+      agentDefaultModel: "openai/gpt-default",
+      sessionKey: "agent:work:main",
+      selectedSession,
+    });
+
+    expect(getChatModelSelect(container).dataset.chatSelectValue).toBe("openai/gpt-session");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-select="true"]')
+        ?.getAttribute("data-chat-fast-mode"),
+    ).toBe("true");
   });
 
   it("uses a unique catalog provider before an unrelated stale session hint", () => {

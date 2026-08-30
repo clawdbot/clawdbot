@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -17,6 +21,10 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
+import { listStoredChatOutboxes, loadChatComposerSnapshot } from "./composer-persistence.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { prepareOutboxPayload } from "./outbox-payloads.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 const sessionKey = "agent:main:accepted-inputs";
 const sessionId = "accepted-input-session";
@@ -54,6 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   resetChatThreadState();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("server-owned pending input display", () => {
@@ -181,49 +190,131 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it("retires browser retry custody while keeping accepted input separate from history", async () => {
-    const history = [
-      { role: "assistant", content: "Still working", __openclaw: { id: "reply-1", seq: 1 } },
-    ];
-    const host = makeChatHost({
-      sessionKey,
-      currentSessionId: sessionId,
-      requestHandlers: { "chat.history": { messages: history, sessionId, pendingInputs: page } },
-    });
-    const queued = {
-      id: "outbox-1",
-      text: "Keep my accepted input",
-      createdAt: 100,
-      sessionKey,
-      sendRunId: input.runId,
-      sendState: "waiting-reconnect" as const,
-    };
-    expect(admitQueuedMessageForSession(host, sessionKey, queued)).toBe(true);
-    await loadChatHistory(host);
-    expect(readChatQueueForScope(host, sessionKey)).toEqual([]);
-    expect(host.chatMessages).toEqual(history);
-    expect(getChatPendingInputs(host)?.page).toEqual(page);
-    const items = buildChatItems({
-      paneId: "pending-pane",
-      sessionKey,
-      messages: host.chatMessages,
-      pendingInputs: page.items,
-      queue: host.chatQueue,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    });
-    expect(items.filter((item) => item.kind === "group" && item.role === "user")).toHaveLength(1);
-    expect(items).toContainEqual(
-      expect.objectContaining({
-        kind: "notice",
-        text: expect.stringContaining("will not run automatically"),
-      }),
-    );
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-  });
+  it.each(["text", "blob"])(
+    "retires browser retry custody while keeping accepted %s input separate from history",
+    async (kind) => {
+      if (kind === "blob") {
+        installOutboxBrowserStorage();
+      }
+      const history = [
+        { role: "assistant", content: "Still working", __openclaw: { id: "reply-1", seq: 1 } },
+      ];
+      const imageBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh0cAAAAASUVORK5CYII=";
+      const imageBytes = Buffer.from(imageBase64, "base64");
+      const attachment = {
+        id: "custody-image",
+        mimeType: "image/png",
+        fileName: "custody.png",
+        sizeBytes: imageBytes.length,
+        dataUrl: `data:image/png;base64,${imageBase64}`,
+      };
+      let queued: ChatQueueItem = {
+        id: "outbox-1",
+        text: "Keep my accepted input",
+        createdAt: 100,
+        sessionKey,
+        sendRunId: input.runId,
+        sendState: "waiting-reconnect",
+        ...(kind === "blob" ? { attachments: [attachment] } : {}),
+      };
+      const message =
+        kind === "blob"
+          ? expectDefined(
+              buildLocalUserMessage({
+                text: queued.text,
+                attachments: [attachment],
+                createdAt: input.acceptedAt,
+                runId: input.runId,
+              }),
+              "complete accepted attachment message",
+            )
+          : input.message;
+      const acceptedPage: ChatPendingInputsPage = { ...page, items: [{ ...input, message }] };
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        requestHandlers: {
+          "chat.history": { messages: history, sessionId, pendingInputs: acceptedPage },
+        },
+      });
+      const cleanup = vi.spyOn(outboxPayloadStore, "removeOutboxPayloads");
+      if (kind === "blob") {
+        const prepared = await prepareOutboxPayload(host, queued);
+        if (prepared.status !== "ready") {
+          throw new Error(`Could not prepare custody attachment: ${prepared.reason}`);
+        }
+        queued = prepared.item;
+        expect(queued.attachmentPayload).toBeDefined();
+      }
+      const reference = queued.attachmentPayload;
+      const payloadOwner = reference
+        ? {
+            tabId: reference.tabId,
+            gatewayOwner: storageTargetForGateway(host.settings.gatewayUrl).gatewayOwner,
+            recoveryScope: reference.recoveryScope,
+            queueId: queued.id,
+          }
+        : undefined;
+      if (reference && payloadOwner) {
+        sessionStorage.setItem("openclaw.control.outboxTab.v1", reference.tabId);
+        const stored = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
+        if (stored.status !== "ready") {
+          throw new Error(`Expected stored custody bytes: ${stored.reason}`);
+        }
+        expect(stored.value).toHaveLength(1);
+        expect(Buffer.from(await stored.value[0]!.blob.arrayBuffer())).toEqual(imageBytes);
+      }
+      expect(admitQueuedMessageForSession(host, sessionKey, queued)).toBe(true);
+      expect(
+        loadChatComposerSnapshot(host, sessionKey)?.queue[0]?.attachments?.[0]?.dataUrl,
+      ).toBeUndefined();
+      await loadChatHistory(host);
+      expect(readChatQueueForScope(host, sessionKey)).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(host.chatMessages).toEqual(history);
+      expect(getChatPendingInputs(host)?.page).toEqual(acceptedPage);
+      if (reference && payloadOwner) {
+        await vi.waitFor(async () => {
+          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
+            status: "failed",
+            reason: "missing",
+          });
+        });
+        expect(cleanup).toHaveBeenCalledTimes(1);
+        expect(cleanup).toHaveBeenCalledWith([reference]);
+      } else {
+        expect(cleanup).not.toHaveBeenCalled();
+      }
+      const items = buildChatItems({
+        paneId: "pending-pane",
+        sessionKey,
+        messages: host.chatMessages,
+        pendingInputs: acceptedPage.items,
+        queue: host.chatQueue,
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        showToolCalls: true,
+      });
+      expect(items.filter((item) => item.kind === "group" && item.role === "user")).toHaveLength(1);
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          kind: "group",
+          role: "user",
+          messages: [expect.objectContaining({ message })],
+        }),
+      );
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          kind: "notice",
+          text: expect.stringContaining("will not run automatically"),
+        }),
+      );
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
 
   it("pages custody without replacing transcript or applying a stale physical-session response", async () => {
     let resolve!: (value: unknown) => void;

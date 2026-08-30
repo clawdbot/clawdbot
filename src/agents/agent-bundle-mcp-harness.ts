@@ -2,19 +2,19 @@
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import {
-  buildBundleMcpToolsFromCatalog,
-  materializeBundleMcpToolsForRun,
-} from "./agent-bundle-mcp-materialize.js";
-import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   getAdvertisedScopedMcpCatalog,
   getOrCreateRequesterScopedMcpRuntime,
   getOrCreateSessionMcpRuntime,
   rememberAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
-} from "./agent-bundle-mcp-runtime.js";
+} from "./agent-bundle-mcp-manager-api.js";
+import {
+  buildBundleMcpToolsFromCatalog,
+  materializeBundleMcpToolsForRun,
+} from "./agent-bundle-mcp-materialize.js";
+import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type { McpToolCatalog, RequesterMcpConnect } from "./agent-bundle-mcp-types.js";
 import {
   resolveConversationCapabilityProfile,

@@ -468,9 +468,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
       return message;
     }
     const content = (message as { content?: unknown }).content;
-    const injectMediaText = hasPersistedMedia(message) && !hasNonBlankUserText(content);
-    // #111204: restore marked path lines here, never in UI-visible transcript storage.
-    const mediaOnlyText = buildLateMediaAttachedProjection(message).text ?? MEDIA_ONLY_USER_TEXT;
+    const injectMediaText = !hasNonBlankUserText(content) && hasPersistedMedia(message);
     const isActive = index === activeUserMessageIndex;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
@@ -495,7 +493,11 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // keeps such messages byte-stable across current↔historical (the envelope is
     // present in both forms) and avoids double-stamping.
     const transformText = (raw: string): string => {
-      const sourceText = injectMediaText && !raw.trim() ? mediaOnlyText : raw;
+      // Restore late-media paths only for blank media turns, never into transcript storage.
+      const sourceText =
+        injectMediaText && !raw.trim()
+          ? (buildLateMediaAttachedProjection(message).text ?? MEDIA_ONLY_USER_TEXT)
+          : raw;
       const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
       if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
         if (isActive) {

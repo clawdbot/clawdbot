@@ -664,6 +664,30 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
+Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
+metadata and payload references in session storage. Attachment bytes stay with the queued input;
+the captured queue metadata owns its destination, even when configured main-session defaults change. All attachments
+must be stored before the message is admitted, and all must be readable before sending. Failed admission leaves the draft
+unsent. Missing or unreadable queued payloads leave a visible row with recovery guidance; the
+browser never sends just the remaining attachments. Binary outbox storage requires browser
+storage access and Web Locks, available over HTTPS or localhost. Gateway attachment limits
+still apply.
+
+The outbox retains up to 25 MiB of attachments per message and 250 MiB across this browser origin,
+subject to the browser's own quota. Queued payloads have no age-based expiry. Delivery or discard
+releases them; closing a tab or interrupting a tab copy or cleanup can leave orphaned payloads
+within that bound. If capacity remains
+full after sending or discarding your queues, save any needed drafts before clearing this site's
+browser storage. That also clears browser-local drafts and sign-in state. Outbox queues belong to
+the browser tab; they are distinct from restart-recoverable composer drafts. Incognito sessions
+keep their existing tab-only inline outbox and its smaller browser storage limit; they never
+store queued attachment Blobs in IndexedDB.
+
+Duplicating a tab copies the same submission IDs. Once opened, the duplicate claims its own
+payload copies and marks those submissions **Delivery unconfirmed**. Check the conversation
+before retrying. A duplicate first opened after the source discarded or delivered a message may
+instead report missing attachments. Independent tabs do not share newly authored outbox messages.
+
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
@@ -674,6 +698,32 @@ the session's active or last run ID for delivery proof. A matching run confirms 
 before its transcript row appears. Without proof, an attempted message stays in the conversation
 with an amber **Delivery unconfirmed** footer and **Retry**. Check the conversation and retry only
 if the message did not arrive. Unconfirmed local commands keep their retry/discard queue controls.
+
+Queued messages and drafts keep the conversation and agent selected when they were created.
+Switching agents, opening a split pane, or reloading does not move them to another destination.
+A literal `global` conversation keeps its captured agent; an agent's main conversation stays
+separate unless the Gateway is configured with global session scope.
+
+Older browser state may have combined several destinations into one bucket. The Control UI uses
+metadata version 4 (`openclaw.control.chatComposer.v4:`), migrating version 1, 2, and 3 records
+directly when their destination is still identifiable. It verifies the new metadata before
+removing an older source, retaining complete sources when storage or recovery capacity blocks
+migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Ambiguous records appear under
+**Saved messages need a destination** and remain unsent. Open the intended non-Incognito conversation with
+an empty composer and queue, expand the notice, and choose **Restore here for review**. Confirm
+the displayed conversation key and agent. Recovered queued messages stay paused: check for
+previous delivery before using **Retry**. Recovered attachment drafts return to the composer
+without sending. Reconnect, a replacement session, or enabling Incognito while confirmation is
+open cancels the transfer; confirm again in the intended conversation. Older attachment drafts
+whose destination is known stay cleared when that destination has a newer clear. Ambiguous saved
+data remains available for review. Queued Blob references and original submission IDs survive
+both automatic migration and explicit destination recovery. Credential-bound messages are shown
+only under their original Gateway credential scope, including when an older bucket contains
+messages from several scopes. Moving a message into or out of recovery does not delete its bytes;
+cleanup follows verified delivery or discard and accounts for retained recovery messages too.
+If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
+available rather than overwriting newer input. Do not clear browser site data
+while you still have saved messages or attachment drafts to recover.
 
 First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a
@@ -758,6 +808,8 @@ Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed u
 ## Chat transcript layout
 
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
+
+Messages forwarded by `sessions_send` render as left-aligned speech bubbles with a forward icon and a source-session chip above the message. Select the chip to open the source session; hover it to see session progress. Each source session has a stable bubble tint. Forwarded messages without a known source session show the source agent when available, or a generic forwarded-message label. The receiving agent's own replies remain flat text.
 
 ## Chat message width
 

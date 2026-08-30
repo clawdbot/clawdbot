@@ -223,6 +223,15 @@ export async function prepareGatewayKernelState(params: {
                 snapshots: [{ sessionId, agentId, runId, text, abortOrigin: "placement-abandon" }],
               });
             },
+            cancelSessionWork: async (request) => {
+              const context = pluginGatewayContext.current;
+              if (!context) {
+                throw new Error("Worker session cancellation is not ready");
+              }
+              const { cancelGatewayWorkerSessionWork } =
+                await import("./server-worker-placement-cancel.js");
+              await cancelGatewayWorkerSessionWork(context, request);
+            },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             info: (message) => log.info(message),
             warn: (message) => log.warn(message),

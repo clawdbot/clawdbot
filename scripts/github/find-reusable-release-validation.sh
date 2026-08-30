@@ -337,6 +337,7 @@ for ((index = 0; index < run_count; index += 1)); do
       and ([.children[].role] | sort) ==
         (if (
           .rerunGroup == "all"
+          and ((.validationInputs.telegramWaiver // "") == "")
           and (
             ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
             or ((.validationInputs.releasePackageSpec // "") | length) > 0

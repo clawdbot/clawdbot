@@ -438,7 +438,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             }
           : undefined,
       sessions: state.sessionsResult,
-      selectedSession,
+      selectedSession: catalogKey ? undefined : selectedSession,
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
@@ -606,6 +606,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       queuedEdit: {
         editingId: activeQueuedMessageEdit(state)?.id ?? null,
         editingText: activeQueuedMessageEdit(state)?.draftText,
+        source: activeQueuedMessageEdit(state)?.source,
         onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
         onEditChange: sessionParticipationBlocked ? undefined : state.updateQueuedChatMessageEdit,
         onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,

@@ -7,7 +7,6 @@ import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
@@ -119,15 +118,9 @@ export function projectChatTranscript(
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
-  // Equivalence, not exact match: the default session travels under alias
-  // keys ("main" vs "agent:main:main") depending on the caller.
-  const activeSession = props.sessions?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
-  // Global-alias detection needs no session row: under configured global
-  // scope, agent:<id>:global and configured-main aliases route to the global
-  // stream even when the capped sessions list omits the canonical row (or it
-  // does not exist yet). The scope gate keeps per-sender main threads direct.
+  const activeSession = props.selectedSession;
+  // Global-alias routing ignores the capped session list, which may omit the
+  // canonical row. The scope gate keeps per-sender main threads direct.
   const isGlobalAliasKey =
     parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
     (sessionHost !== null &&
@@ -661,6 +654,7 @@ export function projectChatTranscript(
     getToolTitlesVersion(),
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
+    props.selectedSession,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,
