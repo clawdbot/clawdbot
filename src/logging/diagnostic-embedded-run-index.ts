@@ -12,12 +12,10 @@ export function createDiagnosticEmbeddedRunIndex<
       return undefined;
     }
     activity.activeEmbeddedRuns.delete(workKey);
-    for (const candidate of activity.activeEmbeddedRuns.values()) {
-      if (candidate.runId === embeddedRun.runId) {
-        return embeddedRun;
-      }
-    }
-    if (runIdIndex.get(embeddedRun.runId) === activity) {
+    const runIdStillActive = Array.from(activity.activeEmbeddedRuns.values()).some(
+      (candidate) => candidate.runId === embeddedRun.runId,
+    );
+    if (!runIdStillActive && runIdIndex.get(embeddedRun.runId) === activity) {
       runIdIndex.delete(embeddedRun.runId);
     }
     return embeddedRun;
