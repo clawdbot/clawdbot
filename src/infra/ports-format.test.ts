@@ -56,6 +56,13 @@ describe("ports-format", () => {
       },
       "non_gateway",
     ],
+    [
+      {
+        command: "socat",
+        commandLine: "socat TCP-LISTEN:18789,fork EXEC:openclaw",
+      },
+      "non_gateway",
+    ],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
@@ -70,6 +77,16 @@ describe("ports-format", () => {
       ],
       18789,
     );
+    expect(hints).not.toContain(gatewayAlreadyRunningHint);
+    expect(hints).toContain("Another process is listening on this port.");
+  });
+
+  it("does not treat a socat command line that mentions openclaw as the gateway", () => {
+    const listener = {
+      commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789 openclaw",
+    };
+    expect(classifyPortListener(listener, 18789)).toBe("non_gateway");
+    const hints = buildPortHints([listener], 18789);
     expect(hints).not.toContain(gatewayAlreadyRunningHint);
     expect(hints).toContain("Another process is listening on this port.");
   });

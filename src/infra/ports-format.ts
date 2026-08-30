@@ -5,16 +5,29 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
+function isSocatPortListener(command: string, commandLine: string): boolean {
+  return (
+    command === "socat" ||
+    /(?:^|[/\\])socat(?:\.exe)?$/.test(command) ||
+    /(?:^|[/\\\s"'=])socat(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)
+  );
+}
+
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
 export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
+  const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
+  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   const raw = normalizeLowercaseStringOrEmpty(
     `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
   );
+  // Executable identity first. Unix inspection records the full `ps` command
+  // line, so a socat forward can mention OpenClaw without being the gateway.
+  if (isSocatPortListener(command, commandLine)) {
+    return "non_gateway";
+  }
   if (raw.includes("openclaw")) {
     return "gateway";
   }
-  const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
-  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
   const hasSshExecutable =
     hasSshCommand ||
@@ -37,16 +50,6 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
     return "non_gateway";
   }
   if (/(?:^|[/\\\s])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)) {
-    return "non_gateway";
-  }
-  // Tailscale / Funnel users often front the gateway with socat on the same
-  // port (different bind address). That is not the gateway and must not look
-  // like an occupied OpenClaw listener.
-  if (
-    command === "socat" ||
-    /(?:^|[/\\])socat(?:\.exe)?$/.test(command) ||
-    /(?:^|[/\\\s"'=])socat(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)
-  ) {
     return "non_gateway";
   }
   return "unknown";
