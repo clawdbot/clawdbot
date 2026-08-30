@@ -172,50 +172,60 @@ describe("title fetch batching", () => {
     expect(requestedIds.size).toBe(commands.length);
   });
 
-  it("resumes when transcript retention removes the saturation cursor", async () => {
-    vi.useFakeTimers();
-    const requestedIds = new Set<string>();
-    const request = vi.fn(async (_method: string, params: unknown) => {
-      const items = (params as { items: Array<{ id: string; input: string }> }).items;
-      for (const item of items) {
-        requestedIds.add(item.id);
+  it.each(["release", "owner-switch"] as const)(
+    "resumes when transcript retention removes the saturation cursor after %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const requestedIds = new Set<string>();
+      const request = vi.fn(async (_method: string, params: unknown) => {
+        const items = (params as { items: Array<{ id: string; input: string }> }).items;
+        for (const item of items) {
+          requestedIds.add(item.id);
+        }
+        return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const firstPane = {};
+      const secondPane = {};
+      const commands = Array.from(
+        { length: 120 },
+        (_, index) => `printf 'retained-title-${index}'`,
+      );
+      const renderTranscript = (visibleCommands: string[], renderSource: object) => {
+        configureToolTitleFetcher({ client, sessionKey: "main", renderSource });
+        for (const command of visibleCommands) {
+          getToolCallTitle("bash", { command });
+        }
+      };
+
+      renderTranscript(commands, firstPane);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(48);
+
+      const retainedCommands = commands.filter((_, index) => index !== 47);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      renderTranscript(retainedCommands, firstPane);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(48);
+
+      renderTranscript(retainedCommands, secondPane);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(48);
+
+      if (transition === "release") {
+        releaseToolTitleRenderSource(firstPane);
+      } else {
+        configureToolTitleFetcher({
+          client,
+          sessionKey: "other-session",
+          renderSource: firstPane,
+        });
       }
-      return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstPane = {};
-    const secondPane = {};
-    const commands = Array.from({ length: 120 }, (_, index) => `printf 'retained-title-${index}'`);
-    const renderTranscript = (visibleCommands: string[], renderSource: object) => {
-      configureToolTitleFetcher({ client, sessionKey: "main", renderSource });
-      for (const command of visibleCommands) {
-        getToolCallTitle("bash", { command });
-      }
-    };
-
-    renderTranscript(commands, firstPane);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
-
-    const retainedCommands = commands.filter((_, index) => index !== 47);
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    renderTranscript(retainedCommands, firstPane);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
-
-    renderTranscript(retainedCommands, secondPane);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
-
-    releaseToolTitleRenderSource(firstPane);
-    renderTranscript(retainedCommands, secondPane);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(48);
-
-    renderTranscript(retainedCommands, secondPane);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requestedIds.size).toBe(96);
-  });
+      renderTranscript(retainedCommands, secondPane);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestedIds.size).toBe(96);
+    },
+  );
 
   it("evicts least-recently-used failures once retention is full", async () => {
     vi.useFakeTimers();

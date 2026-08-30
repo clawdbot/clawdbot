@@ -37,14 +37,14 @@ export function subscribeToolTitleChanges(listener: () => void): () => void {
 
 export function releaseToolTitleRenderSource(renderSource: object): void {
   renderEpochs.delete(renderSource);
+  renderOwners.delete(renderSource);
   if (activeRenderSource === renderSource) {
     activeRenderSource = DEFAULT_RENDER_SOURCE;
     activeRenderEpoch = renderEpochs.get(DEFAULT_RENDER_SOURCE) ?? 0;
   }
-  for (const saturation of saturatedSessions.values()) {
+  for (const [ownerKey, saturation] of saturatedSessions) {
     if (saturation.searchRenderSource === renderSource) {
-      saturation.searchRenderSource = null;
-      saturation.searchRenderEpoch = null;
+      saturatedSessions.delete(ownerKey);
     }
   }
 }
@@ -92,6 +92,7 @@ let activeAgentId: string | null = null;
 let activeRenderSource = DEFAULT_RENDER_SOURCE;
 let activeRenderEpoch = 0;
 const renderEpochs = new WeakMap<object, number>();
+const renderOwners = new WeakMap<object, string>();
 let fetcherGeneration = 0;
 let activeFlush: object | null = null;
 
@@ -346,10 +347,20 @@ export function configureToolTitleFetcher(params: {
     titlesDisabledByGateway = false;
     clearRetainedTitleState();
   }
+  const renderSource = params.renderSource ?? DEFAULT_RENDER_SOURCE;
+  const agentId = params.agentId ?? null;
+  const ownerKey = params.sessionKey ? queueOwnerKey(params.sessionKey, agentId) : null;
+  const previousOwnerKey = renderOwners.get(renderSource);
+  if (previousOwnerKey && previousOwnerKey !== ownerKey) {
+    releaseToolTitleRenderSource(renderSource);
+  }
+  if (ownerKey) {
+    renderOwners.set(renderSource, ownerKey);
+  }
   activeClient = params.client;
   activeSessionKey = params.sessionKey;
-  activeAgentId = params.agentId ?? null;
-  activeRenderSource = params.renderSource ?? DEFAULT_RENDER_SOURCE;
+  activeAgentId = agentId;
+  activeRenderSource = renderSource;
   activeRenderEpoch = (renderEpochs.get(activeRenderSource) ?? 0) + 1;
   renderEpochs.set(activeRenderSource, activeRenderEpoch);
 }
