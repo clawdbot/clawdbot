@@ -132,6 +132,10 @@ export async function mergeSessionTranscriptContext(params: {
       ? { beforeTimestampMs: options?.beforeTimestampMs ?? params.ctx.Timestamp }
       : {}),
     ...(options?.minTimestampMs !== undefined ? { minTimestampMs: options.minTimestampMs } : {}),
+    // Injected context is what the user believes the current session holds: a reset
+    // keeps sessionId, so without this the turn after it re-surfaces the replay tail
+    // the boundary retained for the runner.
+    excludeResetCarryover: true,
   });
   const labels = options?.senderLabels ?? { assistant: "Assistant", user: "User" };
   const transcript = turns.map((turn) => {

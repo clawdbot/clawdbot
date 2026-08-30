@@ -133,6 +133,12 @@ type ReadRecentSessionConversationTextOptions = {
   minTimestampMs?: number;
   role?: "user" | "assistant";
   preferUpstreamUserText?: boolean;
+  /**
+   * Read only what the latest reset boundary admitted: a reset keeps `sessionId`, so
+   * an unbounded read re-surfaces the replay tail it retained. Opt-in — the
+   * upstream-activity monitor reads across resets by design.
+   */
+  excludeResetCarryover?: boolean;
 };
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
@@ -283,6 +289,7 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
     const recent: SessionRecentConversationText[] = [];
     for (let offset = 0; recent.length < limit; offset += pageSize) {
       const page = readSessionTranscriptMessageEventPage(readScope, {
+        ...(options.excludeResetCarryover ? { excludeResetCarryover: true } : {}),
         maxMessages: pageSize,
         offset,
       });

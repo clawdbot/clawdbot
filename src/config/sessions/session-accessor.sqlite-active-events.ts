@@ -18,6 +18,7 @@ import {
   readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
+  resolvePostResetVisibleStart,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
@@ -407,11 +408,16 @@ export function readRecentSessionTranscriptMessageEvents(
 /** Reads one tail-relative message page with index range predicates, never OFFSET scanning. */
 export function readSessionTranscriptMessageEventPage(
   scope: SessionTranscriptReadScope,
-  options: { maxMessages: number; offset: number },
+  options: { excludeResetCarryover?: boolean; maxMessages: number; offset: number },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
-    const totalMessages = visible.total;
+    // What the reset retained sits at the head of the visible window, so starting
+    // after it leaves exactly the messages that boundary admitted.
+    const firstVisible = options.excludeResetCarryover
+      ? resolvePostResetVisibleStart(projection)
+      : 0;
+    const totalMessages = Math.max(0, visible.total - firstVisible);
     const offset = Math.min(
       Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
       totalMessages,
@@ -420,8 +426,8 @@ export function readSessionTranscriptMessageEventPage(
       0,
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
     );
-    const endExclusive = Math.max(0, totalMessages - offset);
-    const start = Math.max(0, endExclusive - maxMessages);
+    const endExclusive = firstVisible + Math.max(0, totalMessages - offset);
+    const start = Math.max(firstVisible, endExclusive - maxMessages);
     return {
       activeLeafEntryId: projection.state.leafEventId,
       events: readVisibleMessageRange(projection, start, endExclusive),

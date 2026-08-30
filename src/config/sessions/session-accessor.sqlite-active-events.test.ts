@@ -371,6 +371,17 @@ describe("SQLite active transcript event projection", () => {
     ]);
     expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
     expect(page.totalMessages).toBe(3);
+
+    const postBoundaryPage = readSessionTranscriptMessageEventPage(scope, {
+      excludeResetCarryover: true,
+      maxMessages: 10,
+      offset: 0,
+    });
+    expect(postBoundaryPage.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "post-reset",
+    ]);
+    expect(postBoundaryPage.totalMessages).toBe(1);
+
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
     expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
@@ -406,6 +417,16 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
+
+    // The later compaction leaves the reset boundary closed (kept tail above), so
+    // excludeResetCarryover still narrows past that tail to genuinely-post-reset content.
+    expect(
+      readSessionTranscriptMessageEventPage(scope, {
+        excludeResetCarryover: true,
+        maxMessages: 10,
+        offset: 0,
+      }).events.map((entry) => (entry.event as { id?: unknown }).id),
+    ).toEqual(["post-reset"]);
   });
 
   it("fails closed when the latest indexed reset payload is malformed", async () => {

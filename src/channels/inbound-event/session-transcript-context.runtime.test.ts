@@ -216,6 +216,40 @@ describe("session transcript inbound context", () => {
     expect(readRecent).not.toHaveBeenCalled();
   });
 
+  it("requests a reset-boundary-bounded read so non-telegram channels don't leak pre-reset context", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context();
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(readRecent).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeResetCarryover: true }),
+    );
+  });
+
+  it("still forwards an explicit minTimestampMs (e.g. telegram's own wiring) alongside it", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context({
+      SessionTranscriptContext: { historyLimit: 3, minTimestampMs: 1_500 },
+    });
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(readRecent).toHaveBeenCalledWith(
+      expect.objectContaining({ minTimestampMs: 1_500, excludeResetCarryover: true }),
+    );
+  });
+
   it("skips canonical history for session-boundary commands", async () => {
     const ctx = context({ CommandBody: "/new summarize this workspace" });
 
