@@ -361,12 +361,16 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
 const hasBashMapfile = spawnSync("bash", ["-c", "type mapfile"], { encoding: "utf8" }).status === 0;
 
 describe.runIf(hasBashMapfile)("Crabbox desktop node bootstrap", () => {
-  it.each([true, false])(
-    "binds only desktop=%s nodes to the exact XFCE session",
-    async (enabled) => {
+  it.each([
+    { enabled: true, runtimeDir: "/run/fixture" },
+    { enabled: true, runtimeDir: "" },
+    { enabled: false, runtimeDir: "/run/fixture" },
+  ])(
+    "binds only desktop nodes to the exact XFCE session: %j",
+    async ({ enabled, runtimeDir }) => {
       const { home, stateDir } = testHome();
       const { nodeBootstrap } = await serveArtifact(await packageFixture("desktop"));
-      await expect(enroll(home, nodeBootstrap, { enabled })).resolves.toEqual({
+      await expect(enroll(home, nodeBootstrap, { enabled, runtimeDir })).resolves.toEqual({
         code: 0,
         output: "",
       });
@@ -377,7 +381,7 @@ describe.runIf(hasBashMapfile)("Crabbox desktop node bootstrap", () => {
           ? {
               DISPLAY: ":99",
               DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/fixture/bus",
-              XDG_RUNTIME_DIR: "/run/fixture",
+              ...(runtimeDir ? { XDG_RUNTIME_DIR: runtimeDir } : {}),
             }
           : {
               DISPLAY: ":0",
