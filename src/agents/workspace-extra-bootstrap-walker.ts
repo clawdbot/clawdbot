@@ -20,8 +20,20 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Minimatch } from "minimatch";
+import { braceExpand, Minimatch } from "minimatch";
 import { isPathInside } from "../infra/path-guards.js";
+
+// Minimatch options for the fallback matcher and its brace expansion, kept in one
+// place so the matcher, the brace expansion, and the per-segment magic check all
+// agree on grammar. Default Minimatch treats `[ab]` as a character class, so a
+// bracket segment counts as magic here — consistent, because a fully-literal
+// bracket path (`pkg[ab]/AGENTS.md`) is routed to the literal reader by the
+// loader and never reaches this walk.
+const EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS = {
+  nocomment: true,
+  nonegate: true,
+  windowsPathsNoEscape: true,
+} as const;
 
 // Normalize a configured pattern to POSIX-relative form: fs.glob expects
 // "/"-separated patterns and a leading "./" carries no meaning.
@@ -96,27 +108,144 @@ function resolveFallbackWalkRoot(normalizedPattern: string): string {
   return slashIndex === -1 ? "." : normalizedPattern.slice(0, slashIndex) || ".";
 }
 
+// Whether a brace-free pattern segment is a wildcard the fallback matcher treats
+// as magic (`?`, `*`, `**`, a bracket class, an extglob). Used only to decide
+// symlink descent: fs.glob follows a directory symlink solely when a LITERAL
+// segment names it, so a magic segment leaves the link terminal.
+function patternSegmentIsMagic(segment: string): boolean {
+  return new Minimatch(segment, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS).hasMagic();
+}
+
+// Ancestor node for the active descent path in the fallback walk. `symlinkDepths`
+// holds the 0-based path-segment indices at which a directory symlink was
+// followed to reach this frame. It is what makes the walk terminate without a
+// realpath cycle guard: a symlink is descended only when symlinkDescentAllowed
+// aligns it against a LITERAL pattern segment whose preceding `**` did not consume
+// one of these depths, so globstar can never re-cross a contained ancestor link
+// (`a/loop -> a`, `self -> .`). Each followed link therefore advances past a
+// distinct literal pattern segment, and a pattern has finitely many, so the walk
+// is bounded — and two distinct links to the same target (`link-a`, `link-b` ->
+// target) are both followed, because descent is decided by pattern position, not
+// by the target's realpath.
+type FallbackWalkFrame = { relativeDir: string; symlinkDepths: ReadonlySet<number> };
+
+// Decide whether a directory symlink at the current walk depth should be
+// descended, mirroring Node fs.glob's symlink rule: a directory symlink is
+// followed only when its own path segment is named by a LITERAL pattern segment
+// whose immediately-preceding pattern segment is not `**`. A symlink consumed by a
+// wildcard (`*`/`**`), or one sitting directly after a `**` recursive prefix, is
+// never followed even when a later literal names it. Braces expand to independent
+// literal alternatives in Node's globber, so descent is allowed when ANY brace-
+// free expansion's alignment allows it.
+function symlinkDescentAllowed(
+  dirSegments: string[],
+  patternExpansions: string[][],
+  ancestorSymlinkDepths: ReadonlySet<number>,
+): boolean {
+  return patternExpansions.some((patternSegments) =>
+    expansionAllowsSymlinkDescent(dirSegments, patternSegments, ancestorSymlinkDepths),
+  );
+}
+
+// Per-expansion symlink-descent alignment for one brace-free pattern.
+// `ancestorSymlinkDepths` holds the 0-based path indices already reached by
+// following a symlink; a `**` may not consume one of them because globstar never
+// traverses INTO a symlink (see FallbackWalkFrame), which is what bounds a cycle.
+function expansionAllowsSymlinkDescent(
+  dirSegments: string[],
+  patternSegments: string[],
+  ancestorSymlinkDepths: ReadonlySet<number>,
+): boolean {
+  const dirLength = dirSegments.length;
+  const patternLength = patternSegments.length;
+  const lastDirIndex = dirLength - 1;
+  const literalNotAfterRecursive = (patternIndex: number): boolean =>
+    !patternSegmentIsMagic(patternSegments[patternIndex]!) &&
+    (patternIndex === 0 || patternSegments[patternIndex - 1] !== "**");
+  const align = (dirIndex: number, patternIndex: number): boolean => {
+    if (dirIndex === dirLength || patternIndex === patternLength) {
+      return false;
+    }
+    const segment = dirSegments[dirIndex]!;
+    const patternSegment = patternSegments[patternIndex]!;
+    if (patternSegment === "**") {
+      // `**` matches zero segments: try the pattern past it against this segment.
+      if (align(dirIndex, patternIndex + 1)) {
+        return true;
+      }
+      // `**` never consumes the final symlink segment (that is wildcard-reached),
+      // never crosses a leading-dot segment, and never crosses an already-followed
+      // symlink: letting a leading `**` absorb an ancestor link would re-cross a
+      // contained ancestor-pointing link on every pass and never terminate.
+      if (
+        dirIndex === lastDirIndex ||
+        segment.startsWith(".") ||
+        ancestorSymlinkDepths.has(dirIndex)
+      ) {
+        return false;
+      }
+      return align(dirIndex + 1, patternIndex);
+    }
+    if (!path.matchesGlob(segment, patternSegment)) {
+      return false;
+    }
+    if (dirIndex === lastDirIndex) {
+      // Final (symlink) segment: descend only when named by a literal that does
+      // not sit directly after a `**`.
+      return literalNotAfterRecursive(patternIndex);
+    }
+    return align(dirIndex + 1, patternIndex + 1);
+  };
+  return align(0, 0);
+}
+
+// A literal-named directory symlink is descended like a directory when its target
+// resolves to a directory; a stat failure (dangling/ELOOP cycle) means "do not
+// descend", so mutual and self links terminate. Containment is NOT re-checked
+// here — the resolver's shared realpath filter drops any match whose canonical
+// path escapes the workspace, so an escaping link is descended but yields nothing.
+async function fallbackSymlinkTargetIsDirectory(childAbs: string): Promise<boolean> {
+  try {
+    // fs.stat follows the link; only a directory target is walked into.
+    return (await fs.stat(childAbs)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 // fs.glob-absent fallback matcher (older Node / some Bun builds): resolve the
 // pattern with a local Minimatch directory walk, yielding workspace-relative
 // matches for the shared realpath-containment filter in the resolver. A subtree
 // that cannot be read is skipped, not thrown — mirroring how fs.glob walks past
 // an unreadable branch, so an unreadable sibling package never aborts loading of
-// a readable one. Yields the raw separator-joined relative path (backslashes
-// preserved) so the caller's toPortableMatchPath folds only the platform
-// separator, exactly as on the fs.glob path.
+// a readable one. Literal-named directory symlinks are followed exactly where
+// fs.glob follows them (see symlinkDescentAllowed), so a bootstrap file behind a
+// symlinked package directory still loads here. Yields the raw separator-joined
+// relative path (backslashes preserved) so the caller's toPortableMatchPath folds
+// only the platform separator, exactly as on the fs.glob path.
 async function* walkFallbackMatches(
   workspaceDir: string,
   normalizedPattern: string,
 ): AsyncGenerator<string> {
-  const matcher = new Minimatch(normalizedPattern, {
-    nocomment: true,
-    nonegate: true,
-    windowsPathsNoEscape: true,
-  });
+  const matcher = new Minimatch(normalizedPattern, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS);
+  // Brace alternations expand to independent literal alternatives in Node's
+  // globber (`pkg/{linked,other}/**` -> `pkg/linked/**` and `pkg/other/**`), and
+  // its symlink rule runs per alternative, so expand once here (off the symlink
+  // hot path) and classify each brace-free expansion's alignment independently.
+  const patternExpansions = braceExpand(
+    normalizedPattern,
+    EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS,
+  ).map((expansion) => expansion.split("/"));
   const walkRoot = resolveFallbackWalkRoot(normalizedPattern);
-  const stack = [walkRoot === "." ? "" : walkRoot];
+  const stack: FallbackWalkFrame[] = [
+    { relativeDir: walkRoot === "." ? "" : walkRoot, symlinkDepths: new Set() },
+  ];
   while (stack.length > 0) {
-    const currentRelativeDir = stack.pop() ?? "";
+    const frame = stack.pop();
+    if (!frame) {
+      continue;
+    }
+    const currentRelativeDir = frame.relativeDir;
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
     if (!isPathInside(workspaceDir, currentDir)) {
       continue;
@@ -134,13 +263,39 @@ async function* walkFallbackMatches(
       const matchKey = toPortableMatchPath(childRelativePath);
       if (entry.isDirectory()) {
         // Descend only where a partial match can still be completed: a shallow
-        // pattern never enters a deeper subtree, bounding the walk to fs.glob's.
+        // pattern never enters a deeper subtree, bounding the walk to fs.glob's. A
+        // real directory is never a symlink crossing, so inherit the parent's
+        // followed-symlink depths unchanged.
         if (matcher.match(matchKey, true)) {
-          stack.push(childRelativePath);
+          stack.push({ relativeDir: childRelativePath, symlinkDepths: frame.symlinkDepths });
         }
         continue;
       }
-      if ((entry.isFile() || entry.isSymbolicLink()) && matcher.match(matchKey)) {
+      if (entry.isSymbolicLink()) {
+        const childSegments = matchKey.split("/");
+        // A literal-named directory symlink not sitting after a `**` is descended
+        // like a directory (same partial-match prune), so a package linked into the
+        // workspace still resolves. The recorded depth stops a deeper `**` from
+        // re-crossing this link, which is what terminates a symlink cycle.
+        if (
+          symlinkDescentAllowed(childSegments, patternExpansions, frame.symlinkDepths) &&
+          matcher.match(matchKey, true) &&
+          (await fallbackSymlinkTargetIsDirectory(path.resolve(workspaceDir, childRelativePath)))
+        ) {
+          const childSymlinkDepths = new Set(frame.symlinkDepths);
+          childSymlinkDepths.add(childSegments.length - 1);
+          stack.push({ relativeDir: childRelativePath, symlinkDepths: childSymlinkDepths });
+          continue;
+        }
+        // Not descended: the link is a terminal leaf candidate, yielded like a file
+        // only on a full match.
+        // oxlint-disable-next-line unicorn/prefer-regexp-test -- Minimatch.match returns a boolean; it has no RegExp#test.
+        if (matcher.match(matchKey)) {
+          yield childRelativePath;
+        }
+        continue;
+      }
+      if (entry.isFile() && matcher.match(matchKey)) {
         yield childRelativePath;
       }
     }
