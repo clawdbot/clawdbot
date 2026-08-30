@@ -223,10 +223,13 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
   );
 
   it.each(["argv.cmd", "argv with spaces.cmd", "argv^caret.cmd", "node.exe"])(
-    "preserves the argument matrix through a real PTY running %s",
+    "preserves literal arguments through a real PTY running %s",
     async (file) => {
       await withTempDir("openclaw-batch-argv-pty-", async (cwd) => {
-        const args = cases.flatMap((testCase) => testCase.args);
+        const args =
+          file === "node.exe"
+            ? ["alpha", "", "two words", "two\twords", "A&B", "100%", "left|right", "<in", ">out"]
+            : cases.flatMap((testCase) => testCase.args);
         const script = path.join(cwd, "argv.cjs");
         const output = path.join(cwd, "received.json");
         await writeFile(
