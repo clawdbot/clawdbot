@@ -48,6 +48,12 @@ describe("secret target registry docs", () => {
 
   it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
     expect(matrixDocsCase.raw).toBe(matrixDocsCase.expected);
+    expect(
+      (JSON.parse(matrixDocsCase.expected) as SecretRefCredentialMatrixDocument).entries.filter(
+        ({ path: credentialPath }) =>
+          credentialPath === "plugins.entries.voice-call.config.numbers.*.tts.providers.*.apiKey",
+      ),
+    ).toHaveLength(1);
   });
 
   it("stays in sync with docs/reference/secretref-credential-surface.md", () => {

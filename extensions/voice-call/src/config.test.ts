@@ -723,7 +723,7 @@ describe("resolveVoiceCallConfig session routing", () => {
           responseTimeoutMs: 20000,
           tts: {
             providers: {
-              openai: { voice: "alloy" },
+              openai: { apiKey: "resolved-route-api-key", voice: "alloy" },
             },
           },
         },
@@ -739,7 +739,30 @@ describe("resolveVoiceCallConfig session routing", () => {
     expect(effective.config.responseSystemPrompt).toBe("You are a baseball card expert.");
     expect(effective.config.responseTimeoutMs).toBe(20000);
     expect(effective.config.tts?.provider).toBe("openai");
-    expect(effective.config.tts?.providers?.openai).toEqual({ voice: "alloy", speed: 1 });
+    expect(effective.config.tts?.providers?.openai).toEqual({
+      apiKey: "resolved-route-api-key",
+      voice: "alloy",
+      speed: 1,
+    });
+  });
+
+  it("accepts every SecretRef source in per-number TTS provider config", () => {
+    for (const apiKey of [
+      envRef("VOICE_CALL_ROUTE_ENV_KEY"),
+      { source: "file" as const, provider: "route-file", id: "/voice-call/apiKey" },
+      { source: "exec" as const, provider: "route-exec", id: "voice-call/apiKey" },
+      { source: "store" as const, provider: "default", id: "VOICE_CALL_ROUTE_STORE_KEY" },
+    ]) {
+      const config = VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "mock",
+        numbers: {
+          "+15550001111": { tts: { providers: { openai: { apiKey } } } },
+        },
+      });
+
+      expect(config.numbers["+15550001111"]?.tts?.providers?.openai?.apiKey).toEqual(apiKey);
+    }
   });
 
   it("falls back to global voice settings when no per-number route matches", () => {
