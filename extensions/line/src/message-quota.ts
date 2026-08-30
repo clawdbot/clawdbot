@@ -47,11 +47,6 @@ export async function readLineMessageQuota(
   }
 }
 
-/** Builds a quota reader for one channel access token. */
-export function createLineMessageQuotaReader(channelAccessToken: string): LineMessageQuotaReader {
-  return new messagingApi.MessagingApiClient({ channelAccessToken });
-}
-
 /**
  * Reads the allowance for a configured account.
  *
@@ -73,7 +68,9 @@ export async function readLineAccountMessageQuota(params: {
   } catch {
     return undefined;
   }
-  return await readLineMessageQuota(createLineMessageQuotaReader(token));
+  return await readLineMessageQuota(
+    new messagingApi.MessagingApiClient({ channelAccessToken: token }),
+  );
 }
 
 /**

@@ -45,116 +45,115 @@ const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAcc
   normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
 
-export const linePlugin: ChannelPlugin<ResolvedLineAccount, LineProbeResult> =
-  createChatChannelPlugin({
-    base: {
-      id: "line",
-      ...lineChannelPluginCommon,
-      setupWizard: lineSetupWizard,
-      groups: {
-        resolveRequireMention: resolveLineGroupRequireMention,
-      },
-      allowlist: buildDmGroupAccountAllowlistAdapter({
-        channelId: "line",
-        resolveAccount: ({ cfg, accountId }) =>
-          resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
-        normalize: ({ cfg, accountId, values }) =>
-          lineConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-        resolveDmAllowFrom: (account) => account.config.allowFrom,
-        resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
-        resolveDmPolicy: (account) => account.config.dmPolicy,
-        resolveGroupPolicy: (account) => account.config.groupPolicy,
-        resolveGroupOverrides: createFlatAllowlistOverrideResolver({
-          resolveRecord: (account) => account.config.groups,
-          label: (groupId) => groupId,
-          resolveEntries: (groupCfg) => groupCfg?.allowFrom,
-        }),
+type LineChannelPlugin = ChannelPlugin<ResolvedLineAccount, LineProbeResult>;
+
+export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
+  base: {
+    id: "line",
+    ...lineChannelPluginCommon,
+    setupWizard: lineSetupWizard,
+    groups: {
+      resolveRequireMention: resolveLineGroupRequireMention,
+    },
+    allowlist: buildDmGroupAccountAllowlistAdapter({
+      channelId: "line",
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+      normalize: ({ cfg, accountId, values }) =>
+        lineConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolveDmAllowFrom: (account) => account.config.allowFrom,
+      resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+      resolveDmPolicy: (account) => account.config.dmPolicy,
+      resolveGroupPolicy: (account) => account.config.groupPolicy,
+      resolveGroupOverrides: createFlatAllowlistOverrideResolver({
+        resolveRecord: (account) => account.config.groups,
+        label: (groupId) => groupId,
+        resolveEntries: (groupCfg) => groupCfg?.allowFrom,
       }),
-      messaging: {
-        targetPrefixes: ["line"],
-        normalizeTarget: normalizeLineMessagingTarget,
-        inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
-        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
-          const peerId = normalizeLineMessagingTarget(target);
-          const chatType = inferLineTargetChatType(target);
-          if (!peerId || !chatType) {
-            return null;
+    }),
+    messaging: {
+      targetPrefixes: ["line"],
+      normalizeTarget: normalizeLineMessagingTarget,
+      inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+        const peerId = normalizeLineMessagingTarget(target);
+        const chatType = inferLineTargetChatType(target);
+        if (!peerId || !chatType) {
+          return null;
+        }
+        const isRoom = peerId.startsWith("R");
+        return buildChannelOutboundSessionRoute({
+          cfg,
+          agentId,
+          channel: "line",
+          accountId,
+          recipientSessionExact: true,
+          peer: { kind: chatType, id: peerId },
+          chatType,
+          from:
+            chatType === "direct"
+              ? `line:${peerId}`
+              : isRoom
+                ? `line:room:${peerId}`
+                : `line:group:${peerId}`,
+          to: peerId,
+        });
+      },
+      resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
+      targetResolver: {
+        looksLikeId: (id) => {
+          const trimmed = id?.trim();
+          if (!trimmed) {
+            return false;
           }
-          const isRoom = peerId.startsWith("R");
-          return buildChannelOutboundSessionRoute({
-            cfg,
-            agentId,
-            channel: "line",
-            accountId,
-            recipientSessionExact: true,
-            peer: { kind: chatType, id: peerId },
-            chatType,
-            from:
-              chatType === "direct"
-                ? `line:${peerId}`
-                : isRoom
-                  ? `line:room:${peerId}`
-                  : `line:group:${peerId}`,
-            to: peerId,
-          });
+          return /^[UCR][a-f0-9]{32}$/i.test(trimmed) || /^line:/i.test(trimmed);
         },
-        resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
-        targetResolver: {
-          looksLikeId: (id) => {
-            const trimmed = id?.trim();
-            if (!trimmed) {
-              return false;
-            }
-            return /^[UCR][a-f0-9]{32}$/i.test(trimmed) || /^line:/i.test(trimmed);
-          },
-          hint: "<userId|groupId|roomId>",
-        },
-      },
-      directory: createEmptyChannelDirectoryAdapter(),
-      setupContract: lineSetupContract,
-      status: lineStatusAdapter,
-      gateway: lineGatewayAdapter,
-      message: lineMessageAdapter,
-      actions: lineMessageActions,
-      bindings: lineBindingsAdapter,
-      conversationBindings: {
-        defaultTopLevelPlacement: "current",
-      },
-      agentPrompt: {
-        messageToolHints: () => [
-          "",
-          "### LINE structured output",
-          "Use `presentation.blocks` for buttons, yes/no choices, and selectable options; LINE maps them to Flex controls or quick replies.",
-          "Use `channelData.line.location` for a location pin and `channelData.line.card` for one LINE-specific card. Supported card types are `media_player`, `event`, `agenda`, `device`, and `appletv_remote`.",
-          "Send rich output with the structured message fields. Double-bracket marker text has no special meaning.",
-        ],
+        hint: "<userId|groupId|roomId>",
       },
     },
-    pairing: {
-      text: {
-        idLabel: "lineUserId",
-        message: "OpenClaw: your access has been approved.",
-        normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
-        notify: async ({ cfg, id, message }) => {
-          const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)(
-            {
-              cfg,
-            },
-          );
-          if (!account.channelAccessToken) {
-            throw new Error("LINE channel access token not configured");
-          }
-          const pushMessageLine =
-            getLineRuntime().channel.line?.pushMessageLine ??
-            (await loadLineChannelRuntime()).pushMessageLine;
-          await pushMessageLine(id, message, {
-            cfg,
-            accountId: account.accountId,
-            channelAccessToken: account.channelAccessToken,
-          });
-        },
+    directory: createEmptyChannelDirectoryAdapter(),
+    setupContract: lineSetupContract,
+    status: lineStatusAdapter,
+    gateway: lineGatewayAdapter,
+    message: lineMessageAdapter,
+    actions: lineMessageActions,
+    bindings: lineBindingsAdapter,
+    conversationBindings: {
+      defaultTopLevelPlacement: "current",
+    },
+    agentPrompt: {
+      messageToolHints: () => [
+        "",
+        "### LINE structured output",
+        "Use `presentation.blocks` for buttons, yes/no choices, and selectable options; LINE maps them to Flex controls or quick replies.",
+        "Use `channelData.line.location` for a location pin and `channelData.line.card` for one LINE-specific card. Supported card types are `media_player`, `event`, `agenda`, `device`, and `appletv_remote`.",
+        "Send rich output with the structured message fields. Double-bracket marker text has no special meaning.",
+      ],
+    },
+  },
+  pairing: {
+    text: {
+      idLabel: "lineUserId",
+      message: "OpenClaw: your access has been approved.",
+      normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
+      notify: async ({ cfg, id, message }) => {
+        const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
+          cfg,
+        });
+        if (!account.channelAccessToken) {
+          throw new Error("LINE channel access token not configured");
+        }
+        const pushMessageLine =
+          getLineRuntime().channel.line?.pushMessageLine ??
+          (await loadLineChannelRuntime()).pushMessageLine;
+        await pushMessageLine(id, message, {
+          cfg,
+          accountId: account.accountId,
+          channelAccessToken: account.channelAccessToken,
+        });
       },
     },
-    security: lineSecurityAdapter,
-    outbound: lineOutboundAdapter,
-  });
+  },
+  security: lineSecurityAdapter,
+  outbound: lineOutboundAdapter,
+});
