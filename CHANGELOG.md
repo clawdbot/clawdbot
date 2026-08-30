@@ -8,13 +8,13 @@ Docs: https://docs.openclaw.ai
 
 - **Security and credential safety:** harden command parsing, browser origin checks, plugin Git installs, diagnostics, service credentials, and webhook logging across Gateway and official plugins.
 - **Message and session integrity:** preserve queued, imported, streamed, and tool-result messages across retries, hooks, recovery, and channel lifecycle transitions.
-- **Gateway reliability:** close failed HTTP and Responses streams, bound expensive reads and history queries, and settle shutdown work before reporting completion.
+- **Gateway reliability:** close failed HTTP and Responses streams, bound expensive reads and history queries, and settle shutdown work before reporting completion. Thanks @RomneyDa.
 - **Channel delivery:** repair Discord, Matrix, Telegram, Slack, WhatsApp, LINE, Feishu, Zalo, and meeting-plugin edge cases that could lose, corrupt, or stall messages.
 - **Provider and media robustness:** bound provider requests and diagnostics, reject malformed payloads, and preserve valid tool schemas and response lifecycles.
 
 ### Changes
 
-- **Extended-stable release tooling:** carry the current Docker channel classifier, promoter, verification policy, and tests so `v2026.7.33` can move only the `extended-stable*` aliases.
+- **Extended-stable release tooling:** carry the current Docker channel classifier, promoter, verification policy, and tests so `v2026.7.33` can move only the `extended-stable*` aliases. Thanks @RomneyDa.
 
 ### Fixes
 
@@ -26,7 +26,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be95eac14acc969 history: 131 in-range PRs + 0 retained seed-only PRs = 131 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.7.1-2..0f9ec6491973e5d12585da75f949ea01c835becc history: 129 in-range PRs + 0 retained seed-only PRs = 129 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
@@ -40,9 +40,9 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #102398** Thanks @yetval.
 - **PR #38290** Related #46520. Thanks @brunowowk and @mosidevv.
 - **PR #102013** Thanks @masatohoshino.
-- **PR #102825** Related #102393. Thanks @yetval.
+- **PR #102825** Related #102393. Thanks @wangyan2026 and @yetval.
 - **PR #102426** Thanks @pgondhi987.
-- **PR #101000** Thanks @hugenshen.
+- **PR #101000** Thanks @hugenshen and @cursoragent.
 - **PR #104625**
 - **PR #104540** Thanks @zhangguiping-xydt.
 - **PR #104734** Related #104713. Thanks @ObliviateRickLin and @davefano.
@@ -55,8 +55,8 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #113697**
 - **PR #114134** Thanks @pgondhi987.
 - **PR #102331**
-- **PR #101630** Thanks @hugenshen.
-- **PR #101736** Thanks @chengzhichao-xydt.
+- **PR #101630** Thanks @hugenshen and @cursoragent.
+- **PR #101736** Thanks @chengzhichao-xydt and @Alix-007.
 - **PR #101617** Thanks @zhangguiping-xydt.
 - **PR #102246** Thanks @mushuiyu886.
 - **PR #102332** Thanks @QiuYuang.
@@ -69,7 +69,7 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #102157** Thanks @wangmiao0668000666.
 - **PR #102395** Thanks @wangmiao0668000666.
 - **PR #102266** Thanks @zw-xysk.
-- **PR #101781** Thanks @hugenshen.
+- **PR #101781** Thanks @hugenshen and @cursoragent.
 - **PR #101934** Thanks @wm0018.
 - **PR #102407** Thanks @miorbnli.
 - **PR #102466** Thanks @chengzhichao-xydt.
@@ -92,27 +92,25 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #102524** Thanks @lsr911.
 - **PR #102389** Related #101837. Thanks @Supsumintong and @qingminglong.
 - **PR #101832** Related #101785. Thanks @MonkeyLeeT and @aniruddhaadak80.
-- **PR #102160** Related #85826, #96168. Thanks @obviyus and @kiagentkronos-cell and @alvelda.
 - **PR #104049**
 - **PR #97828** Related #80862. Thanks @ly-wang19 and @kyle20026.
-- **PR #102859** Thanks @Alix-007.
-- **PR #102862** Thanks @Alix-007.
+- **PR #102859** Thanks @Alix-007 and @Leon-SK668.
+- **PR #102862** Thanks @Alix-007 and @Leon-SK668.
 - **PR #103547** Thanks @xialonglee.
 - **PR #103555** Thanks @xialonglee.
 - **PR #104229**
 - **PR #104306** Related #104214. Thanks @vincentkoc.
 - **PR #102965** Thanks @chengzhichao-xydt.
 - **PR #103752** Thanks @Leon-SK668.
-- **PR #104419** Related #104382.
-- **PR #103728** Thanks @Leon-SK668.
+- **PR #103728** Thanks @Leon-SK668 and @vincentkoc.
 - **PR #104426** Related #104425.
-- **PR #103731** Thanks @Leon-SK668.
+- **PR #103731** Thanks @Leon-SK668 and @vincentkoc.
 - **PR #104450** Related #91212. Thanks @Enominera.
 - **PR #104263** Thanks @qingminglong.
 - **PR #104156** Thanks @qingminglong.
 - **PR #104173** Thanks @qingminglong.
-- **PR #104110** Thanks @zhangguiping-xydt.
-- **PR #104404** Thanks @mushuiyu886.
+- **PR #104110** Thanks @zhangguiping-xydt and @vincentkoc.
+- **PR #104404** Thanks @mushuiyu886 and @vincentkoc.
 - **PR #104440** Thanks @qingminglong.
 - **PR #104260** Thanks @hugenshen.
 - **PR #104151** Thanks @hugenshen.
@@ -123,13 +121,12 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #104610**
 - **PR #104301** Thanks @whiteyzy.
 - **PR #104578** Thanks @hugenshen.
-- **PR #103445** Thanks @zw-xysk.
-- **PR #104686**
+- **PR #103445** Thanks @zw-xysk and @cursoragent.
 - **PR #104677** Thanks @Leon-SK668.
 - **PR #104423** Thanks @mushuiyu886.
 - **PR #104560** Thanks @wings1029.
 - **PR #104454** Thanks @chenyangjun-xy.
-- **PR #104715**
+- **PR #104715** Thanks @Leon-SK668.
 - **PR #104470** Related #104469. Thanks @VectorPeak.
 - **PR #104498** Thanks @VectorPeak.
 - **PR #104741** Thanks @vincentkoc.
@@ -144,7 +141,7 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #113897**
 - **PR #114051**
 - **PR #114061**
-- **PR #114280**
+- **PR #114280** Thanks @yangxiansheng.
 - **PR #114325** Thanks @RomneyDa.
 - **PR #93516** Related #102885. Thanks @Papilionidae.
 - **PR #114450** Related #105078. Thanks @VectorPeak.
@@ -154,13 +151,14 @@ This audited record covers the complete v2026.7.1-2..ea35430cd8595edc3dd136eb3be
 - **PR #114500** Related #103735. Thanks @Maless88.
 - **PR #97024** Thanks @0xghost42.
 - **PR #114076** Related #105701. Thanks @qingminglong and @aniruddhaadak80.
-- **PR #128799** Related #128743. Thanks @LiuwqGit and @schaba21.
+- **PR #128799** Related #128743. Thanks @LiuwqGit and @Patrick-Erichsen and @schaba21.
 - **PR #131546** Related #131544.
-- **PR #131195** Related #129349. Thanks @edenfunf.
+- **PR #131195** Related #129349. Thanks @edenfunf and @obviyus.
 - **PR #131783**
-- **PR #132014** Related #132000. Thanks @edenfunf.
-- **PR #102636** Related #102628. Thanks @Gary-Jia-new and @Joakim-Emanuelson.
+- **PR #132014** Related #132000. Thanks @edenfunf and @obviyus.
+- **PR #102636** Related #102628. Thanks @Gary-Jia-new and @altaywtf and @Joakim-Emanuelson.
 - **PR #132545**
+- **PR #102160** Related #85826, #96168. Thanks @obviyus and @kiagentkronos-cell and @alvelda.
 
 ## 2026.7.1-2
 
