@@ -2,14 +2,15 @@
 // ephemeral gateway (which activates the subagent registry), then drives the
 // live completion path: lifecycle end, retained listing, SQLite restart, expiry.
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { reconcileOrphanedRestoredRuns } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import {
   loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
+  activateSubagentRegistry,
   getSubagentRunByRunId,
+  initSubagentRegistry,
   listSubagentRunsForRequester,
   registerSubagentRun,
   resetSubagentRegistryForTests,
@@ -144,7 +145,7 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     // Interrupted handoff: the process can stop after the live gateway accepted
     // sessions.delete and before cleanup bookkeeping lands. Rebuild exactly that
     // on-disk shape from the real persisted row — dispatch stamp kept, completion
-    // stamp gone, child session already deleted — and run the real restore path.
+    // stamp gone, child session already deleted — then restore + activate.
     const interrupted = loadSubagentRegistryFromSqlite();
     const interruptedRow = interrupted.get(RUN_ID);
     expect(interruptedRow).toBeDefined();
@@ -153,16 +154,34 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     interruptedRow!.requesterSettleWake = undefined;
     saveSubagentRegistryToSqlite(interrupted);
 
-    const restored = loadSubagentRegistryFromSqlite();
-    expect(restored.get(RUN_ID)?.cleanupCompletedAt).toBeUndefined();
-    reconcileOrphanedRestoredRuns({ runs: restored, resumedRuns: new Set() });
-    const recovered = restored.get(RUN_ID);
-    expect(recovered).toBeDefined();
-    expect(recovered?.archiveAtMs).toBe(retained.archiveAtMs);
-    expect(recovered?.cleanupCompletedAt).toBe(dispatchedAt);
+    resetSubagentRegistryForTests({ persist: false });
+    useLiveGatewayForRegistryCleanup();
+    initSubagentRegistry();
+    expect(getSubagentRunByRunId(RUN_ID)?.cleanupCompletedAt).toBeUndefined();
+    activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime: {
+            dispatchAgent: vi.fn(),
+            waitForAgent: vi.fn(),
+            sendRecoveryNotice: vi.fn(),
+          },
+        }) as never,
+    );
+    const recovered = await vi.waitFor(
+      () => {
+        const entry = getSubagentRunByRunId(RUN_ID);
+        expect(entry?.archiveAtMs).toBe(retained.archiveAtMs);
+        expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
+        return entry!;
+      },
+      { timeout: 10_000, interval: 25 },
+    );
+    // Owner finalize uses Date.now(), not the dispatch stamp. Settle wake may
+    // already have drained by the time we observe the row.
+    expect(recovered.cleanupCompletedAt).not.toBe(dispatchedAt);
 
     // The interrupted row must not relink the deleted child in the session list.
-    saveSubagentRegistryToSqlite(restored);
     const interruptedProjection = loadSubagentSessionListRunsFromSqlite().get(RUN_ID);
     expect(interruptedProjection).toBeDefined();
     expect(shouldKeepSubagentRunChildLink(interruptedProjection!)).toBe(false);
@@ -202,7 +221,7 @@ describe("delete-cleanup archive retention through a real gateway", () => {
         dispatchStampPersisted: true,
         completionStampMissingOnDisk: true,
         prunedByRestore: false,
-        repairedCleanupCompletedAt: recovered?.cleanupCompletedAt ?? null,
+        finalizedByRestoreActivation: recovered.cleanupCompletedAt !== dispatchedAt,
         childLinkAfterRestore: false,
       },
       expiry: { presentAfterSweep: false },

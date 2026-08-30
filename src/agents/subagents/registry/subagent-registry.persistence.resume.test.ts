@@ -273,6 +273,51 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("finalizes dispatch-only delete cleanup through restore activation", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const now = Date.now();
+      const dispatchedAt = now;
+      const run: SubagentRunRecord = {
+        runId: "run-dispatch-only-delete",
+        childSessionKey: "agent:main:subagent:dispatch-only-delete",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "finish cleanup after restart",
+        cleanup: "delete",
+        createdAt: now - 100,
+        expectsCompletionMessage: false,
+        cleanupHandled: true,
+        deleteCleanupDispatchedAt: dispatchedAt,
+        archiveAtMs: now + 60_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 50,
+          endedAt: now,
+          outcome: { status: "ok" },
+        },
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      };
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      expect(mod.getSubagentRunByRunId(run.runId)?.cleanupCompletedAt).toBeUndefined();
+      expect(mod.getSubagentRunByRunId(run.runId)?.cleanupHandled).toBe(false);
+      expect(callGatewayModule.callGateway).not.toHaveBeenCalled();
+
+      activateRegistry();
+      await vi.waitFor(
+        () => {
+          expect(mod.getSubagentRunByRunId(run.runId)?.cleanupCompletedAt).toBeTypeOf("number");
+        },
+        { timeout: 5_000, interval: 10 },
+      );
+      expect(mod.getSubagentRunByRunId(run.runId)?.cleanupCompletedAt).not.toBe(dispatchedAt);
+    });
+  });
+
   it("replays one required completion after restart without the child session", async () => {
     await withRegistryState(async () => {
       const run = createOrphanedRequiredDelivery("pending");

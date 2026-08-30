@@ -235,7 +235,7 @@ describe("reconcileOrphanedRestoredRuns", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
-  it("finishes bookkeeping for a dispatched delete-cleanup row interrupted by restart", () => {
+  it("keeps a dispatched delete-cleanup row recoverable without marking it complete", () => {
     const entry = createRunEntry({
       cleanup: "delete",
       execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
@@ -244,13 +244,9 @@ describe("reconcileOrphanedRestoredRuns", () => {
     });
     const runs = new Map([[entry.runId, entry]]);
 
-    // The repaired stamp has to persist, so the first restore reports a change.
-    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(true);
-    expect(runs.get(entry.runId)).toBe(entry);
-    expect(entry.cleanupCompletedAt).toBe(2_000);
-
     expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(false);
     expect(runs.get(entry.runId)).toBe(entry);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
   });
 
   it("prunes a dispatched delete-cleanup row once its archive deadline passed", () => {
@@ -386,6 +382,30 @@ describe("reconcileOrphanedRun", () => {
     expect(entry.execution).toEqual({ status: "running", startedAt: 1_000 });
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
+
+  it("does not prune an unexpired dispatched delete-cleanup row", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      deleteCleanupDispatchedAt: 2_000,
+      archiveAtMs: Date.now() + 60_000,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(
+      reconcileOrphanedRun({
+        runId: entry.runId,
+        entry,
+        reason: "missing-session-entry",
+        source: "resume",
+        runs,
+        resumedRuns,
+      }),
+    ).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
   });
 
   it("retains a replayable required completion without its child session", () => {

@@ -307,6 +307,16 @@ export function reconcileOrphanedRun(params: {
   if (hasRetainedRequiredCompletionDelivery(params.entry)) {
     return false;
   }
+  // Dispatch already reached sessions.delete. Resume must not prune this
+  // unexpired row — startSubagentAnnounceCleanupFlow owns finalization.
+  // Stamping complete here (or pruning) skips requester settle and cleanup tails.
+  if (
+    hasDispatchedDeleteCleanup(params.entry) &&
+    typeof params.entry.archiveAtMs === "number" &&
+    params.entry.archiveAtMs > Date.now()
+  ) {
+    return false;
+  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
@@ -363,15 +373,9 @@ export function reconcileOrphanedRestoredRuns(params: {
       typeof entry.archiveAtMs === "number" &&
       entry.archiveAtMs > now
     ) {
-      // Cleanup submitted sessions.delete, so the orphan reason confirms that
-      // deletion instead of reporting a lost session. The dispatch stamp is
-      // durable but the completion stamp is written after the gateway call, so
-      // finish the bookkeeping a restart may have interrupted; the row stays
-      // session-less on purpose until the sweeper archives it at its deadline.
-      if (entry.cleanupCompletedAt === undefined) {
-        entry.cleanupCompletedAt = entry.deleteCleanupDispatchedAt;
-        changed = true;
-      }
+      // Dispatch already reached sessions.delete. Keep the unexpired row, but
+      // do not stamp cleanupCompletedAt — resumeSubagentRun would skip
+      // requester settle and cleanup tails. Restore activation owns that.
       continue;
     }
     if (
