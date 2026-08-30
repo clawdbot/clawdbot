@@ -53,6 +53,12 @@ const LEGACY_LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{
 // CHAT WINDOW: `${label} (untrusted, <order>, <relation>):` (338-360).
 
 function applyLegacyInboundLabelRewrites(text: string): string {
+  // Every legacy rule contains one of these spellings. Check decoded content so
+  // Unicode-escaped labels still reach their rewrite.
+  if (!text.includes("untrusted") && !text.includes("Untrusted")) {
+    return text;
+  }
+
   // Peel the timestamp envelope so the anchored (`^`) rules see the first header at column 0, exactly
   // as the runtime stripper does. Without this, "[Wed …] Conversation info (…):" stays unmarked and the
   // marker-only strippers expose its JSON. Reattached verbatim below.
