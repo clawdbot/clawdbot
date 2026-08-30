@@ -1,8 +1,8 @@
-// Codex plugin module implements run attempt behavior.
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
-import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
+import { cleanupCodexAttempt, type CodexAttemptOwnedTurn } from "./run-attempt-cleanup.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
 import { finalizeCodexAttempt } from "./run-attempt-finalize.js";
@@ -58,16 +58,20 @@ export async function runCodexAppServerAttempt(
   if ("result" in turnStart) {
     return turnStart.result;
   }
-  const activeTurn = await activateCodexAttemptTurn(
-    resources,
-    turnRuntime,
-    lifecycle,
-    notifications,
-    turnStart.turn,
-  );
-
+  // turn/start has created native work; own it before activation so failures cannot leak it.
+  let ownedTurn: CodexAttemptOwnedTurn = { phase: "accepted", turnId: turnStart.turn.turn.id };
   let finalizedResult: EmbeddedRunAttemptResult;
   try {
+    const activeTurn = await activateCodexAttemptTurn(
+      resources,
+      turnRuntime,
+      lifecycle,
+      notifications,
+      turnStart.turn,
+    );
+    // Publication can partially acquire handles; cleanup must own the active turn first.
+    ownedTurn = { phase: "activated", activeTurn };
+    activeTurn.publishActiveOwnership();
     finalizedResult = await finalizeCodexAttempt(
       resources,
       turnRuntime,
@@ -76,11 +80,18 @@ export async function runCodexAppServerAttempt(
       turnRequest,
       activeTurn,
     );
-  } finally {
-    await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+  } catch (error) {
+    await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, ownedTurn).catch(
+      (cleanupError: unknown) => {
+        embeddedAgentLog.warn("codex app-server cleanup failed after attempt error", {
+          error: cleanupError,
+        });
+      },
+    );
+    throw error;
   }
-  // Cleanup retires the execution lease; only then can device loss no longer
-  // race the final result captured during asynchronous terminal processing.
+  await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, ownedTurn);
+  // Cleanup retires the execution lease before device loss can race the captured final result.
   if (
     resources.state.executionDisconnectError &&
     !connection.terminalState.explicitCancellationObserved

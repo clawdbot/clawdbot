@@ -144,8 +144,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
-    // Runs on every one-shot attempt teardown; routine retirement checks are
-    // diagnostic detail, not operator-facing info.
     embeddedAgentLog.debug("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
@@ -155,7 +153,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       closed: retired.closed,
       matchedSharedClient: retired.found,
     });
-    if (retired.closed) {
+    // Unsafe retirement owns closure; one-shot lease teardown must not join it again.
+    if (retired.closed && !state.startupClientUnsafe) {
       await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     }
   };
@@ -168,9 +167,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
     if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
-      // Close the authorized node lease first; losing its socket first is a real disconnect.
+      // Release the node lease first; unsafe retirement owns closure and must not be joined again.
       await releaseSandboxExecEnvironment();
-      const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+      const ownedClient =
+        state.releaseSharedClientLease && !state.startupClientUnsafe ? state.client : undefined;
       releaseSharedClientLeaseOnce();
       await ownedClient?.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
       return;

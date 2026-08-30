@@ -8,7 +8,7 @@ import {
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-  closeCodexStartupClientBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -68,7 +68,7 @@ export async function startCodexAttemptTurn(
     startupAuthProfileId,
     abortFromUpstream,
   } = connection;
-  const { state, turnIdRef } = turnRuntime;
+  const { state } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
   const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
   let turn: CodexTurnStartResponse | undefined;
@@ -249,12 +249,13 @@ export async function startCodexAttemptTurn(
         });
         if (!released) {
           // Detach the unsafe client before releasing this lease, but let sibling leases finish.
+          resourceState.startupClientUnsafe = true;
           await runAgentCleanupStep({
             runId: params.runId,
             sessionId: params.sessionId,
             step: "codex-retire-unsafe-startup-client",
             log: embeddedAgentLog,
-            cleanup: async () => closeCodexStartupClientBestEffort(resourceState.client),
+            cleanup: () => retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup"),
           });
         }
       }
@@ -313,16 +314,5 @@ export async function startCodexAttemptTurn(
     await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
-  const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;
-  if (resourceState.thread.pluginAppPolicyContext) {
-    authoritySourceRef.current = {
-      client: resourceState.client,
-      threadId: resourceState.thread.threadId,
-      policyContext: resourceState.thread.pluginAppPolicyContext,
-      configCwd: connection.effectiveCwd,
-    };
-  }
-  turnIdRef.current = turn.turn.id;
-  resourceState.nativeSubagentMonitor?.bindTurn(turn.turn.id);
   return { turn };
 }

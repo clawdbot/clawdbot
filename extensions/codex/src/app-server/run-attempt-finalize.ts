@@ -62,6 +62,7 @@ export async function finalizeCodexAttempt(
   const {
     params,
     terminalState,
+    freezeRunTerminalOutcome,
     runAbortController,
     activeContextEngine,
     bindingStore,
@@ -88,13 +89,7 @@ export async function finalizeCodexAttempt(
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
   const { codexModelCallDiagnostics } = requestRuntime;
-  const {
-    activeTurnId,
-    activeProjector,
-    streamState,
-    freezeRunTerminalOutcome,
-    notifyUserMessagePersisted,
-  } = activeTurn;
+  const { activeTurnId, activeProjector, streamState, notifyUserMessagePersisted } = activeTurn;
   await completion;
   await state.abortCleanup;
   // Timeout and Stop still join queued projections within the abort grace;

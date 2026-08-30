@@ -400,6 +400,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const abortFromUpstream = () => {
     abortExplicitly(params.abortSignal?.reason ?? "upstream_abort");
   };
+  const freezeRunTerminalOutcome = () => {
+    if (!terminalState.terminalOutcomeFrozen) {
+      terminalState.terminalOutcomeFrozen = true;
+      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    }
+  };
   if (params.abortSignal?.aborted) {
     abortFromUpstream();
   } else {
@@ -503,6 +509,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     terminalState,
     abortExplicitly,
     abortFromUpstream,
+    freezeRunTerminalOutcome,
     resolveReviewerPolicyContext,
     resolveRuntimeOptionsForCurrentBinding,
     mutable,

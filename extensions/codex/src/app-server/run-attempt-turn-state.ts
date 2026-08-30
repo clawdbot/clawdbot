@@ -2,8 +2,8 @@ import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runti
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
 } from "./attempt-client-cleanup.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import {
@@ -123,7 +123,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   };
   const interruptTurn = async (
     turnId: string,
-    completionOptions?: { locallyCompleted?: boolean; timeoutMs?: number },
+    completionOptions?: {
+      locallyCompleted?: boolean;
+      operation?: string;
+      timeoutMs?: number;
+    },
   ) => {
     if (completionOptions?.locallyCompleted) {
       state.localCompletionRequested = true;
@@ -134,7 +138,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       timeoutMs: completionOptions?.timeoutMs,
     });
     if (!completed) {
-      await closeCodexStartupClientBestEffort(resourceState.client);
+      resourceState.startupClientUnsafe = true;
+      await retireUnsafeCodexTurnClientBestEffort(
+        resourceState.client,
+        completionOptions?.operation ?? "turn interrupt",
+      );
     }
     return completed;
   };
