@@ -15,7 +15,7 @@ function isWorkerStartMessage(value: unknown): boolean {
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    hasExactOwnKeys(value as Record<string, unknown>, ["type"]) &&
+    hasExactOwnKeys(value, ["type"]) &&
     (value as { type?: unknown }).type === WORKER_START_MESSAGE_TYPE
   );
 }

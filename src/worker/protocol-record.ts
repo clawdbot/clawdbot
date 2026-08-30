@@ -1,5 +1,5 @@
 export function hasExactOwnKeys(
-  value: Record<string, unknown>,
+  value: object,
   required: readonly string[],
   optional: readonly string[] = [],
 ): boolean {
