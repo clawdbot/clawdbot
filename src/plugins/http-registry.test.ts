@@ -867,4 +867,80 @@ describe("registerPluginHttpRoute", () => {
     unregister();
     child.revoke();
   });
+
+  it("keeps a reused shared route alive until every holder lifetime ends", () => {
+    const registry = createEmptyPluginRegistry();
+    const first = createTrackedRouteLease();
+    const second = createTrackedRouteLease();
+    const registerSharedRoute = () =>
+      registerPluginHttpRoute({
+        path: "/zalo-hosted-media",
+        auth: "plugin",
+        match: "prefix",
+        handler: vi.fn(),
+        pluginId: "zalo",
+        source: "zalo-hosted-media",
+        throwOnFailure: true,
+      });
+
+    withPluginHttpRouteRegistry(registry, registerSharedRoute, first.lease);
+    withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        registerPluginHttpRoute({
+          path: "/zalo-hosted-media",
+          auth: "plugin",
+          match: "prefix",
+          handler: vi.fn(),
+          pluginId: "zalo",
+          source: "zalo-hosted-media",
+          reuseExistingSameOwner: true,
+          throwOnFailure: true,
+        }),
+      second.lease,
+    );
+
+    // Revoking the first holder must not drop a shared route the second
+    // account's task still serves through the same-owner reuse.
+    first.revoke();
+    expect(registry.httpRoutes).toHaveLength(1);
+
+    second.revoke();
+    expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it("does not pin a shared route open for a lease-less reuser", () => {
+    const registry = createEmptyPluginRegistry();
+    const first = createTrackedRouteLease();
+
+    withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        registerPluginHttpRoute({
+          path: "/zalo-hosted-media",
+          auth: "plugin",
+          match: "prefix",
+          handler: vi.fn(),
+          pluginId: "zalo",
+          source: "zalo-hosted-media",
+          throwOnFailure: true,
+        }),
+      first.lease,
+    );
+    withPluginHttpRouteRegistry(registry, () =>
+      registerPluginHttpRoute({
+        path: "/zalo-hosted-media",
+        auth: "plugin",
+        match: "prefix",
+        handler: vi.fn(),
+        pluginId: "zalo",
+        source: "zalo-hosted-media",
+        reuseExistingSameOwner: true,
+        throwOnFailure: true,
+      }),
+    );
+
+    first.revoke();
+    expect(registry.httpRoutes).toHaveLength(0);
+  });
 });

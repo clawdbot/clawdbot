@@ -2010,6 +2010,63 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toBeNull();
   });
 
+  it("keeps a shared account-agnostic route alive when the first account's task is discarded", async () => {
+    const routeRegistry = createEmptyPluginRegistry();
+    let firstSharedHandler: unknown;
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {
+      // Account-agnostic shared ingress: every account registers the same
+      // canonical path and same-owner reuse attaches it instead of conflicting.
+      registerPluginHttpRoute({
+        path: "/shared/webhook",
+        handler: () => true,
+        auth: "plugin",
+        match: "prefix",
+        pluginId: "discord",
+        source: "shared-ingress",
+        reuseExistingSameOwner: true,
+        throwOnFailure: true,
+        registry: routeRegistry,
+      });
+      firstSharedHandler ??= (routeRegistry.httpRoutes ?? []).find(
+        (route) => route.path === "/shared/webhook",
+      )?.handler;
+      // A stuck drain: this task never settles and never unregisters its route.
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => [DEFAULT_ACCOUNT_ID, "second"],
+      }),
+    );
+    const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+
+    await manager.startChannels();
+    expect(
+      (routeRegistry.httpRoutes ?? []).filter((route) => route.path === "/shared/webhook"),
+    ).toHaveLength(1);
+
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    // The discarded first task's lease revocation must not evict the shared
+    // route the second account still serves: the surviving entry is the one the
+    // first account registered, not a successor re-creation.
+    const sharedRoutes = (routeRegistry.httpRoutes ?? []).filter(
+      (route) => route.path === "/shared/webhook",
+    );
+    expect(sharedRoutes).toHaveLength(1);
+    expect(sharedRoutes[0]?.handler).toBe(firstSharedHandler);
+    expect(startAccount).toHaveBeenCalledTimes(3);
+    const secondAccount = manager.getRuntimeSnapshot().channelAccounts.discord?.second;
+    expect(secondAccount?.running).toBe(true);
+  });
+
   it("keeps the second recovery task running when the stale task rejects", async () => {
     const releaseFirstTask = createDeferred();
     let startCount = 0;

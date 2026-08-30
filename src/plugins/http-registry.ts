@@ -62,6 +62,19 @@ export function createPluginCapabilityLease(): PluginCapabilityLease {
   };
 }
 
+// A route entry outlives one registration call: a later same-owner reuse pins the
+// existing entry under its own lease, so revoking the first holder cannot drop a
+// shared route another account still serves. The creator's unregister stays
+// authoritative; removal happens when it fires or the last lifetime expires.
+type PluginHttpRouteLifetime = {
+  expired: boolean;
+  releases: Set<() => void>;
+};
+const attachRouteLifetimeByEntry = new WeakMap<
+  PluginHttpRouteRegistration,
+  (leases: readonly PluginHttpRouteRegistrationLease[]) => void
+>();
+
 const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
   registry: PluginRegistry;
   leases: readonly PluginHttpRouteRegistrationLease[];
@@ -159,6 +172,14 @@ export function registerPluginHttpRoute(params: {
         params.log?.(
           `plugin: reusing existing webhook path ${normalizedPath} (${routeMatch}) (${requestedOwner}/${requestedSource})`,
         );
+        // A lease-less reuser has no lifetime to pin with, so the route keeps
+        // following its creator instead of being pinned open forever.
+        const leases = scope?.leases ?? [];
+        if (leases.length > 0) {
+          for (const route of canonicalMatches) {
+            attachRouteLifetimeByEntry.get(route)?.(leases);
+          }
+        }
         return noopUnregister;
       }
       const conflictingOwner = mismatchedOwner ?? existing;
@@ -208,16 +229,52 @@ export function registerPluginHttpRoute(params: {
   };
   routes.push(entry);
 
-  const releases: Array<() => void> = [];
-  const unregister = () => {
+  let alive = true;
+  const lifetimes = new Set<PluginHttpRouteLifetime>();
+  const removeEntry = () => {
+    if (!alive) {
+      return;
+    }
+    alive = false;
     const index = routes.indexOf(entry);
     if (index >= 0) {
       routes.splice(index, 1);
     }
-    for (const release of releases.splice(0)) {
+    for (const lifetime of lifetimes) {
+      lifetime.expired = true;
+      for (const release of lifetime.releases) {
+        release();
+      }
+      lifetime.releases.clear();
+    }
+    lifetimes.clear();
+    attachRouteLifetimeByEntry.delete(entry);
+  };
+  const expireLifetime = (lifetime: PluginHttpRouteLifetime) => {
+    if (lifetime.expired) {
+      return;
+    }
+    lifetime.expired = true;
+    lifetimes.delete(lifetime);
+    for (const release of lifetime.releases) {
       release();
     }
+    lifetime.releases.clear();
+    if (lifetimes.size === 0) {
+      removeEntry();
+    }
   };
-  scope?.leases.forEach((lease) => releases.push(lease.retain(unregister)));
-  return unregister;
+  const attachLifetime = (leases: readonly PluginHttpRouteRegistrationLease[]) => {
+    if (!alive || leases.length === 0) {
+      return;
+    }
+    const lifetime: PluginHttpRouteLifetime = { expired: false, releases: new Set() };
+    lifetimes.add(lifetime);
+    for (const lease of leases) {
+      lifetime.releases.add(lease.retain(() => expireLifetime(lifetime)));
+    }
+  };
+  attachRouteLifetimeByEntry.set(entry, attachLifetime);
+  attachLifetime(scope?.leases ?? []);
+  return removeEntry;
 }
