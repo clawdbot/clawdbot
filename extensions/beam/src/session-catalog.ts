@@ -78,7 +78,7 @@ function transcriptPage(
   const start = Math.max(0, end - limit);
   return {
     // Uploads are chronological; catalog pages expose newest items first.
-    items: items.slice(start, end).reverse(),
+    items: items.slice(start, end).toReversed(),
     ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
   };
 }

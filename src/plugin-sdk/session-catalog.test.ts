@@ -76,7 +76,7 @@ describe("session catalog SDK", () => {
       id,
       type: "agentMessage",
       text: id,
-      ...(timestamps[index] ? { timestamp: timestamps[index] } : {}),
+      timestamp: timestamps[index],
     }));
     const latest = sessionCatalogPaging.boundTranscriptPage(items, 2, 0);
     expect(latest.items.map((item) => item.id)).toEqual(["1", "a"]);
