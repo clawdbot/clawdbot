@@ -9,6 +9,7 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -115,7 +116,9 @@ function createInput(options?: {
       throw options.activationError;
     }
   });
+  const setPromptPreparation = vi.fn<(prepare: (() => Promise<void>) | undefined) => void>();
   const activeSession = {
+    [agentSessionSetPromptPreparation]: setPromptPreparation,
     agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
     setActiveToolsByName,
     replaceCustomTools: vi.fn(),
@@ -174,6 +177,7 @@ function createInput(options?: {
 
   return {
     activeSession,
+    setPromptPreparation,
     allCustomTools,
     clientToolRuntime,
     events,
@@ -388,7 +392,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.getCodeModeRecoveryCandidate()).toEqual({});
   });
 
-  it.each(["replace", "abort"] as const)(
+  it.each(["replace", "replace-reject", "replace-pending", "abort", "current-error"] as const)(
     "discards permission prompt preparation after %s",
     async (closure) => {
       const fixture = createInput();
@@ -407,18 +411,39 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       await entered.promise;
       if (closure === "abort") {
         controller.abort();
-      } else {
+      } else if (closure !== "current-error") {
         prepared.setPermissionPromptPreparation(async () => () => "current permission prompt");
       }
-      pending.resolve(staleRenderer);
+      if (closure === "replace-reject" || closure === "current-error") {
+        pending.reject(new Error("obsolete memory preparation failed"));
+      } else if (closure !== "replace-pending") {
+        pending.resolve(staleRenderer);
+      }
       const [result] = await settled;
+      pending.resolve(staleRenderer);
       expect(staleRenderer).not.toHaveBeenCalled();
-      expect(result.status).toBe(closure === "abort" ? "rejected" : "fulfilled");
-      if (closure === "replace") {
+      const rejected = closure === "abort" || closure === "current-error";
+      expect(result.status).toBe(rejected ? "rejected" : "fulfilled");
+      if (closure === "current-error") {
+        expect(result).toMatchObject({ reason: { message: "obsolete memory preparation failed" } });
+      }
+      if (!rejected) {
         expect(fixture.activeSession.agent.state.systemPrompt).toBe("current permission prompt");
       }
     },
   );
+
+  it("fences initial prompt preparation after run cancellation without a policy change", async () => {
+    const fixture = createInput();
+    const controller = new AbortController();
+    fixture.input.runAbortSignal = controller.signal;
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const prepare = fixture.setPromptPreparation.mock.lastCall?.[0];
+    expect(prepare).toBeTypeOf("function");
+    const reason = new Error("run closed during SDK prompt hooks");
+    controller.abort(reason);
+    await expect(prepare!()).rejects.toBe(reason);
+  });
 
   it("does not install Code Mode outcome handling when the run kept direct tools", async () => {
     const fixture = createInput({ codeModeControlsEnabledForRun: false });

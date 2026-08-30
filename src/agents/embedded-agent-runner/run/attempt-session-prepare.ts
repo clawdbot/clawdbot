@@ -26,6 +26,7 @@ import { bootstrapHarnessContextEngine } from "../../harness/context-engine-life
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import {
   type AgentSession,
   type CreateAgentSessionOptions,
@@ -230,37 +231,56 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   input.onSessionCreated(activeSession);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
-  let preparePermissionPrompt: (() => Promise<(prompt: string) => string>) | undefined;
+  let permissionPreparation:
+    | { prepare: () => Promise<(prompt: string) => string>; controller: AbortController }
+    | undefined;
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
     applySystemPromptToSession(activeSession, nextSystemPrompt);
     return nextSystemPrompt;
   };
-  const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
-  activeSession.agent.prepareNextTurn = async (signal) => {
-    const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
-    if (!preparePermissionPrompt) {
-      return snapshot;
-    }
+  const refreshPermissionPrompt = async (prompt?: string, signal?: AbortSignal) => {
     const runSignal = signal
       ? AbortSignal.any([signal, input.runAbortSignal])
       : input.runAbortSignal;
-    let prepare: typeof preparePermissionPrompt;
-    let refresh: (prompt: string) => string;
-    do {
+    while (true) {
       runSignal.throwIfAborted();
-      prepare = preparePermissionPrompt;
-      if (!prepare) {
-        return snapshot;
+      const preparation = permissionPreparation;
+      if (!preparation) {
+        return undefined;
       }
-      refresh = await raceWithAbortSignal(prepare(), runSignal);
-      // A newer permission selection may supersede an awaited plugin preparation.
-      // Never publish the old renderer or its diagnostics into that generation.
-    } while (prepare !== preparePermissionPrompt);
-    runSignal.throwIfAborted();
-    const prompt = snapshot?.context?.systemPrompt ?? activeSession.agent.state.systemPrompt;
-    const refreshedPrompt = setActiveSessionSystemPrompt(refresh(prompt));
-    return snapshot?.context
+      let refresh: (prompt: string) => string;
+      try {
+        refresh = await raceWithAbortSignal(
+          preparation.prepare(),
+          AbortSignal.any([runSignal, preparation.controller.signal]),
+        );
+      } catch (error) {
+        runSignal.throwIfAborted();
+        // Replacement wakes this boundary even if the old plugin never settles.
+        // Its late rejection cannot fail the newer permission generation.
+        if (preparation !== permissionPreparation) {
+          continue;
+        }
+        throw error;
+      }
+      runSignal.throwIfAborted();
+      if (preparation !== permissionPreparation) {
+        continue;
+      }
+      return setActiveSessionSystemPrompt(
+        refresh(prompt ?? activeSession.agent.state.systemPrompt),
+      );
+    }
+  };
+  activeSession[agentSessionSetPromptPreparation](async () => {
+    await refreshPermissionPrompt();
+  });
+  const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
+  activeSession.agent.prepareNextTurn = async (signal) => {
+    const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
+    const refreshedPrompt = await refreshPermissionPrompt(snapshot?.context?.systemPrompt, signal);
+    return snapshot?.context && refreshedPrompt !== undefined
       ? {
           ...snapshot,
           context: {
@@ -328,7 +348,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       setActiveSessionSystemPrompt(currentPrompt);
     },
     setPermissionPromptPreparation: (prepare?: () => Promise<(prompt: string) => string>) => {
-      preparePermissionPrompt = prepare;
+      const previous = permissionPreparation;
+      permissionPreparation = prepare ? { prepare, controller: new AbortController() } : undefined;
+      previous?.controller.abort();
     },
   };
 }
