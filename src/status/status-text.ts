@@ -4,7 +4,6 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
@@ -321,9 +320,7 @@ export async function buildStatusReplyParts(
     isGroup,
     defaultGroupActivation,
   } = params;
-  const statusAgentId = sessionKey
-    ? resolveSessionAgentId({ sessionKey, config: cfg })
-    : resolveDefaultAgentId(cfg);
+  const statusAgentId = resolveSessionAgentId({ sessionKey, config: cfg, agentId: params.agentId });
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
   const statusWorkspaceDir =
     params.workspaceDir ??
@@ -538,7 +535,11 @@ export async function buildStatusReplyParts(
     }
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const subagentReadContext = buildControlledSubagentRunsReadContext(requesterKey);
+    const subagentReadContext = buildControlledSubagentRunsReadContext(
+      requesterKey,
+      statusAgentId,
+      cfg,
+    );
     const runs = subagentReadContext.runs;
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({

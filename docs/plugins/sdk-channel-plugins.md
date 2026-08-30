@@ -429,6 +429,11 @@ For activity updates, use `service.touch(binding.bindingId, at, binding.conversa
 Omit scope only for intentional global cleanup or an existing legacy cross-channel
 operation. Scope does not change binding ids or require a new adapter method.
 
+Refreshing the same target session and target kind preserves omitted runtime
+metadata. Replacing either starts fresh target metadata, so a new session cannot
+inherit the previous plugin owner, agent, or label. Keep conversation transport
+details and explicit lifecycle settings separate from target metadata.
+
 ## Approvals and channel capabilities
 
 Most channel plugins do not need approval-specific code. Core owns same-chat
