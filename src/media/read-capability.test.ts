@@ -521,4 +521,54 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(denied.readFile).toBeUndefined();
     expect(denied.localRoots).not.toContain(extraRoot);
   });
+
+  it.each([
+    {
+      name: "workspaceOnly",
+      tools: { allow: ["read"] as const, fs: { workspaceOnly: true } },
+    },
+    {
+      name: "messaging profile",
+      tools: { profile: "messaging" as const },
+    },
+    {
+      name: "explicit global read deny",
+      tools: { deny: ["read"] as const },
+    },
+  ])("withholds configured mediaLocalRoots when $name forbids host-root expansion", ({ tools }) => {
+    const extraRoot = process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools,
+        agents: { defaults: { mediaLocalRoots: [extraRoot] } },
+      } as OpenClawConfig,
+      messageProvider: "telegram",
+      requesterSenderId: "trusted-user",
+    });
+
+    expect(result.localRoots).not.toContain(extraRoot);
+    expect(result.readFile).toBeUndefined();
+  });
+
+  it("rejects configured-root loads before I/O when workspaceOnly forbids expansion", async () => {
+    const extraRoot = tempDirs.make("media-local-roots-forbidden-");
+    const secretPath = path.join(extraRoot, "secret.png");
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: { allow: ["read"], fs: { workspaceOnly: true } },
+        agents: { defaults: { mediaLocalRoots: [extraRoot] } },
+      } as OpenClawConfig,
+      messageProvider: "telegram",
+      requesterSenderId: "trusted-user",
+    });
+    // Telegram reply delivery drops the resolver to bare roots and lets the
+    // common loader read from them. Rejection must happen at the root list,
+    // not after opening the configured file.
+    await expect(
+      loadWebMediaRaw(
+        secretPath,
+        buildOutboundMediaLoadOptions({ mediaLocalRoots: access.localRoots }),
+      ),
+    ).rejects.toMatchObject({ code: "path-not-allowed" });
+  });
 });

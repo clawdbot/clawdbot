@@ -172,6 +172,10 @@ export function resolveAgentScopedOutboundMediaAccess(
     params.workspaceMediaAccess?.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const mediaReadAllowed = isAgentScopedMediaReadAllowedByToolPolicy(params);
+  const hostRootExpansionAllowed = resolveEffectiveToolFsRootExpansionAllowed({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   const managedLocalRoots = getManagedMediaLocalRoots(params.mediaSources);
   let hostLocalRoots =
     params.mediaAccess?.localRoots ??
@@ -181,8 +185,11 @@ export function resolveAgentScopedOutboundMediaAccess(
       mediaSources: params.mediaSources,
     });
   // Configured operator roots are not an ambient grant. Append them only when
-  // host/group read is already allowed and the caller did not supply roots.
-  if (mediaReadAllowed && !params.mediaAccess?.localRoots) {
+  // sender/group read is already allowed, the canonical host-root expansion
+  // policy allows it, and the caller did not supply roots. Telegram delivery
+  // consumes bare localRoots; omitting the expansion check would let
+  // workspaceOnly / messaging profiles load configured external paths.
+  if (mediaReadAllowed && hostRootExpansionAllowed && !params.mediaAccess?.localRoots) {
     hostLocalRoots = appendConfiguredMediaLocalRoots(
       [...hostLocalRoots],
       params.cfg.agents?.defaults?.mediaLocalRoots,

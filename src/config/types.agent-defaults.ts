@@ -271,7 +271,8 @@ export type AgentDefaultsConfig = {
   mediaMaxMb?: number;
   /**
    * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
-   * Merged into the shared agent-scoped media-root allowlist used by all channels.
+   * Merged only by the policy-gated outbound resolver for message actions and
+   * selected Telegram delivery paths — not an ambient all-channel grant.
    * Relative paths are rejected; they must not resolve against the gateway cwd.
    */
   mediaLocalRoots?: string[];

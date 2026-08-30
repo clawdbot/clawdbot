@@ -14,7 +14,8 @@ export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
  * Owns the Telegram-side inputs to the shared outbound media policy: pins the
  * provider, derives the group id, and forwards requester identity. Configured
  * `agents.defaults.mediaLocalRoots` apply only when sender/group host-read
- * policy allows — the generic root helper never grants them ambiently.
+ * policy and the canonical host-root expansion gate allow — the generic root
+ * helper never grants them ambiently.
  */
 export function resolveNativeCommandOutboundMediaRoots(params: {
   cfg: OpenClawConfig;
