@@ -51,7 +51,7 @@ const CODEX_LEGACY_SOURCE_FINDING_COUNTS = new Map<string, number>([
 ]);
 const CODEX_CURRENT_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts", 1],
 ]);
 
 // Generated chunks can contain multiple reviewed execution sites. Counts are
@@ -730,7 +730,7 @@ describe("publishable plugin npm package install security scan", () => {
       "mixed",
       [
         "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts",
-        "@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts",
+        "@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts",
       ],
     ],
     [
@@ -744,7 +744,7 @@ describe("publishable plugin npm package install security scan", () => {
       "duplicate occurrence",
       [
         ...expandReviewedFindingCounts(CODEX_CURRENT_SOURCE_FINDING_COUNTS),
-        "@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts",
+        "@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts",
       ],
     ],
   ];
