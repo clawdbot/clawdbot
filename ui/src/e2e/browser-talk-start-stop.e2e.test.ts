@@ -941,16 +941,24 @@ suite.define(() => {
 
       await expect
         .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  openclawTalkE2eState?: { constraints: unknown[] };
-                }
-              ).openclawTalkE2eState?.constraints.length,
-          ),
+          page.evaluate(() => {
+            const state = (
+              window as Window & {
+                openclawTalkE2eState?: {
+                  constraints: unknown[];
+                  tracksStopped: number;
+                  inputProcessor?: unknown;
+                };
+              }
+            ).openclawTalkE2eState;
+            return {
+              captures: state?.constraints.length,
+              stopped: state?.tracksStopped,
+              relayReady: state?.inputProcessor != null,
+            };
+          }),
         )
-        .toBe(1);
+        .toEqual({ captures: 2, stopped: 1, relayReady: true });
       await gateway.emitGatewayEvent("talk.event", {
         relaySessionId: currentRelaySessionId,
         type: "ready",
@@ -1018,36 +1026,17 @@ suite.define(() => {
 
   it("shows actionable guidance when Talk microphone permission is blocked", async () => {
     await suite.withPage(undefined, async ({ page }) => {
-      const relaySessionId = "relay-blocked-microphone-e2e";
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "talk.client.create": {
-            provider: "openai",
-            transport: "gateway-relay",
-            relaySessionId,
-            audio: {
-              inputEncoding: "pcm16",
-              inputSampleRateHz: 16_000,
-              outputEncoding: "pcm16",
-              outputSampleRateHz: 24_000,
-            },
-          },
-          "talk.session.close": {},
-        },
-      });
+      const gateway = await installMockGateway(page);
       await installBlockedMicrophoneFixture(page);
 
       await page.setViewportSize({ width: 320, height: 720 });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("button", { name: "Tap to talk" }).click();
-      await gateway.waitForRequest("talk.client.create");
-
       await expect
         .poll(() => page.getByRole("alert").locator(".agent-chat__talk-status-text").textContent())
         .toBe("Microphone access is blocked. Allow it in browser site settings to list inputs.");
-      await expect
-        .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
-        .toBe(1);
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
+      expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
       await expect
         .poll(() => page.getByRole("button", { name: "Tap to talk" }).isVisible())
         .toBe(true);
