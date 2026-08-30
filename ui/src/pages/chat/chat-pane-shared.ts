@@ -271,7 +271,8 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
         target instanceof HTMLElement &&
         (target.matches(CHAT_AUTOTYPE_EXEMPT_SELECTOR) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR)) ||
-          ("open" in target && (target as HTMLElement & { open?: boolean }).open === true)),
+          target.matches("dialog[open], wa-popover[open]") ||
+          (target.hasAttribute("popover") && target.matches(":popover-open"))),
     );
 }
 
