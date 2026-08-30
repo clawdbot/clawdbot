@@ -20,6 +20,7 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import type { AgentSessionEvent } from "./agent-session-types.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -739,5 +740,89 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     expect(session.agent.steeringMode).toBe("all");
     expect(session.agent.followUpMode).toBe("all");
+  });
+});
+
+describe("AgentSession settlement fault-path", () => {
+  it("preserves the accepted sessions_yield handoff when afterToolCall throws", async () => {
+    const sessionRef: { current?: AgentSession } = {};
+    const yieldTool: ToolDefinition = {
+      name: "sessions_yield",
+      label: "Sessions yield",
+      description: "ends the current turn for an external handoff",
+      parameters: Type.Object({}),
+      execute: async () => {
+        const activeSession = sessionRef.current;
+        if (!activeSession) {
+          throw new Error("session not ready");
+        }
+        activeSession.agent.abort({ code: "sessions_yield", turnHandoff: true });
+        return { content: [{ type: "text", text: "yielded" }], details: { yielded: true } };
+      },
+    };
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(
+          activeModel,
+          [{ type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} }],
+          "toolUse",
+        ),
+      ),
+    );
+    const { session } = await createTestSession({ customTools: [yieldTool] });
+    sessionRef.current = session;
+
+    const events: AgentSessionEvent[] = [];
+    session.subscribe((event) => {
+      events.push(event);
+    });
+    const originalAfterToolCall = session.agent.afterToolCall;
+    session.agent.afterToolCall = async (context, signal) => {
+      if (context.toolCall.name === "sessions_yield") {
+        throw signal?.reason;
+      }
+      return originalAfterToolCall?.(context, signal);
+    };
+
+    await session.prompt("yield now");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+
+    // Delivery boundary chain: the channel layer (handleToolExecutionEnd in
+    // embedded-agent-subscribe.handlers.tools.completion.ts) reads
+    // tool_execution_end.isError to decide whether to commit delivery
+    // evidence. If the settlement catch rewrote the result as an error,
+    // isError would be true and the delivery would be discarded.
+    const endEvent = events.find(
+      (event): event is Extract<AgentSessionEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(false);
+    expect(endEvent?.result).toMatchObject({ details: { yielded: true } });
+
+    // The assistant message_end with stopReason "aborted" is the yield-abort
+    // signal the channel layer reads in handleAgentEnd to classify the turn
+    // as a clean handoff (turnHandoff) rather than an error.
+    const assistantMessageEnds = events.filter(
+      (event): event is Extract<AgentSessionEvent, { type: "message_end" }> =>
+        event.type === "message_end" &&
+        (event as { message?: { role?: string } }).message?.role === "assistant",
+    );
+    const abortedMessageEnd = assistantMessageEnds.at(-1);
+    expect(abortedMessageEnd?.message).toMatchObject({ stopReason: "aborted" });
+
+    // agent_end proves the run terminated cleanly; the channel layer uses it
+    // for terminal liveness (hasAttemptTerminalState / hasTerminalOutput).
+    const agentEnd = events.find(
+      (event): event is Extract<AgentSessionEvent, { type: "agent_end" }> =>
+        event.type === "agent_end",
+    );
+    expect(agentEnd).toBeDefined();
+    expect(agentEnd?.willRetry).toBe(false);
+
+    expect(session.agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "aborted",
+    });
   });
 });

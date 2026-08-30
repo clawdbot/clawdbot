@@ -213,7 +213,7 @@ describe("wrapToolWithAbortSignal", () => {
     });
   });
 
-  it("does not start sessions_yield when the run was already handed off", async () => {
+  it("lets sessions_yield run when the run was already handed off", async () => {
     const runAbort = new AbortController();
     runAbort.abort({ code: "sessions_yield", turnHandoff: true });
     const onYield = vi.fn();
@@ -222,11 +222,29 @@ describe("wrapToolWithAbortSignal", () => {
       runAbort.signal,
     );
 
-    await expect(wrapped.execute("call-yield", {})).rejects.toMatchObject({
-      name: "AbortError",
-      message: "Aborted",
-    });
+    // The pre-check exempts the yield-handoff reason; the tool runs and returns
+    // its own result (here: no claimYield → error), not a wrapper-injected "Aborted".
+    const result = await wrapped.execute("call-yield", {});
+    expect(result.details).toMatchObject({ status: "error" });
     expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("preserves a sessions_yield result when the run was already handed off", async () => {
+    const runAbort = new AbortController();
+    runAbort.abort({ code: "sessions_yield", turnHandoff: true });
+    const onYield = vi.fn();
+    const wrapped = wrapToolWithAbortSignal(
+      createSessionsYieldTool({
+        sessionId: "requester",
+        claimYield: () => true,
+        onYield,
+      }),
+      runAbort.signal,
+    );
+
+    const result = await wrapped.execute("call-yield", {});
+    expect(result.details).toMatchObject({ status: "yielded", message: "Turn yielded." });
+    expect(onYield).toHaveBeenCalledOnce();
   });
 
   it("preserves an actual sessions_yield failure after its owner starts the handoff", async () => {

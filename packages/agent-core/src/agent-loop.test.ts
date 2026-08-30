@@ -3567,6 +3567,683 @@ describe("agentLoop tool termination", () => {
     expect(messages.some((message) => message.role === "custom")).toBe(false);
   });
 
+  it("preserves an accepted handoff when afterToolCall throws for the yield tool", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "yield during tool", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolCall: async () => {
+          throw controller.signal.reason;
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(false);
+    expect(endEvent?.result).toMatchObject({ details: { yielded: true } });
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.some((message) => message.role === "custom")).toBe(false);
+  });
+
+  it("preserves an accepted handoff when afterToolOutcome throws for the yield tool", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "yield during tool", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolOutcome: async () => {
+          throw controller.signal.reason;
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(false);
+    expect(endEvent?.result).toMatchObject({ details: { yielded: true } });
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.some((message) => message.role === "custom")).toBe(false);
+  });
+
+  it("keeps a sibling tool's afterToolCall error as an error during a handoff abort", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-sibling", name: "sibling_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const siblingTool: AgentTool = {
+      name: "sibling_tool",
+      label: "sibling_tool",
+      description: "A sibling tool that runs during a handoff abort",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "sibling result" }],
+          details: { sibling: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "sibling during handoff", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [siblingTool] },
+      {
+        ...config,
+        afterToolCall: async () => {
+          throw new Error("Aborted");
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+  });
+
+  it("keeps a sibling tool's afterToolOutcome error as an error during a handoff abort", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-sibling", name: "sibling_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const siblingTool: AgentTool = {
+      name: "sibling_tool",
+      label: "sibling_tool",
+      description: "A sibling tool that runs during a handoff abort",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "sibling result" }],
+          details: { sibling: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "sibling during handoff", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [siblingTool] },
+      {
+        ...config,
+        afterToolOutcome: async () => {
+          throw new Error("Aborted");
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+  });
+
+  it("still rewrites a plain abort error to an error result for a non-handoff abort", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-work", name: "work_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const workTool: AgentTool = {
+      name: "work_tool",
+      label: "work_tool",
+      description: "A tool whose abort is not a handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort(new Error("user aborted"));
+        throw new Error("Aborted");
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "abort during tool", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [workTool] },
+      config,
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+  });
+
+  it("keeps a genuine yield-callback error as an error after the handoff marker", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        throw new Error("yield bookkeeping failed");
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "yield with a real error", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      config,
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+    expect(endEvent?.result).toMatchObject({
+      content: [{ type: "text", text: "yield bookkeeping failed" }],
+    });
+  });
+
+  it("does not preserve a handoff when a different owner set turnHandoff on the abort reason (afterToolCall)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield tool aborted by a different handoff owner",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "different_owner", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "different owner handoff", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolCall: async () => {
+          throw new Error("Aborted");
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+  });
+
+  it("does not preserve a handoff when a different owner set turnHandoff on the abort reason (afterToolOutcome)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield tool aborted by a different handoff owner",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "different_owner", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "different owner handoff", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolOutcome: async () => {
+          throw new Error("Aborted");
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+  });
+
+  it("keeps a genuine afterToolCall failure as an error after an accepted yield", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "genuine hook failure after yield", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolCall: async () => {
+          throw new Error("database write failed");
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+    expect(endEvent?.result).toMatchObject({
+      content: [{ type: "text", text: "database write failed" }],
+    });
+  });
+
+  it("keeps a genuine afterToolOutcome failure as an error after an accepted yield", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "genuine hook failure after yield", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolOutcome: async () => {
+          throw new Error("notification dispatch failed");
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+    expect(endEvent?.result).toMatchObject({
+      content: [{ type: "text", text: "notification dispatch failed" }],
+    });
+  });
+
+  it("keeps an unrelated AbortError as an error after an accepted yield (afterToolCall)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "unrelated abort after yield", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolCall: async () => {
+          throw Object.assign(new Error("independent abort"), { name: "AbortError" });
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+    expect(endEvent?.result).toMatchObject({
+      content: [{ type: "text", text: "independent abort" }],
+    });
+  });
+
+  it("keeps an unrelated AbortError as an error after an accepted yield (afterToolOutcome)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "sessions_yield", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "sessions_yield",
+      label: "sessions_yield",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "unrelated abort after yield", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [yieldTool] },
+      {
+        ...config,
+        afterToolOutcome: async () => {
+          throw Object.assign(new Error("independent abort"), { name: "AbortError" });
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(endEvent?.isError).toBe(true);
+    expect(endEvent?.result).toMatchObject({
+      content: [{ type: "text", text: "independent abort" }],
+    });
+  });
+
   it("does not start prepared parallel tools after the run aborts mid-batch", async () => {
     const controller = new AbortController();
     const executed: string[] = [];

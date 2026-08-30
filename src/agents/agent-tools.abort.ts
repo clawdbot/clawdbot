@@ -16,6 +16,31 @@ function throwAbortError(): never {
 }
 
 /**
+ * Whether the run abort signal carries the canonical sessions_yield handoff
+ * reason. Matches the exemption in {@link raceWithAbortSignal}'s onAbort so the
+ * pre-abort pre-check does not reject a yield tool whose run was already
+ * handed off (e.g. a sibling or re-dispatched yield). The combined signal's
+ * reason must be the same reference as the run signal's, which AbortSignal.any
+ * propagates from the first aborted source.
+ */
+function isYieldHandoffAbort(
+  toolName: string,
+  combinedSignal: AbortSignal,
+  abortSignal: AbortSignal | undefined,
+): boolean {
+  if (toolName !== "sessions_yield" || !abortSignal?.aborted) {
+    return false;
+  }
+  // SAFETY: abortSignal.aborted is true above, so reason is set; the cast only exposes optional unknown fields for safe property access, not a stronger contract.
+  const reason = abortSignal.reason as { code?: unknown; turnHandoff?: unknown } | undefined;
+  return (
+    combinedSignal.reason === abortSignal.reason &&
+    reason?.code === "sessions_yield" &&
+    reason.turnHandoff === true
+  );
+}
+
+/**
  * Races a tool execute promise against the combined abort signal so an abort
  * settles the wrapped call immediately instead of awaiting the tool forever.
  * JavaScript cannot cancel a running promise: a tool that never observes the
@@ -82,7 +107,7 @@ export function wrapToolWithAbortSignal(
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const combinedSignal = signal ? AbortSignal.any([signal, abortSignal]) : abortSignal;
-      if (combinedSignal.aborted) {
+      if (combinedSignal.aborted && !isYieldHandoffAbort(tool.name, combinedSignal, abortSignal)) {
         throwAbortError();
       }
       return await raceWithAbortSignal(
@@ -99,7 +124,7 @@ export function wrapToolWithAbortSignal(
       const combinedSignal = params.signal
         ? AbortSignal.any([params.signal, abortSignal])
         : abortSignal;
-      if (combinedSignal.aborted) {
+      if (combinedSignal.aborted && !isYieldHandoffAbort(tool.name, combinedSignal, abortSignal)) {
         throwAbortError();
       }
       const yieldRunSignal = tool.name === "sessions_yield" ? abortSignal : undefined;
@@ -121,7 +146,10 @@ export function wrapToolWithAbortSignal(
         kind: "ready",
         args: prepared.args,
         execute: (onImplementationStart) => {
-          if (combinedSignal.aborted) {
+          if (
+            combinedSignal.aborted &&
+            !isYieldHandoffAbort(tool.name, combinedSignal, abortSignal)
+          ) {
             throwAbortError();
           }
           return raceWithAbortSignal(
