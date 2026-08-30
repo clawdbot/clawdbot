@@ -1,5 +1,5 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
-import type { BrowserAnnotationAttachment, ChatGoalDraftMode } from "./chat-types.ts";
+import type { ChatGoalDraftMode, DurableComposerDraftAttachment } from "./chat-types.ts";
 import {
   openControlUiDatabase,
   requestResult,
@@ -19,14 +19,6 @@ export type DurableComposerDraftScope = {
   gatewayOwner: string;
   recoveryScope: string;
   scopeKey: string;
-};
-
-export type DurableComposerDraftAttachment = {
-  blob: Blob;
-  mimeType: string;
-  fileName?: string;
-  sizeBytes?: number;
-  browserAnnotation?: BrowserAnnotationAttachment;
 };
 
 type DurableComposerDraft = {

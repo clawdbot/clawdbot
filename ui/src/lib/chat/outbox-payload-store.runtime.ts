@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import type { ChatQueueItem } from "./chat-types.ts";
-import type { DurableComposerDraftAttachment } from "./composer-draft-store.runtime.ts";
+import type { ChatQueueItem, DurableComposerDraftAttachment } from "./chat-types.ts";
 import {
   openControlUiDatabase,
   requestResult,

@@ -1,8 +1,9 @@
-import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
   DurableComposerDraftAttachment,
-  DurableComposerDraftScope,
-} from "../../lib/chat/composer-draft-store.runtime.ts";
+} from "../../lib/chat/chat-types.ts";
+import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import {
   generateAttachmentId,
   getChatAttachmentBlob,

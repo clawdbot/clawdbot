@@ -29,6 +29,15 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
