@@ -91,6 +91,8 @@ Clients that manage their own history can append `response.output` to `input`, t
 
 For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call, matching the `/v1/chat/completions` contract. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event.
 
+Streaming requests hold provisional prose until the matching call is confirmed and use finalized result text when available.
+
 ## Images (`input_image`)
 
 Supports base64 or URL sources:
