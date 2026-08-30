@@ -162,8 +162,21 @@ describe("docs-sync-publish", () => {
       (entry) => entry.language === "zh-Hans",
     );
     const german = config.navigation.languages.find((entry) => entry.language === "de");
+    const sourceConfig: typeof config = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../docs/docs.json"), "utf8"),
+    );
+    const sourceEnglish = sourceConfig.navigation.languages.find(
+      (entry) => entry.language === "en",
+    );
+    const releaseNotes = collectPages(
+      sourceEnglish?.tabs.find((tab) => tab.tab === "Release & CI")?.groups?.[0],
+    );
 
     expect(english).toBeDefined();
+    expect(english).toEqual(sourceEnglish);
+    expect(releaseNotes[0]).toBe("releases/index");
+    expect(releaseNotes.length).toBeGreaterThan(1);
+    expect(releaseNotes.every((page) => page.startsWith("releases/"))).toBe(true);
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
     expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
@@ -174,9 +187,7 @@ describe("docs-sync-publish", () => {
     ]);
 
     const releaseRoutes = [
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
+      ...releaseNotes,
       "maturity/scorecard",
       "maturity/taxonomy",
       "reference/RELEASING",
@@ -193,11 +204,7 @@ describe("docs-sync-publish", () => {
       "Release process",
       "Testing and CI",
     ]);
-    expect(releaseTab?.groups?.[0]?.pages).toEqual([
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
-    ]);
+    expect(releaseTab?.groups?.[0]?.pages).toEqual(releaseNotes);
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
     expect(new Set(collectPages(releaseTab))).toHaveLength(releaseRoutes.length);
 
@@ -220,11 +227,9 @@ describe("docs-sync-publish", () => {
       "发布流程",
       "测试与 CI",
     ]);
-    expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual([
-      "zh-CN/releases/index",
-      "zh-CN/releases/2026.7.1",
-      "zh-CN/releases/2026.6.11",
-    ]);
+    expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual(
+      releaseNotes.map((page) => `zh-CN/${page}`),
+    );
     expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
       releaseRoutes.map((page) => `zh-CN/${page}`),
     );
