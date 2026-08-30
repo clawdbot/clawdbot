@@ -1144,18 +1144,8 @@ jobs:
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build
-
-      - name: Configure suite-specific env
-        if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            openshell-e2e)
-              echo "OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=$HOME/.config" >> "$GITHUB_ENV"
-              ;;
-          esac
 
       - name: Install OpenShell CLI
         if: |
@@ -1164,95 +1154,184 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.109
-          installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
-          trap 'rm -f "$installer_path"' EXIT
+          # The installer also starts a systemd gateway. Install only the verified
+          # package so the E2E shell below is the sole gateway lifecycle owner.
+          package_path="$(mktemp "${RUNNER_TEMP}/openshell.XXXXXX.deb")"
+          trap 'rm -f "$package_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
-            -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/8d67250a5d17348eb96c4fa46226b06d8041f2ba/install.sh
-          sh "$installer_path"
+            -o "$package_path" \
+            https://github.com/NVIDIA/OpenShell/releases/download/v0.0.109/openshell_0.0.109-1_amd64.deb
+          printf '%s  %s\n' \
+            0364a21f279023a241d967309ebb0177dadb66bd792eeb3daf542283158ca40f \
+            "$package_path" | sha256sum --check -
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$package_path"
           openshell --version
 
-      - name: Bootstrap OpenShell gateway
+      - name: Run ${{ matrix.label }}
         if: |
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
           matrix.suite_id == 'openshell-e2e'
         shell: bash
         run: |
           set -euo pipefail
-          mtls_dir="$HOME/.config/openshell/gateways/openshell/mtls"
-          gateway_tls_dir="$RUNNER_TEMP/openshell-gateway-certs"
-          fallback_pid=""
-          if ! openshell --gateway openshell sandbox list >/dev/null 2>&1; then
-            rm -rf "$gateway_tls_dir"
-            openshell-gateway generate-certs \
-              --output-dir "$gateway_tls_dir" \
-              --server-san 127.0.0.1 \
-              --server-san localhost \
-              --server-san host.openshell.internal
-            rm -rf "$mtls_dir"
-            mkdir -p "$mtls_dir"
-            cp "$gateway_tls_dir/ca.crt" "$mtls_dir/ca.crt"
-            cp "$gateway_tls_dir/client/tls.crt" "$mtls_dir/tls.crt"
-            cp "$gateway_tls_dir/client/tls.key" "$mtls_dir/tls.key"
-            openshell gateway remove openshell >/dev/null 2>&1 || true
-            OPENSHELL_LOCAL_TLS_DIR="$gateway_tls_dir" nohup openshell-gateway \
-              --bind-address 0.0.0.0 \
-              --port 17670 \
-              --drivers docker \
-              --tls-cert "$gateway_tls_dir/server/tls.crt" \
-              --tls-key "$gateway_tls_dir/server/tls.key" \
-              --tls-client-ca "$mtls_dir/ca.crt" \
-              >"$RUNNER_TEMP/openshell-gateway.log" 2>&1 &
-            fallback_pid=$!
-            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=$fallback_pid" >> "$GITHUB_ENV"
-            for _ in $(seq 1 30); do
-              if openshell gateway add --local --name openshell https://127.0.0.1:17670; then
-                break
+          umask 077
+          fixture_root="$(mktemp -d "${RUNNER_TEMP}/openshell-e2e.XXXXXX")"
+          gateway_name="openshell-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gateway_port=17680
+          gateway_pid=""
+          command_pid=""
+          run_owned() {
+            # Async wait handles cancellation immediately; the process group
+            # includes pnpm's test-runner descendants in the same cleanup.
+            setsid "$@" &
+            command_pid=$!
+            wait "$command_pid"
+          }
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            # Actions escalates cancellation after 7.5s, then kills the tree at
+            # 10s. Ignore repeat signals and keep the shared shutdown grace short.
+            trap '' INT TERM
+            local owned_pids=()
+            [[ -n "$gateway_pid" ]] && owned_pids+=("$gateway_pid")
+            [[ -n "$command_pid" ]] && owned_pids+=("-$command_pid")
+            if (( ${#owned_pids[@]} )); then
+              kill -TERM -- "${owned_pids[@]}" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                local alive=0
+                for pid in "${owned_pids[@]}"; do
+                  kill -0 -- "$pid" 2>/dev/null && alive=1
+                done
+                (( alive )) || break
+                sleep 0.2
+              done
+              for pid in "${owned_pids[@]}"; do
+                if kill -0 -- "$pid" 2>/dev/null; then
+                  kill -KILL -- "$pid" 2>/dev/null || true
+                  result=1
+                fi
+                wait "${pid#-}" 2>/dev/null || true
+              done
+            fi
+            local networks
+            if networks="$(timeout --foreground --kill-after=1s 1s docker network ls --format '{{.Name}}')"; then
+              if grep -Fxq -- "$gateway_name" <<< "$networks"; then
+                timeout --foreground --kill-after=1s 1s docker network rm "$gateway_name" || result=1
               fi
-              sleep 1
-            done
-            openshell gateway select openshell
-            for _ in $(seq 1 60); do
-              if openshell --gateway openshell sandbox list >/dev/null 2>&1; then
-                break
-              fi
-              sleep 1
-            done
-          fi
-          if [[ -z "$fallback_pid" ]]; then
-            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=" >> "$GITHUB_ENV"
-          fi
-          openshell --gateway openshell sandbox list >/dev/null
-          openshell gateway list
+            else
+              result=1
+            fi
+            rm -rf "$fixture_root"
+            exit "$result"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          export XDG_CONFIG_HOME="$fixture_root/config"
+          export XDG_STATE_HOME="$fixture_root/state"
+          export OPENCLAW_E2E_OPENSHELL_CONFIG_HOME="$XDG_CONFIG_HOME"
+          # Local registration imports this bundle too; a server-only override
+          # would replace the CLI certificates with the package-managed bundle.
+          export OPENSHELL_LOCAL_TLS_DIR="$fixture_root/pki"
+          mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
+          run_owned openshell-gateway generate-certs --output-dir "$OPENSHELL_LOCAL_TLS_DIR" \
+            --server-san 127.0.0.1 --server-san localhost --server-san host.openshell.internal
+          cat > "$fixture_root/gateway.toml" <<TOML
+          [openshell]
+          version = 1
+          [openshell.gateway]
+          compute_drivers = ["docker"]
+          [openshell.gateway.mtls_auth]
+          enabled = true
+          [openshell.drivers.docker]
+          sandbox_namespace = "$gateway_name"
+          network_name = "$gateway_name"
+          grpc_endpoint = "https://host.openshell.internal:$gateway_port"
+          TOML
+          RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
+            --bind-address 0.0.0.0 --port "$gateway_port" \
+            > "$RUNNER_TEMP/$gateway_name.raw.log" 2>&1 &
+          gateway_pid=$!
+          run_owned openshell gateway add --local --name "$gateway_name" "https://127.0.0.1:$gateway_port"
+          ready_deadline=$((SECONDS + 60))
+          until run_owned timeout --foreground 5s openshell --gateway "$gateway_name" whoami \
+            > "$fixture_root/whoami.txt" 2> "$fixture_root/auth-error.txt"; do
+            kill -0 "$gateway_pid" 2>/dev/null || {
+              echo "OpenShell gateway exited before authenticated readiness." >&2
+              exit 1
+            }
+            if (( SECONDS >= ready_deadline )); then
+              cat "$fixture_root/auth-error.txt" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          kill -0 "$gateway_pid"
+          run_owned timeout --foreground 20s openshell --gateway "$gateway_name" sandbox list
+          echo "OpenShell bootstrap passed: owned gateway and protected whoami/sandbox list."
+          run_owned ${{ matrix.command }}
 
-      - name: Validate suite credentials
-        if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            openshell-e2e)
-              ;;
-          esac
-
-      - name: Run ${{ matrix.label }}
+      - name: Redact OpenShell gateway log
         if: |
-          (
-            (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
-            (inputs.include_live_suites && matrix.requires_live_suites)
-          ) &&
-          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        run: ${{ matrix.command }}
-
-      - name: Stop fallback OpenShell gateway
-        if: always() && matrix.suite_id == 'openshell-e2e'
+          always() && inputs.include_repo_e2e &&
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${OPENCLAW_OPENSHELL_FALLBACK_PID:-}" ]]; then
-            kill "$OPENCLAW_OPENSHELL_FALLBACK_PID" 2>/dev/null || true
+          umask 077
+          log_base="$RUNNER_TEMP/openshell-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'rm -f "$log_base.raw.log" "$log_base.redacted.tmp"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          # Logging runs after owned-process/PKI cleanup, never extending its
+          # cancellation grace. Only this bounded, redacted file may be uploaded.
+          if timeout --foreground --kill-after=1s 5s node --input-type=module - \
+            "$log_base.raw.log" > "$log_base.redacted.tmp" 2>/dev/null <<'NODE'
+          import fs from "node:fs";
+          import { stripVTControlCharacters } from "node:util";
+          import { redactSensitiveText } from "./dist/plugin-sdk/logging-core.js";
+          const fd = fs.openSync(process.argv[2], "r");
+          try {
+            const size = fs.fstatSync(fd).size;
+            const start = Math.max(0, size - 1024 * 1024);
+            const buffer = Buffer.alloc(size - start);
+            const bytes = fs.readSync(fd, buffer, 0, buffer.length, start);
+            let text = buffer.subarray(0, bytes).toString("utf8");
+            if (start > 0) {
+              const newline = text.indexOf("\n");
+              text = newline < 0 ? "" : text.slice(newline + 1);
+            }
+            text = text.slice(0, text.lastIndexOf("\n") + 1);
+            // v0.0.109 logs SSH bearer UUIDs as session_id/object.id, not token.
+            // Remove full values before canonical redaction, including in spans.
+            text = stripVTControlCharacters(text).replace(
+              /[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi, "[redacted-uuid]",
+            );
+            process.stdout.write(redactSensitiveText(text, { mode: "tools" }));
+          } finally {
+            fs.closeSync(fd);
+          }
+          NODE
+          then
+            mv "$log_base.redacted.tmp" "$log_base.log"
+            tail -n 120 "$log_base.log"
+          else
+            echo "OpenShell gateway log omitted: source or canonical redaction unavailable."
           fi
+
+      - name: Upload redacted OpenShell gateway log
+        if: |
+          always() && inputs.include_repo_e2e &&
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openshell-gateway-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openshell-e2e-${{ github.run_id }}-${{ github.run_attempt }}.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   validate_docker_e2e:
     needs:

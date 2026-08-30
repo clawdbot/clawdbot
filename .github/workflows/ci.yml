@@ -3378,7 +3378,7 @@ jobs:
               fi
               ;;
             test-types)
-              # The github/hybrid planner profile moves the 14 serial core-test
+              # The github/hybrid planner profile moves the bounded core-test
               # graphs (~70% of this lane) into the dedicated hosted stripes
               # job; this row keeps the extensions/root/scripts tail. Targets
               # without stripe support run the whole lane here.
@@ -3458,9 +3458,9 @@ jobs:
           node --import tsx scripts/run-oxlint-shards.mts \
             --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
 
-  # The github/hybrid planner profile stripes the 14 serial core test-type
+  # The github/hybrid planner profile stripes the bounded core test-type
   # graphs (~34-42s per graph on either runner class; tsgo saturates a machine
-  # per graph) across four jobs; the check-test-types row keeps the
+  # per graph) across five jobs; the check-test-types row keeps the
   # extensions/root/scripts tail. All-Blacksmith mode keeps the single
   # 16-vCPU test-types job.
   check-test-types-hosted-core-shard:

@@ -6520,19 +6520,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
   });
 
-  it("gives release build steps enough Node heap", () => {
+  it("gives release builds enough Node heap and special E2E its private QA runtime", () => {
     for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
       const jobs = readWorkflow(workflowPath).jobs ?? {};
       for (const [jobName, job] of Object.entries(jobs)) {
         for (const step of job.steps ?? []) {
           if (step.run === "pnpm build") {
-            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toEqual({
-              NODE_OPTIONS: "--max-old-space-size=8192",
-            });
+            expect(step.env?.NODE_OPTIONS, `${workflowPath}:${jobName}:${step.name}`).toBe(
+              "--max-old-space-size=8192",
+            );
           }
         }
       }
     }
+    expect(
+      workflowStep(
+        workflowJob(LIVE_E2E_WORKFLOW, "validate_special_e2e"),
+        "Build dist for special E2E",
+      ),
+    ).toMatchObject({ run: "pnpm build", env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } });
   });
 
   it("runs full release children from the trusted workflow ref", () => {
