@@ -175,6 +175,7 @@ describe("docs-sync-publish", () => {
 
     const releaseRoutes = [
       "releases/index",
+      "releases/2026.8.1",
       "releases/2026.7.1",
       "releases/2026.6.11",
       "maturity/scorecard",
@@ -195,6 +196,7 @@ describe("docs-sync-publish", () => {
     ]);
     expect(releaseTab?.groups?.[0]?.pages).toEqual([
       "releases/index",
+      "releases/2026.8.1",
       "releases/2026.7.1",
       "releases/2026.6.11",
     ]);
@@ -222,6 +224,7 @@ describe("docs-sync-publish", () => {
     ]);
     expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual([
       "zh-CN/releases/index",
+      "zh-CN/releases/2026.8.1",
       "zh-CN/releases/2026.7.1",
       "zh-CN/releases/2026.6.11",
     ]);
