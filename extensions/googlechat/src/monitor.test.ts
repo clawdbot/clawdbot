@@ -1075,18 +1075,18 @@ describe("googlechat monitor inbound space classification", () => {
               throw new Error("Expected a Google Chat reply delivery turn");
             }
             const declaredDurable = "durable" in turn.delivery ? turn.delivery.durable : undefined;
+            if (typeof declaredDurable !== "function") {
+              throw new Error("Expected a Google Chat durable delivery resolver");
+            }
+            const durable = async (...args: Parameters<typeof declaredDurable>): Promise<false> => {
+              observedDurableOptions(await declaredDurable(...args));
+              return false;
+            };
             return {
               ...turn,
               delivery: {
                 ...turn.delivery,
-                durable: async (payload, info) => {
-                  const options =
-                    typeof declaredDurable === "function"
-                      ? await declaredDurable(payload, info)
-                      : declaredDurable;
-                  observedDurableOptions(options);
-                  return false;
-                },
+                durable,
               },
               replyResolver: async () => ({
                 text: "final reply",
