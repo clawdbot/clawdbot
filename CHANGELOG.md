@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **iMessage current-conversation routing:** preserve the exact inbound chat selector for automatic replies and targetless message actions when service detection is unset, and reject redacted display targets with actionable guidance. (#133468)
 - **Session memory:** capture the departing conversation before manual, daily, or idle resets close its transcript window, preserving recent messages and their trust provenance in memory artifacts.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
@@ -454,6 +453,7 @@ Docs: https://docs.openclaw.ai
 - **System-agent recovery guidance:** direct browser and app users to Settings or the OpenClaw host instead of terminal-only exit guidance while preserving the required stop, onboard, and restart lifecycle. (#114633) Thanks @jesse-merhi.
 - **Browser keyboard aliases:** accept `Esc`, `Return`, `Del`, `Ctrl`, and `Cmd` in browser actions and shortcuts, and preserve keyboard guidance in compact tool schemas. (#130401) Thanks @geekforlife.
 - **Microsoft Teams caption probes:** wait for live captions on reused, manually opened meeting tabs and report a timeout when captions do not arrive. (#111466) Thanks @zhangguiping-xydt.
+- **iMessage current-conversation routing:** preserve the exact inbound chat selector for automatic replies and targetless message actions when service detection is unset, and reject redacted display targets with actionable guidance. (#133499) Thanks @omarshahine.
 
 ## 2026.7.1
 
