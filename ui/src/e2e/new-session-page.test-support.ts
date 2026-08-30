@@ -267,6 +267,18 @@ export async function openNewSessionPlusMenu(page: Page) {
   return menu;
 }
 
+export async function openNewSessionModeMenu(page: Page) {
+  const menu = page.locator("wa-dropdown.new-session-page__visibility-menu");
+  await menu.getByRole("button", { name: /^Mode:/ }).click();
+  await menu.getByRole("menuitemradio", { name: "Default" }).waitFor({ state: "visible" });
+  return menu;
+}
+
+export async function selectNewSessionMode(page: Page, mode: "Default" | "Draft" | "Incognito") {
+  const menu = await openNewSessionModeMenu(page);
+  await menu.getByRole("menuitemradio", { name: mode }).click();
+}
+
 export async function navigateInApp(page: Page, routeId: string, search = "") {
   await page.evaluate(
     ({ targetRouteId, targetSearch }) => {

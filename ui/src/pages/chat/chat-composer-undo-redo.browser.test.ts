@@ -1,6 +1,6 @@
-// Composer native undo/redo regression: the controlled `.value` binding must
-// not re-apply the textarea value after native input, which clobbers the
-// browser's undo/redo bookkeeping (#131708).
+// Composer native undo/redo regression: controlled value bindings must not
+// re-apply textarea values after native input, which clobbers the browser's
+// undo/redo bookkeeping (#131708, #132845).
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -16,14 +16,25 @@ const describeComposerUndoRedo = canRunPlaywrightChromium(chromiumExecutablePath
   ? describe
   : describe.skip;
 
-const COMPOSER_TEXTAREA = ".agent-chat__composer-combobox > textarea";
 const TYPED_TEXT = "hello world test";
+const COMPOSER_TARGETS = [
+  {
+    name: "active chat",
+    path: "chat/main",
+    selector: ".agent-chat__composer-combobox > textarea",
+  },
+  {
+    name: "new session",
+    path: "new",
+    selector: ".new-session-page__message",
+  },
+] as const;
 
-let browser: Browser | null = null;
-let page: Page | null = null;
-let server: ControlUiE2eServer | null = null;
+describeComposerUndoRedo.each(COMPOSER_TARGETS)("$name composer native undo/redo", (target) => {
+  let browser: Browser | null = null;
+  let page: Page | null = null;
+  let server: ControlUiE2eServer | null = null;
 
-describeComposerUndoRedo("chat composer native undo/redo", () => {
   beforeAll(async () => {
     browser = await chromium.launch({
       executablePath: chromiumExecutablePath,
@@ -51,11 +62,11 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
         configurable: true,
       });
     });
-    await page.goto(`${server.baseUrl}chat/main`, {
+    await page.goto(`${server.baseUrl}${target.path}`, {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
-    await page.locator(COMPOSER_TEXTAREA).waitFor({ timeout: 30_000 });
+    await page.locator(target.selector).waitFor({ timeout: 30_000 });
   });
 
   afterAll(async () => {
@@ -71,7 +82,7 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
   }
 
   it("keeps native redo working after undo in the composer textarea", async () => {
-    const textarea = page!.locator(COMPOSER_TEXTAREA);
+    const textarea = page!.locator(target.selector);
     await textarea.click();
     await textarea.type(TYPED_TEXT);
     expect(await textarea.inputValue()).toBe(TYPED_TEXT);
@@ -89,7 +100,7 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
   });
 
   it("does not re-apply the textarea value after native input", async () => {
-    const textarea = page!.locator(COMPOSER_TEXTAREA);
+    const textarea = page!.locator(target.selector);
     await textarea.click();
     await page!.keyboard.press("ControlOrMeta+a");
     await page!.keyboard.press("Backspace");

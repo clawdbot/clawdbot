@@ -1,7 +1,8 @@
 import { html, nothing, svg } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
+import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
@@ -15,8 +16,17 @@ const shredderIcon = strokeIcon(svg` <path
   <path d="M2 13h20" />
   <path d="M6 20v-3" />`);
 
-/** Page-level session privacy control for the fixed new-session rail. */
-export function renderNewSessionIncognitoControl(
+type VisibilityOption = {
+  value: NewSessionVisibility;
+  label: string;
+  description?: string;
+  icon: ReturnType<typeof strokeIcon>;
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
+/** One closed session-mode selector for the fixed new-session rail. */
+export function renderNewSessionVisibilityControl(
   submission: {
     visibility: NewSessionVisibility;
     submitting: boolean;
@@ -26,65 +36,96 @@ export function renderNewSessionIncognitoControl(
   },
   draftAvailable: boolean,
 ) {
-  const active = submission.visibility === "incognito";
-  const draftActive = submission.visibility === "draft";
-  const disabledReason = submission.incognitoDisabledReason();
-  const disabled =
-    submission.submitting ||
-    Boolean(submission.pendingPlacement.sessionKey) ||
-    Boolean(disabledReason);
-  const description = disabledReason ?? t("newSession.incognitoDescription");
+  const incognitoDisabledReason = submission.incognitoDisabledReason();
+  const defaultOption: VisibilityOption = {
+    value: "normal",
+    label: t("common.default"),
+    icon: icons.radio,
+  };
+  const options: VisibilityOption[] = [
+    defaultOption,
+    ...(draftAvailable
+      ? [
+          {
+            value: "draft" as const,
+            label: t("newSession.draft"),
+            description: t("newSession.draftDescription"),
+            icon: icons.pencil,
+          },
+        ]
+      : []),
+    {
+      value: "incognito",
+      label: t("newSession.incognito"),
+      description: t("newSession.incognitoDescription"),
+      icon: shredderIcon,
+      disabled: Boolean(incognitoDisabledReason),
+      disabledReason: incognitoDisabledReason,
+    },
+  ];
+  const selected =
+    options.find((option) => option.value === submission.visibility) ?? defaultOption;
+  const disabled = submission.submitting || Boolean(submission.pendingPlacement.sessionKey);
+  const modeLabel = t("common.mode");
   return html`
-    <div class="new-session-page__incognito-rail">
-      ${draftAvailable
-        ? html`
-            <openclaw-tooltip
-              class="new-session-page__draft-tooltip"
-              .content=${t("newSession.draftDescription")}
+    <div class="new-session-page__visibility-rail">
+      <wa-dropdown
+        class="new-session-page__visibility-menu"
+        placement="bottom-end"
+        @wa-select=${(event: CustomEvent<{ item?: { value?: string } }>) => {
+          const value = event.detail.item?.value;
+          const option = options.find((entry) => entry.value === value);
+          if (!disabled && option && !option.disabled) {
+            submission.setVisibility(option.value);
+          }
+        }}
+      >
+        <button
+          slot="trigger"
+          type="button"
+          class="shell-chrome-controls__button new-session-page__visibility-trigger ${submission.visibility !==
+          "normal"
+            ? "new-session-page__visibility-trigger--active"
+            : ""}"
+          aria-label=${`${modeLabel}: ${selected.label}`}
+          aria-haspopup="menu"
+          ?disabled=${disabled}
+          title=${selected.description ?? modeLabel}
+        >
+          <span aria-hidden="true">${selected.icon}</span>
+          <span>${selected.label}</span>
+          <span class="new-session-page__visibility-chevron" aria-hidden="true"
+            >${icons.chevronDown}</span
+          >
+        </button>
+        ${options.map((option) => {
+          const checked = option.value === submission.visibility;
+          return html`
+            <wa-dropdown-item
+              class="new-session-page__visibility-option"
+              value=${option.value}
+              role="menuitemradio"
+              aria-checked=${String(checked)}
+              ${ref((element) => syncDropdownItemRadio(element, checked))}
+              ?disabled=${option.disabled}
+              title=${option.disabledReason ?? nothing}
             >
-              <button
-                type="button"
-                class="shell-chrome-controls__button new-session-page__draft-toggle ${draftActive
-                  ? "new-session-page__draft-toggle--active"
-                  : ""}"
-                role="switch"
-                aria-label=${`${t("newSession.draft")}: ${t("newSession.draftDescription")}`}
-                aria-checked=${String(draftActive)}
-                ?disabled=${submission.submitting ||
-                Boolean(submission.pendingPlacement.sessionKey)}
-                title=${t("newSession.draftDescription")}
-                @click=${() => submission.setVisibility(draftActive ? "normal" : "draft")}
-              >
-                ${icons.pencil}
-                ${draftActive
-                  ? html`<span class="new-session-page__draft-toggle-label"
-                      >${t("newSession.draft")}</span
+              <span slot="icon" aria-hidden="true">${option.icon}</span>
+              <span class="new-session-page__visibility-option-copy">
+                <span>${option.label}</span>
+                ${option.description
+                  ? html`<span class="new-session-page__visibility-option-description"
+                      >${option.disabledReason ?? option.description}</span
                     >`
                   : nothing}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      <openclaw-tooltip .content=${description}>
-        <button
-          type="button"
-          class="shell-chrome-controls__button new-session-page__incognito-toggle ${active
-            ? "new-session-page__incognito-toggle--active"
-            : ""}"
-          role="switch"
-          aria-label=${t("newSession.incognito")}
-          aria-checked=${String(active)}
-          ?disabled=${disabled}
-          title=${description}
-          @click=${() => {
-            if (!disabled) {
-              submission.setVisibility(active ? "normal" : "incognito");
-            }
-          }}
-        >
-          ${shredderIcon}
-        </button>
-      </openclaw-tooltip>
+              </span>
+              ${checked
+                ? html`<span slot="details" aria-hidden="true">${icons.check}</span>`
+                : nothing}
+            </wa-dropdown-item>
+          `;
+        })}
+      </wa-dropdown>
     </div>
   `;
 }

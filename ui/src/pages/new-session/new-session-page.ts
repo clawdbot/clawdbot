@@ -33,8 +33,8 @@ import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import {
-  renderNewSessionIncognitoControl,
   renderNewSessionIncognitoNotice,
+  renderNewSessionVisibilityControl,
 } from "./incognito-control.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
@@ -574,8 +574,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
           isCatalogTarget: catalog.isTarget(this.data),
           draftOwnerKey: this.routeOwnerKey(),
           message: this.submission.message,
-          visibility: this.submission.visibility,
-          draftAvailable: capabilities.canStartAsDraft(this.context),
           ...capabilities.composerProps(this.context, this.gateway, this.place.agentId),
           modelControl: this.place.modelControl,
           permissionControl: catalog.isTarget(this.data)
@@ -610,11 +608,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
           onInput: (message) => this.setMessageFromUser(message),
           onOpenImage: (item) => {
             this.imageLightbox = item;
-          },
-          onVisibilityChange: (visibility) => {
-            if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-              this.submission.setVisibility(visibility);
-            }
           },
           onSubmit: () => void this.submission.submit(),
         })}
@@ -678,7 +671,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           ? "new-session-page--incognito"
           : ""}"
       >
-        ${renderNewSessionIncognitoControl(
+        ${renderNewSessionVisibilityControl(
           this.submission,
           this.submission.capabilities.canStartAsDraft(this.context),
         )}

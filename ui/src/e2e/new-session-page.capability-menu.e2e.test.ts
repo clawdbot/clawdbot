@@ -2,6 +2,8 @@ import { expect, it } from "vitest";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
+  openNewSessionModeMenu,
+  selectNewSessionMode,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -11,16 +13,12 @@ suite.define(() => {
     {
       name: "desktop",
       viewport: { width: 1280, height: 900 },
-      composerVisible: true,
-      railVisible: false,
     },
     {
       name: "mobile",
       viewport: { width: 390, height: 844 },
-      composerVisible: false,
-      railVisible: true,
     },
-  ])("shows Draft once on $name", async ({ viewport, composerVisible, railVisible }) => {
+  ])("shows one closed visibility selector on $name", async ({ viewport }) => {
     await suite.withPage({ viewport }, async ({ page }) => {
       await installMockGateway(page, {
         allowedSessionVisibilities: ["shared", "draft"],
@@ -30,18 +28,18 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__composer");
-      await composer.getByRole("button", { name: "Add attachment" }).click();
-      await composer
-        .locator("wa-dropdown.agent-chat__capability-menu")
-        .getByRole("menuitem", { name: "Draft" })
-        .click();
+      const trigger = page.getByRole("button", { name: "Mode: Default" });
+      await expect.poll(() => trigger.count()).toBe(1);
+      const modeMenu = await openNewSessionModeMenu(page);
+      await expect.poll(() => modeMenu.getByRole("menuitemradio").count()).toBe(3);
+      expect(
+        await modeMenu.getByRole("menuitemradio", { name: "Default" }).getAttribute("aria-checked"),
+      ).toBe("true");
+      await modeMenu.getByRole("menuitemradio", { name: "Draft" }).click();
+      await page.getByRole("button", { name: "Mode: Draft" }).waitFor();
 
-      await expect
-        .poll(() => composer.locator(".new-session-page__visibility--draft").isVisible())
-        .toBe(composerVisible);
-      await expect
-        .poll(() => page.locator(".new-session-page__draft-toggle").isVisible())
-        .toBe(railVisible);
+      await composer.getByRole("button", { name: "Add attachment" }).click();
+      expect(await composer.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
     });
   });
 
@@ -99,10 +97,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__composer");
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await selectNewSessionMode(page, "Draft");
       await composer.getByRole("button", { name: "Add attachment" }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
 
-      await menu.getByRole("menuitem", { name: "Draft" }).click();
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
       const release = menu.getByRole("menuitem", { name: "Release" });

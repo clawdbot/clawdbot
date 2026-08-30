@@ -4,7 +4,9 @@ import {
   SESSION_LIST_DEFAULTS,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  openNewSessionModeMenu,
   pollLocatorText,
+  selectNewSessionMode,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -61,7 +63,8 @@ suite.define(() => {
     try {
       const sidebarCreate = page.locator(".sidebar-brand__new-thread");
       const submit = page.getByRole("button", { name: "Start session" });
-      const incognito = page.getByRole("switch", { name: "Incognito" });
+      const modeMenu = await openNewSessionModeMenu(page);
+      const incognito = modeMenu.getByRole("menuitemradio", { name: "Incognito" });
 
       await expect.poll(() => sidebarCreate.isDisabled()).toBe(true);
       await expect.poll(() => submit.isDisabled()).toBe(true);
@@ -69,6 +72,7 @@ suite.define(() => {
       expect(await incognito.getAttribute("title")).toBe(
         "This action requires operator.admin access.",
       );
+      await page.keyboard.press("Escape");
       await submit.click({ force: true });
       const projectRequests = await gateway.getRequests("projects.list");
       expect(projectRequests).toHaveLength(1);
@@ -86,12 +90,14 @@ suite.define(() => {
         params: {},
       });
       const submit = page.getByRole("button", { name: "Start session" });
-      const incognito = page.getByRole("switch", { name: "Incognito" });
+      const modeMenu = await openNewSessionModeMenu(page);
+      const incognito = modeMenu.getByRole("menuitemradio", { name: "Incognito" });
       const effort = page.locator('[data-chat-thinking-select="true"]');
 
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isEnabled()).toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await expect.poll(() => incognito.isDisabled()).toBe(true);
+      await page.keyboard.press("Escape");
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.getByRole("button", { name: /Writer runner/u }).waitFor();
@@ -471,9 +477,7 @@ suite.define(() => {
       "operator.write",
     ]);
     try {
-      const incognito = page.getByRole("switch", { name: "Incognito" });
-      await expect.poll(() => incognito.isEnabled()).toBe(true);
-      await incognito.click();
+      await selectNewSessionMode(page, "Incognito");
       await page.getByRole("button", { name: "Start session" }).click();
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({

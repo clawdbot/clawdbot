@@ -16,6 +16,7 @@ import {
   navigateInApp,
   pollLocatorText,
   projectProofArtifactDir,
+  selectNewSessionMode,
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -102,7 +103,7 @@ async function withNewSessionPage(
 }
 
 suite.define(() => {
-  it("keeps rail privacy visible and shows the mobile footer mode without hover", async () => {
+  it("keeps one mobile session mode control visible without hover", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
         models: [
@@ -126,46 +127,31 @@ suite.define(() => {
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const attach = page.getByRole("button", { name: "Add attachment" });
       const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
-      const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
-      const incognito = page.getByRole("switch", { name: "Incognito" });
+      const mode = page.getByRole("button", { name: "Mode: Default" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
-      await Promise.all([
-        footer.waitFor(),
-        attach.waitFor(),
-        draft.waitFor({ state: "attached" }),
-        incognito.waitFor(),
-        model.waitFor(),
-      ]);
+      await Promise.all([footer.waitFor(), attach.waitFor(), mode.waitFor(), model.waitFor()]);
 
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await page.mouse.move(0, 0);
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => mode.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       expect(
-        await incognito.evaluate(
-          (element) => element.closest(".new-session-page__incognito-rail") != null,
+        await mode.evaluate(
+          (element) => element.closest(".new-session-page__visibility-rail") != null,
         ),
       ).toBe(true);
 
-      const [footerBox, attachBox, draftBox, modelBox] = await Promise.all([
+      const [footerBox, attachBox, modelBox] = await Promise.all([
         footer.boundingBox(),
         attach.boundingBox(),
-        draft.boundingBox(),
         model.boundingBox(),
       ]);
       expect(footerBox).not.toBeNull();
       expect(attachBox).not.toBeNull();
-      expect(draftBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
-      // The row reads as the settings for the next turn, in the order the
-      // operator decides them: attachments, draft visibility, then the model and
-      // its reasoning. This viewport is narrow enough that
-      // the row wraps, so the comparison is reading order — which line a control
-      // is on first, then where it sits on that line.
+      // This viewport is narrow enough that the composer row wraps, so compare
+      // reading order — which line a control is on first, then its inline position.
       const followsInReadingOrder = (
         previous: { x: number; y: number; height: number } | null,
         next: { x: number; y: number; height: number } | null,
@@ -212,8 +198,8 @@ suite.define(() => {
       await expect.poll(attachGlyphSine).toBeCloseTo(-Math.SQRT1_2, 3);
       await page.keyboard.press("Escape");
       await expect.poll(attachGlyphSine).toBe(0);
-      await incognito.click();
-      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
+      await selectNewSessionMode(page, "Incognito");
+      await page.getByRole("button", { name: "Mode: Incognito" }).waitFor();
     });
   });
 

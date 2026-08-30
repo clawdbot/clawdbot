@@ -14,6 +14,7 @@ import {
   prepareNewSessionComposerUiProof,
   prepareProjectUiProof,
   projectProofArtifactDir,
+  selectNewSessionMode,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -192,21 +193,21 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
-      // Incognito is a page-level choice on the far end of the same top rail
-      // as the shell controls, rather than an option inside the composer.
-      const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
-      const incognitoBox = await incognitoToggle.boundingBox();
+      // Visibility is one page-level choice on the far end of the same top
+      // rail as the shell controls, rather than an option inside the composer.
+      const modeTrigger = page.getByRole("button", { name: "Mode: Default" });
+      const modeBox = await modeTrigger.boundingBox();
       const commandPaletteBox = await page
         .getByRole("button", { name: "Open command palette" })
         .boundingBox();
-      expect(incognitoBox).not.toBeNull();
+      expect(modeBox).not.toBeNull();
       expect(commandPaletteBox).not.toBeNull();
-      expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
-      expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
+      expect(modeBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
+      expect(modeBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
       expect(
         await page
           .locator(".new-session-page__composer")
-          .getByRole("switch", { name: "Incognito" })
+          .getByRole("button", { name: /^Mode:/ })
           .count(),
       ).toBe(0);
       const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
@@ -217,11 +218,10 @@ suite.define(() => {
           element.classList.contains("chat-controls__speed-toggle"),
         ),
       ).toBe(true);
-      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
-      await incognitoToggle.click();
-      await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
-      await incognitoToggle.click();
-      await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("false");
+      await selectNewSessionMode(page, "Incognito");
+      await page.getByRole("button", { name: "Mode: Incognito" }).waitFor();
+      await selectNewSessionMode(page, "Default");
+      await page.getByRole("button", { name: "Mode: Default" }).waitFor();
 
       // Unified layout: the trigger row (menus above the composer) sits
       // inside the start-screen welcome, below the hero.

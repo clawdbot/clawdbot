@@ -17,6 +17,7 @@ import {
   pastePng,
   pollLocatorText,
   reconnectProofArtifactDir,
+  selectNewSessionMode,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -57,12 +58,11 @@ suite.define(() => {
       await firstMessage.fill("restore this prompt after restart");
       await pastePng(firstMessage);
       await firstPage.locator('.chat-attachment-thumb img[alt="pixel.png"]').waitFor();
-      const incognito = firstPage.getByRole("switch", { name: "Incognito" });
-      await incognito.click();
-      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
+      await selectNewSessionMode(firstPage, "Incognito");
+      await firstPage.getByRole("button", { name: "Mode: Incognito" }).waitFor();
       await waitForCommittedNewSessionDraft(firstPage, null, 0);
-      await incognito.click();
-      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
+      await selectNewSessionMode(firstPage, "Default");
+      await firstPage.getByRole("button", { name: "Mode: Default" }).waitFor();
       await firstMessage.fill("restore this prompt after restart and incognito");
       await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
       await waitForCommittedNewSessionDraft(

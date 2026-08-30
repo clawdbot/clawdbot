@@ -7,6 +7,7 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
+  selectNewSessionMode,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -270,7 +271,7 @@ suite.define(() => {
       await navigateInApp(page, "new-session", "?agent=main");
       await expect.poll(() => message.inputValue()).toBe("main route draft");
 
-      await page.getByRole("switch", { name: "Incognito" }).click();
+      await selectNewSessionMode(page, "Incognito");
       await waitForCommittedNewSessionDraft(page, null, 0);
       await page.reload();
       await expect.poll(() => message.inputValue()).toBe("");

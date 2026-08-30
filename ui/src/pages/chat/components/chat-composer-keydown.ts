@@ -46,10 +46,6 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
-      return;
-    }
-
     if (goalComposer.active) {
       if (event.key === "Escape") {
         event.preventDefault();

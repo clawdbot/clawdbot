@@ -16,7 +16,6 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -39,10 +38,7 @@ function renderComposer(
     };
     submitting?: boolean;
     messageLocked?: boolean;
-    visibility?: NewSessionVisibility;
-    draftAvailable?: boolean;
     toolOverrides?: SessionToolOverrides | null;
-    onVisibilityChange?: (visibility: NewSessionVisibility) => void;
     message?: string;
     draftOwnerKey?: string;
     agentId?: string;
@@ -76,8 +72,6 @@ function renderComposer(
         draftOwnerKey,
         isCatalogTarget: true,
         message,
-        visibility: overrides.visibility,
-        draftAvailable: overrides.draftAvailable,
         toolOverrides: overrides.toolOverrides,
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: overrides.requiresModifier ?? false,
@@ -96,7 +90,6 @@ function renderComposer(
           overrides.onInput?.(next);
           renderCurrent();
         },
-        onVisibilityChange: overrides.onVisibilityChange,
         onSubmit: overrides.onSubmit ?? (() => undefined),
       }),
       container,
@@ -703,33 +696,6 @@ describe("new-session composer attachment drops", () => {
 
     expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
     expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
-  });
-
-  it("keeps page-level incognito out of the composer when drafts are unavailable", () => {
-    const { composer } = renderComposer();
-    const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
-
-    expect(switches).toHaveLength(0);
-  });
-
-  it("lets one draft pill replace page-level incognito", () => {
-    const onVisibilityChange = vi.fn();
-    const { composer } = renderComposer({
-      draftAvailable: true,
-      visibility: "draft",
-      onVisibilityChange,
-    });
-    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
-    const visibleDraftButtons = Array.from(
-      composer.querySelectorAll<HTMLButtonElement>(".agent-chat__composer-footer button"),
-    ).filter((button) => button.textContent?.trim() === "Draft");
-
-    expect(draftPill?.textContent).toContain("Draft");
-    expect(draftPill?.getAttribute("aria-checked")).toBe("true");
-    expect(visibleDraftButtons).toEqual([draftPill]);
-
-    draftPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {

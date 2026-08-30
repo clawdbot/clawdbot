@@ -7,7 +7,6 @@ import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController, renderNewSessionComposer } from "./composer.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 export function renderNewSessionDraftComposer(options: {
@@ -19,8 +18,6 @@ export function renderNewSessionDraftComposer(options: {
   draftOwnerKey: string;
   isCatalogTarget: boolean;
   message: string;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
   capabilityMenu?: CapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
   modelControl: NewSessionModelControl;
@@ -43,7 +40,6 @@ export function renderNewSessionDraftComposer(options: {
   messageLocked?: boolean;
   onInput: (message: string) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
@@ -59,8 +55,6 @@ export function renderNewSessionDraftComposer(options: {
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     message: options.message,
-    visibility: options.visibility,
-    draftAvailable: options.draftAvailable,
     capabilityMenu: options.capabilityMenu,
     toolOverrides: options.toolOverrides,
     modelControl: options.isCatalogTarget
@@ -107,7 +101,6 @@ export function renderNewSessionDraftComposer(options: {
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
     onOpenImage: options.onOpenImage,
-    onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
   });
 }

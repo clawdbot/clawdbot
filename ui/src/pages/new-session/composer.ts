@@ -1,6 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
-import { ref } from "lit/directives/ref.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
@@ -46,13 +44,15 @@ import {
   updateSlashMenu,
 } from "../chat/components/chat-composer-slash-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
+import {
+  createComposerInputHandlers,
+  renderComposerEditor,
+} from "../chat/components/composer-editor.ts";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
 import {
-  renderNewSessionDraftVisibility,
   renderNewSessionPlusMenu,
   renderNewSessionSelectionStatus,
 } from "./composer-capability-controls.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 
 export type NewSessionComposerOptions = {
   attachmentLimits?: { maxBytes: number; maxImageBytes: number };
@@ -81,15 +81,12 @@ export type NewSessionComposerOptions = {
   textareaController: NewSessionComposerTextareaController;
   voiceControl?: TemplateResult | typeof nothing;
   messageLocked?: boolean;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
   capabilityMenu?: CapabilityMenuProps;
   toolOverrides?: SessionToolOverrides | null;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
 
@@ -169,6 +166,7 @@ export class NewSessionComposerTextareaController {
   readonly slashMenuState = createSlashMenuState();
   capabilityMenuOpen = false;
   capabilityMenuView: ChatComposerPlusMenuView = "root";
+  composing = false;
 
   readonly ref = (element?: Element) => {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
@@ -354,6 +352,7 @@ export class NewSessionComposerTextareaController {
     resetSlashMenuState(this.slashMenuState);
     this.capabilityMenuOpen = false;
     this.capabilityMenuView = "root";
+    this.composing = false;
     if (this.textarea) {
       disconnectTextareaOverflowObserver(this.textarea);
       this.textarea = null;
@@ -384,9 +383,6 @@ function handleComposerKeydown(
   slashMenuHost: SlashMenuHost,
 ) {
   if (options.dictationActive) {
-    return;
-  }
-  if (event.isComposing || event.keyCode === 229) {
     return;
   }
   if (
@@ -512,6 +508,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     ? getActiveSkillMenuOptionLabel(skillMenuState)
     : getActiveSlashMenuOptionLabel(slashMenuState);
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
+  const inputHandlers = createComposerInputHandlers({
+    canFocus: () => !composerLocked,
+    onDismissInvocations: () => {
+      resetSkillMenuState(skillMenuState);
+      resetSlashMenuState(slashMenuState);
+      options.requestUpdate();
+    },
+  });
   return html`
     <div
       class="agent-chat__composer-shell new-session-page__composer"
@@ -524,55 +528,55 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         class="agent-chat__input agent-chat__input--mobile-toolbar${options.dictationActive
           ? " agent-chat__input--dictating"
           : ""}"
+        @wa-show=${inputHandlers.dropdownShow}
+        @wa-after-show=${inputHandlers.dropdownAfterShow}
+        @openclaw-composer-dismiss-invocations=${inputHandlers.dismissInvocations}
+        @click=${inputHandlers.click}
+        @pointerdown=${inputHandlers.pointerDown}
       >
+        ${slashMenuVisible
+          ? renderSlashMenu(slashMenuState, slashMenuHost, options.message, options.requestUpdate)
+          : nothing}
+        ${skillMenuVisible
+          ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
+          : nothing}
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
-            ${slashMenuVisible
-              ? renderSlashMenu(
-                  slashMenuState,
-                  slashMenuHost,
-                  options.message,
-                  options.requestUpdate,
-                )
-              : nothing}
-            ${skillMenuVisible
-              ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
-              : nothing}
-            <textarea
-              ${ref(options.textareaController.ref)}
-              class="new-session-page__message"
-              rows="1"
-              ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
-              ?disabled=${options.submitting || options.messageLocked}
-              ?readonly=${options.dictationActive}
-              placeholder=${animatedPlaceholder}
-              aria-label=${messagePlaceholder}
-              .value=${visibleMessage}
-              aria-autocomplete="list"
-              aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
-              aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
-              aria-describedby=${menuAnnouncementId}
-              @input=${(event: Event) => {
-                if (options.dictationActive) {
-                  return;
+            ${renderComposerEditor({
+              textareaRef: options.textareaController.ref,
+              className: "new-session-page__message",
+              value: visibleMessage,
+              autofocus: globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false,
+              disabled: options.submitting || options.messageLocked === true,
+              readonly: options.dictationActive === true,
+              placeholder: animatedPlaceholder,
+              label: messagePlaceholder,
+              menuVisible,
+              menuListboxId,
+              activeMenuOptionId,
+              describedBy: menuAnnouncementId,
+              keyShortcuts: options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter",
+              isComposing: () => options.textareaController.composing,
+              onComposingChange: (composing) => {
+                options.textareaController.composing = composing;
+              },
+              onKeyDown: (event) =>
+                handleComposerKeydown(event, options, skillMenuHost, slashMenuHost),
+              onInput: (_event, target) => {
+                if (!options.dictationActive) {
+                  updateMenus(target);
+                  options.onInput(target.value);
                 }
-                const target = event.target as HTMLTextAreaElement;
-                adjustTextareaHeight(target);
-                updateMenus(target);
-                options.onInput(target.value);
-              }}
-              @select=${handleSelect}
-              @keydown=${(event: KeyboardEvent) =>
-                handleComposerKeydown(event, options, skillMenuHost, slashMenuHost)}
-              @paste=${(event: ClipboardEvent) => {
+              },
+              onSelectionChange: handleSelect,
+              onPaste: (event) => {
                 if (!composerLocked) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
-              }}
-            ></textarea>
+              },
+            })}
             <span
               id=${menuAnnouncementId}
               class="sr-only"
@@ -586,9 +590,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-lead">
             ${renderNewSessionPlusMenu(options, attachmentProps)}
-            ${options.permissionControl ?? nothing}
-            ${options.draftAvailable ? renderNewSessionDraftVisibility(options) : nothing}
-            ${renderNewSessionSelectionStatus(options)}
+            ${options.permissionControl ?? nothing} ${renderNewSessionSelectionStatus(options)}
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">

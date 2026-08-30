@@ -17,86 +17,68 @@ openclaw-new-session-page {
   min-height: 0;
 }
 
-/* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
+/* Opposite end of the fixed shell-control rail: session visibility belongs to
    the page, not to the message being composed. */
-.new-session-page__incognito-rail {
+.new-session-page__visibility-rail {
   position: absolute;
   top: 10px;
   right: 10px;
   z-index: 45;
 }
 
-.new-session-page__draft-toggle {
-  display: none;
-}
-
-:is(
-  .new-session-page__draft-toggle,
-  .new-session-page__incognito-toggle
-).shell-chrome-controls__button {
-  width: 40px;
+.new-session-page__visibility-trigger.shell-chrome-controls__button {
+  width: auto;
+  min-width: 40px;
   height: 40px;
+  gap: 7px;
+  padding-inline: 10px;
   border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   corner-shape: superellipse(1.5);
+  font-size: 12px;
+  font-weight: 600;
 }
 
-:is(
-  .new-session-page__draft-toggle,
-  .new-session-page__incognito-toggle
-).shell-chrome-controls__button:hover:not(:disabled) {
+.new-session-page__visibility-trigger.shell-chrome-controls__button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
   background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
 }
 
-:is(
-    .new-session-page__draft-toggle,
-    .new-session-page__incognito-toggle
-  ).shell-chrome-controls__button
-  svg {
+.new-session-page__visibility-trigger.shell-chrome-controls__button svg {
   width: 19px;
   height: 19px;
 }
 
-:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
-:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
-  :disabled
-) {
+.new-session-page__visibility-trigger--active,
+.new-session-page__visibility-trigger--active:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
 }
 
-html.openclaw-native-macos .new-session-page__incognito-rail {
-  top: 52px;
+.new-session-page__visibility-chevron {
+  display: inline-flex;
 }
 
-@media (max-width: 560px) {
-  .new-session-page__incognito-rail {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+.new-session-page__visibility-chevron svg {
+  width: 12px;
+  height: 12px;
+}
 
-  .new-session-page__draft-toggle {
-    display: inline-flex;
-  }
+.new-session-page__visibility-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 
-  .new-session-page__draft-toggle--active.shell-chrome-controls__button {
-    width: auto;
-    padding-inline: 10px;
-    gap: 7px;
-  }
+.new-session-page__visibility-option-description {
+  color: var(--muted);
+  font-size: 11px;
+}
 
-  .new-session-page__draft-toggle-label {
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .new-session-page__composer .new-session-page__visibility--draft {
-    display: none;
-  }
+html.openclaw-native-macos .new-session-page__visibility-rail {
+  top: 52px;
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -211,91 +193,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   .new-session-page__incognito-notice {
     transition-duration: 0ms;
   }
-}
-
-/* Sits after the model and reasoning pickers: the footer row reads as the
-   settings for the next turn, and how the session is recorded is the last of
-   them, not the first thing between "+" and the model. The model control claims
-   order 3 in chat/layout.css, so this follows it.
-   Box, type and rhythm come from the composer's chip family tokens rather than
-   numbers of its own: this control is a peer of the pickers beside it, and it
-   used to announce itself as a different component — smaller text, shorter box,
-   pill corners and a muted foreground against their 13px squared-off chips. The
-   fallbacks keep it sane if it is ever rendered outside a composer. */
-.new-session-page__visibility {
-  display: inline-flex;
-  align-items: center;
-  order: 4;
-  gap: var(--chat-composer-chip-gap, 6px);
-  min-height: var(--chat-composer-chip-height, 30px);
-  padding-block: 0;
-  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--chat-composer-secondary, var(--muted));
-  font: inherit;
-  font-size: var(--chat-composer-chip-text, 13px);
-  line-height: 1.35;
-  cursor: var(--cursor-action);
-}
-
-/* Draft belongs with the attachment and permission controls. On pointer-first
-   layouts it stays quiet until the footer is explored; touch layouts keep the
-   action reachable because they have no persistent hover state. */
-@media (hover: hover) and (pointer: fine) {
-  .new-session-page__composer
-    .agent-chat__composer-lead
-    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
-    opacity: 0;
-    pointer-events: none;
-    visibility: hidden;
-    transition:
-      opacity 120ms var(--ease-out),
-      visibility 0s linear 160ms;
-  }
-
-  .new-session-page__composer
-    .agent-chat__composer-footer:is(:hover, :focus-within)
-    .agent-chat__composer-lead
-    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
-    opacity: 1;
-    pointer-events: auto;
-    visibility: visible;
-    transition-delay: 0s;
-  }
-}
-
-.new-session-page__visibility:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text-strong);
-}
-
-/* Active mode must read as toggled-on even while hovered: hover on an
-   inactive pill already shows a neutral fill, so active gets an accent
-   tint to stay distinguishable under the cursor. */
-.new-session-page__visibility--active,
-.new-session-page__visibility--active:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
-
-.new-session-page__visibility:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-/* The mark has to be a block: left inline it sits on the label's baseline, which
-   parks it about 2px above the row's axis while every sibling control is centred
-   on its own box. Blocking it lets the wrapper collapse to the icon so the
-   button's `align-items: center` puts it on the same line as the label. */
-.new-session-page__visibility svg {
-  display: block;
-  width: var(--chat-composer-chip-icon, 14px);
-  height: var(--chat-composer-chip-icon, 14px);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
 }
 
 /* Quiet chip row directly above the composer: the agent and place pickers
@@ -1137,19 +1034,6 @@ wa-popover.new-session-page__project-popover::part(body) {
 
   .new-session-page__select {
     position: static;
-  }
-}
-
-@container chat-composer (max-width: 480px) {
-  .new-session-page__composer .new-session-page__visibility {
-    flex: 0 0 var(--chat-composer-control-size);
-    width: var(--chat-composer-control-size);
-    padding-inline: 0;
-    justify-content: center;
-  }
-
-  .new-session-page__composer .new-session-page__visibility-label {
-    display: none;
   }
 }
 

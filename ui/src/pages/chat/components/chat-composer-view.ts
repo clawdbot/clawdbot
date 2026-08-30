@@ -1,14 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
-import { guard } from "lit/directives/guard.js";
-import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import {
@@ -21,7 +18,7 @@ import {
   renderChatPrimaryActions,
   renderComposerDictationStatus,
 } from "./chat-composer-controls.ts";
-import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
@@ -43,14 +40,9 @@ import {
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
-import {
-  ensureChatComposerPickerDismissal,
-  handleChatComposerDropdownShow,
-  markPointerOpenedChatComposerDropdown,
-  restorePointerOpenedChatComposerTrigger,
-} from "./chat-picker-overlay.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { renderChatVoiceError } from "./chat-voice-activity.ts";
+import { createComposerInputHandlers, renderComposerEditor } from "./composer-editor.ts";
 
 type ChatComposerViewContext = {
   props: ChatComposerProps;
@@ -128,9 +120,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuAnnouncementId,
     goalComposer,
   } = context;
-  if (slashMenuVisible || skillMenuVisible) {
-    ensureChatComposerPickerDismissal();
-  }
+  const inputHandlers = createComposerInputHandlers({
+    canFocus: () => canCompose,
+    onDismissInvocations: () => {
+      state.slashMenuOpen = false;
+      resetSlashMenuState(state);
+      resetSkillMenuState(state);
+      requestUpdate();
+    },
+  });
   const disabledBanner = props.disabledBanner
     ? html`
         <div
@@ -243,7 +241,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         state.dictationSelection?.end ?? visibleDraft.length,
       ).value
     : visibleDraft;
-  const draftDirection = detectTextDirection(dictationPreviewDraft);
   const interruptedStatus = props.runError
     ? nothing
     : renderChatRunStatusIndicator(composerRunStatus);
@@ -319,19 +316,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline
               ? "agent-chat__input--offline"
               : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
-            @wa-show=${handleChatComposerDropdownShow}
-            @wa-after-show=${restorePointerOpenedChatComposerTrigger}
-            @openclaw-composer-dismiss-invocations=${() => {
-              state.slashMenuOpen = false;
-              resetSlashMenuState(state);
-              resetSkillMenuState(state);
-              requestUpdate();
-            }}
-            @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
-            @pointerdown=${(event: PointerEvent) => {
-              markPointerOpenedChatComposerDropdown(event);
-              focusComposerFromChrome(event, canCompose);
-            }}
+            @wa-show=${inputHandlers.dropdownShow}
+            @wa-after-show=${inputHandlers.dropdownAfterShow}
+            @openclaw-composer-dismiss-invocations=${inputHandlers.dismissInvocations}
+            @click=${inputHandlers.click}
+            @pointerdown=${inputHandlers.pointerDown}
             ${ref(state.composerInputRef ?? undefined)}
           >
             ${slashMenuVisible
@@ -409,50 +398,39 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
 
             <div class="agent-chat__composer-input-row">
               <div class="agent-chat__composer-combobox">
-                <textarea
-                  ${ref(state.textareaRef ?? undefined)}
-                  .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
-                  dir=${draftDirection}
-                  ?disabled=${!canCompose}
-                  ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
-                  aria-autocomplete="list"
-                  aria-controls=${ifDefined(
-                    slashMenuVisible || skillMenuVisible ? slashMenuListboxId : undefined,
-                  )}
-                  aria-expanded=${ifDefined(
-                    slashMenuVisible || skillMenuVisible ? "true" : undefined,
-                  )}
-                  aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-                  aria-describedby=${`${slashMenuAnnouncementId}${
+                ${renderComposerEditor({
+                  textareaRef: state.textareaRef ?? undefined,
+                  value: dictationPreviewDraft,
+                  disabled: !canCompose,
+                  readonly: dictation?.locksComposer === true || goalComposer.pending,
+                  placeholder: dictation?.active ? "" : placeholder,
+                  label: placeholder,
+                  menuVisible: slashMenuVisible || skillMenuVisible,
+                  menuListboxId: slashMenuListboxId,
+                  activeMenuOptionId: activeSlashMenuOptionId,
+                  describedBy: `${slashMenuAnnouncementId}${
                     props.disabledReason ? ` ${disabledReasonId}` : ""
-                  }`}
-                  aria-keyshortcuts=${sendShortcut === "enter"
-                    ? "Enter"
-                    : "Control+Enter Meta+Enter"}
-                  @keydown=${handleKeyDown}
-                  @beforeinput=${handleBeforeInput}
-                  @input=${handleInput}
-                  @select=${handleSelect}
-                  @focus=${handleSelect}
-                  @pointerup=${handleSelect}
-                  @compositionstart=${(event: CompositionEvent) => {
-                    state.composerComposing = true;
-                    state.composingDraft = {
-                      key: draftKey,
-                      value: (event.target as HTMLTextAreaElement).value,
-                    };
-                  }}
-                  @compositionend=${handleCompositionEnd}
-                  @blur=${handleBlur}
-                  @paste=${(event: ClipboardEvent) => {
+                  }`,
+                  keyShortcuts: sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter",
+                  isComposing: () => state.composerComposing,
+                  onComposingChange: (composing, target) => {
+                    state.composerComposing = composing;
+                    if (composing) {
+                      state.composingDraft = { key: draftKey, value: target.value };
+                    }
+                  },
+                  onKeyDown: handleKeyDown,
+                  onBeforeInput: handleBeforeInput,
+                  onInput: handleInput,
+                  onSelectionChange: handleSelect,
+                  onCompositionEnd: handleCompositionEnd,
+                  onBlur: handleBlur,
+                  onPaste: (event) => {
                     if (canCompose && !props.suggestionComposer) {
                       handleChatAttachmentPaste(event, props);
                     }
-                  }}
-                  aria-label=${placeholder}
-                  placeholder=${dictation?.active ? "" : placeholder}
-                  rows="1"
-                ></textarea>
+                  },
+                })}
                 <span
                   id=${slashMenuAnnouncementId}
                   class="sr-only"

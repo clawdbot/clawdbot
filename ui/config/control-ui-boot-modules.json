@@ -1681,6 +1681,7 @@
  "ui/src/pages/chat/components/chat-working-indicator-surprise.ts",
  "ui/src/pages/chat/components/chat-working-indicator.ts",
  "ui/src/pages/chat/components/chat-workspace-conflict.ts",
+ "ui/src/pages/chat/components/composer-editor.ts",
  "ui/src/pages/chat/components/continue-in-terminal-dialog.ts",
  "ui/src/pages/chat/components/session-diff-menus.ts",
  "ui/src/pages/chat/components/session-diff-panel.ts",

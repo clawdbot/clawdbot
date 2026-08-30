@@ -329,7 +329,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   });
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
-    adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     if (!goalComposer.active) {
       updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
@@ -380,7 +379,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
-    state.composerComposing = false;
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
@@ -390,10 +388,8 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
-    // A dropped compositionend (detach/blur mid-IME) must not wedge the
-    // composing flag: it persists across renders and kills Enter-send,
-    // history keys, and command menus until the Send button resets it.
-    state.composerComposing = false;
+    // The shared editor clears composition before blur reaches this host;
+    // discard the chat-only staged draft at the same lifecycle boundary.
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
