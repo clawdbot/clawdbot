@@ -21,7 +21,16 @@
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1, absolutely: 1, tide: 1, beacon: 1, phosphor: 1 };
+        var THEMES = {
+          claw: 1,
+          knot: 1,
+          dash: 1,
+          absolutely: 1,
+          tide: 1,
+          beacon: 1,
+          phosphor: 1,
+          crt: 1,
+        };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -60,6 +69,7 @@
             tide: ["tide", "tide-light"],
             beacon: ["beacon", "beacon-light"],
             phosphor: ["phosphor", "phosphor-light"],
+            crt: ["crt", "crt-light"],
           };
           var pair = FAMILIES[theme];
           var resolved = pair
@@ -154,6 +164,14 @@
 
       html[data-theme="phosphor-light"] {
         background: #f4f7f4;
+      }
+
+      html[data-theme="crt"] {
+        background: #090a09;
+      }
+
+      html[data-theme="crt-light"] {
+        background: #f5f5f4;
       }
 
       body {

@@ -268,7 +268,10 @@ export async function handleInboundMatrixReaction(params: {
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
   if (runtimeBindingId) {
-    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts);
+    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts, {
+      channel: "matrix",
+      accountId: params.accountId,
+    });
   }
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {

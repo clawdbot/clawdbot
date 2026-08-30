@@ -235,7 +235,6 @@ export async function runEmbeddedFallbackCandidate(
         abortSignal: params.runAbortSignal,
         replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,
-        compactionCountOwner: "caller",
         onCompactionAccounting: (fact) => {
           compactionAccounting = fact;
         },

@@ -1622,6 +1622,29 @@ describe("direct thread avatar mode", () => {
       name: "treats explicit agent global keys as global even without a session row",
       cases: [avatarCase("agent:work:global", false)],
     },
+    {
+      name: "keeps avatars when a forwarded cross-session message joins a direct thread",
+      cases: [
+        avatarCase("kind-direct", false, {
+          sessions: sessionsListWithKind("kind-direct", "direct"),
+          messages: [
+            { role: "user", content: "hi", timestamp: 1 },
+            {
+              role: "assistant",
+              content: "forwarded report",
+              timestamp: 2,
+              senderLabel: "Forwarded from scout",
+              senderSession: { sessionKey: "agent:scout:main", agentId: "scout" },
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:scout:main",
+                sourceTool: "sessions_send",
+              },
+            },
+          ],
+        }),
+      ],
+    },
   ])("$name", ({ cases }) => {
     for (const { props, direct } of cases) {
       const container = renderChatView(props);

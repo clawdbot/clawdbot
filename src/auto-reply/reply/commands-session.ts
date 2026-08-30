@@ -437,6 +437,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     if (action === SESSION_ACTION_UNBIND) {
       await sessionBindingService.unbind({
         bindingId: activeBinding.bindingId,
+        scope: activeBinding.conversation,
         reason: "manual",
       });
       return sessionCommandReply("✅ Conversation unbound.");

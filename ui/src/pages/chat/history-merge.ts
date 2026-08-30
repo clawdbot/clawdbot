@@ -208,7 +208,7 @@ function adoptInitialUserMessage(
   if (
     identity?.role !== "user" ||
     identity.isImported ||
-    identity.runId !== handoff.pendingRunId ||
+    identity.sendId !== handoff.pendingRunId ||
     (handoffSequence !== null && identity.sequence !== handoffSequence)
   ) {
     return message;

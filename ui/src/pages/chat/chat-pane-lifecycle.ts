@@ -32,7 +32,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import * as chatAvatars from "./chat-avatar.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -379,8 +379,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }
-    const state = this.state;
-    if (!state) {
+    if (!this.state) {
       return;
     }
     const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);
@@ -580,10 +579,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         }
         if (state) {
           if (event.event === "config.changed") {
-            invalidateChatAvatarCache(state);
+            chatAvatars.invalidateChatAvatarCache(state);
             invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
-            void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
@@ -670,6 +669,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    void chatAvatars.refreshSenderAgentAvatars(this.state);
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
@@ -699,6 +699,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   override disconnectedCallback() {
     if (this.state) {
+      chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
         // MCP app teardown can delay DOM removal after pane close. Finalize any

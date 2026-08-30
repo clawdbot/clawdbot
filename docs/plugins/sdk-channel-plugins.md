@@ -384,8 +384,8 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectConversationBinding(...)` from
-`openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
+Use `inspectSessionBindingByConversation(...)` from
+`openclaw/plugin-sdk/session-binding-runtime` when the resolver needs this
 available/unavailable distinction.
 
 ### Account-scoped conversation binding support
@@ -410,6 +410,24 @@ configured binding rules or plugin-owned session routing. Contract tests
 should cover at least one supported and one unsupported account through the
 `ChannelPlugin["conversationBindings"]` contract exported by
 `openclaw/plugin-sdk/channel-core`.
+
+Binding ids are local to a channel and account. `SessionBindingService.touch(bindingId, at?, scope?)`
+and `unbind({ bindingId, reason, scope })` accept an optional `{ channel, accountId }`
+scope to select that owner. For an individual mutation, pass the existing binding's
+`conversation` as the scope. For example, to detach a resolved binding:
+
+```ts
+await getSessionBindingService().unbind({
+  bindingId: binding.bindingId,
+  scope: binding.conversation,
+  reason: "manual",
+});
+```
+
+Import `getSessionBindingService` from `openclaw/plugin-sdk/session-binding-runtime`.
+For activity updates, use `service.touch(binding.bindingId, at, binding.conversation)`.
+Omit scope only for intentional global cleanup or an existing legacy cross-channel
+operation. Scope does not change binding ids or require a new adapter method.
 
 ## Approvals and channel capabilities
 

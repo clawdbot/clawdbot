@@ -1260,6 +1260,7 @@ img.chat-avatar.chat-avatar--logo {
 :root[data-theme="absolutely"] .chat-confirm-popover__yes,
 :root[data-theme="tide"] .chat-confirm-popover__yes,
 :root[data-theme="phosphor"] .chat-confirm-popover__yes,
+:root[data-theme="crt"] .chat-confirm-popover__yes,
 :root[data-theme="beacon"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
@@ -1278,6 +1279,7 @@ img.chat-avatar.chat-avatar--logo {
 :root[data-theme="absolutely"] .chat-confirm-popover__yes:hover,
 :root[data-theme="tide"] .chat-confirm-popover__yes:hover,
 :root[data-theme="phosphor"] .chat-confirm-popover__yes:hover,
+:root[data-theme="crt"] .chat-confirm-popover__yes:hover,
 :root[data-theme="beacon"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }

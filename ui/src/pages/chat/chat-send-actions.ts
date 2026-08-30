@@ -14,6 +14,7 @@ import {
   resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
   scheduleStoredChatOutboxDrain,
 } from "./chat-outbox-drain.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
@@ -36,7 +37,7 @@ import {
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   activeQueuedMessageEdit,
@@ -99,10 +100,6 @@ export async function sendChatMessageWithGeneratedRunId(
     const error = applyChatSendError(state, err, canApplyError);
     return err instanceof GatewayRequestError ? { kind: "rejected" as const, error } : null;
   }
-}
-
-function findStoredOutbox(host: ChatHost, id: string) {
-  return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
 }
 
 const resetRetryState = (
@@ -246,7 +243,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   ) {
     return;
   }
-  let outbox = findStoredOutbox(host, item.id);
+  let outbox = chatOutboxOwner(host).durable(host, item.id);
   if (!outbox) {
     const wasVolatile = isVolatileQueuedMessage(host, item.id);
     if (!admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)) {
@@ -281,7 +278,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
-  outbox = findStoredOutbox(host, retry.id);
+  outbox = chatOutboxOwner(host).durable(host, retry.id);
   if (!outbox) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;

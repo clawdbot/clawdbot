@@ -285,13 +285,15 @@ async function sendQueuedChatMessage(
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
-    // Steers continue the current run, so its transient commentary and tools keep that ownership.
-    if (prepared.queueMode !== "steer" || !host.chatRunId) {
+    // Keep the current run intact until an ACK or live event owns its replacement.
+    if (!host.chatRunId) {
       resetToolStream(host);
     }
     setChatError(host, null);
     reconcileChatRunLifecycle(host, {
       clearRunStatus: true,
+      // A send has not replaced the active run; its progress and approvals still belong to it.
+      clearIndicators: !host.chatRunId,
     });
   }
 

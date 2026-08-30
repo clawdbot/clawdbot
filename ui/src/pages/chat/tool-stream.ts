@@ -28,7 +28,7 @@ import {
   uiSessionEventMatches,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { reconcileChatRunStartup, type ChatRunStartupState } from "./chat-run-startup.ts";
 import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -871,6 +871,9 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
     return true;
   }
+  if (progress.text) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
+  }
   const persisted =
     progress.itemId &&
     host.chatMessages?.some((message) => {
@@ -1127,7 +1130,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ? entry.name
       : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
-    host.chatRunStartup = { state: "activity", runId: payload.runId };
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
   }
   const args = phase === "start" ? data.args : undefined;
   const output =

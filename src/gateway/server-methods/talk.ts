@@ -260,6 +260,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
   );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
+  const realtimeProviderIds = Object.keys(realtimeConfig.providers);
   const realtimeSurface =
     realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
   // Mirror talk.client.create's resolution inputs (agent scope + top-level model
@@ -375,11 +376,12 @@ function buildTalkCatalog(config: OpenClawConfig) {
     realtime: {
       ready: realtimeSelection.ready,
       ...(activeRealtimeProvider ? { activeProvider: activeRealtimeProvider } : {}),
-      providers: listRealtimeVoiceProviders(config).map((provider) => {
+      providers: listRealtimeVoiceProviders(config, realtimeProviderIds).map((provider) => {
         const available = isSecretOwnerAvailable("capability", "talk:realtime");
         const rawConfig = resolveProviderRawConfig({
           providerConfigs: realtimeConfig.providers ?? {},
           providerId: provider.id,
+          providerAliases: provider.aliases,
           configuredProviderId:
             provider.id === activeRealtimeProvider ? realtimeConfig.provider : undefined,
         });
@@ -443,7 +445,9 @@ function buildTalkCatalog(config: OpenClawConfig) {
           entry.transports = [...capabilities.transports];
         }
         if (capabilities?.inputAudioFormats) {
-          entry.inputAudioFormats = capabilities.inputAudioFormats.map((format) => ({ ...format }));
+          entry.inputAudioFormats = capabilities.inputAudioFormats.map((format) => ({
+            ...format,
+          }));
         }
         if (capabilities?.outputAudioFormats) {
           entry.outputAudioFormats = capabilities.outputAudioFormats.map((format) => ({

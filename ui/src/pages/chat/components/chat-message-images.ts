@@ -10,13 +10,12 @@ import {
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
-  buildAssistantAttachmentUrl,
-  isLocalAssistantAttachmentSource,
-  isLocalAttachmentPreviewAllowed,
-} from "./chat-message-local-media.ts";
+  resolveAssistantAttachmentAvailability,
+  resolveManagedOutgoingMediaSessionKey,
+} from "./chat-message-attachment-availability.ts";
+import { openResolvedImage } from "./chat-message-image-open.ts";
+import { buildAssistantAttachmentUrl } from "./chat-message-local-media.ts";
 import {
   cacheManagedImageBlobUrl,
   isChatMediaResourceCurrent,
@@ -114,31 +113,21 @@ export function resolveRenderableMessageImages(
   opts?: ImageRenderOptions,
 ): RenderableImageBlock[] {
   return images.flatMap((img) => {
-    const isLocalImage = isLocalAssistantAttachmentSource(img.url);
-    const localMediaPreviewRoots = opts?.localMediaPreviewRoots ?? [];
-    // Until bootstrap supplies roots, let authenticated Gateway metadata decide.
-    const canProxyLocalImage =
-      isLocalImage &&
-      (localMediaPreviewRoots.length === 0 ||
-        isLocalAttachmentPreviewAllowed(img.url, localMediaPreviewRoots));
-    if (isLocalImage && !canProxyLocalImage) {
-      return [];
-    }
-    const availability = canProxyLocalImage
-      ? resolveAssistantAttachmentAvailability(
-          img.url,
-          localMediaPreviewRoots,
-          opts?.resourceBasePath,
-          opts?.authToken,
-          opts?.onRequestUpdate,
-        )
-      : { status: "available" as const };
+    const availability = resolveAssistantAttachmentAvailability(
+      img.url,
+      opts?.localMediaPreviewRoots ?? [],
+      opts?.resourceBasePath,
+      opts?.authToken,
+      opts?.onRequestUpdate,
+    );
     if (availability.status !== "available") {
       return [];
     }
-    const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.resourceBasePath, availability.mediaTicket)
-      : img.url;
+    const displayUrl = buildAssistantAttachmentUrl(
+      img.url,
+      opts?.resourceBasePath,
+      availability.mediaTicket,
+    );
     return [{ ...img, displayUrl }];
   });
 }
@@ -162,7 +151,7 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
       img.artifactId,
       "full",
     );
-    const cached = readManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full");
+    const cached = readManagedImageBlobUrl(cacheKey);
     if (cached) {
       const release = opts?.onOpenImage ? retainManagedImageBlobUrl(cacheKey) : undefined;
       openResolvedImage(opts?.onOpenImage, cached, title, release, requestVersion);
@@ -270,17 +259,6 @@ function isManagedOutgoingImageSource(source: string): boolean {
   }
 }
 
-function resolveManagedOutgoingImageRequesterSessionKey(source: string): string | null {
-  try {
-    const parsed = new URL(source, window.location.origin);
-    const parts = parsed.pathname.split("/");
-    const encodedSessionKey = parts[5];
-    return encodedSessionKey ? decodeURIComponent(encodedSessionKey) : null;
-  } catch {
-    return null;
-  }
-}
-
 function resolveManagedOutgoingImageBlobUrlCacheKey(
   source: string,
   opts?: ImageRenderOptions,
@@ -289,17 +267,6 @@ function resolveManagedOutgoingImageBlobUrlCacheKey(
 ): string {
   const authToken = opts?.authToken?.trim() ?? "";
   return `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${authToken}::${artifactId?.trim() ?? ""}`;
-}
-
-function readManagedOutgoingImageBlobUrl(
-  source: string,
-  opts?: ImageRenderOptions,
-  artifactId?: string,
-  variant: ManagedImageVariant = "thumbnail",
-): string | undefined {
-  return readManagedImageBlobUrl(
-    resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId, variant),
-  );
 }
 
 async function resolveManagedOutgoingImageBlobUrl(
@@ -402,7 +369,7 @@ async function fetchManagedOutgoingImageBlob(
   variant: ManagedImageVariant,
   controller = new AbortController(),
 ): Promise<Blob | null> {
-  const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
+  const requesterSessionKey = resolveManagedOutgoingMediaSessionKey(source);
   const artifactDownload =
     requesterSessionKey && artifactId && opts?.resolveArtifactDownload
       ? await opts

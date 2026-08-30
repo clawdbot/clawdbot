@@ -1866,6 +1866,10 @@ export const en: TranslationMap = {
         label: "Phosphor",
         description: "Green on glass",
       },
+      crt: {
+        label: "CRT",
+        description: "Console mono",
+      },
     },
     textSizes: {
       small: "Small",

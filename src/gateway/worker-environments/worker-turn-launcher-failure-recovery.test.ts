@@ -390,6 +390,7 @@ describe("worker turn launcher failure recovery", () => {
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,

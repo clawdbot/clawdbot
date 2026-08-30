@@ -17,11 +17,7 @@ import { getTaskById, findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import {
-  killAllControlledSubagentRuns,
-  killControlledSubagentRun,
-  killSubagentRunAdmin,
-} from "./subagent-control.js";
+import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -289,7 +285,7 @@ it.each([
 );
 
 it.each(
-  (["bulk", "controlled", "admin"] as const).flatMap((boundary) =>
+  (["bulk", "admin"] as const).flatMap((boundary) =>
     ["ordinary retirement", "session replacement", "lifecycle rotation", "owner replacement"].map(
       (transition) => ({ boundary, transition }),
     ),
@@ -359,15 +355,13 @@ it.each(
   const pending =
     boundary === "bulk"
       ? killAllControlledSubagentRuns({ cfg, controller, runs: [ancestor] })
-      : boundary === "controlled"
-        ? killControlledSubagentRun({ cfg, controller, entry: ancestor })
-        : killSubagentRunAdmin({
-            cfg,
-            sessionKey: ancestorKey,
-            expectedRunId: ancestor.runId,
-            expectedGeneration: ancestor.generation,
-            expectedOwnerKey: controllerSessionKey,
-          });
+      : killSubagentRunAdmin({
+          cfg,
+          sessionKey: ancestorKey,
+          expectedRunId: ancestor.runId,
+          expectedGeneration: ancestor.generation,
+          expectedOwnerKey: controllerSessionKey,
+        });
   try {
     await entered.promise;
     // Independent canonical termination during the drain, followed by modeled
@@ -413,9 +407,7 @@ it.each(
     expect(result).toMatchObject(
       boundary === "bulk"
         ? { status: "ok", killed: 1 }
-        : boundary === "controlled"
-          ? { status: "ok", cascadeKilled: 1 }
-          : { found: true, killed: true, cascadeKilled: 1 },
+        : { found: true, killed: true, cascadeKilled: 1 },
     );
   } finally {
     admission.release();
@@ -464,7 +456,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
     const handle = createEmbeddedRunHandle({ abort, runId: "fixed-store-child" });
     setActiveEmbeddedRun(sessionId, handle, childSessionKey);
     try {
-      const result = await killControlledSubagentRun({
+      const result = await killAllControlledSubagentRuns({
         cfg: { ...getRuntimeConfig(), session: { store } },
         controller: {
           controllerSessionKey: "agent:main:main",
@@ -473,10 +465,10 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
           callerIsSubagent: false,
           controlScope: "children",
         },
-        entry: subagentRuns.get("fixed-store-child")!,
+        runs: [subagentRuns.get("fixed-store-child")!],
       });
       expect(abort, JSON.stringify(result)).toHaveBeenCalledOnce();
-      expect(result).toMatchObject({ status: "ok", killed: true });
+      expect(result).toMatchObject({ status: "ok", killed: 1 });
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(
         true,
       );
