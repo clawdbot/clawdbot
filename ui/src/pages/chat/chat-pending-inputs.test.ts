@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createInitializationContext } from "./chat-pane.test-support.ts";
 import {
   applyChatPendingInputs,
   getChatPendingInputs,
@@ -13,6 +14,7 @@ import {
 import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
 
@@ -30,6 +32,22 @@ const input: ChatPendingInputsPage["items"][number] = {
   },
 };
 const page: ChatPendingInputsPage = { items: [input], total: 2, nextBefore: 2 };
+
+function makeChatPageHost({
+  requestHandlers,
+  ...overrides
+}: Partial<ChatPageHost> & { requestHandlers: Record<string, unknown> }) {
+  const { client, hello, request, sessions } = makeChatHost({ requestHandlers });
+  const context = { ...createInitializationContext(), sessions };
+  const host = createPageState(
+    context,
+    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { querySelector: () => null },
+  );
+  Object.assign(host, { client, hello, connected: true }, overrides);
+  return Object.assign(host, { request });
+}
+
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
@@ -42,7 +60,7 @@ describe("server-owned pending input display", () => {
   it.each(["send", "agent.run.started", "agent.input.settled"])(
     "refreshes accepted inputs on %s while a retained pane is running",
     async (reason) => {
-      const host = makeChatHost({
+      const host = makeChatPageHost({
         sessionKey,
         currentSessionId: sessionId,
         chatRunId: "active-run",
@@ -57,10 +75,8 @@ describe("server-owned pending input display", () => {
         },
       });
       applyChatPendingInputs(host, { items: [], total: 0 });
-      // SAFETY: This event path uses the chat/session owners supplied by makeChatHost.
-      const state = host as ChatPageHost;
       handlePageGatewayEvent(
-        state,
+        host,
         {
           type: "event",
           event: "sessions.changed",
@@ -93,7 +109,7 @@ describe("server-owned pending input display", () => {
       };
       const toolMessage = { role: "assistant", runId: "active-run", toolCallId: "live-tool" };
       let historyReads = 0;
-      const host = makeChatHost({
+      const host = makeChatPageHost({
         sessionKey,
         currentSessionId: sessionId,
         chatRunId: runId,
@@ -134,9 +150,7 @@ describe("server-owned pending input display", () => {
       });
       applyChatPendingInputs(host, page);
       const loading = loadChatHistory(host);
-      // SAFETY: This event path uses the chat/session owners supplied by makeChatHost.
-      const state = host as ChatPageHost;
-      handlePageGatewayEvent(state, {
+      handlePageGatewayEvent(host, {
         type: "event",
         event: "session.message",
         payload: {
