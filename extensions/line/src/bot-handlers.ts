@@ -442,7 +442,7 @@ async function handleMessageEvent(
     const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
     // LINE splits one multi-image send into several webhook events. The spool
     // hands the whole set here, so every part's media joins one turn.
-    for (const part of [message, ...setParts.map((partEvent) => partEvent.message)]) {
+    for (const part of orderedLineSetMessages(message, setParts)) {
       if (!isDownloadableLineMessageType(part.type)) {
         continue;
       }
@@ -624,6 +624,17 @@ async function handlePostbackEvent(
  * and the durable spool hands the parts of one multi-image send over together;
  * those parts share a turn while everything else keeps its own.
  */
+/** Media reads in the order the sender picked, whatever order LINE delivered. */
+function orderedLineSetMessages(
+  message: MessageEvent["message"],
+  setParts: readonly MessageEvent[],
+): readonly MessageEvent["message"][] {
+  const messages = [message, ...setParts.map((partEvent) => partEvent.message)];
+  const indexOf = (part: (typeof messages)[number]) =>
+    part.type === "image" ? (part.imageSet?.index ?? Number.MAX_SAFE_INTEGER) : 0;
+  return messages.toSorted((left, right) => indexOf(left) - indexOf(right));
+}
+
 function groupLineDeliveryTurns(events: readonly WebhookEvent[]): WebhookEvent[][] {
   const turns: WebhookEvent[][] = [];
   const bySetId = new Map<string, WebhookEvent[]>();
@@ -634,7 +645,16 @@ function groupLineDeliveryTurns(events: readonly WebhookEvent[]): WebhookEvent[]
         : undefined;
     const joined = setId === undefined ? undefined : bySetId.get(setId);
     if (joined) {
-      joined.push(event);
+      // The turn answers as its freshest part: reply tokens expire, so a set
+      // delivered out of order must not reply with the oldest one's token.
+      // Media order is decided separately, by the index the sender picked.
+      const head = joined[0];
+      if (head && event.timestamp > head.timestamp) {
+        joined[0] = event;
+        joined.push(head);
+      } else {
+        joined.push(event);
+      }
       continue;
     }
     const started = [event];

@@ -179,13 +179,19 @@ vi.mock("./send.js", () => ({
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
-  buildLineMessageContextMock: vi.fn(async (_params: { allMedia?: unknown[] }) => ({
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  })),
+  buildLineMessageContextMock: vi.fn(
+    async (_params: {
+      allMedia?: { path: string }[];
+      // The event the turn answers as: its reply token is what reaches LINE.
+      event?: { replyToken?: string };
+    }) => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }),
+  ),
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
@@ -1637,6 +1643,55 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
     // Every part's media reaches the one turn that speaks for the set.
     expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.allMedia).toHaveLength(3);
+  });
+
+  it("answers a set with its freshest part while media keeps the picked order", async () => {
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const base = 1_700_000_000_000;
+    const imagePart = (messageId: string, index: number, arrivedAt: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-fresh", index, total: 3 },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${index}`,
+        replyToken: `reply-${index}`,
+        timestamp: arrivedAt,
+      });
+
+    // Delivered 2, 1, 3: image 3 is the freshest arrival, image 1 the oldest.
+    await handleLineWebhookEvents(
+      [
+        imagePart("m2", 2, base + 200),
+        imagePart("m1", 1, base + 100),
+        imagePart("m3", 3, base + 300),
+      ],
+      context,
+    );
+
+    // The turn speaks as the freshest part: a reply token expires, so answering
+    // with image 1's would risk a token that is already stale.
+    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+    expect(built?.event?.replyToken).toBe("reply-3");
+    // Media still reads in the order the sender picked them.
+    expect(built?.allMedia?.map((media) => media.path)).toEqual([
+      "/media/m1.png",
+      "/media/m2.png",
+      "/media/m3.png",
+    ]);
   });
 
   it("keeps events that are not part of a set on their own turns", async () => {
