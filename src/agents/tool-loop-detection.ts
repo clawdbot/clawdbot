@@ -170,6 +170,34 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   return undefined;
 }
 
+// These spans describe when an exec failed, not why. Preserve every other
+// diagnostic token so a new error, exit code, or cause resets the streak.
+const VOLATILE_EXEC_FAILURE_PATTERNS = [
+  /\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:z|[+-]\d{2}:\d{2})?/giu,
+  /\d{4}-\d{2}-\d{2}/gu,
+  /\d{1,2}:\d{2}:\d{2}(?:\.\d{1,6})?/gu,
+  /\b(?:attempt|retry)\b[\s#:=]*\d+/giu,
+  /\b\d+(?:\.\d+)?\s?(?:ns|us|ms|seconds?|minutes?|hours?)\b/giu,
+  /\b(?:pid|ppid)\b[\s#:=]*\d+/giu,
+] as const;
+
+function hashExecFailureIdentity(
+  details: Record<string, unknown>,
+  exitCode: number,
+  output: string,
+): string {
+  let outputShape = output;
+  for (const pattern of VOLATILE_EXEC_FAILURE_PATTERNS) {
+    outputShape = outputShape.replace(pattern, "#");
+  }
+  return digestToolOutcome({
+    status: details.status,
+    exitCode,
+    timedOut: details.timedOut === true,
+    output: outputShape,
+  });
+}
+
 // Delivery results carry fresh per-call ids (messageId/runId) in details and text, so
 // hashing them defeats no-progress loop blocking (#89090). Hash only id-stripped facts
 // for outbound-message actions; other `message` actions keep full hashing (real progress).
@@ -259,12 +287,17 @@ function isLoopVetoResult(details: Record<string, unknown>): boolean {
   return details.status === "blocked" && details.deniedReason === "tool-loop";
 }
 
+type ToolCallOutcome = Pick<
+  ToolCallRecord,
+  "failureIdentityHash" | "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName"
+>;
+
 function hashToolOutcome(
   toolName: string,
   params: unknown,
   result: unknown,
   error: unknown,
-): Pick<ToolCallRecord, "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName"> {
+): ToolCallOutcome {
   if (error !== undefined) {
     const unknownToolName = extractUnknownToolName(error);
     return {
@@ -299,7 +332,11 @@ function hashToolOutcome(
         output !== "" &&
         output !== `(Command exited with code ${exitCode})`;
       return terminalFailure
-        ? { resultHash: execHash, outcomeKind: "terminal-exec-failure" }
+        ? {
+            resultHash: execHash,
+            outcomeKind: "terminal-exec-failure",
+            failureIdentityHash: hashExecFailureIdentity(details, exitCode, output),
+          }
         : { resultHash: execHash };
     }
   }
@@ -704,6 +741,7 @@ export function recordToolCallOutcome(
     }
     call.outcomeKind = outcome.outcomeKind;
     call.resultHash = outcome.resultHash;
+    call.failureIdentityHash = outcome.failureIdentityHash;
     if (outcome.noProgress) {
       call.noProgress = true;
     } else {
@@ -723,6 +761,7 @@ export function recordToolCallOutcome(
       ...(runId && { runId }),
       outcomeKind: outcome.outcomeKind,
       resultHash: outcome.resultHash,
+      failureIdentityHash: outcome.failureIdentityHash,
       ...(outcome.noProgress ? { noProgress: true as const } : {}),
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),

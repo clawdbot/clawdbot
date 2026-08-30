@@ -21,7 +21,7 @@ function countNoProgressStreak(
   terminalExecFailuresOnly: boolean,
 ): { count: number; latestResultHash?: string } {
   let streak = 0;
-  let latestResultHash: string | undefined;
+  let latestOutcome: ToolCallRecord | undefined;
   // Vetoes are provisional until an older concrete outcome anchors them; a newer
   // changed outcome must reset vetoes from the previous no-progress streak.
   let pendingLoopVetoes = 0;
@@ -50,13 +50,26 @@ function countNoProgressStreak(
     if (terminalExecFailuresOnly && record.outcomeKind !== "terminal-exec-failure") {
       break;
     }
-    if (!latestResultHash) {
-      latestResultHash = record.resultHash;
+    if (!latestOutcome) {
+      latestOutcome = record;
       streak = pendingLoopVetoes + 1;
       pendingLoopVetoes = 0;
       continue;
     }
-    if (record.resultHash !== latestResultHash) {
+    // A return to an earlier command starts a new tail. Changing arguments can
+    // still count when each new command keeps failing in the same typed way.
+    if (
+      terminalExecFailuresOnly &&
+      latestOutcome.argsHash !== argsHash &&
+      record.argsHash === argsHash
+    ) {
+      break;
+    }
+    const repeatsSameFailure =
+      terminalExecFailuresOnly &&
+      record.failureIdentityHash !== undefined &&
+      record.failureIdentityHash === latestOutcome.failureIdentityHash;
+    if (record.resultHash !== latestOutcome.resultHash && !repeatsSameFailure) {
       break;
     }
     streak += pendingLoopVetoes + 1;
@@ -64,7 +77,7 @@ function countNoProgressStreak(
   }
 
   return {
-    count: latestResultHash ? streak : terminalExecFailuresOnly ? 0 : pendingLoopVetoes,
-    latestResultHash,
+    count: latestOutcome ? streak : terminalExecFailuresOnly ? 0 : pendingLoopVetoes,
+    latestResultHash: latestOutcome?.resultHash,
   };
 }
