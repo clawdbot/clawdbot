@@ -157,12 +157,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   }
 
   const usage = runResult.meta?.agentMeta?.usage;
-  const hasBillableUsageBuckets =
-    usage &&
-    (usage.input !== undefined ||
-      usage.output !== undefined ||
-      usage.cacheRead !== undefined ||
-      usage.cacheWrite !== undefined);
   const promptTokens = runResult.meta?.agentMeta?.promptTokens;
   const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed =
@@ -363,7 +357,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,

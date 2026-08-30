@@ -91,7 +91,12 @@ describe("session list resolver cache", () => {
     },
   );
 
-  test("collapses request-local resolver work to O(unique provider/model tuples)", () => {
+  test.each([
+    { name: "legacy flat estimate", recorded: undefined, tiered: false, expected: 0.00015 },
+    { name: "recorded per-call total", recorded: 0.25, tiered: true, expected: 0.25 },
+    { name: "recorded zero", recorded: 0, tiered: true, expected: 0 },
+    { name: "unknown tiered total", recorded: undefined, tiered: true, expected: undefined },
+  ])("bounds resolver work and preserves $name", ({ recorded, tiered, expected }) => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -118,6 +123,19 @@ describe("session list resolver cache", () => {
       output: 1,
       cacheRead: 0,
       cacheWrite: 0,
+      ...(tiered
+        ? {
+            tieredPricing: [
+              {
+                input: 2,
+                output: 2,
+                cacheRead: 0,
+                cacheWrite: 0,
+                range: [0, Infinity] as [number, number],
+              },
+            ],
+          }
+        : {}),
     });
     try {
       for (let index = 0; index < rowCount; index += 1) {
@@ -133,6 +151,7 @@ describe("session list resolver cache", () => {
           model: tuple.model,
           inputTokens: 100,
           outputTokens: 50,
+          estimatedCostUsd: recorded,
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -153,20 +172,23 @@ describe("session list resolver cache", () => {
             rowContext,
           }).thinkingOptions,
         ).toEqual(["Off"]);
-        expect(
-          resolveEstimatedSessionCostUsd({
-            cfg,
-            provider: tuple.modelProvider,
-            model: tuple.model,
-            entry,
-            rowContext,
-          }),
-        ).toBeDefined();
+        const resolvedCost = resolveEstimatedSessionCostUsd({
+          cfg,
+          provider: tuple.modelProvider,
+          model: tuple.model,
+          entry,
+          rowContext,
+        });
+        if (expected !== undefined) {
+          expect(resolvedCost).toBeCloseTo(expected, 10);
+        } else {
+          expect(resolvedCost).toBeUndefined();
+        }
       }
 
-      // Both caches key on the five unique tuples, not all 30 rows.
+      // Recorded prices bypass lookup; legacy fallback still scales by model, not row.
       expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
-      expect(costSpy).toHaveBeenCalledTimes(tuples.length);
+      expect(costSpy).toHaveBeenCalledTimes(recorded !== undefined ? 0 : tuples.length);
     } finally {
       thinkingSpy.mockRestore();
       costSpy.mockRestore();

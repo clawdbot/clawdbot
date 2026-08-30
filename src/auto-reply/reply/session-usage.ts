@@ -8,6 +8,7 @@ import {
 } from "../../agents/cli-session.js";
 import {
   deriveSessionTotalTokens,
+  hasBillableUsage,
   hasNonzeroUsage,
   type NormalizedUsage,
 } from "../../agents/usage.js";
@@ -22,7 +23,7 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
   params: {
@@ -83,7 +84,7 @@ function estimateSessionRunCostUsd(params: {
   providerUsed?: string;
   modelUsed?: string;
 }): number | undefined {
-  if (!hasNonzeroUsage(params.usage)) {
+  if (!hasBillableUsage(params.usage)) {
     return undefined;
   }
   const cost = resolveModelCostConfig({
@@ -92,7 +93,7 @@ function estimateSessionRunCostUsd(params: {
     config: params.cfg,
     agentDir: params.agentDir,
   });
-  return asNonNegativeFiniteNumber(estimateUsageCost({ usage: params.usage, cost }));
+  return asNonNegativeFiniteNumber(estimateAggregateUsageCost({ usage: params.usage, cost }));
 }
 
 /** Persists usage accounting and selected runtime metadata to the session store. */
@@ -143,6 +144,7 @@ export async function persistSessionUsageUpdate(params: {
   const cfg = params.cfg ?? getRuntimeConfig();
   const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const hasUsage = hasNonzeroUsage(params.usage);
+  const hasBilling = hasBillableUsage(params.usage);
   const hasPromptTokens =
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
@@ -153,13 +155,13 @@ export async function persistSessionUsageUpdate(params: {
   const hasCurrentContextSnapshot = params.currentContextSnapshot !== undefined;
   const currentContextTokens = resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens);
 
-  if (
+  // A monetary-only update must not invalidate the existing context observation.
+  const hasContextUpdate =
     hasUsage ||
     hasFreshContextSnapshot ||
     hasCurrentContextSnapshot ||
-    params.modelUsed ||
-    params.contextTokensUsed
-  ) {
+    Boolean(params.modelUsed || params.contextTokensUsed);
+  if (hasBilling || hasContextUpdate) {
     try {
       await patchSessionEntryCore(
         { agentId, storePath, sessionKey },
@@ -233,10 +235,9 @@ export async function persistSessionUsageUpdate(params: {
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
-          // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
-          // cumulative run usage, so assign directly instead of accumulating).
-          // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
-          if (runEstimatedCostUsd !== undefined) {
+          if (hasBilling && !preserveUserFacingRunState) {
+            // Snapshot cumulative run cost once, including unknown cost; accumulating
+            // or retaining a prior amount would attach stale dollars to new tokens.
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
           if (totalTokens !== undefined && !preserveUserFacingRunState) {
@@ -249,6 +250,7 @@ export async function persistSessionUsageUpdate(params: {
             }
           } else if (
             !preserveUserFacingRunState &&
+            hasContextUpdate &&
             (hasCurrentContextSnapshot ||
               params.preserveFreshTotalTokensOnStaleUsage !== true ||
               entry.totalTokensFresh !== true)

@@ -1,4 +1,5 @@
 // Status message helpers read and format stored status messages.
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -68,7 +69,7 @@ import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import {
-  estimateUsageCost,
+  estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
@@ -944,18 +945,20 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         allowPluginNormalization: false,
       })
     : undefined;
-  const cost = hasUsage
-    ? estimateUsageCost({
-        usage: {
-          input: inputTokens ?? undefined,
-          output: outputTokens ?? undefined,
-          cacheRead: cacheRead ?? undefined,
-          cacheWrite: cacheWrite ?? undefined,
-        },
-        cost: costConfig,
-      })
-    : undefined;
-  const costLabel = hasUsage ? formatUsd(cost) : undefined;
+  const cost =
+    asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
+    (hasUsage
+      ? estimateAggregateUsageCost({
+          usage: {
+            input: inputTokens ?? undefined,
+            output: outputTokens ?? undefined,
+            cacheRead: cacheRead ?? undefined,
+            cacheWrite: cacheWrite ?? undefined,
+          },
+          cost: costConfig,
+        })
+      : undefined);
+  const costLabel = formatUsd(cost);
 
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
