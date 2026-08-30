@@ -975,7 +975,7 @@ describe("buildGatewayInstallPlan", () => {
     const warn = vi.fn();
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       platform: "linux",
