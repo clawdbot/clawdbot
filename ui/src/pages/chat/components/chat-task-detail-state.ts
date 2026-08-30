@@ -33,6 +33,7 @@ export type TaskDetailHost = UiSessionDefaultsHost & {
   connected: boolean;
   connectionEpoch?: number;
   requestUpdate?: () => void;
+  sessionsResultAgentId?: string | null;
   taskDetailState?: TaskDetailState;
 };
 

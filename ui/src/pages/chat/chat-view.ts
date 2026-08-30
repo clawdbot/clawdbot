@@ -181,7 +181,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     sessions: SessionsListResult | null;
-    selectedSession?: GatewaySessionRow;
+    selectedSession: GatewaySessionRow | undefined;
     toolOverrides?: SessionToolOverrides;
     capabilityMenu?: CapabilityMenuProps;
     swarmSessions?: readonly GatewaySessionRow[];
@@ -342,6 +342,7 @@ export function renderChat(props: ChatProps) {
     {
       paneId: props.paneId,
       sessionKey: props.sessionKey,
+      selectedSession: props.selectedSession,
       announceTranscript: props.announceTranscript,
       loading: props.loading && !placementStartup,
       historyPagination: props.historyPagination,
