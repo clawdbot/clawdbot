@@ -15,6 +15,7 @@ import {
   type SessionChangedResult,
 } from "../../lib/sessions/reconcile.ts";
 import {
+  resolveUiConversationIdentity,
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -47,7 +48,6 @@ import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
-import { resolveStoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -635,7 +635,7 @@ export function handlePageGatewayEvent(
     }
     // A cold Blob read may finish after another connection or retry takes over.
     // Apply the terminal only after its complete user turn owns independent bytes.
-    const scope = resolveStoredChatOutboxScope(
+    const scope = resolveUiConversationIdentity(
       state,
       terminalPayload.sessionKey,
       isUiGlobalSessionKey(terminalPayload.sessionKey)

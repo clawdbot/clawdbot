@@ -23,7 +23,7 @@ import {
   excludeComposerAttachments,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
 } from "./chat-queue.ts";
 import { createResetSlashCommandSender } from "./chat-reset-delivery.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
@@ -80,7 +80,7 @@ async function settleDeliverySettings(
   consumed: Set<Promise<boolean>>,
 ): Promise<ChatQueueItem | QueuedChatSendResult> {
   const route = options?.routingSessionKey ?? queueSessionKey;
-  const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
+  const setState = deliveryStateWriter(host, storageMode, item.id);
   const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   let current = readQueuedMessageById(host, item.id);
   let pendingSettings =
@@ -119,14 +119,12 @@ function publishSettledDeliverySettings(
   host: ChatHost,
   item: ChatQueueItem,
   storageMode: QueuedChatStorageMode,
-  queueSessionKey: string,
 ): ChatQueueItem | QueuedChatSendResult {
   // Keep one non-drainable durable barrier across the complete picker tail.
   // Publishing earlier can let reconnect race a newer or cancelled selection.
   const current = deliveryStateWriter(
     host,
     storageMode,
-    queueSessionKey,
     item.id,
   )(reconnectSafeQueuedSendState(host));
   if (!current) {
@@ -193,7 +191,7 @@ async function sendQueuedChatMessage(
     return prepared;
   }
   if (consumedSettings.size) {
-    prepared = publishSettledDeliverySettings(host, prepared, storageMode, queueSessionKey);
+    prepared = publishSettledDeliverySettings(host, prepared, storageMode);
     if (typeof prepared === "string") {
       return prepared;
     }
@@ -208,7 +206,7 @@ async function sendQueuedChatMessage(
   if (!prepared.sendRunId || !prepared.sendState) {
     const sessionKey = prepared.sessionKey ?? queuedSessionKey;
     prepared =
-      updateQueuedSendItem(host, storageMode, sessionKey, prepared.id, (item) => ({
+      updateQueuedSendItem(host, storageMode, prepared.id, (item) => ({
         ...item,
         sendAttempts: item.sendAttempts ?? 0,
         sendRunId: item.sendRunId ?? generateUUID(),
@@ -231,11 +229,11 @@ async function sendQueuedChatMessage(
   const message = prepared.intent ? prepared.text : prepared.text.trim();
   const attachments = (queued.attachmentPayload ? queued.attachments : prepared.attachments) ?? [];
   if (!message && attachments.length === 0) {
-    removeQueuedMessageWithoutReleasing(host, id, prepared.sessionKey ?? host.sessionKey);
+    removeQueuedMessageWithoutReleasing(host, id);
     return "sent";
   }
   const sessionKey = prepared.sessionKey ?? host.sessionKey;
-  const setState = deliveryStateWriter(host, storageMode, sessionKey, id);
+  const setState = deliveryStateWriter(host, storageMode, id);
   if (options?.target) {
     const access = readChatResetTargetAccess(host, options.target);
     if (!access.allowed) {
@@ -261,7 +259,7 @@ async function sendQueuedChatMessage(
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
   const requestStartedAtMs = controlUiNowMs();
-  const sendingItem = updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+  const sendingItem = updateQueuedSendItem(host, storageMode, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
     sendError: undefined,
@@ -369,7 +367,7 @@ async function sendQueuedChatMessage(
     const retireOnAck = ack.status === "ok" || storageMode === "memory";
     let retirementFailed = false;
     if (retireOnAck) {
-      removeQueuedMessageWithoutReleasing(host, id, sessionKey);
+      removeQueuedMessageWithoutReleasing(host, id);
       retirementFailed = storageMode === "durable" && readQueuedMessageById(host, id) !== null;
     }
     if (isVisible()) {
@@ -478,7 +476,7 @@ async function sendQueuedChatMessage(
         if (restore) {
           cancelChatDelivery(host, prepared, options ?? {});
         } else {
-          updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+          updateQueuedSendItem(host, storageMode, id, (item) => ({
             ...item,
             ...rollbackAttempt,
             sendError: safelyRejected ? error : UNCONFIRMED_CHAT_SEND_ERROR,
@@ -496,7 +494,7 @@ async function sendQueuedChatMessage(
         });
         return restore ? "failed" : "pending";
       }
-      const waiting = updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
+      const waiting = updateQueuedMessage(host, id, (item) => ({
         ...item,
         ...rollbackAttempt,
         sendError: error,
@@ -507,7 +505,7 @@ async function sendQueuedChatMessage(
         if (restore) {
           cancelChatDelivery(host, prepared, options ?? {});
         } else {
-          updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
+          updateQueuedMessage(host, id, (item) => ({
             ...item,
             sendError: OFFLINE_QUEUE_STORAGE_ERROR,
             sendState: "failed",
@@ -618,7 +616,7 @@ export async function deliverChatQueueItem(
         );
       }
       if (typeof admitted !== "string") {
-        admitted = publishSettledDeliverySettings(host, admitted, storageMode, sessionKey);
+        admitted = publishSettledDeliverySettings(host, admitted, storageMode);
       }
       if (typeof admitted === "string") {
         drainResult = admitted;

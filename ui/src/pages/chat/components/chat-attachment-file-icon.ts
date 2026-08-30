@@ -2,9 +2,8 @@ import { html } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
-let attachmentIconStyles: Promise<unknown> | undefined;
+import "../../../styles/chat/attachments.css";
 
 type AttachmentFileIconFamily =
   | "unknown"
@@ -271,8 +270,6 @@ export function renderAttachmentFileIcon(options: {
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
 }) {
-  attachmentIconStyles ??= import("../../../styles/chat/attachments.css");
-  void attachmentIconStyles;
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
   const compactLight = resolved.compact
     ? fileIconAssetPath(`compact/light/${resolved.compact}`)
@@ -296,9 +293,8 @@ export function renderAttachmentFileIcon(options: {
       "--chat-file-icon-compact-dark": `url("${compactDark}")`,
     })}
   >
-    <span class="chat-attachment-file-icon__large">
-      <span class="chat-attachment-file-icon__overlay"></span>
-    </span>
-    <span class="chat-attachment-file-icon__compact"></span>
+    ${options.mode === "large-placeholder"
+      ? html`<span class="chat-attachment-file-icon__overlay"></span>`
+      : null}
   </span>`;
 }
