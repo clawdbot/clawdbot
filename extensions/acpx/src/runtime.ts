@@ -873,14 +873,22 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
   }
 
-  private resolveDelegateForSession(params: {
-    command: string | undefined;
-    sessionKey: string;
-  }): BaseAcpxRuntime {
+  private resolveDelegateForSession(params: { command: string | undefined; sessionKey: string }): {
+    delegate: BaseAcpxRuntime;
+    created: boolean;
+  } {
     if (shouldUseBridgeSafeDelegateForCommand(params.command)) {
-      return this.bridgeSafeDelegate;
+      return { delegate: this.bridgeSafeDelegate, created: false };
     }
-    return this.resolveManagedToolsDelegateForSession(params.sessionKey);
+    const normalizedSessionKey = params.sessionKey.trim();
+    const cached = this.managedToolsSessionDelegates.get(normalizedSessionKey);
+    const delegate = this.resolveManagedToolsDelegateForSession(params.sessionKey);
+    return {
+      delegate,
+      created:
+        cached === undefined &&
+        this.managedToolsSessionDelegates.get(normalizedSessionKey) === delegate,
+    };
   }
 
   private resolveManagedToolsDelegateForSession(sessionKey: string): BaseAcpxRuntime {
@@ -912,6 +920,16 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     );
     this.managedToolsSessionDelegates.set(normalizedSessionKey, delegate);
     return delegate;
+  }
+
+  private releaseFailedManagedToolsDelegateForSession(
+    sessionKey: string,
+    delegate: BaseAcpxRuntime,
+  ): void {
+    const normalizedSessionKey = sessionKey.trim();
+    if (this.managedToolsSessionDelegates.get(normalizedSessionKey) === delegate) {
+      this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+    }
   }
 
   private releaseManagedToolsDelegateForSession(sessionKey: string): void {
@@ -950,7 +968,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     return this.resolveDelegateForSession({
       command: snapshot.command,
       sessionKey: handle.sessionKey,
-    });
+    }).delegate;
   }
 
   private commandWithLaunchLease(command: string): string {
@@ -1503,7 +1521,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
     });
-    const delegate = this.resolveDelegateForSession({ command, sessionKey: input.sessionKey });
     const isCodexAcp =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command);
     const claudeModelOverride = isClaudeAcpCommand(command)
@@ -1547,31 +1564,41 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       resumeSessionId: input.resumeSessionId,
     });
 
-    const handle = !codexModelOverride
-      ? await this.runWithLaunchLease({
-          sessionKey: ensureInput.sessionKey,
-          command: stableLaunchCommand,
-          reusableCommand,
-          run: () =>
-            this.withCodexWrapperDiagnostics({
-              command: stableLaunchCommand,
-              fallbackCode: "ACP_SESSION_INIT_FAILED",
-              run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
-            }),
-        })
-      : await this.runWithLaunchLease({
-          sessionKey: input.sessionKey,
-          command: stableLaunchCommand,
-          reusableCommand,
-          run: () =>
-            this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+    const resolution = this.resolveDelegateForSession({ command, sessionKey: input.sessionKey });
+    const { delegate } = resolution;
+    let handle: Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
+    try {
+      handle = !codexModelOverride
+        ? await this.runWithLaunchLease({
+            sessionKey: ensureInput.sessionKey,
+            command: stableLaunchCommand,
+            reusableCommand,
+            run: () =>
               this.withCodexWrapperDiagnostics({
                 command: stableLaunchCommand,
                 fallbackCode: "ACP_SESSION_INIT_FAILED",
-                run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+                run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
               }),
-            ),
-        });
+          })
+        : await this.runWithLaunchLease({
+            sessionKey: input.sessionKey,
+            command: stableLaunchCommand,
+            reusableCommand,
+            run: () =>
+              this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+                this.withCodexWrapperDiagnostics({
+                  command: stableLaunchCommand,
+                  fallbackCode: "ACP_SESSION_INIT_FAILED",
+                  run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+                }),
+              ),
+          });
+    } catch (error) {
+      if (resolution.created) {
+        this.releaseFailedManagedToolsDelegateForSession(input.sessionKey, delegate);
+      }
+      throw error;
+    }
     return appliedModel ? { ...handle, appliedModel } : handle;
   }
 

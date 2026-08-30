@@ -352,6 +352,69 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
+  it("replaces a newly created managed-tools delegate after failed admission", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
+    });
+    type ManagedDelegate = {
+      close: AcpRuntime["close"];
+      ensureSession: AcpRuntime["ensureSession"];
+    };
+    type DelegateResolution = { delegate: ManagedDelegate; created: boolean };
+    const exposedRuntime = runtime as unknown as {
+      managedToolsSessionDelegates: Map<string, ManagedDelegate>;
+      resolveDelegateForSession(params: {
+        command: string | undefined;
+        sessionKey: string;
+      }): DelegateResolution;
+    };
+    const resolveDelegate = exposedRuntime.resolveDelegateForSession.bind(exposedRuntime);
+    const resolvedDelegates: ManagedDelegate[] = [];
+    exposedRuntime.resolveDelegateForSession = (params) => {
+      const resolution = resolveDelegate(params);
+      if (!resolvedDelegates.includes(resolution.delegate)) {
+        resolvedDelegates.push(resolution.delegate);
+        if (resolvedDelegates.length === 1) {
+          vi.spyOn(resolution.delegate, "ensureSession").mockRejectedValue(
+            new Error("launch failed"),
+          );
+        } else {
+          vi.spyOn(resolution.delegate, "ensureSession").mockResolvedValue({
+            sessionKey: params.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: "codex",
+          });
+          vi.spyOn(resolution.delegate, "close").mockResolvedValue(undefined);
+        }
+      }
+      return resolution;
+    };
+    const input = {
+      agent: "codex",
+      mode: "persistent" as const,
+      sessionKey: "agent:codex:managed-admission",
+      cwd: "/tmp",
+    };
+
+    await expect(runtime.ensureSession(input)).rejects.toThrow("launch failed");
+    expect(exposedRuntime.managedToolsSessionDelegates.has(input.sessionKey)).toBe(false);
+
+    const handle = await runtime.ensureSession(input);
+    expect(resolvedDelegates).toHaveLength(2);
+    expect(resolvedDelegates[1]).not.toBe(resolvedDelegates[0]);
+    expect(exposedRuntime.managedToolsSessionDelegates.get(input.sessionKey)).toBe(
+      resolvedDelegates[1],
+    );
+
+    await runtime.close({ handle, reason: "closed" });
+    expect(exposedRuntime.managedToolsSessionDelegates.has(input.sessionKey)).toBe(false);
+  });
+
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
