@@ -2096,7 +2096,7 @@ src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	6
 src/agents/tools/sessions-history-tool.ts	7
-src/agents/tools/sessions-list-tool.ts	6
+src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-send-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5

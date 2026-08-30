@@ -147,13 +147,29 @@ describe("session transcript reader facade", () => {
     };
   }
 
-  function boundedPageEventReadCount(): number {
-    return vi
-      .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
+  function boundedTitleEventReadCount(): number {
+    const batchEvents = vi
+      .mocked(sessionAccessor.readSessionTranscriptTitleProbeBatch)
       .mock.results.reduce(
-        (total, result) => total + (result.type === "return" ? result.value.events.length : 0),
+        (total, result) =>
+          total +
+          (result.type === "return"
+            ? result.value.reduce(
+                (count, probe) => count + (probe ? probe.head.length + probe.tail.length : 0),
+                0,
+              )
+            : 0),
         0,
       );
+    return (
+      batchEvents +
+      vi
+        .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
+        .mock.results.reduce(
+          (total, result) => total + (result.type === "return" ? result.value.events.length : 0),
+          0,
+        )
+    );
   }
 
   test("reads active-branch messages and message ids through a scope", async () => {
@@ -445,6 +461,34 @@ describe("session transcript reader facade", () => {
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
   });
 
+  test("keeps inter-session title variants independent through cache reuse and append", async () => {
+    const scope = await writeSqliteMessages("reader-title-provenance-variants", [
+      { role: "user", content: "Routed work", provenance: { kind: "inter_session" } },
+      { role: "user", content: "Human question" },
+      { role: "assistant", content: "**Initial** answer" },
+    ]);
+    const readVariants = () => {
+      for (const includeInterSession of [false, true, false, true]) {
+        const fields = readSessionTitleFieldsFromTranscriptBatch([scope], {
+          includeInterSession,
+        })[0];
+        expect(fields?.firstUserMessage).toBe(
+          includeInterSession ? "Routed work" : "Human question",
+        );
+      }
+    };
+    readVariants();
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId: scope.sessionId, sessionKey: scope.sessionKey, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "**Latest** answer" } }],
+        touchSessionEntry: false,
+      },
+    );
+    readVariants();
+    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("Latest answer");
+  });
+
   test("falls back to the canonical visible window for reset transcripts", async () => {
     const sessionId = "reader-title-reset-window";
     const scope = await writeTranscript(sessionId, [
@@ -485,27 +529,41 @@ describe("session transcript reader facade", () => {
     ]);
   });
 
-  test("degrades single title reads while the projection rebuilds", async () => {
-    const scope = await writeSqliteMessages("reader-title-single-rebuilding", [
-      { role: "user", content: "single prompt" },
-      { role: "assistant", content: "single reply" },
-    ]);
-    markProjectionNeedsRebuild(scope.sessionId);
+  test.each(["stale", "unclassified"] as const)(
+    "degrades single title reads for a %s projection",
+    async (projection) => {
+      const scope = await writeSqliteMessages("reader-title-single-rebuilding", [
+        { role: "user", content: "single prompt" },
+        { role: "assistant", content: "single reply" },
+      ]);
+      if (projection === "stale") {
+        markProjectionNeedsRebuild(scope.sessionId);
+      } else {
+        openOpenClawAgentDatabase({
+          agentId: "main",
+          path: path.join(tempDir, "openclaw-agent.sqlite"),
+        })
+          .db.prepare(
+            "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+      }
 
-    let fields: ReturnType<typeof readSessionTitleFieldsFromTranscript> | undefined;
-    try {
-      fields = readSessionTitleFieldsFromTranscript(scope);
-    } finally {
-      await waitForSessionTranscriptIndexReconcile({
-        agentId: "main",
-        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      let fields: ReturnType<typeof readSessionTitleFieldsFromTranscript> | undefined;
+      try {
+        fields = readSessionTitleFieldsFromTranscript(scope);
+      } finally {
+        await waitForSessionTranscriptIndexReconcile({
+          agentId: "main",
+          path: path.join(tempDir, "openclaw-agent.sqlite"),
+        });
+      }
+      expect(fields).toEqual({
+        firstUserMessage: null,
+        lastMessagePreview: null,
       });
-    }
-    expect(fields).toEqual({
-      firstUserMessage: null,
-      lastMessagePreview: null,
-    });
-  });
+    },
+  );
 
   test("isolates a rebuilding projection to one title row and heals on refresh", async () => {
     const scopes: SessionTranscriptReadScope[] = [];
@@ -667,30 +725,29 @@ describe("session transcript reader facade", () => {
     }
   });
 
-  test("bounds title probe reads independently of transcript length", async () => {
-    const probeReadCount = async (sessionId: string, messageCount: number) => {
-      const scope = await writeSqliteMessages(
-        sessionId,
-        Array.from({ length: messageCount }, () => ({ role: "assistant", content: " " })),
-      );
-      vi.clearAllMocks();
+  test.each(["single", "batch"] as const)(
+    "bounds %s title probes without rereading their initial window",
+    async (mode) => {
+      const probeReadCount = async (sessionId: string, messageCount: number) => {
+        const scope = await writeSqliteMessages(
+          sessionId,
+          Array.from({ length: messageCount }, () => ({ role: "assistant", content: " " })),
+        );
+        vi.clearAllMocks();
 
-      expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-        firstUserMessage: null,
-        lastMessagePreview: null,
-      });
-      expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-          .mock.calls.map(([, options]) => options.maxMessages),
-      ).toEqual([20, 80, 20, 80]);
-      return boundedPageEventReadCount();
-    };
+        const fields =
+          mode === "single"
+            ? readSessionTitleFieldsFromTranscript(scope)
+            : readSessionTitleFieldsFromTranscriptBatch([scope])[0];
+        expect(fields).toEqual({ firstUserMessage: null, lastMessagePreview: null });
+        expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
+        return boundedTitleEventReadCount();
+      };
 
-    await expect(probeReadCount("reader-title-bounded-101", 101)).resolves.toBe(200);
-    await expect(probeReadCount("reader-title-bounded-201", 201)).resolves.toBe(200);
-  });
+      await expect(probeReadCount("reader-title-bounded-101", 101)).resolves.toBe(200);
+      await expect(probeReadCount("reader-title-bounded-201", 201)).resolves.toBe(200);
+    },
+  );
 
   test("reuses cached SQLite title fields while the transcript watermark is unchanged", async () => {
     const scope = await writeSqliteMessages("reader-title-cache-warm", [
@@ -849,7 +906,7 @@ describe("session transcript reader facade", () => {
       lastMessagePreview: null,
     });
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-    expect(boundedPageEventReadCount()).toBe(200);
+    expect(boundedTitleEventReadCount()).toBe(200);
   });
 
   test("promotes SQLite message idempotency into transcript metadata", async () => {
