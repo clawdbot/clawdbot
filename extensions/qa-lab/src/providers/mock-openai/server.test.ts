@@ -3311,6 +3311,41 @@ Update and merge these partial structured summaries.`,
     expect(yieldDebug.plannedToolName).toBe("sessions_yield");
   });
 
+  it("drives a media-bearing subagent through the direct fallback", async () => {
+    const server = await startMockServer();
+    const mediaPath = "/tmp/qa-direct-media-fallback.png";
+    const prompt = ["Subagent direct fallback media QA check:", `media path: ${mediaPath}`].join(
+      "\n",
+    );
+
+    await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const spawnDebug = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "media spawn debug request",
+    );
+    expect(spawnDebug.plannedToolName).toBe("sessions_spawn");
+    expect(requireRecord(spawnDebug.plannedToolArgs, "media spawn args")).toMatchObject({
+      task: `Subagent direct fallback media worker: media path: ${mediaPath}`,
+      label: "qa-direct-media-fallback-worker",
+      thread: false,
+      mode: "run",
+    });
+
+    const worker = await expectOpenAiNonStreamingResponsesJson(server, {
+      input: [makeUserInput(`Subagent direct fallback media worker: media path: ${mediaPath}`)],
+    });
+    expect(outputText(worker)).toBe(`QA-SUBAGENT-DIRECT-MEDIA-FALLBACK-OK\nMEDIA:${mediaPath}`);
+
+    const announce = await expectOpenAiNonStreamingResponsesJson(server, {
+      input: [makeUserInput("QA-SUBAGENT-DIRECT-MEDIA-FALLBACK-OK")],
+    });
+    expect(outputText(announce)).toBe("NO_REPLY");
+  });
+
   it("returns no visible announce output for the direct fallback QA marker", async () => {
     const server = await startMockServer();
 

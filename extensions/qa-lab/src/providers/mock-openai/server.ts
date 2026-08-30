@@ -73,6 +73,8 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_PROMPT_RE,
+  QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_WORKER_RE,
   QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
   QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -81,6 +83,7 @@ import {
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_MARKER,
   QA_SUBAGENT_SELF_YIELD_MARKER,
   QA_SUBAGENT_TERMINAL_MARKERS,
   QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
@@ -1237,6 +1240,12 @@ async function buildResponsesPayload(
       );
     }
   }
+  const directMediaFallbackWorker = QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_WORKER_RE.exec(prompt);
+  if (directMediaFallbackWorker?.[1]) {
+    return buildAssistantEvents(
+      `${QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_MARKER}\nMEDIA:${directMediaFallbackWorker[1]}`,
+    );
+  }
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
   }
@@ -1350,6 +1359,23 @@ async function buildResponsesPayload(
     if (hasCompletedToolOutput) {
       // End the requester turn before the delayed worker settles. The terminal
       // result must therefore use the runtime's direct channel fallback.
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
+  if (allInputText.includes(QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_MARKER)) {
+    return buildAssistantEvents("NO_REPLY");
+  }
+  const directMediaFallback = QA_SUBAGENT_DIRECT_MEDIA_FALLBACK_PROMPT_RE.exec(allInputText);
+  if (directMediaFallback?.[1]) {
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent direct fallback media worker: media path: ${directMediaFallback[1]}`,
+        label: "qa-direct-media-fallback-worker",
+        thread: false,
+        mode: "run",
+      });
+    }
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("NO_REPLY");
     }
   }
