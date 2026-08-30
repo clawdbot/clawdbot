@@ -8,9 +8,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveCommitHash } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
@@ -97,7 +96,7 @@ function commitsMatch(expected: string, actual: string): boolean {
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
-  commit = resolveCommitHash({ env, moduleUrl: import.meta.url }),
+  commit = resolveRuntimeServiceCommit(),
   runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
   const snapshot = await readRestartSentinel(env);

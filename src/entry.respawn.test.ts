@@ -233,6 +233,25 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
   });
 
+  it.each([
+    ["injects a discovered CA for whitespace", "linux", " ", "/etc/ca.pem", "/etc/ca.pem", "1"],
+    ["drops an empty value without discovery", "linux", "", undefined, undefined, undefined],
+    ["drops whitespace without discovery", "linux", " ", undefined, undefined, undefined],
+    ["drops whitespace on Windows", "win32", " ", undefined, undefined, undefined],
+  ] as const)("%s", (_label, platform, inherited, discovered, expected, expectedReady) => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "status"],
+      env: { NODE_EXTRA_CA_CERTS: inherited },
+      execArgv: [],
+      autoNodeExtraCaCerts: discovered,
+      platform,
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe(expected);
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe(expectedReady);
+  });
+
   it("returns null when both respawn guards are already satisfied", () => {
     expect(
       buildCliRespawnPlan({

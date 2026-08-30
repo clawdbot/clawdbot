@@ -9,6 +9,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   loadSessionEntry,
+  onSessionIdentityMutation,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
@@ -28,6 +29,66 @@ afterEach(() => {
 });
 
 describe("SQLite session row persistence", () => {
+  it.each(["committed", "declined", "revoked"] as const)(
+    "records only committed owner facts before cancellation observers (%s)",
+    async (mode) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-commit-fact-")),
+      };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:commit-fact" };
+      await upsertSessionEntryCore(scope, { sessionId: "predecessor", updatedAt: 10 });
+      const controller = new AbortController();
+      const cancelled = new Error("cancelled after identity publication");
+      const revoked = new Error("writer revoked before commit");
+      const facts: InternalSessionEntry[] = [];
+      const observed: Array<{ acceptedId?: string; persistedId?: string }> = [];
+      const unsubscribe = onSessionIdentityMutation((mutation) => {
+        if (mutation.previous.sessionId !== "predecessor") {
+          return;
+        }
+        observed.push({
+          acceptedId: facts.at(-1)?.sessionId,
+          persistedId: loadSessionEntry(scope)?.sessionId,
+        });
+        controller.abort(cancelled);
+      });
+      try {
+        const options = {
+          onCommitted: (entry: InternalSessionEntry) => {
+            facts.push(entry);
+          },
+          assertCommitAllowed: () => {
+            if (mode === "revoked") {
+              throw revoked;
+            }
+          },
+        };
+        const pending = patchSessionEntryCore(
+          scope,
+          () => (mode === "declined" ? null : { sessionId: "successor" }),
+          options,
+        );
+        if (mode === "revoked") {
+          await expect(pending).rejects.toBe(revoked);
+        } else {
+          await pending;
+        }
+        if (mode === "committed") {
+          expect(facts).toHaveLength(1);
+          expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
+          expect(controller.signal.reason).toBe(cancelled);
+        } else {
+          expect(facts).toEqual([]);
+          expect(observed).toEqual([]);
+          expect(loadSessionEntry(scope)?.sessionId).toBe("predecessor");
+        }
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it.each([
     { mode: "async", sandbox: "required", source: "profile" },
     { mode: "sync", sandbox: "required", source: "unknown" },

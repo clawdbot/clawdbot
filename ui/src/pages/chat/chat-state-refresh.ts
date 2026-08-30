@@ -11,9 +11,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
+  parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
@@ -25,7 +26,7 @@ import {
   retireChatModelSelectionOwnership,
 } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -86,15 +87,41 @@ export function applySelectedChatAgent(
   if (
     !host ||
     !isUiSelectedGlobalSessionKey(host, host.sessionKey) ||
+    parseAgentSessionKey(host.sessionKey)?.agentId ||
     (host.assistantAgentId ?? null) === selectedAgentId
   ) {
     return;
   }
+  applyChatAgentOwnerTransition(host, selectedAgentId);
+  void refreshCurrentChatSessionList(host);
+}
+
+export function applyChatAgentOwnerTransition(
+  host: ChatPageHost,
+  selectedAgentId: string | null,
+): void {
+  if ((host.assistantAgentId ?? null) === selectedAgentId) {
+    return;
+  }
   retireChatModelSelectionOwnership(host);
+  host.assistantIdentityRequestVersion += 1;
   host.assistantAgentId = selectedAgentId;
-  // Global chats retain their session key across agent selection. Replace the binding now;
-  // its old agent fence correctly rejects later invalidations and cannot initiate recovery.
+  host.assistantName = "";
+  host.assistantAvatar = null;
+  host.assistantAvatarSource = null;
+  host.assistantAvatarStatus = null;
+  host.assistantAvatarReason = null;
+  host.chatAvatarUrl = null;
+  host.chatAvatarSource = null;
+  host.chatAvatarStatus = null;
+  host.chatAvatarReason = null;
+  host.modelAuthStatusResult = null;
+  host.modelAuthStatusError = null;
+  // Global chats retain their session key across agent selection. Replace agent-owned
+  // bindings now so their old fences reject later publications.
   void refreshChatMetadata(host);
+  void refreshChatModelAuthStatus(host).finally(() => host.requestUpdate?.());
+  void host.loadAssistantIdentity();
   host.requestUpdate?.();
 }
 
@@ -189,18 +216,26 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
+  const agentId = resolveChatAgentId(host);
+  const requestVersion = ++host.modelAuthStatusRequestVersion;
+  const ownsRequest = () =>
+    host.client === client &&
+    host.connected &&
+    host.connectionEpoch === connectionEpoch &&
+    host.modelAuthStatusRequestVersion === requestVersion &&
+    resolveChatAgentId(host) === agentId;
   try {
     const result = await loadModelAuthStatus(client, {
       ...opts,
-      agentId: resolveChatAgentId(host),
+      agentId,
     });
-    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
+    if (!ownsRequest()) {
       return;
     }
     host.modelAuthStatusResult = result;
-    host.modelAuthStatusError = null;
+    host.modelAuthStatusError = result.unavailable?.message ?? null;
   } catch (err) {
-    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
+    if (!ownsRequest()) {
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };
@@ -258,6 +293,8 @@ async function refreshChat(
     onStartupMetadata?: ChatStartupMetadataHandler;
   },
 ) {
+  const refreshedClient = host.client;
+  const refreshedEpoch = host.connectionEpoch;
   const refreshedSessionKey = host.sessionKey;
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
@@ -278,7 +315,7 @@ async function refreshChat(
     if (!history?.sessionInfo) {
       return;
     }
-    host.sessions.reconcile(history.sessionInfo, history.defaults, {
+    const admitted = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessions.state.agentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
       sourceCanonicalListRevision: history.sourceCanonicalListRevision,
@@ -288,16 +325,40 @@ async function refreshChat(
       // key while the sidebar lineage reload catches up.
       archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
-    host.sessionsResult = host.sessions.state.result;
-    host.sessionsResultAgentId = host.sessions.state.agentId;
-    const sessionsResult = host.sessions.state.result;
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
-    );
+    if (
+      !admitted ||
+      host.client !== refreshedClient ||
+      host.connectionEpoch !== refreshedEpoch ||
+      host.sessionKey !== refreshedSessionKey ||
+      resolveAgentIdForSession(host) !== refreshedAgentId
+    ) {
+      return;
+    }
+    // The shared roster may belong to another agent. Keep this pane's accepted
+    // global history separate rather than relabeling or borrowing that roster.
+    const scopedHistory =
+      isUiSelectedGlobalSessionKey(host, refreshedSessionKey) &&
+      host.sessions.state.agentId !== refreshedAgentId;
+    host.sessionsResult = scopedHistory
+      ? reconcileSessionHistory(
+          host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
+          history.sessionInfo,
+          history.defaults,
+          {
+            resultAgentId: refreshedAgentId,
+            selectedGlobalAgentId: refreshedAgentId,
+            archivedFilter: "all",
+          },
+          // Only this pane's changed projection proves a newer same-agent row;
+          // a later Main list cannot freeze Work history or block a missing row.
+          host.sessionsResultAgentId === refreshedAgentId &&
+            host.sessionsResult !== previousSessionsResult,
+        )
+      : host.sessions.state.result;
+    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : host.sessions.state.agentId;
+    const sessionInfo = selectedChatSessionRow(host);
     const rosterRow = sessionInfo ?? history.sessionInfo;
-    if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
+    if (sessionInfo) {
       host.selectedChatSessionArchived = rosterRow.archived === true;
       host.selectedChatSessionIncognito = rosterRow.incognito === true;
     }

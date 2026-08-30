@@ -37,10 +37,12 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
+  resolveMediaToolSandboxConfig,
   resolveMediaToolReferenceAccess,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
+  type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import { hasToolModelConfig } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
@@ -57,8 +59,6 @@ import {
   createSandboxBridgeReadFile,
   runWithImageModelFallback,
   type AnyAgentTool,
-  type SandboxedBridgeMediaPathConfig,
-  type SandboxFsBridge,
   type ToolFsPolicy,
 } from "./tool-runtime.helpers.js";
 
@@ -138,10 +138,7 @@ function buildPdfExtractionContext(
 // Run PDF prompt with model fallback
 // ---------------------------------------------------------------------------
 
-type PdfSandboxConfig = {
-  root: string;
-  bridge: SandboxFsBridge;
-};
+type PdfSandboxConfig = MediaToolSandbox;
 
 async function runPdfPrompt(params: {
   cfg?: OpenClawConfig;
@@ -486,14 +483,10 @@ export function createPdfTool(options?: {
         throw new ToolInputError("No PDF model configured.");
       }
 
-      const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
-        options?.sandbox && options.sandbox.root.trim()
-          ? {
-              root: options.sandbox.root.trim(),
-              bridge: options.sandbox.bridge,
-              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-            }
-          : null;
+      const sandboxConfig = resolveMediaToolSandboxConfig(
+        options?.sandbox,
+        options?.fsPolicy?.workspaceOnly,
+      );
 
       // MARK: - Load each PDF
       const loadedPdfs: Array<{

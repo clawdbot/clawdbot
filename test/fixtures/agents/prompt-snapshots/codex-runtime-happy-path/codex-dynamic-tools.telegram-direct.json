@@ -1053,7 +1053,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
         "inputSchema": {
           "properties": {
             "includeTools": {
@@ -1069,6 +1069,10 @@
             },
             "offset": {
               "minimum": 0,
+              "type": "integer"
+            },
+            "pendingBefore": {
+              "minimum": 1,
               "type": "integer"
             },
             "sessionId": {

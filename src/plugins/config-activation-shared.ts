@@ -1,11 +1,6 @@
 // Shares plugin activation state helpers across config and registry code.
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
-type EnableStateLike = {
-  enabled: boolean;
-  reason?: string;
-};
-
 type PluginKindLike = string | readonly string[] | undefined;
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
@@ -154,34 +149,28 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     isBundledChannelEnabledByChannelConfig: params.isBundledChannelEnabledByChannelConfig,
   });
 
+  // Keep result construction shared; policy precedence stays in the ordered branches below.
+  const decision = (
+    source: PluginActivationSource,
+    details: Partial<Pick<PluginActivationDecision, "explicitlyEnabled" | "cause" | "reason">> = {},
+  ): PluginActivationDecision => ({
+    enabled: source !== "disabled",
+    activated: source !== "disabled",
+    explicitlyEnabled: explicitSelection.explicitlyEnabled,
+    source,
+    ...details,
+  });
+
   if (!params.config.enabled) {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: explicitSelection.explicitlyEnabled,
-      source: "disabled",
-      cause: "plugins-disabled",
-    };
+    return decision("disabled", { cause: "plugins-disabled" });
   }
   const policyId = normalizePluginPolicyId(params.id);
   if (params.config.deny.includes(policyId)) {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: explicitSelection.explicitlyEnabled,
-      source: "disabled",
-      cause: "blocked-by-denylist",
-    };
+    return decision("disabled", { cause: "blocked-by-denylist" });
   }
   const entry = params.config.entries[policyId];
   if (entry?.enabled === false) {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: explicitSelection.explicitlyEnabled,
-      source: "disabled",
-      cause: "disabled-in-config",
-    };
+    return decision("disabled", { cause: "disabled-in-config" });
   }
   const explicitlyAllowed = params.config.allow.includes(policyId);
   if (
@@ -190,150 +179,45 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     entry?.enabled !== true &&
     explicitSelection.cause !== "selected-context-engine-slot"
   ) {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: explicitSelection.explicitlyEnabled,
-      source: "disabled",
-      cause: "workspace-disabled-by-default",
-    };
+    return decision("disabled", { cause: "workspace-disabled-by-default" });
   }
   if (params.config.slots.memory === params.id) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: true,
-      source: "explicit",
-      cause: "selected-memory-slot",
-    };
+    return decision("explicit", { explicitlyEnabled: true, cause: "selected-memory-slot" });
   }
   if (params.config.slots.contextEngine === params.id) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: true,
-      source: "explicit",
-      cause: "selected-context-engine-slot",
-    };
+    return decision("explicit", { explicitlyEnabled: true, cause: "selected-context-engine-slot" });
   }
   if (
     params.allowBundledChannelExplicitBypassesAllowlist === true &&
     explicitSelection.cause === "bundled-channel-enabled-in-config"
   ) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: true,
-      source: "explicit",
-      cause: explicitSelection.cause,
-    };
+    return decision("explicit", { explicitlyEnabled: true, cause: explicitSelection.cause });
   }
   if (params.config.allow.length > 0 && !explicitlyAllowed) {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: explicitSelection.explicitlyEnabled,
-      source: "disabled",
-      cause: "not-in-allowlist",
-    };
+    return decision("disabled", { cause: "not-in-allowlist" });
   }
   if (explicitSelection.explicitlyEnabled) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: true,
-      source: "explicit",
-      cause: explicitSelection.cause,
-    };
+    return decision("explicit", { explicitlyEnabled: true, cause: explicitSelection.cause });
   }
   if (params.autoEnabledReason) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: false,
-      source: "auto",
-      reason: params.autoEnabledReason,
-    };
+    return decision("auto", { explicitlyEnabled: false, reason: params.autoEnabledReason });
   }
   if (entry?.enabled === true) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: false,
-      source: "auto",
-      cause: "enabled-by-effective-config",
-    };
+    return decision("auto", { explicitlyEnabled: false, cause: "enabled-by-effective-config" });
   }
   if (
     params.origin === "bundled" &&
     params.isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
   ) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: false,
-      source: "auto",
-      cause: "bundled-channel-configured",
-    };
+    return decision("auto", { explicitlyEnabled: false, cause: "bundled-channel-configured" });
   }
   if (params.origin === "bundled" && params.enabledByDefault === true) {
-    return {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: false,
-      source: "default",
-      cause: "bundled-default-enablement",
-    };
+    return decision("default", { explicitlyEnabled: false, cause: "bundled-default-enablement" });
   }
   if (params.origin === "bundled") {
-    return {
-      enabled: false,
-      activated: false,
-      explicitlyEnabled: false,
-      source: "disabled",
-      cause: "bundled-disabled-by-default",
-    };
+    return decision("disabled", { explicitlyEnabled: false, cause: "bundled-disabled-by-default" });
   }
-  return {
-    enabled: true,
-    activated: true,
-    explicitlyEnabled: explicitSelection.explicitlyEnabled,
-    source: "default",
-  };
-}
-
-function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
-}
-
-function resolveEnableStateResult<TParams>(
-  params: TParams,
-  resolveState: (params: TParams) => EnableStateLike,
-): { enabled: boolean; reason?: string } {
-  return toEnableStateResult(resolveState(params));
-}
-
-export function createPluginEnableStateResolver<TConfig, TOrigin extends string>(
-  resolveState: (params: {
-    id: string;
-    origin: TOrigin;
-    config: TConfig;
-    enabledByDefault?: boolean;
-  }) => EnableStateLike,
-): (
-  id: string,
-  origin: TOrigin,
-  config: TConfig,
-  enabledByDefault?: boolean,
-) => { enabled: boolean; reason?: string } {
-  return (id, origin, config, enabledByDefault) =>
-    resolveEnableStateResult({ id, origin, config, enabledByDefault }, resolveState);
-}
-
-export function createEffectiveEnableStateResolver<TParams>(
-  resolveState: (params: TParams) => EnableStateLike,
-): (params: TParams) => { enabled: boolean; reason?: string } {
-  return (params) => resolveEnableStateResult(params, resolveState);
+  return decision("default");
 }
 
 function hasKind(kind: PluginKindLike, target: string): boolean {

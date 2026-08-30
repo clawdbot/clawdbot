@@ -53,7 +53,9 @@ channels. The Control UI keeps the full structured stepper.
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
-30 through 3600 seconds.
+30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
+run cancellation or the overall run timeout. A pending question does not extend
+an explicit run budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.

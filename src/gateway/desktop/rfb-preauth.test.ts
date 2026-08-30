@@ -275,15 +275,22 @@ describe("RFB server-side pre-authentication", () => {
     }
   });
 
-  it("matches the VncAuth bit-reversed DES challenge vector", async () => {
+  it.each([
+    ["RFB 003.003\n", "RFB 003.003\n", true],
+    ["RFB 003.007\n", "RFB 003.007\n", false],
+    ["RFB 003.008\n", "RFB 003.008\n", false],
+    ["RFB 003.889\n", "RFB 003.008\n", false],
+  ])("matches the VncAuth DES vector with server version %j", async (banner, reply, legacy) => {
     const challenge = Buffer.from("0123456789abcdef", "ascii");
     await runPreauth({
       preauth: { auth: "vnc-password", credentials: { password: "password" } },
       serverScript: async (server) => {
-        await server.write(VERSION_3_8);
-        expect(await server.readExactly(12)).toEqual(VERSION_3_8);
-        await server.write(Buffer.from([1, 2]));
-        expect(await server.readExactly(1)).toEqual(Buffer.from([2]));
+        await server.write(Buffer.from(banner));
+        expect(await server.readExactly(12)).toEqual(Buffer.from(reply));
+        await server.write(legacy ? Buffer.from([0, 0, 0, 2]) : Buffer.from([1, 2]));
+        if (!legacy) {
+          expect(await server.readExactly(1)).toEqual(Buffer.from([2]));
+        }
         await server.write(challenge);
         expect((await server.readExactly(16)).toString("hex")).toBe(
           "5645abeb5f1e6475e8feb11beb66ea19",

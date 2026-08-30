@@ -59,6 +59,7 @@ import {
   shouldReplayOldestChatHistoryRecord,
 } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
+import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
@@ -183,6 +184,7 @@ async function handleChatHistoryRequest({
     messageId,
     sessionId: requestedSessionId,
     maxChars,
+    pendingBefore,
   } = params as {
     sessionKey: string;
     agentId?: string;
@@ -192,6 +194,7 @@ async function handleChatHistoryRequest({
     messageId?: string;
     sessionId?: string;
     maxChars?: number;
+    pendingBefore?: number;
   };
   if (offset !== undefined && messageId !== undefined) {
     respond(
@@ -318,6 +321,18 @@ async function handleChatHistoryRequest({
   const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
+  const pendingInputs =
+    sessionId && sessionId === entry?.sessionId
+      ? readChatPendingInputs(
+          {
+            agentId: sessionAgentId,
+            sessionKey: canonicalKey,
+            sessionId,
+            storePath,
+          },
+          { before: pendingBefore, limit: max, maxChars: effectiveMaxChars },
+        )
+      : { items: [], total: 0 };
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
   try {
     historyPage = cursor
@@ -367,7 +382,9 @@ async function handleChatHistoryRequest({
     ? (capChatHistoryAroundMessage({
         messages: replaced.messages,
         messageId,
-        fits: (messages) => byteCounter.messagesBytes(messages) <= maxHistoryBytes,
+        // A nonempty JSON array costs one framing byte plus each message and its separator.
+        maxCost: maxHistoryBytes - 1,
+        messageCost: (message) => byteCounter.messageBytes(message) + 1,
       }) ?? capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items)
     : capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items;
   const historyBudgetPreserved =
@@ -554,6 +571,7 @@ async function handleChatHistoryRequest({
       kind: "delta",
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
+      pendingInputs,
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -569,6 +587,7 @@ async function handleChatHistoryRequest({
     sessionKey,
     sessionId,
     messages: composeTranscriptDisplay(capped),
+    pendingInputs,
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),

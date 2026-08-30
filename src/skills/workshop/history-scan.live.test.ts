@@ -22,6 +22,8 @@ let workspaceDir = "";
 function liveConfig(): OpenClawConfig {
   const modelId = process.env.OPENCLAW_LIVE_SKILL_HISTORY_MODEL ?? "gpt-5.6-luna";
   return {
+    // This eval needs only OpenAI and the built-in Workshop tool.
+    plugins: { allow: ["openai"] },
     models: {
       providers: {
         openai: {

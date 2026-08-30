@@ -1,8 +1,13 @@
+import "./chat-outbox-recovery.ts";
 import { html, nothing } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
+import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../../lib/chat/outbox-store.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -76,16 +81,29 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       workspaceGit,
       sidebarLayout,
     );
+    const recovery = html`<openclaw-chat-outbox-recovery
+      .host=${state}
+      .identity=${JSON.stringify([
+        state.settings.gatewayUrl,
+        state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
+        storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, state.sessionKey)),
+      ])}
+      @outbox-restored=${() => {
+        this.chatState.restoreComposer();
+        state.requestUpdate?.();
+      }}
+    ></openclaw-chat-outbox-recovery>`;
     const chat = renderChat({
       ...chatProps,
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
-      header: board.face === "dashboard" ? nothing : header,
+      header: board.face === "dashboard" ? nothing : html`${header}${recovery}`,
     });
     // Keep this root stable across board face changes so the guarded board runtime
     // remains connected while Chat is active.
     const primary = html`<div class="chat-pane-primary-column">
-      ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
+      ${board.face === "dashboard" ? html`${header}${recovery}` : nothing}
+      ${this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());

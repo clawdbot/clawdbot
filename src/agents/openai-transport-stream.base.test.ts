@@ -338,6 +338,7 @@ describe("openai transport stream", () => {
       reasoningTokens: 3,
       totalTokens: 9,
     });
+    expect(output.usage.contextUsage).toEqual({ state: "unavailable" });
   });
 
   it("prices Responses cache writes separately from ordinary input", async () => {
@@ -377,6 +378,11 @@ describe("openai transport stream", () => {
       cacheRead: 20,
       cacheWrite: 30,
       reasoningTokens: 0,
+      totalTokens: 110,
+    });
+    expect(output.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 100,
       totalTokens: 110,
     });
     expect(output.usage.cost.input).toBeCloseTo(0.00025);

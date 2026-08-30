@@ -693,54 +693,74 @@ function assertStateSurvived() {
 
 function assertAuthProfileMigrationSurvived(stateDir, stage) {
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const sources = [
-    path.join(agentDir, "auth-profiles.json"),
-    path.join(agentDir, "auth-state.json"),
-    path.join(agentDir, "auth.json"),
-    path.join(stateDir, "credentials", "oauth.json"),
-  ];
+  const fixture = readJson(
+    "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+  );
+  const sources = new Map([
+    [path.join(agentDir, "auth-profiles.json"), fixture.authProfiles],
+    [path.join(agentDir, "auth-state.json"), fixture.authState],
+    [path.join(agentDir, "auth.json"), fixture.legacyAuth],
+    [path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth],
+  ]);
   if (stage === "baseline") {
     assert(
-      sources.every((source) => fs.existsSync(source)),
+      [...sources.keys()].every((source) => fs.existsSync(source)),
       "auth profile fixture source missing",
     );
     return;
   }
-  for (const source of sources) {
+  for (const [source, contents] of sources) {
     assert(!fs.existsSync(source), `legacy auth source remained active: ${source}`);
     const prefix = `${path.basename(source)}.migrated-`;
     const archives = fs
       .readdirSync(path.dirname(source))
       .filter((entry) => entry.startsWith(prefix));
     assert(archives.length === 1, `expected one legacy auth archive for ${source}`);
-  }
-  const agentDatabase = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    const row = agentDatabase
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
-      .get();
-    const store = JSON.parse(row?.store_json ?? "null");
-    assert(
-      store?.profiles?.["openai:default"]?.key === "fake-upgrade-openai-key",
-      "openai credential did not migrate",
+    assertStrict.equal(
+      fs.readFileSync(path.join(path.dirname(source), archives[0]), "utf8"),
+      `${JSON.stringify(contents, null, 2)}\n`,
+      `auth archive changed for ${source}`,
     );
-    assert(
-      store?.profiles?.["xai:default"]?.key === "fake-upgrade-xai-key",
-      "legacy xai credential did not migrate",
-    );
-    assert(
-      store?.profiles?.["anthropic:default"]?.refresh === "fake-upgrade-refresh-token",
-      "shared OAuth credential did not migrate",
-    );
-  } finally {
-    agentDatabase.close();
   }
   const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
+    // Main's legacy files feed the shared owner; current runtime reads these
+    // canonical state cells after Doctor retires the old agent-local rows.
+    const read = stateDatabase.prepare(
+      "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+    );
+    const store = JSON.parse(read.get("authProfiles.store")?.value_json ?? "null");
+    const expectedProfiles = {
+      ...fixture.authProfiles.profiles,
+      ...Object.fromEntries(
+        Object.entries(fixture.legacyAuth).map(([provider, credential]) => [
+          `${provider}:default`,
+          credential,
+        ]),
+      ),
+      ...Object.fromEntries(
+        Object.entries(fixture.legacyOAuth).map(([provider, credential]) => [
+          `${provider}:default`,
+          { type: "oauth", provider, ...credential },
+        ]),
+      ),
+    };
+    for (const [profileId, credential] of Object.entries(expectedProfiles)) {
+      assertStrict.deepEqual(
+        store?.profiles?.[profileId],
+        credential,
+        `auth profile changed: ${profileId}`,
+      );
+    }
+    const state = JSON.parse(read.get("authProfiles.state")?.value_json ?? "null");
+    assertStrict.deepEqual(state?.order, fixture.authState.order, "auth state order changed");
+    assertStrict.deepEqual(
+      state?.lastGood,
+      fixture.authState.lastGood,
+      "auth state lastGood changed",
+    );
     const receipt = stateDatabase
       .prepare(
         "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = 'completed' AND removed_source = 1",

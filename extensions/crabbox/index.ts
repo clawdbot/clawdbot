@@ -11,6 +11,22 @@ export default definePluginEntry({
   name: "Crabbox Worker Provider",
   description: "Cloud worker provider backed by the Crabbox CLI",
   register(api) {
+    api.registerCli(
+      async ({ program }) => {
+        const { registerCrabboxWarmImageCommands } =
+          await import("./src/crabbox-worker-warm-image-cli.js");
+        registerCrabboxWarmImageCommands(program);
+      },
+      {
+        descriptors: [
+          {
+            name: "crabbox",
+            description: "Inspect and recover Crabbox warm images",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
     const provider = createCrabboxWorkerProvider({
       openclawRoot: resolveOpenClawRoot(api.rootDir),
       wallpaperPath: workerWallpaperPath,

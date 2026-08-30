@@ -28,12 +28,7 @@ export {
 } from "./embedded-agent-helpers/image-errors.js";
 export { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
 export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
-export {
-  BILLING_ERROR_USER_MESSAGE,
-  formatBillingErrorMessage,
-  getApiErrorPayloadFingerprint,
-  isRawApiErrorPayload,
-} from "./failover/user-copy.js";
+export { formatBillingErrorMessage, getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 export {
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,

@@ -35,9 +35,10 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     resolveTranscriptSessionKeyBySessionId: resolveTranscriptSessionKeyBySessionIdMock,
   };
 });
-vi.mock("./chat-display-projection.js", () => ({
-  projectChatDisplayMessage: projectChatDisplayMessageMock,
-}));
+vi.mock("./chat-display-projection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-display-projection.js")>();
+  return { ...actual, projectChatDisplayMessage: projectChatDisplayMessageMock };
+});
 vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
   loadGatewaySessionRow: loadGatewaySessionRowMock,

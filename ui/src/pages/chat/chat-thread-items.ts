@@ -2,15 +2,14 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
-import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -242,13 +241,7 @@ export function findNearestAssistantMessageIndex(
     const nextDelta = next.timestamp - toolTimestamp;
     return nextDelta < previousDelta ? next.index : previous.index;
   }
-  if (previous) {
-    return previous.index;
-  }
-  if (next) {
-    return next.index;
-  }
-  return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+  return previous?.index ?? next?.index ?? assistantEntries.at(-1)?.index ?? null;
 }
 
 export function findCanvasInsertionIndex(
@@ -321,7 +314,7 @@ export function readPendingSendFailure(message: unknown): {
   };
 }
 
-function readChatThreadMessageIdentity(message: unknown) {
+export function readChatThreadMessageIdentity(message: unknown) {
   const record = asRecord(message);
   const surfaceId =
     typeof record?.messageId === "string" && record.messageId.trim()
@@ -339,9 +332,10 @@ export function userTurnSendIdentity(message: unknown): string | null {
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
-  return isPendingSendMessage(message)
+  const id = readChatThreadMessageIdentity(message)?.id;
+  return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
     ? null
-    : (readChatThreadMessageIdentity(message)?.id ?? null);
+    : (id ?? null);
 }
 
 function transcriptMessageSourceKey(message: unknown): string | null {
@@ -408,158 +402,6 @@ export function buildMessageKeys(messages: unknown[], indexOffset = 0): string[]
   });
 }
 
-function collapseDuplicateSourceKey(message: unknown): string | null {
-  if (isPendingSendMessage(message)) {
-    return null;
-  }
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized) {
-    return null;
-  }
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "assistant" && role !== "user") {
-    return null;
-  }
-  const identity = readChatThreadMessageIdentity(message);
-  if (!identity?.isImported) {
-    return identity?.id ? `${role}:${identity.id}` : null;
-  }
-  if (identity.externalSource) {
-    return `${role}:import:${identity.externalSource}`;
-  }
-  return identity.sequence === null ? null : `${role}:import-seq:${identity.sequence}`;
-}
-
-function prefersNativeChatSurface(message: unknown): boolean {
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized) {
-    return false;
-  }
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
-}
-
-function stripSenderLabelPrefix(text: string, senderLabel: string): string {
-  const label = senderLabel.trim();
-  if (!label) {
-    return text;
-  }
-  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`), "");
-}
-
-function textOnlyMessageParts(message: unknown) {
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized || normalized.content.length === 0) {
-    return null;
-  }
-  const textParts: string[] = [];
-  for (const block of normalized.content) {
-    if (block.type !== "text" || typeof block.text !== "string") {
-      return null;
-    }
-    textParts.push(block.text);
-  }
-  return {
-    role: normalizeRoleForGrouping(normalized.role).toLowerCase(),
-    senderLabel: (normalized.senderLabel ?? "").trim(),
-    senderKey: senderIdentityKey(normalized.sender),
-    text: textParts.join("\n"),
-  };
-}
-
-function sourceDuplicateDisplayParts(message: unknown) {
-  const parts = textOnlyMessageParts(message);
-  return parts?.role === "assistant" && parts.text.trim() ? parts : null;
-}
-
-function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage: unknown): boolean {
-  const previous = sourceDuplicateDisplayParts(previousMessage);
-  const next = sourceDuplicateDisplayParts(nextMessage);
-  if (!previous || !next || previous.role !== next.role) {
-    return false;
-  }
-  if (Boolean(previous.senderLabel) === Boolean(next.senderLabel)) {
-    return false;
-  }
-  const labeled = previous.senderLabel ? previous : next;
-  const native = previous.senderLabel ? next : previous;
-  return (
-    labeled.text === native.text ||
-    stripSenderLabelPrefix(labeled.text, labeled.senderLabel) === native.text
-  );
-}
-
-function collapseDuplicateDisplaySignature(message: unknown): string | null {
-  if (isPendingSendMessage(message)) {
-    return null;
-  }
-  const parts = textOnlyMessageParts(message);
-  if (!parts || !parts.role || parts.role === "tool") {
-    return null;
-  }
-  const { role } = parts;
-  const text = parts.text.trim().replace(/\s+/g, " ");
-  if (!text) {
-    return null;
-  }
-  const senderLabel = role === "user" || role === "assistant" ? parts.senderLabel : "";
-  return `${role}:${senderLabel}:${parts.senderKey ?? ""}:${text}`;
-}
-
-export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
-  const collapsed: ChatItem[] = [];
-  let previousSignature: string | null = null;
-  let previousSourceKey: string | null = null;
-  let previousSourceIsUnprovenImport = false;
-
-  for (const item of items) {
-    if (item.kind !== "message") {
-      collapsed.push(item);
-      previousSignature = null;
-      previousSourceKey = null;
-      previousSourceIsUnprovenImport = false;
-      continue;
-    }
-    const signature = collapseDuplicateDisplaySignature(item.message);
-    const sourceKey = collapseDuplicateSourceKey(item.message);
-    const identity = readChatThreadMessageIdentity(item.message);
-    const sourceIsUnprovenImport =
-      sourceKey === null &&
-      identity?.isImported === true &&
-      identity.externalSource === null &&
-      identity.sequence === null;
-    const previous = collapsed[collapsed.length - 1];
-    if (
-      sourceKey &&
-      previousSourceKey === sourceKey &&
-      previous?.kind === "message" &&
-      isSameSourceRelayNativeDuplicate(previous.message, item.message)
-    ) {
-      if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
-        collapsed[collapsed.length - 1] = item;
-        previousSignature = signature;
-      }
-      continue;
-    }
-    if (
-      signature &&
-      previousSignature === signature &&
-      previous?.kind === "message" &&
-      !sourceIsUnprovenImport &&
-      !previousSourceIsUnprovenImport &&
-      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
-    ) {
-      previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
-      continue;
-    }
-    collapsed.push(item);
-    previousSignature = signature;
-    previousSourceKey = sourceKey;
-    previousSourceIsUnprovenImport = sourceIsUnprovenImport;
-  }
-
-  return collapsed;
-}
 export function hasRenderableNormalizedMessage(
   message: unknown,
   normalized = safeNormalizeMessage(message),

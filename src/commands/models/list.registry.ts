@@ -38,7 +38,7 @@ function validateAvailableModels(availableModels: unknown): Model[] {
 
 /** Loads the full registry, discovered keys, and model-level availability. */
 export async function loadModelRegistry(cfg: OpenClawConfig, opts?: ModelListRegistryOptions) {
-  const { config: runtimeConfig, registry } = await loadAgentModelRegistry(cfg, opts);
+  const { authModes, config: runtimeConfig, registry } = await loadAgentModelRegistry(cfg, opts);
   const isVisible = (model: Model) =>
     !shouldSuppressBuiltInModelCore({
       provider: model.provider,
@@ -58,7 +58,7 @@ export async function loadModelRegistry(cfg: OpenClawConfig, opts?: ModelListReg
     // Registry discovery failures above still abort the command.
     availabilityErrorMessage = `Model availability unavailable: getAvailable() failed.\n${formatErrorWithStack(err)}`;
   }
-  return { registry, models, discoveredKeys, availableKeys, availabilityErrorMessage };
+  return { authModes, registry, models, discoveredKeys, availableKeys, availabilityErrorMessage };
 }
 
 /** Loads only configured registry entries and their auth availability. */

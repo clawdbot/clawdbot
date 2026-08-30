@@ -1,20 +1,33 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
+  getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as agentDatabase from "../state/openclaw-agent-db-readonly.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { resolveAgentDir } from "./agent-scope.js";
+import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
   resolvePublishedModelCatalogOwner,
 } from "./prepared-model-catalog-owner.js";
+import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import {
   startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
 } from "./prepared-model-runtime.build.js";
 import {
+  activateStandalonePreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
@@ -24,14 +37,69 @@ import {
 
 const mocks = getPreparedModelRuntimeMocks();
 
-beforeEach(() => resetPreparedModelRuntimeHarness());
+let state: OpenClawTestState;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "prepared-model-runtime" });
+  resetPreparedModelRuntimeHarness(state);
+});
+afterEach(async ({ task }) => {
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+});
+
+describe("prepared fixture containment", () => {
+  function assertOwnedPath(target: string) {
+    const relative = path.relative(state.root, path.resolve(target));
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`PREPARED_FIXTURE_ESCAPE: ${target}`);
+    }
+  }
+
+  beforeEach(() => {
+    const readFileSync = fs.readFileSync;
+    vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+      if (typeof args[0] === "string" && path.basename(args[0]) === "models.json") {
+        assertOwnedPath(args[0]);
+      }
+      return readFileSync(...args);
+    });
+    const readDatabase = agentDatabase.withOpenClawAgentDatabaseReadOnly;
+    vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseReadOnly").mockImplementation(
+      (operation, options, behavior) => {
+        // Guard before delegation: the reader may reuse a handle before probing the file.
+        assertOwnedPath(options.path!);
+        return readDatabase(operation, options, behavior);
+      },
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["static", "live"] as const)("contains native %s model capture", async (catalogMode) => {
+    mocks.configuredAgentIds = ["default", "worker"];
+    await refreshPreparedModelRuntimeSnapshots({}, { catalogMode });
+    expect(mocks.discoverModels).toHaveBeenCalled();
+    for (const agentId of ["default", "worker"]) {
+      expect(fs.readFileSync).toHaveBeenCalledWith(
+        path.join(state.agentDir(agentId), "models.json"),
+        "utf8",
+      );
+    }
+  });
+
+  it("contains the native read-only catalog boundary", () => {
+    expect(loadPersistedPluginModelCatalogsReadOnly(resolveAgentDir({}, "default"))).toEqual([]);
+    expect(agentDatabase.withOpenClawAgentDatabaseReadOnly).toHaveBeenCalledWith(
+      expect.any(Function),
+      { agentId: "default", path: path.join(state.agentDir("default"), "openclaw-agent.sqlite") },
+    );
+  });
+});
 
 describe("prepared catalog owner lifecycle", () => {
   it.each([false, true])(
     "retains the current preparation across adopted auth (previous snapshot: %s)",
     async (previousSnapshot) => {
       mocks.configuredAgentIds = ["alpha"];
-      const agentDir = "/tmp/configured-alpha";
+      const agentDir = state.agentDir("alpha");
       if (previousSnapshot) {
         mocks.configuredWorkspaces.set("alpha", "/tmp/old-workspace");
         await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
@@ -109,7 +177,7 @@ describe("prepared catalog owner lifecycle", () => {
   );
 
   it("refreshes a newer beta preparation instead of the completed alpha snapshot", async () => {
-    const agentDir = "/tmp/rebound-catalog-agent";
+    const agentDir = state.agentDir("rebound-catalog-agent");
     const workspaceDir = "/tmp/rebound-catalog-workspace";
     const input = { agentDir, inheritedAuthDir: agentDir, workspaceDir, config: {} };
     mocks.configuredAgentIds = ["alpha"];
@@ -152,7 +220,7 @@ describe("prepared catalog owner lifecycle", () => {
   });
 
   it("retains known-unbound identity across auth refresh while runtime reads stay usable", async () => {
-    const input = { config: {}, agentDir: "/tmp/unbound-catalog-agent", readOnly: true };
+    const input = { config: {}, agentDir: state.agentDir("unbound-catalog-agent"), readOnly: true };
     mocks.configuredAgentIds = ["alpha"];
     const first = await publishPreparedModelRuntimeSnapshot(input);
     expect(() => resolvePublishedModelCatalogOwner(first)).toThrow(
@@ -174,10 +242,138 @@ describe("prepared catalog owner lifecycle", () => {
 });
 
 describe("prepared build candidate lifetime", () => {
+  it("fails a timed-out publication without overlapping its late build with a retry", async () => {
+    getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
+    const source = createDeferred<{ agentDir: string; wrote: false }>();
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => await source.promise);
+    const input = { config: {}, agentDir: state.agentDir("timeout") };
+    const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuild");
+    try {
+      await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
+        "prepared model runtime publication timed out",
+      );
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
+        "prepared model runtime publication timed out",
+      );
+      await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
+        "prepared model runtime publication timed out",
+      );
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+
+      source.resolve({ agentDir: input.agentDir, wrote: false });
+      // The timeout settles admission before capture finishes; join the native build, not discovery.
+      await builds.mock.results[0]!.value.completion;
+      expect(mocks.discoverModels).toHaveBeenCalledOnce();
+      await expect(publishPreparedModelRuntimeSnapshot(input)).resolves.toMatchObject({
+        agentDir: input.agentDir,
+      });
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    } finally {
+      source.resolve({ agentDir: input.agentDir, wrote: false });
+      await Promise.all(builds.mock.results.map((result) => result.value.completion));
+      builds.mockRestore();
+    }
+  });
+
+  it("serializes workspace replacements for one agent-owned catalog", async () => {
+    const finishFirstGate = createDeferred();
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
+      await finishFirstGate.promise;
+      return { agentDir: String(targetDir), wrote: false };
+    });
+    const config = {};
+    const agentDir = state.agentDir("workspace-replacement");
+    let first: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
+    let requestDuringFirstGeneration: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+    let replacement: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
+    try {
+      first = publishPreparedModelRuntimeSnapshot({
+        config,
+        agentDir,
+        workspaceDir: "/tmp/workspace-old",
+      });
+      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce());
+      requestDuringFirstGeneration = prepareModelRuntimeSnapshot({
+        config,
+        agentDir,
+        workspaceDir: "/tmp/workspace-old",
+      });
+
+      replacement = publishPreparedModelRuntimeSnapshot({
+        config,
+        agentDir,
+        workspaceDir: "/tmp/workspace-new",
+      });
+      await Promise.resolve();
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+
+      finishFirstGate.resolve();
+      const firstSnapshot = await first;
+      const replacementSnapshot = await replacement;
+      expect(await requestDuringFirstGeneration).toBe(firstSnapshot);
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
+        config,
+        agentDir,
+        expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
+      );
+      expect(
+        await prepareModelRuntimeSnapshot({
+          config,
+          agentDir,
+          workspaceDir: "/tmp/workspace-new",
+        }),
+      ).toBe(replacementSnapshot);
+    } finally {
+      finishFirstGate.resolve();
+      await Promise.allSettled([first, replacement, requestDuringFirstGeneration]);
+    }
+  });
+
+  it("serializes conflicting standalone activations for one owner", async () => {
+    const agentDir = state.agentDir("concurrent-standalone");
+    const firstConfig = {};
+    const secondConfig = {};
+    const finishFirstBuildGate = createDeferred();
+    let finishFirstBuild!: () => void;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
+      finishFirstBuild = () => finishFirstBuildGate.resolve();
+      await finishFirstBuildGate.promise;
+      return { agentDir: String(targetDir), wrote: false };
+    });
+
+    let firstActivation: ReturnType<typeof activateStandalonePreparedModelRuntime> | undefined;
+    let secondActivation: ReturnType<typeof activateStandalonePreparedModelRuntime> | undefined;
+    try {
+      firstActivation = activateStandalonePreparedModelRuntime({
+        config: firstConfig,
+        agentDir,
+      });
+      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce());
+      secondActivation = activateStandalonePreparedModelRuntime({
+        config: secondConfig,
+        agentDir,
+      });
+
+      await Promise.resolve();
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+      finishFirstBuild();
+
+      const [first, second] = await Promise.all([firstActivation, secondActivation]);
+      expect(first?.config).toBe(firstConfig);
+      expect(second?.config).toBe(secondConfig);
+      expect(first).not.toBe(second);
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    } finally {
+      finishFirstBuildGate.resolve();
+      await Promise.allSettled([firstActivation, secondActivation]);
+    }
+  });
+
   it("allows a direct serialized build without a lifecycle generation guard", async () => {
     const input = {
       config: {},
-      agentDir: "/tmp/direct-prepared-model-runtime-build",
+      agentDir: state.agentDir("direct-prepared-model-runtime-build"),
       readOnly: true,
     };
     const build = startSerializedSnapshotBuild(
@@ -187,14 +383,17 @@ describe("prepared build candidate lifetime", () => {
       "static",
     );
 
-    await expect(build.pending).resolves.toMatchObject({
-      snapshot: {
-        agentDir: input.agentDir,
-        config: input.config,
-      },
-      pluginGeneration: expect.any(Object),
-    });
-    await expect(build.completion).resolves.toBeUndefined();
+    try {
+      await expect(build.pending).resolves.toMatchObject({
+        snapshot: {
+          agentDir: input.agentDir,
+          config: input.config,
+        },
+        pluginGeneration: expect.any(Object),
+      });
+    } finally {
+      await build.completion;
+    }
   });
 
   it.each([
@@ -239,7 +438,7 @@ describe("prepared build candidate lifetime", () => {
       callbacks: false,
     },
   ])("preserves $name semantics", async ({ single, generation, build, allowed, callbacks }) => {
-    const input = { config: {}, agentDir: "/tmp/candidate-lifetime", readOnly: true };
+    const input = { config: {}, agentDir: state.agentDir("candidate-lifetime"), readOnly: true };
     const candidate = {
       input,
       catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
@@ -270,7 +469,11 @@ describe("prepared build candidate lifetime", () => {
   it.each(["before", "after"] as const)(
     "checks supersession %s workspace preparation",
     async (checkpoint) => {
-      const input = { config: {}, agentDir: "/tmp/candidate-checkpoint", readOnly: true };
+      const input = {
+        config: {},
+        agentDir: state.agentDir("candidate-checkpoint"),
+        readOnly: true,
+      };
       const candidate = {
         input,
         catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),

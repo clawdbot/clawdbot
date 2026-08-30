@@ -6,7 +6,6 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
@@ -45,14 +44,13 @@ import {
   invalidSetupConfigError,
   redactSetupInferenceError,
   resolveSetupInferenceWorkspace,
-  setupInferenceLog,
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
 import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
 import {
   cleanupSetupInferenceTempDir,
   persistManualAuthProfiles,
-  reloadCodexRegistryAfterActivation,
+  restoreSetupPluginMetadata,
   retainUnownedCodexInstall,
   runSetupInferenceTest,
 } from "./setup-inference-persist.js";
@@ -145,12 +143,7 @@ async function activateSetupInferenceUnredacted(
   const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
-    : (
-        await resolveSetupInferenceWorkspace({
-          configExists: snapshot.exists,
-          configValid: snapshot.valid,
-        })
-      ).workspace;
+    : resolveSetupInferenceWorkspace(snapshot);
 
   const tempDir = await (
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
@@ -158,9 +151,7 @@ async function activateSetupInferenceUnredacted(
   const testAgentDir = path.join(tempDir, "agent");
   let pendingCodexInstall: PluginInstallRecord | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
-  let codexRegistryNeedsReload = false;
-  let codexRegistryReloaded = false;
-  let codexReloadedRuntimeConfig: OpenClawConfig | undefined;
+  let codexMetadataNeedsRestore = false;
   let codexProbePluginRegistry: PluginRegistry | undefined;
   try {
     const plan = await buildTestPlan({
@@ -260,7 +251,7 @@ async function activateSetupInferenceUnredacted(
               error: ensured.message,
             };
           }
-          codexRegistryNeedsReload = true;
+          codexMetadataNeedsRestore = true;
           pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
           if (pendingCodexInstall) {
             // The managed package exists before inference can run. Mark this
@@ -365,7 +356,7 @@ async function activateSetupInferenceUnredacted(
       config: testPlan.config,
       env: process.env,
       ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
-      ...(codexRegistryNeedsReload ? { allowCurrent: false } : {}),
+      ...(codexMetadataNeedsRestore ? { allowCurrent: false } : {}),
     });
     const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
     const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
@@ -632,46 +623,6 @@ async function activateSetupInferenceUnredacted(
         gatewayRestartRequired,
       } = persistenceState);
     }
-    if (codexRegistryNeedsReload && committedConfig) {
-      const reloadedRuntimeConfig = await reloadCodexRegistryAfterActivation({
-        readSnapshot,
-        workspaceDir: workspace,
-        deps,
-        requireValidConfig: true,
-      });
-      codexRegistryReloaded = reloadedRuntimeConfig !== null;
-      codexReloadedRuntimeConfig = reloadedRuntimeConfig ?? undefined;
-      if (!codexRegistryReloaded) {
-        throw new SetupInferenceActivationIndeterminateError(
-          "Inference activation committed, but the active plugin registry could not be reloaded. Restart the Gateway before using Codex inference.",
-        );
-      }
-    }
-    if (committedConfig && params.surface === "gateway" && params.kind === "codex-cli") {
-      try {
-        // The writer returns authored config, while prepared owners are keyed to the Gateway's
-        // materialized runtime snapshot. Publishing the authored shape strands metadata/probes.
-        if (!codexReloadedRuntimeConfig) {
-          throw new Error("committed runtime config is unavailable");
-        }
-        const refreshPreparedModelRuntimeSnapshots =
-          deps.refreshPreparedModelRuntimeSnapshots ??
-          (await import("../agents/prepared-model-runtime.js"))
-            .refreshPreparedModelRuntimeSnapshots;
-        await refreshPreparedModelRuntimeSnapshots(codexReloadedRuntimeConfig);
-      } catch (error) {
-        if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-          throw new SetupInferenceActivationIndeterminateError(
-            `Inference activation committed, but the prepared model catalog could not be refreshed (${error instanceof Error ? error.message : String(error)}). Restart the Gateway before using the new inference route.`,
-          );
-        }
-        // Our config commit can trigger a hot reload of the same or newer config.
-        // That lifecycle publication owns the refresh; losing ownership is not activation failure.
-        setupInferenceLog.info(
-          "Prepared model catalog refresh superseded by a newer publication; activation proceeding.",
-        );
-      }
-    }
     const announceAutoLocalModelLean =
       autoLocalModelLeanApplied &&
       committedConfig?.agents?.defaults?.experimental?.localModelLean === true;
@@ -723,20 +674,10 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    if (codexRegistryNeedsReload && !codexRegistryReloaded) {
-      // The probe loaded discovery against staged config. Restore the live
-      // registry from the latest persisted config before another request runs.
-      codexRegistryReloaded =
-        (await reloadCodexRegistryAfterActivation({
-          readSnapshot,
-          workspaceDir: workspace,
-          deps,
-        })) !== null;
-      if (!codexRegistryReloaded) {
-        codexCleanupError = new SetupInferenceActivationIndeterminateError(
-          "Inference activation could not restore the active plugin registry after its Codex probe. Restart the Gateway before retrying.",
-        );
-      }
+    if (codexMetadataNeedsRestore) {
+      // The probe owns a private registry. Restore only its staged metadata;
+      // Gateway reload owns runtime replacement and the prepared auth generation.
+      await restoreSetupPluginMetadata({ readSnapshot, workspaceDir: workspace, deps });
     }
     await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
     if (codexCleanupError) {

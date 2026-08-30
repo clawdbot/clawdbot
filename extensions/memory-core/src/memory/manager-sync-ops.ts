@@ -29,12 +29,13 @@ import {
   removeMemoryDatabaseFiles,
 } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
   applyMemoryFallbackProviderState,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
-import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
+import { type MemoryReindexLockHandle, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -304,6 +305,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        if (targetedSessionSync.failure) {
+          this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
+        }
         return;
       }
     }
@@ -376,6 +380,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        this.syncOutcomes.recordActiveFailure(err);
         log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
         return;
       }
@@ -530,7 +535,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     );
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
-      reindexLock = acquireMemoryReindexLock(dbPath);
+      reindexLock = await waitForMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       const shadow = new MemoryIndexDatabase(tempDb);
@@ -618,15 +623,17 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       closeMemoryDatabase(tempDb);
       tempDbClosed = true;
-      await withMemoryWorkspaceLock(this.workspaceDir, () =>
-        publishMemoryDatabaseTables({
-          targetDb: originalDb,
-          sourcePath: tempDbPath,
-          metaKey: MEMORY_INDEX_META_KEY,
-          expectedRevision: originalRevision,
-          vectorExtensionPath: shadow.vector.extensionPath,
-        }),
-      );
+      await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+        await withMemoryIndexPublishGeneration(dbPath, async () => {
+          await publishMemoryDatabaseTables({
+            targetDb: originalDb,
+            sourcePath: tempDbPath,
+            metaKey: MEMORY_INDEX_META_KEY,
+            expectedRevision: originalRevision,
+            vectorExtensionPath: shadow.vector.extensionPath,
+          });
+        });
+      });
 
       if (rebuilt.vectorIndexComplete) {
         // Publish completeness only after the shadow tables committed. A crash

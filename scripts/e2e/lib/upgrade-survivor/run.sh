@@ -103,7 +103,6 @@ update_restart_source=""
 update_repair_required="0"
 initial_update_observation_root=""
 last_update_observation_root=""
-migration_seconds=""
 idempotence_seconds=""
 run_completed="0"
 
@@ -221,7 +220,6 @@ write_summary() {
     SUMMARY_UPDATE_RESTART_SOURCE="$update_restart_source" \
     SUMMARY_START_SECONDS="$start_seconds" \
     SUMMARY_UPDATE_RESTART_SECONDS="$update_restart_seconds" \
-    SUMMARY_MIGRATION_SECONDS="$migration_seconds" \
     SUMMARY_IDEMPOTENCE_SECONDS="$idempotence_seconds" \
     SUMMARY_HEALTHZ_SECONDS="$healthz_seconds" \
     SUMMARY_READYZ_SECONDS="$readyz_seconds" \
@@ -262,7 +260,6 @@ const summary = {
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
-    migrationSeconds: numberOrNull(process.env.SUMMARY_MIGRATION_SECONDS),
     idempotenceSeconds: numberOrNull(process.env.SUMMARY_IDEMPOTENCE_SECONDS),
     healthzSeconds: numberOrNull(process.env.SUMMARY_HEALTHZ_SECONDS),
     readyzSeconds: numberOrNull(process.env.SUMMARY_READYZ_SECONDS),
@@ -1170,21 +1167,10 @@ assert_root_managed_vps_cli_usable() {
 }
 
 run_doctor() {
-  local started_at budget
-  started_at="$(date +%s)"
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
     echo "openclaw doctor failed" >&2
     openclaw_e2e_print_log "$DOCTOR_LOG" >&2
     return 1
-  fi
-  if [ "$SCENARIO" = "sqlite-volume" ]; then
-    migration_seconds=$(($(date +%s) - started_at))
-    budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS 120)"
-    echo "SQLite volume migration doctor completed in ${migration_seconds}s (budget ${budget}s)."
-    if [ "$migration_seconds" -gt "$budget" ]; then
-      echo "SQLite volume migration exceeded budget: ${migration_seconds}s > ${budget}s" >&2
-      return 1
-    fi
   fi
 }
 
@@ -1392,7 +1378,10 @@ phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
 phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
 if [ "$SCENARIO" = "sqlite-volume" ]; then
+  phase seed-baseline-shared-state node scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs \
+    seed-baseline-plugin-state "$(package_root)"
   phase seed-volume-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-volume
+  phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
@@ -1401,6 +1390,10 @@ phase configure-clawhub-fixture configure_clawhub_fixture
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
+if [ "$SCENARIO" = "sqlite-volume" ]; then
+  # A standalone Doctor pass would conceal missing migrations in the updater.
+  phase assert-automatic-migration assert_survival
+fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
   clawhub_security_mode="$(
     node scripts/e2e/lib/package-compat.mjs --clawhub-release-security-mode "$candidate_version"
@@ -1419,14 +1412,13 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-phase doctor run_doctor
+if [ "$SCENARIO" != "sqlite-volume" ]; then
+  phase doctor run_doctor
+fi
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
-if [ "$SCENARIO" = "sqlite-volume" ]; then
-  phase assert-volume-idempotence assert_volume_idempotence
-fi
 phase fixture-plugin-consent repair_fixture_plugin_consent
 if [ "$SCENARIO" = "meeting-transcripts-sqlite" ]; then
   # Export recreates the archived source path. Finish every repeated survival
@@ -1436,9 +1428,20 @@ fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$SCENARIO" = "sqlite-volume" ]; then
+  phase gateway-volume-history node scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs \
+    --url ws://127.0.0.1:18789 --out "$ARTIFACT_ROOT/volume-gateway.json"
+  phase gateway-stop stop_gateway
+  phase assert-volume-idempotence assert_volume_idempotence
+  phase gateway-restart start_gateway
+  phase gateway-restart-probes check_gateway_probes
+  phase gateway-restart-volume-history node scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs \
+    --url ws://127.0.0.1:18789 --out "$ARTIFACT_ROOT/volume-gateway-restarted.json"
+  phase assert-restarted-survival assert_survival
+fi
 if [ "$LIVE_OPENAI" = "1" ]; then
   phase live-openai run_live_openai
 fi
 
 run_completed="1"
-echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} updateRestartMode=${UPDATE_RESTART_MODE} migration=${migration_seconds:-n/a}s idempotence=${idempotence_seconds:-n/a}s startup=${start_seconds}s updateRestart=${update_restart_seconds:-manual}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} updateRestartMode=${UPDATE_RESTART_MODE} idempotence=${idempotence_seconds:-n/a}s startup=${start_seconds}s updateRestart=${update_restart_seconds:-manual}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."

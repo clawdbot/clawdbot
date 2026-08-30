@@ -214,6 +214,26 @@ async function captureProof(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: path.join(ARTIFACT_DIR, name) });
 }
 
+async function captureDocumentProof(page: Page, name: string): Promise<void> {
+  if (!CAPTURE_UI_PROOF) {
+    return;
+  }
+  await mkdir(ARTIFACT_DIR, { recursive: true });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  });
+  await page.screenshot({ path: path.join(ARTIFACT_DIR, name) });
+}
+
+async function pauseRecordedProof(page: Page): Promise<void> {
+  if (CAPTURE_UI_PROOF) {
+    await page.waitForTimeout(900);
+  }
+}
+
 async function expectMobilePendingLayout(page: Page): Promise<void> {
   const allowButton = page.getByRole("button", { name: "Allow once" });
   const denyButton = page.getByRole("button", { name: "Deny" });
@@ -459,6 +479,44 @@ suite.define(() => {
     expect(new URL(surface.page.url()).pathname).toBe(approvalPath(basePath));
     await expectStandaloneApprovalPage(surface.page);
     expect(surface.pageErrors).toEqual([]);
+  });
+
+  it("confirms the owning Gateway before opening a remote approval notification", async () => {
+    const basePath = "";
+    const pending = pendingApproval(basePath);
+    const surface = await createSurface({
+      basePath,
+      pending,
+      recordVideo: true,
+      viewport: MOBILE_VIEWPORT,
+    });
+    const remoteGatewayUrl = "wss://remote-gateway.example/mobile";
+    const url = new URL(approvalUrl(basePath));
+    url.hash = new URLSearchParams({ gatewayUrl: remoteGatewayUrl }).toString();
+
+    try {
+      const response = await surface.page.goto(url.href);
+      expect(response?.status()).toBe(200);
+      const confirmation = surface.page.locator("openclaw-gateway-url-confirmation");
+      await confirmation.waitFor();
+      expect(await confirmation.getByText(remoteGatewayUrl, { exact: true }).count()).toBe(1);
+      expect(await surface.gateway.getRequests("approval.get")).toHaveLength(0);
+      await captureDocumentProof(surface.page, "after-remote-gateway-confirmation.png");
+      await pauseRecordedProof(surface.page);
+
+      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await waitForApprovalPage(surface.page);
+      const request = await surface.gateway.waitForRequest("approval.get");
+      expect(request.params).toEqual({ id: APPROVAL_ID });
+      expect((await surface.gateway.getSocketUrls()).at(-1)).toBe(remoteGatewayUrl);
+      expect(new URL(surface.page.url()).hash).toBe("");
+      await expectStandaloneApprovalPage(surface.page);
+      await captureProof(surface.page, "after-remote-gateway-approval.png");
+      await pauseRecordedProof(surface.page);
+      expect(surface.pageErrors).toEqual([]);
+    } finally {
+      await closeRecordedSurface(surface, "approval-page-remote-gateway-mobile.webm");
+    }
   });
 
   it("uses the page Gateway without replacing a saved remote selection", async () => {

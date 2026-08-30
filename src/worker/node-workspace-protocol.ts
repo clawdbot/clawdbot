@@ -2,6 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SpawnResult } from "../process/exec.js";
 import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer-protocol.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -34,14 +35,6 @@ export type NodeWorkerWorkspaceExecInput = {
 
 export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
 
-function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => Object.hasOwn(value, key)) &&
-    Object.keys(value).every((key) => allowed.has(key))
-  );
-}
-
 function parseJson(raw?: string | null): unknown {
   if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
@@ -72,7 +65,7 @@ export function parseNodeWorkerWorkspaceExecInput(
   const value = parseJson(raw);
   if (
     !isRecord(value) ||
-    !hasExactKeys(
+    !hasExactOwnKeys(
       value,
       ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
       ["input", "timeoutMs", "resetWorkspace", "transfer", "seed"],
@@ -139,11 +132,11 @@ export function parseNodeWorkerWorkspaceExecInput(
       throw new Error("INVALID_REQUEST: workspace seed key must be a SHA-256 hex digest");
     }
     const { action, key, maxAgeMs } = value.seed;
-    if (action === "apply" && hasExactKeys(value.seed, ["action", "key"])) {
+    if (action === "apply" && hasExactOwnKeys(value.seed, ["action", "key"])) {
       seed = { action, key };
     } else if (
       action === "store" &&
-      hasExactKeys(value.seed, ["action", "key", "maxAgeMs"]) &&
+      hasExactOwnKeys(value.seed, ["action", "key", "maxAgeMs"]) &&
       typeof maxAgeMs === "number" &&
       Number.isSafeInteger(maxAgeMs) &&
       maxAgeMs >= 0
@@ -170,11 +163,15 @@ export function parseNodeWorkerWorkspaceExecInput(
       token.length > 1_024 ||
       token.includes("\0") ||
       (direction === "download"
-        ? !hasExactKeys(value.transfer, ["direction", "token", "manifestRef"], ["attachments"]) ||
+        ? !hasExactOwnKeys(
+            value.transfer,
+            ["direction", "token", "manifestRef"],
+            ["attachments"],
+          ) ||
           !validRef(manifestRef) ||
           (value.transfer.attachments !== undefined && value.transfer.attachments !== true)
         : direction === "upload"
-          ? !hasExactKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
+          ? !hasExactOwnKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
             !validRef(baseManifestRef)
           : true)
     ) {
@@ -217,7 +214,7 @@ export function parseNodeWorkerWorkspaceExecResult(
 ): NodeWorkerWorkspaceExecResult | null {
   if (
     !isRecord(value) ||
-    !hasExactKeys(
+    !hasExactOwnKeys(
       value,
       ["workspaceDir", "stdout", "stderr", "code", "signal", "killed", "termination"],
       [

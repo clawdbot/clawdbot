@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
@@ -15,6 +16,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
@@ -480,6 +482,97 @@ describe("openclaw.chat", () => {
     expect(calls[0]?.ok).toBe(false);
   });
 
+  it.each([
+    "applied",
+    "applied-restart-required",
+    "restart-pending",
+    "failed",
+    "stopped",
+    "superseded",
+  ] as const)(
+    "settles setup after the Gateway application receipt without holding its lane: %s",
+    async (outcome) => {
+      const application = createRuntimeConfigWriteApplication();
+      const claim = expectDefined(application.claim(), "application claim");
+      const result = {
+        ok: true as const,
+        modelRef: "openai/gpt-5.6-luna",
+        latencyMs: 1,
+        lines: [],
+      };
+      setupInferenceMocks.activateSetupInference.mockImplementation(
+        async (params: ActivateSetupInferenceParams) => {
+          params.onRuntimeApplication?.(application);
+          return result;
+        },
+      );
+      const { calls, respond } = makeRespond();
+      const pending = systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never);
+      try {
+        await vi.waitFor(() =>
+          expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce(),
+        );
+        await waitOneTask();
+        expect(calls).toEqual([]);
+        expect(systemAgentLane().activeCount).toBe(0);
+        await systemAgentHandler("openclaw.setup.verify")({
+          params: {},
+          respond: () => {},
+        } as never);
+        expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+      } finally {
+        claim.settle(outcome);
+        if (
+          outcome === "applied" ||
+          outcome === "applied-restart-required" ||
+          outcome === "restart-pending"
+        ) {
+          await pending;
+        } else {
+          await expect(pending).rejects.toThrow(
+            outcome === "superseded" ? "newer settings" : "Restart the Gateway before chatting",
+          );
+        }
+      }
+      if (
+        outcome === "applied" ||
+        outcome === "applied-restart-required" ||
+        outcome === "restart-pending"
+      ) {
+        expect(calls).toEqual([
+          {
+            ok: true,
+            payload: outcome === "applied" ? result : { ...result, gatewayRestartRequired: true },
+            error: undefined,
+          },
+        ]);
+      } else {
+        // The RPC error stops automatic candidate fallthrough after a saved choice.
+        expect(calls).toEqual([]);
+      }
+    },
+  );
+
+  it("reports restart required when the committed setup application is unclaimed", async () => {
+    setupInferenceMocks.activateSetupInference.mockImplementation(
+      async (params: ActivateSetupInferenceParams) => {
+        params.onRuntimeApplication?.(createRuntimeConfigWriteApplication());
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
+      },
+    );
+    const { calls, respond } = makeRespond();
+    await expect(
+      systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never),
+    ).rejects.toThrow("Restart the Gateway before chatting");
+    expect(calls).toEqual([]);
+  });
+
   it.each(["success", "task error", "response error"])(
     "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
     async (outcome) => {
@@ -539,11 +632,12 @@ describe("openclaw.chat", () => {
         workspace: "/tmp/work",
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
+        onRuntimeApplication: expect.any(Function),
       });
       expect(calls).toEqual(
         outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],
       );
-      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [1]);
+      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [0]);
       expect(systemAgentLane().activeCount).toBe(0);
     },
   );

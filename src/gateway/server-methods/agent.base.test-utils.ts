@@ -1187,8 +1187,19 @@ describe("gateway agent handler", () => {
     expect(store["agent:main:main"]).toBeUndefined();
   });
 
-  it("does not re-persist an admitted gateway user turn after the session key is rebound", async () => {
+  it("does not re-persist a committed gateway user turn after the session key is rebound", async () => {
     primeMainAgentRun({ sessionId: "accepted-session-id" });
+    mocks.agentCommand.mockImplementationOnce(
+      async (opts: {
+        userTurnTranscriptRecorder?: { persistApproved: () => Promise<unknown> };
+      }) => {
+        await requireValue(
+          opts.userTurnTranscriptRecorder,
+          "user turn recorder missing",
+        ).persistApproved();
+        return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
+      },
+    );
 
     await runMainAgent("stale after reset", "idem-user-turn-rebound");
 
@@ -1271,7 +1282,7 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall<
         AgentCommandCall & {
           userTurnTranscriptRecorder?: {
-            getPersistedMessage: () => { __openclaw?: Record<string, unknown> } | undefined;
+            message?: { __openclaw?: Record<string, unknown> };
             hasPersisted: () => boolean;
           };
         }
@@ -1282,8 +1293,9 @@ describe("gateway agent handler", () => {
           mimeType: "image/png",
         }),
       ]);
-      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
-      expect(call.userTurnTranscriptRecorder?.getPersistedMessage()?.["__openclaw"]).toMatchObject({
+      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+      expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+      expect(call.userTurnTranscriptRecorder?.message?.["__openclaw"]).toMatchObject({
         media: [expect.objectContaining({ contentType: "image/png", kind: "image" })],
         mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
       });
@@ -1339,7 +1351,7 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall<
         AgentCommandCall & {
           userTurnTranscriptRecorder?: {
-            getPersistedMessage: () => { __openclaw?: Record<string, unknown> } | undefined;
+            message?: { __openclaw?: Record<string, unknown> };
             hasPersisted: () => boolean;
           };
         }
@@ -1347,8 +1359,9 @@ describe("gateway agent handler", () => {
       expect(call.images).toEqual([]);
       expect(call.imageOrder).toEqual(["offloaded"]);
       expect(call.message).toContain("[media attached: media://inbound/");
-      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
-      expect(call.userTurnTranscriptRecorder?.getPersistedMessage()?.["__openclaw"]).toMatchObject({
+      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+      expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+      expect(call.userTurnTranscriptRecorder?.message?.["__openclaw"]).toMatchObject({
         media: [expect.objectContaining({ contentType: "image/png", kind: "image" })],
         mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
       });

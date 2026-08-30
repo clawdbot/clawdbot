@@ -67,6 +67,23 @@ function activeHistory(runId: string): ChatHistoryResult {
   } satisfies ChatHistoryResult;
 }
 
+it.each(["main", "workspace"])(
+  "requests the configured default agent for global main alias %s",
+  async (sessionKey) => {
+    const state = createState({ messages: [] });
+    state.sessionKey = sessionKey;
+    state.assistantAgentId = "work";
+    state.agentsList = { defaultId: "main", mainKey: "workspace", scope: "global" };
+    const request = vi.spyOn(state.client!, "request");
+    await loadChatHistory(state);
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey,
+      agentId: "main",
+      limit: 100,
+    });
+  },
+);
+
 describe("syncSelectedSessionMessageSubscription", () => {
   it("starts the new subscription before the previous unsubscribe settles", async () => {
     let resolveUnsubscribe: () => void = () => undefined;

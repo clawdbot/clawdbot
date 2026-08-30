@@ -40,6 +40,7 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState, retryChatHistoryLoad } from "./chat-history.ts";
+import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
@@ -180,6 +181,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     sessions: SessionsListResult | null;
+    selectedSession: GatewaySessionRow | undefined;
     toolOverrides?: SessionToolOverrides;
     capabilityMenu?: CapabilityMenuProps;
     swarmSessions?: readonly GatewaySessionRow[];
@@ -307,11 +309,13 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
   };
 
 export function renderChat(props: ChatProps) {
+  const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const showModelSetupSplash =
     props.modelSetupRequired === true &&
     props.messages.length === 0 &&
+    (pendingInputs?.page.items.length ?? 0) === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&
@@ -338,6 +342,7 @@ export function renderChat(props: ChatProps) {
     {
       paneId: props.paneId,
       sessionKey: props.sessionKey,
+      selectedSession: props.selectedSession,
       announceTranscript: props.announceTranscript,
       loading: props.loading && !placementStartup,
       historyPagination: props.historyPagination,
@@ -352,6 +357,7 @@ export function renderChat(props: ChatProps) {
       runOutputTokens: props.runOutputTokens,
       runStatus: props.runStatus,
       queue,
+      pendingInputs: pendingInputs?.page.items,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
       persistCommentary: props.persistCommentary,
@@ -465,6 +471,7 @@ export function renderChat(props: ChatProps) {
   const transcriptEmpty =
     !runWorking &&
     props.messages.length === 0 &&
+    (pendingInputs?.page.items.length ?? 0) === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&
@@ -538,6 +545,43 @@ export function renderChat(props: ChatProps) {
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">
                   ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
+                  ${pendingInputs &&
+                  (pendingInputs.page.total > 0 || pendingInputs.before !== undefined)
+                    ? html`<div class="chat-history-error chat-history-error--inline" role="status">
+                        <span
+                          >${t("chat.pendingInputs.count", {
+                            count: String(pendingInputs.page.total),
+                          })}</span
+                        >
+                        ${pendingInputs.error ? html`<span>${pendingInputs.error}</span>` : nothing}
+                        ${pendingInputs.page.nextBefore !== undefined
+                          ? html`<button
+                              class="btn btn--sm"
+                              type="button"
+                              ?disabled=${pendingInputs.loading}
+                              @click=${() =>
+                                props.historyState &&
+                                loadChatPendingInputs(
+                                  props.historyState,
+                                  pendingInputs.page.nextBefore,
+                                )}
+                            >
+                              ${t("chat.pendingInputs.earlier")}
+                            </button>`
+                          : nothing}
+                        ${pendingInputs.before !== undefined
+                          ? html`<button
+                              class="btn btn--sm"
+                              type="button"
+                              ?disabled=${pendingInputs.loading}
+                              @click=${() =>
+                                props.historyState && loadChatPendingInputs(props.historyState)}
+                            >
+                              ${t("chat.pendingInputs.latest")}
+                            </button>`
+                          : nothing}
+                      </div>`
+                    : nothing}
                   ${scrollToBottomButton}
                   ${props.inlineApproval && props.onApprovalDecision
                     ? html`<div class="chat-inline-approval">

@@ -222,6 +222,7 @@ async function runConnectCommand(
     // replays setup after the one-shot bootstrap credential has been consumed.
     preferGatewayBootstrapToken: opts.ephemeral !== true,
     ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
+    ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
   };
 

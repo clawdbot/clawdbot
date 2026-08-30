@@ -1878,9 +1878,7 @@ export const en: TranslationMap = {
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
-      hint: "Receive browser push notifications from your gateway.",
-      nativeHint: "Notifications are shown natively by the OpenClaw app on this Mac.",
-      unavailableHint: "Not available in this browser.",
+      unavailableHint: "Browser unsupported.",
       unavailable: "Unavailable",
       checking: "Checking...",
       granted: "Granted",
@@ -1905,10 +1903,31 @@ export const en: TranslationMap = {
       subscribing: "Subscribing...",
       enable: "Enable notifications",
       openSystemSettings: "Open System Settings",
-      blockedHint:
-        "Notifications are blocked. Update your browser site permissions to allow notifications.",
-      nativeBlockedHint:
-        "Notifications are disabled for OpenClaw in macOS. Allow them in System Settings > Notifications.",
+      blockedHint: "Allow notifications in this site's browser permissions.",
+      nativeBlockedHint: "Allow OpenClaw in macOS System Settings > Notifications.",
+      iosInstallRequired: "On iPhone or iPad, use Share > Add to Home Screen, then open OpenClaw.",
+      accountDefaults: "Account defaults",
+      installedApp: "This browser or app",
+      deliverDevice: "Deliver to this browser or app",
+      notificationLabel: "Notification label",
+      approvalRequested: "Approval requested",
+      agentFinished: "Agent finished",
+      agentQuestion: "Agent question",
+      scheduledTaskFailed: "Scheduled task failed",
+      backgroundTaskFailed: "Background task failed",
+      lockScreenDetail: "Lock-screen detail",
+      lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
+      private: "Private",
+      namesOnly: "Names only",
+      detailed: "Detailed",
+      quietHours: "Quiet hours",
+      quietHoursWindow: "Quiet hours window",
+      timeZone: "Time zone",
+      onlyAgents: "Only these agents",
+      inherit: "Use account default",
+      inheritDetail: "Use account detail level",
+      inheritQuietHours: "Use account quiet hours",
+      overrideAgents: "Override for this device",
     },
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
@@ -3136,7 +3155,7 @@ export const en: TranslationMap = {
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
@@ -5320,6 +5339,14 @@ export const en: TranslationMap = {
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
     sendErrors: {
+      outboxPayloadCopied:
+        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
+      outboxPayloadCapacity:
+        "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
+      outboxPayloadUnavailable:
+        "Browser attachment storage is unavailable. Use HTTPS or localhost, allow browser storage, and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+      outboxPayloadMissing:
+        "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
     waitingForApproval: "Waiting for approval…",
@@ -5683,6 +5710,19 @@ export const en: TranslationMap = {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
+    outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryDescription:
+      "An older browser version did not preserve every destination. These drafts and queued messages have not been sent by recovery. Open an empty non-Incognito conversation, then restore an entry here for review. Attachment drafts may appear separately.",
+    outboxRecoveryConfirm:
+      "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
+    outboxRecoveryRestore: "Restore here for review",
+    outboxRecoveryConflict:
+      "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
+    outboxRecoveryStorageFailed:
+      "Browser storage could not complete recovery. The original saved data has been retained. Free browser storage and reload to try again.",
+    outboxRecoveryFull:
+      "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
+    outboxRecoveryMessages: "Queued messages: {count}",
     restartRecoveryTitle: "This session ended during a restart.",
     restartRecoveryDisabled: "Its transcript is safe.",
     resumeInNewSession: "Resume in new session",
@@ -5938,6 +5978,9 @@ export const en: TranslationMap = {
       tooLargeToDisplay: "This message is too large to display here.",
       unknownDate: "Unknown date",
       toolSender: "Tool",
+      forwardedFrom: "From",
+      forwardedFromAgent: "Forwarded from {agentId}",
+      forwardedMessage: "Forwarded message",
       fullContentLoadExhausted: "Could not load the full message.",
       voiceNote: "Voice note",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
@@ -5990,6 +6033,7 @@ export const en: TranslationMap = {
       nextRun: "New permissions apply to the next run.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
+      defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {
@@ -6123,6 +6167,16 @@ export const en: TranslationMap = {
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
     },
+    pendingInputs: {
+      count: "Retained accepted inputs: {count}",
+      queued: "Accepted by the Gateway. Waiting for its turn.",
+      cancelled:
+        "Cancelled before its turn. This input will not run automatically; copy it to send a new message.",
+      interrupted:
+        "Interrupted before its turn. This input will not run automatically; copy it to send a new message.",
+      earlier: "Earlier accepted inputs",
+      latest: "Latest accepted inputs",
+    },
     pairingQrExpired: {
       title: "Pairing QR expired",
       reason: "Run /pair qr again to generate a fresh setup code.",
@@ -6238,6 +6292,7 @@ export const en: TranslationMap = {
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
+      microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
       microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",

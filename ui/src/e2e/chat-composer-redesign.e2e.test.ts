@@ -260,7 +260,7 @@ suite.define(() => {
                 contextTokens: 200_000,
                 displayName: "Main",
                 hasActiveRun: false,
-                key: "main",
+                key: "agent:main:main",
                 kind: "direct",
                 label: "Main",
                 model: "gpt-5.5",
@@ -641,7 +641,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       // The working row stays attached with elapsed/token telemetry throughout streaming.
@@ -703,7 +703,7 @@ suite.define(() => {
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect.poll(() => stop.count()).toBe(0);
 

@@ -285,12 +285,23 @@ Current runtime behavior:
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
 
+<Warning>
+GPT-Live uses agent delegation instead of native function tools. Its current
+Voice Call bridge cannot invoke `openclaw_end_call` or custom `realtime.tools`.
+Use an OpenAI GA realtime model or Google Gemini Live when the call needs those
+controls; selecting GPT-Live does not make them available through delegation.
+</Warning>
+
 ### Hangup detection
 
 Realtime calls normally end when the carrier sends a stream stop event or closes
 the media WebSocket. If an intermediary does not promptly forward that close,
 OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
 2-second grace period for media to resume, and then ends the call.
+
+If the realtime provider ends its session first, OpenClaw also ends the carrier
+call, including when the provider reports a normal close. This prevents a silent
+phone connection from remaining open after its voice session has finished.
 
 The realtime model can also call `openclaw_end_call` when the caller asks to
 hang up. The model must speak any final words before calling the tool: a

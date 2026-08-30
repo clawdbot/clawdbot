@@ -5,7 +5,7 @@ const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
 const replaceConfigFileMock = vi.fn();
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/io.runtime.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
 }));
 

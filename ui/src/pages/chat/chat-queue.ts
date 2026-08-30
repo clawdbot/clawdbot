@@ -1,6 +1,7 @@
 // Control UI page module owns Chat queue storage and queue item cleanup.
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -312,17 +313,17 @@ export function admitQueuedMessageForSession(
   sessionKey: string,
   item: ChatQueueItem,
   replaces?: StoredChatQueueReplacement,
+  captured = captureChatOutboxAdmission(host, sessionKey, item.agentId),
 ): boolean {
   const owner = chatOutboxOwner(host);
-  const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
-  owner.keep(host, scope, item);
-  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replaces)) {
+  owner.keep(host, captured.scope, item);
+  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replaces, captured)) {
     return false;
   }
   if (item.sendState !== "waiting-model") {
     owner.change(host, item.id);
   }
-  return owner.durable(host, item.id) !== undefined;
+  return true;
 }
 
 export function removeQueuedMessageWithoutReleasing(
@@ -414,6 +415,19 @@ export function removeDeliveredQueuedChatSendForRun(
   }
   releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   return removed;
+}
+
+export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
+  return (
+    left.id === right.id &&
+    left.sendRunId === right.sendRunId &&
+    left.sendAttempts === right.sendAttempts &&
+    left.sendState === right.sendState &&
+    left.agentId === right.agentId &&
+    left.sessionKey === right.sessionKey &&
+    left.orderKey === right.orderKey &&
+    left.attachmentPayload?.key === right.attachmentPayload?.key
+  );
 }
 
 export function readDeliveredQueuedChatSendForRun(

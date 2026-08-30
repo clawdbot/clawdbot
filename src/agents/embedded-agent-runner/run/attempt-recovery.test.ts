@@ -22,6 +22,12 @@ type TransportDropScenario = {
   yieldDetected?: boolean;
 };
 
+const disabledCompactionRuntime = {
+  prepareRecoveryOwner: () => {
+    throw new Error("Compaction is disabled in this recovery fixture");
+  },
+};
+
 // Live shape: a code-mode exec batch settled, then the ChatGPT Responses stream
 // died while the model was still reasoning, so the errored turn is thinking-only.
 async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
@@ -128,7 +134,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
       continueFromCurrentTranscript,
     },
     failoverRetryController,
-    compactionRuntime: {},
+    compactionRuntime: disabledCompactionRuntime,
     contextRecoveryState,
     usageAccumulator: createUsageAccumulator(),
     lastRunPromptUsage: undefined,
@@ -385,7 +391,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       runtimePlan: { auth: {} },
       sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
       failoverRetryController,
-      compactionRuntime: {},
+      compactionRuntime: disabledCompactionRuntime,
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
       usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: undefined,

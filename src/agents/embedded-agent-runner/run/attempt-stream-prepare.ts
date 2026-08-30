@@ -29,10 +29,7 @@ import {
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import {
-  buildToolLifecycleErrorResult,
-  sanitizeToolResult,
-} from "../../embedded-agent-tool-results.js";
+import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
@@ -44,7 +41,8 @@ import {
 import type { AgentMessage } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { isToolResultError } from "../../tool-result-error.js";
+import { hashToolCall } from "../../tool-loop-detection.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
@@ -63,6 +61,7 @@ import {
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
+import { registerCodeModeRecoveryJournalEntry } from "./code-mode-recovery-journal.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
@@ -72,6 +71,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -89,7 +89,7 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 };
 
 export function prepareEmbeddedAttemptStream(input: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   activeSession: AgentSession;
   runtimeChannel?: string;
   hookRunner: HookRunner;
@@ -337,6 +337,9 @@ export function prepareEmbeddedAttemptStream(input: {
     silentExpected: attempt.silentExpected,
     suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
     config: attempt.config,
+    compactionCountOwner: attempt.compactionCountOwner,
+    onContextAccountingEvent: attempt.onContextAccountingEvent,
+    sessionPersistence: attempt.sessionPersistence,
     // Live events belong to the transcript session. The sandbox key is only
     // authority context and may intentionally point at a visible parent.
     sessionKey: attempt.sessionKey,
@@ -382,9 +385,57 @@ export function prepareEmbeddedAttemptStream(input: {
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
+        onTerminal: async (terminal) => {
+          const activity = createNestedToolActivity({
+            runId: attempt.runId,
+            scopeId: activityScope,
+            afterEntryId,
+            startOrder,
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: terminal.executedArguments,
+            result: sanitizeToolResult(terminal.result),
+            isError: terminal.isError,
+            startedAt,
+            timestamp: Date.now(),
+          });
+          await runWithOwnedSessionTranscriptWrite(
+            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
+            () => {
+              // Revalidate the exact attempt after awaited acceptance and writer admission.
+              if (
+                ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
+                input.getRunState().aborted
+              ) {
+                return;
+              }
+              const message = {
+                ...activity,
+                idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+              };
+              manager.appendMessage(message);
+              const recorded = readNestedToolActivity(
+                redactTranscriptMessage(activity, attempt.config),
+              );
+              if (!recorded) {
+                throw new Error("Nested activity became invalid during transcript redaction");
+              }
+              registerCodeModeRecoveryJournalEntry(recorded, {
+                actionKey: hashToolCall(
+                  normalizeToolPolicyName(toolParams.toolName),
+                  terminal.executedArguments,
+                ),
+                effectState: terminal.effectReceipt.state,
+              });
+              input.nestedToolActivities.push(recorded);
+            },
+          );
+          notifyToolActivity(attempt.runId);
+        },
         execute: async (onImplementationStart) => {
           // Acceptance belongs inside execution: observers must never see a rejected success.
-          const outcome = await raceWithAbortSignal(
+          return await raceWithAbortSignal(
             (async () => {
               signal.throwIfAborted();
               const preparer = getInternalToolExecutionPreparer(toolParams.tool);
@@ -418,53 +469,7 @@ export function prepareEmbeddedAttemptStream(input: {
             })().then(toolParams.acceptResultBeforeProjection),
             signal,
             yieldRunSignal,
-          ).then(
-            (result) => ({ result }),
-            (error: unknown) => ({ result: buildToolLifecycleErrorResult(error), error }),
           );
-          const activity = createNestedToolActivity({
-            runId: attempt.runId,
-            scopeId: activityScope,
-            afterEntryId,
-            startOrder,
-            parentToolCallId: toolParams.parentToolCallId,
-            toolCallId: toolParams.toolCallId,
-            toolName: toolParams.toolName,
-            input: toolParams.input,
-            result: sanitizeToolResult(outcome.result),
-            isError: isToolResultError(outcome.result),
-            startedAt,
-            timestamp: Date.now(),
-          });
-          await runWithOwnedSessionTranscriptWrite(
-            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
-            () => {
-              // Revalidate the exact attempt after awaited acceptance and writer admission.
-              if (
-                ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
-                input.getRunState().aborted
-              ) {
-                return;
-              }
-              const message = {
-                ...activity,
-                idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
-              };
-              manager.appendMessage(message);
-              const recorded = readNestedToolActivity(
-                redactTranscriptMessage(activity, attempt.config),
-              );
-              if (!recorded) {
-                throw new Error("Nested activity became invalid during transcript redaction");
-              }
-              input.nestedToolActivities.push(recorded);
-            },
-          );
-          notifyToolActivity(attempt.runId);
-          if ("error" in outcome) {
-            throw outcome.error;
-          }
-          return outcome.result;
         },
       }),
       signal,

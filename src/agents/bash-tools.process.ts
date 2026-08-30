@@ -24,7 +24,11 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { appendExecTimeoutRetryGuidance, renderExecExitLabel } from "./bash-tools.exec-output.js";
+import {
+  EXEC_RETENTION_CAP_NOTE,
+  appendExecTimeoutRetryGuidance,
+  renderExecExitLabel,
+} from "./bash-tools.exec-output.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -100,9 +104,7 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
 }
 
 function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
-  return session.totalOutputChars > session.aggregated.length
-    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
-    : "";
+  return session.totalOutputChars > session.aggregated.length ? EXEC_RETENTION_CAP_NOTE : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -215,8 +217,8 @@ function finishedPollResult(
   // the exact process; a reused slug must never point the model at successor logs.
   const retainedOutputNote = outputDropped
     ? getFinishedSession(sessionId) === finished
-      ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
-      : "\n\n[earlier output is omitted from this poll; omitted output is no longer available through action=log]"
+      ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
+      : "[earlier output is omitted from this poll; omitted output is no longer available through action=log]\n\n"
     : "";
   return attachInternalToolResultAcknowledgement(
     {
@@ -224,9 +226,9 @@ function finishedPollResult(
         {
           type: "text",
           text: appendExecTimeoutRetryGuidance(
-            (output || "(no new output)") +
-              retentionCapNote(finished) +
+            retentionCapNote(finished) +
               retainedOutputNote +
+              (output || "(no new output)") +
               `\n\nProcess exited with ${renderExecExitLabel(finished)}.`,
             finished.exitReason,
           ),
@@ -484,7 +486,7 @@ export function createProcessTool(
           const output = unreadOutput.trim();
           const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
-            ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
+            ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
             : "";
           const hasNewOutput = output.length > 0;
           const retryInMs = recordPollRetrySuggestion(params.sessionId, hasNewOutput);
@@ -495,9 +497,9 @@ export function createProcessTool(
                 {
                   type: "text",
                   text:
-                    (output || "(no new output)") +
                     aggregateOutputNote +
                     retainedOutputNote +
+                    (output || "(no new output)") +
                     (buildInputWaitHint(runtime) || "\n\nProcess still running."),
                 },
               ],
@@ -530,9 +532,9 @@ export function createProcessTool(
           );
           const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
           const text =
+            retentionCapNote(record) +
             (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
-            defaultTailNote(totalLines, window.usingDefaultTail) +
-            retentionCapNote(record);
+            defaultTailNote(totalLines, window.usingDefaultTail);
           return {
             content: [
               {

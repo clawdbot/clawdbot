@@ -171,7 +171,7 @@ beforeEach(() => {
     return { ok: true };
   });
   getUserMedia = vi.fn(async () => ({
-    getTracks: () => [{ stop: vi.fn() }],
+    getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
   }));
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
@@ -190,10 +190,51 @@ afterEach(() => {
 });
 
 describe("ComposerDictationController", () => {
+  it("keeps captured text and releases dictation on microphone loss when error delivery throws", async () => {
+    const { controller, onCommit, onError } = createHarness();
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    const addListener = vi.spyOn(track, "addEventListener");
+    getUserMedia.mockResolvedValueOnce({ getTracks: () => [track] });
+    try {
+      expect(controller.startDirect()).toBe(true);
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
+      );
+      emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "Keep these words" });
+      onError.mockImplementation(() => {
+        throw new Error("error display failed");
+      });
+
+      const ended = addListener.mock.calls[0]?.[1];
+      expect(() => {
+        if (typeof ended === "function") {
+          ended(new Event("ended"));
+        }
+      }).toThrow("error display failed");
+
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("Microphone"), {
+        kind: "interrupted",
+        preservesText: true,
+      });
+      expect(onCommit).toHaveBeenCalledWith("Keep these words");
+      expect(controller.active).toBe(false);
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(listeners.size).toBe(0);
+      expect(processors[0]?.onaudioprocess).toBeNull();
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
+      );
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it.each(["Escape", "blur", "hidden"])("cancels direct dictation on %s", async (action) => {
     const { controller, onCommit } = createHarness();
     const stopTrack = vi.fn();
-    getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] });
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
+    });
 
     try {
       expect(controller.startDirect()).toBe(true);
@@ -391,7 +432,7 @@ describe("ComposerDictationController", () => {
     const order: string[] = [];
     getUserMedia = vi.fn(async () => {
       order.push("microphone");
-      return { getTracks: () => [{ stop: vi.fn() }] };
+      return { getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })] };
     });
     Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
     request = vi.fn(async (method: string, params: unknown) => {

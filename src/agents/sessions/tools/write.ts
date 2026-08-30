@@ -328,9 +328,6 @@ async function readOriginalWriteState(
   content: string,
   ops: WriteOperations,
 ): Promise<WriteToolPrecheck> {
-  if (!ops.statFile) {
-    return { state: "unknown" };
-  }
   let stat: PersistedFileStat | null;
   try {
     stat = await ops.statFile(absolutePath);
@@ -354,14 +351,16 @@ async function readOriginalWriteState(
 
   try {
     const originalContent = await ops.readFile(absolutePath);
-    const originalText = Buffer.isBuffer(originalContent)
-      ? originalContent.toString("utf8")
-      : originalContent;
+    const originalBytes = Buffer.isBuffer(originalContent)
+      ? originalContent
+      : Buffer.from(originalContent, "utf8");
+    const originalText = originalBytes.toString("utf8");
     if (Buffer.byteLength(originalText, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
       return { state: "unknown", beforeStat: stat, readAttempted: true };
     }
     return {
-      state: originalText === content ? "same" : "different",
+      // No-op receipts need the same encoded bytes as post-write verification.
+      state: originalBytes.equals(Buffer.from(content, "utf8")) ? "same" : "different",
       beforeStat: stat,
       beforeText: originalText,
       readAttempted: true,

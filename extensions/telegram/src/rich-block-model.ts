@@ -1,5 +1,5 @@
-// Bot API 10.2 rich block/RichText model: types, size accounting, and the
-// plain-text projection shared by the emitter, splitter, and fallback paths.
+// OpenClaw-authored rich block subset plus size accounting and the plain-text
+// projection shared by the emitter, splitter, and fallback paths.
 export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii";
 
 export type RichText =
@@ -45,8 +45,8 @@ export type RichBlockTableCell = {
   is_header?: true;
   colspan?: number;
   rowspan?: number;
-  align?: RichBlockTableCellAlign;
-  valign?: "top" | "middle" | "bottom";
+  align: RichBlockTableCellAlign;
+  valign: "top" | "middle" | "bottom";
 };
 
 export type InputRichBlockParagraph = {

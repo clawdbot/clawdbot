@@ -14,6 +14,7 @@ export class GatewayProtocolRequestError extends Error {
   readonly details?: unknown;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+  declare readonly responsePayload?: unknown;
 
   constructor(error: Partial<ErrorShape>) {
     super(error.message ?? "request failed");
@@ -24,6 +25,18 @@ export class GatewayProtocolRequestError extends Error {
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
   }
+}
+
+/** Preserve response metadata after custom factories without adding it to error JSON. */
+export function retainGatewayResponsePayload(
+  error: GatewayProtocolRequestError,
+  payload: unknown,
+): void {
+  Object.defineProperty(error, "responsePayload", {
+    value: payload,
+    enumerable: false,
+    configurable: true,
+  });
 }
 
 /** A local transport deadline, distinct from a Gateway's authoritative rejection. */

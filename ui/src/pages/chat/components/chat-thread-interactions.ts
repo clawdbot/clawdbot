@@ -2,7 +2,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -65,6 +66,7 @@ export type ChatThreadProps = {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
@@ -81,6 +83,7 @@ export type ChatThreadProps = {
   runOutputTokens?: number | null;
   runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  pendingInputs?: ChatPendingInputsPage["items"];
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;

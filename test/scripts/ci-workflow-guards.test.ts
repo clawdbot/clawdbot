@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -33,6 +34,7 @@ import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
 
 const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
@@ -1202,14 +1204,13 @@ function createQaProtocolTopology() {
   runGit(origin, ["checkout", "-q", "main"]);
 
   runGit(root, ["clone", "-q", "--no-local", origin, checkout]);
-  const fakeBin = path.join(root, "bin");
-  mkdirSync(fakeBin);
-  writeExecutable(path.join(fakeBin, "timeout"), ["#!/usr/bin/env bash", "shift 3", 'exec "$@"']);
+  const gitOwner = path.join(root, "ci-git-owner.py");
+  writeFileSync(gitOwner, readFileSync(".github/actions/git-owner/owner.py"));
 
   return {
     checkout,
     compatibilityHead,
-    fakeBin,
+    gitOwner,
     featureHead,
     invalidCompatibilityHead,
     mainBase,
@@ -1261,7 +1262,7 @@ function runQaSelectedRefValidation(
       GITHUB_OUTPUT: githubOutput,
       GITHUB_STEP_SUMMARY: path.join(topology.checkout, "github-summary"),
       INPUT_REF: inputRef,
-      PATH: `${topology.fakeBin}:${process.env.PATH ?? ""}`,
+      CI_GIT_OWNER: topology.gitOwner,
     },
   });
   return { ...result, outputs: readWorkflowOutputs(githubOutput) };
@@ -1459,242 +1460,6 @@ function runControlUiI18nSourceFixture(options: {
       output: `${run.stdout}${run.stderr}`,
       status: run.status,
       summary: existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : "",
-    };
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-}
-
-function runGeneratedPublisherScenario(
-  baseChangePath: "a" | "b" | null,
-  options: {
-    autoMerge?: boolean;
-    existingAutoMergeMethod?: "MERGE" | "REBASE" | "SQUASH";
-    existingPr?: boolean;
-    expectFailure?: boolean;
-    failGeneratedPush?: boolean;
-    invalidationPaths?: string;
-    mergeGeneratedPush?: boolean;
-    noGeneratedChange?: boolean;
-    overlapPolicy?: string;
-    stalePrHeadOnce?: boolean;
-    stalePrViewHeadOnce?: boolean;
-    updateSource?: boolean;
-  } = {},
-) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-generated-pr-"));
-  try {
-    const origin = path.join(root, "origin.git");
-    const updater = path.join(root, "updater");
-    const worktree = path.join(root, "worktree");
-    const generatedDir = path.join(worktree, "generated");
-    const sourceDir = path.join(worktree, "source");
-    const fakeBin = path.join(root, "bin");
-    const runnerTemp = path.join(root, "runner-temp");
-    const prState = path.join(root, "pr-open");
-    const mergeCalls = path.join(root, "merge-calls");
-    const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
-    const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
-    const summary = path.join(root, "summary.md");
-
-    mkdirSync(generatedDir, { recursive: true });
-    mkdirSync(sourceDir);
-    mkdirSync(fakeBin);
-    mkdirSync(runnerTemp);
-    writeFileSync(summary, "", "utf8");
-    if (options.stalePrHeadOnce) {
-      writeFileSync(stalePrHeadOnce, "", "utf8");
-    }
-    if (options.stalePrViewHeadOnce) {
-      writeFileSync(stalePrViewHeadOnce, "", "utf8");
-    }
-    runGit(root, ["init", "--bare", origin]);
-    runGit(root, ["init", "--initial-branch=main", worktree]);
-    runGit(worktree, ["config", "user.name", "Test Publisher"]);
-    runGit(worktree, ["config", "user.email", "publisher@example.com"]);
-    writeFileSync(path.join(generatedDir, "a.txt"), "old-a\n", "utf8");
-    writeFileSync(path.join(generatedDir, "b.txt"), "old-b\n", "utf8");
-    writeFileSync(path.join(sourceDir, "input.txt"), "old-input\n", "utf8");
-    runGit(worktree, ["add", "generated", "source"]);
-    runGit(worktree, ["commit", "-m", "base"]);
-    runGit(worktree, ["remote", "add", "origin", origin]);
-    runGit(worktree, ["push", "-u", "origin", "main"]);
-    runGit(root, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
-    if (options.existingPr) {
-      runGit(worktree, ["switch", "-c", "automation/locale"]);
-      writeFileSync(path.join(generatedDir, "a.txt"), "stale-pr-a\n", "utf8");
-      runGit(worktree, ["add", "generated"]);
-      runGit(worktree, ["commit", "-m", "stale generated pull request"]);
-      runGit(worktree, ["push", "-u", "origin", "automation/locale"]);
-      writeFileSync(prState, "", "utf8");
-      runGit(worktree, ["switch", "main"]);
-    }
-    if (baseChangePath !== null || options.updateSource) {
-      runGit(root, ["clone", "--branch", "main", origin, updater]);
-      runGit(updater, ["config", "user.name", "Base Updater"]);
-      runGit(updater, ["config", "user.email", "updater@example.com"]);
-      if (baseChangePath !== null) {
-        writeFileSync(
-          path.join(updater, "generated", `${baseChangePath}.txt`),
-          `newer-${baseChangePath}\n`,
-          "utf8",
-        );
-      }
-      if (options.updateSource) {
-        writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
-      }
-      runGit(updater, ["add", "generated", "source"]);
-      runGit(updater, ["commit", "-m", "update base"]);
-      runGit(updater, ["push", "origin", "main"]);
-    }
-    if (!options.noGeneratedChange) {
-      writeFileSync(path.join(generatedDir, "a.txt"), "desired-a\n", "utf8");
-    }
-    if (options.failGeneratedPush) {
-      writeExecutable(path.join(origin, "hooks", "pre-receive"), [
-        "#!/bin/sh",
-        'rm -f "$0"',
-        "exit 1",
-      ]);
-    }
-    if (options.mergeGeneratedPush) {
-      writeExecutable(path.join(origin, "hooks", "post-receive"), [
-        "#!/bin/sh",
-        "while read -r old_head new_head ref; do",
-        '  if [ "$ref" = "refs/heads/automation/locale" ]; then',
-        '    git update-ref refs/heads/main "$new_head"',
-        '    git update-ref -d refs/heads/automation/locale "$new_head"',
-        "  fi",
-        "done",
-      ]);
-    }
-
-    writeExecutable(path.join(fakeBin, "sleep"), ["#!/bin/sh", "exit 0"]);
-    writeExecutable(path.join(fakeBin, "gh"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'case "${1-}:${2-}" in',
-      "  auth:setup-git) exit 0 ;;",
-      "  api:*)",
-      '    if [[ -f "$FAKE_PR_STATE" ]]; then',
-      '      if [[ -f "$FAKE_STALE_HEAD_ONCE" ]]; then',
-      '        head="0000000000000000000000000000000000000000"',
-      '        rm -f "$FAKE_STALE_HEAD_ONCE"',
-      "      else",
-      '        head="$(git --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
-      "      fi",
-      '      printf "https://github.com/openclaw/openclaw/pull/1\\t%s\\n" "$head"',
-      "    fi",
-      "    ;;",
-      "  pr:create)",
-      '    : > "$FAKE_PR_STATE"',
-      '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
-      "    ;;",
-      "  pr:edit) exit 0 ;;",
-      "  pr:view)",
-      '    [[ -n "${GH_TOKEN:-}" ]]',
-      '    [[ -f "$FAKE_PR_STATE" ]]',
-      '    if [[ -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE" ]]; then',
-      '      head="0000000000000000000000000000000000000000"',
-      '      rm -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE"',
-      "    else",
-      '      head="$(git --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
-      "    fi",
-      '    printf "%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD"',
-      "    ;;",
-      "  pr:merge)",
-      '    [[ "$GH_TOKEN" == "test-token" ]]',
-      '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
-      "    ;;",
-      '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
-      "esac",
-    ]);
-
-    const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
-    const actionRun = action.runs.steps.find(
-      (step: { name?: string }) => step.name === "Publish generated pull request",
-    ).run;
-    expect(actionRun).toContain("timeout --signal=TERM --kill-after=10s");
-    const publishRun = `timeout() {
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      --signal=*|--kill-after=*) shift ;;
-      [0-9]*s) shift; break ;;
-      *) break ;;
-    esac
-  done
-  "$@"
-}
-${actionRun}`;
-    const publish = spawnSync("bash", ["-c", publishRun], {
-      cwd: worktree,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        BASE_BRANCH: "main",
-        COMMIT_MESSAGE: "chore(test): refresh generated output",
-        AUTO_MERGE: String(options.autoMerge ?? false),
-        FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
-        FAKE_ORIGIN: origin,
-        FAKE_MERGE_CALLS: mergeCalls,
-        FAKE_PR_STATE: prState,
-        FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
-        FAKE_STALE_PR_VIEW_HEAD_ONCE: stalePrViewHeadOnce,
-        GENERATED_PATHS: "generated",
-        INVALIDATION_PATHS: options.invalidationPaths ?? "source",
-        OVERLAP_POLICY: options.overlapPolicy ?? "defer",
-        CONTENTS_TOKEN: "contents-token",
-        GH_TOKEN: "test-token",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_REPOSITORY_OWNER: "openclaw",
-        GITHUB_STEP_SUMMARY: summary,
-        HEAD_BRANCH: "automation/locale",
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        PR_BODY: "Generated test body",
-        PR_TITLE: "chore(test): refresh generated output",
-        RUNNER_TEMP: runnerTemp,
-      },
-    });
-    const publishOutput = `${publish.stdout}${publish.stderr}`;
-    if (options.expectFailure ? publish.status === 0 : publish.status !== 0) {
-      throw new Error(
-        `generated publisher exited ${String(publish.status)} (expected ${options.expectFailure ? "failure" : "success"}):\n${publishOutput}`,
-      );
-    }
-    const authHeader = spawnSync(
-      "git",
-      ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
-      { cwd: worktree, encoding: "utf8" },
-    );
-    if (authHeader.status !== 1 || authHeader.stdout.trim() !== "") {
-      throw new Error("generated publisher left its Git authorization header configured");
-    }
-
-    const branchRef = "refs/heads/automation/locale";
-    const branchExists =
-      spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;
-    const branchHead = branchExists
-      ? runGit(root, ["--git-dir", origin, "rev-parse", branchRef])
-      : "";
-    return {
-      branchExists,
-      branchHead,
-      generatedA: branchExists
-        ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/a.txt`])
-        : "",
-      generatedB: branchExists
-        ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/b.txt`])
-        : "",
-      mainGeneratedA: runGit(root, [
-        "--git-dir",
-        origin,
-        "show",
-        "refs/heads/main:generated/a.txt",
-      ]),
-      mainHead: runGit(root, ["--git-dir", origin, "rev-parse", "refs/heads/main"]),
-      mergeCalls: existsSync(mergeCalls) ? readFileSync(mergeCalls, "utf8") : "",
-      publishOutput,
-      summary: readFileSync(summary, "utf8"),
     };
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -2599,84 +2364,70 @@ NODE
     });
     expect(actionPublishStep.env.OVERLAP_POLICY).toBe("${{ inputs.overlap-policy }}");
     expect(actionPublishStep.env.AUTO_MERGE).toBe("${{ inputs.auto-merge }}");
+    const publishPolicy = readFileSync(".github/actions/publish-generated-pr/policy.py", "utf8");
     expect(actionPublishStep.run).toContain('case "${OVERLAP_POLICY}" in');
     expect(actionPublishStep.run).toContain("defer | fail");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
+    expect(
+      actionPublishStep.run.match(/timeout --signal=TERM --kill-after=10s 60s/gu),
+    ).toHaveLength(5);
+    expect(actionPublishStep.env.PUBLISH_ACTION_PATH).toBe("${{ github.action_path }}");
     expect(actionPublishStep.run).toContain(
-      'git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"',
+      'exec python3 -I -S "$CI_GIT_OWNER" --policy "$PUBLISH_ACTION_PATH/policy.py"',
     );
-    expect(actionPublishStep.run).toContain("printf '::add-mask::%s\\n' \"${git_auth}\"");
-    expect(actionPublishStep.run).toContain(
-      "git config --local --unset-all http.https://github.com/.extraheader",
+    expect(actionPublishStep.run).not.toMatch(
+      /(?:^|[\s;])git (?:config|fetch|push|diff|ls-tree|ls-remote|rev-parse|merge-base|add|commit|switch|restore|rm)\b/mu,
     );
-    expect(actionPublishStep.run).toContain("trap cleanup_git_auth EXIT");
-    expect(actionPublishStep.run).not.toContain("gh auth setup-git");
-    expect(actionPublishStep.run).toContain("timeout --signal=TERM --kill-after=10s 120s");
-    expect(actionPublishStep.run).toContain("--force-with-lease=refs/heads/");
-    expect(actionPublishStep.run).toContain(
+    expect(publishPolicy).not.toMatch(
+      /except (?:Exception|BaseException|SystemExit|RuntimeError)|backoff\(|subprocess\.(?:run|Popen)\([^\n]*["']git/u,
+    );
+    expect(publishPolicy.match(/timeout=\d+/gu)).toEqual([
+      "timeout=60",
+      "timeout=120",
+      "timeout=60",
+    ]);
+    for (const contract of [
+      'auth_key = "http.https://github.com/.extraheader"',
+      'f"AUTHORIZATION: basic {git_auth}"',
+      'print(f"::add-mask::{git_auth}"',
+      'git("config", "--local", "--unset-all", auth_key)',
+      "except GitFailure:",
+      "except PublicationFailure as error:",
+      "finally:\n    cleanup_git_auth()",
+      "--force-with-lease=refs/heads/{head_branch}:{expected_head}",
       "GH013|repository rule violations|required status check",
-    );
-    expect(actionPublishStep.run).toContain("refusing a doomed retry");
-    expect(actionPublishStep.run).toContain("branch_was_deleted");
-    expect(actionPublishStep.run).toContain(
-      '[[ -n "${remote_head}" && -z "${current_remote_head}" ]]',
-    );
-    expect(actionPublishStep.run).toContain('push_generated_branch ""');
-    expect(actionPublishStep.run).toContain(
-      "overlap policy decides whether stale output defers or fails",
-    );
-    expect(actionPublishStep.run).toContain(
+      "bool(remote_head) and not current_remote_head",
+      'push_generated_branch("")',
+    ]) {
+      expect(publishPolicy).toContain(contract);
+    }
+    // The real repository scenarios below own overlap, invalidation, tree/lease,
+    // reconciliation and auto-merge behavior; spelling is no longer Bash policy.
+    for (const contract of [
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls"',
-    );
-    expect(actionPublishStep.run).toContain('-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"');
-    expect(actionPublishStep.run).toContain(".head.repo.full_name == env.GITHUB_REPOSITORY");
-    expect(actionPublishStep.run).toContain(".head.ref == env.HEAD_BRANCH");
-    expect(actionPublishStep.run).toContain(".head.sha");
-    expect(actionPublishStep.run).not.toContain("gh pr list");
-    expect(actionPublishStep.run).toContain("neutralize_stale_pr");
-    expect(actionPublishStep.run).toContain(
-      'git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"',
-    );
-    expect(actionPublishStep.run).not.toContain("force_retirement");
-    expect(actionPublishStep.run).toContain("unsafe close mutation");
-    expect(actionPublishStep.run).not.toContain("gh pr close");
-    expect(actionPublishStep.run).toContain('source_commit="$(git rev-parse HEAD)"');
-    expect(actionPublishStep.run).toContain(
-      'git merge-base --is-ancestor "${source_commit}" "${base_ref}"',
-    );
-    expect(actionPublishStep.run).toContain("Snapshot the generator's desired blobs");
-    expect(actionPublishStep.run).toContain(
-      'git diff --name-only -z --no-renames "${source_commit}" "${desired_commit}"',
-    );
-    expect(actionPublishStep.run).toContain(
-      '[[ "${source_entry}" != "${base_entry}" && "${desired_entry}" != "${base_entry}" ]]',
-    );
-    expect(actionPublishStep.run).toContain('git switch -C "${HEAD_BRANCH}" "${base_ref}"');
-    expect(actionPublishStep.run).toContain(
-      'git restore --source="${desired_commit}" --staged --worktree -- "${path}"',
-    );
-    expect(actionPublishStep.run).not.toContain("git rebase");
-    expect(actionPublishStep.run).toContain("verify_publication");
-    expect(actionPublishStep.run).toContain("desired_matches_tree");
-    expect(actionPublishStep.run).toContain(
-      '[[ "${current_remote_head}" != "${published_commit}" ]]',
-    );
-    expect(actionPublishStep.run).toContain('[[ "${final_pr_head}" != "${published_commit}" ]]');
-    expect(actionPublishStep.run).toContain("gh pr edit");
-    expect(actionPublishStep.run).toContain("gh pr create");
-    expect(actionPublishStep.run).toContain('--base "${BASE_BRANCH}"');
-    expect(actionPublishStep.run).toContain('--head "${HEAD_BRANCH}"');
-    expect(actionPublishStep.run).toContain('--body-file "${body_file}"');
-    expect(actionPublishStep.run).toContain("ensure_auto_merge_compatible");
-    expect(actionPublishStep.run).toContain("enable_auto_merge");
-    expect(actionPublishStep.run).not.toContain("disable_existing_auto_merge");
-    expect(actionPublishStep.run).not.toContain("--disable-auto");
-    expect(actionPublishStep.run).toContain("--json autoMergeRequest");
-    expect(actionPublishStep.run).not.toContain('GH_TOKEN="${CONTENTS_TOKEN}"');
-    expect(actionPublishStep.run).toContain(
+      '-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"',
+      ".head.repo.full_name == env.GITHUB_REPOSITORY",
+      ".head.ref == env.HEAD_BRANCH",
+      ".head.sha",
+      "gh pr edit",
+      "gh pr create",
+      '--base "${BASE_BRANCH}"',
+      '--head "${HEAD_BRANCH}"',
+      '--body-file "${body_file}"',
+      "--json autoMergeRequest",
       '--auto --squash --match-head-commit "${published_commit}"',
-    );
-    expect(actionPublishStep.run).not.toContain('HEAD:"${BASE_BRANCH}"');
+    ])
+      expect(actionPublishStep.run).toContain(contract);
+    for (const forbidden of [
+      "gh auth setup-git",
+      "gh pr list",
+      "gh pr close",
+      "--disable-auto",
+      'GH_TOKEN="${CONTENTS_TOKEN}"',
+      'HEAD:"${BASE_BRANCH}"',
+    ]) {
+      expect(actionPublishStep.run).not.toContain(forbidden);
+    }
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_ALLOW_RELEASE_GENERATED_MIX",
     );
@@ -3708,68 +3459,75 @@ NODE
     ).toBe(96);
   });
 
-  it("honors trusted dispatch runner selection for check shards", () => {
-    const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
-    const lintMatrix = {
-      runner: "blacksmith-32vcpu-ubuntu-2404",
-      task: "lint",
-    };
-    const evaluateDispatch = (
-      runnerBackend: "blacksmith" | "github" | "hybrid",
-      overrides: {
-        dispatchId?: string;
-        frozenTarget?: boolean;
-        matrix?: Record<string, unknown>;
-        releaseGate?: boolean;
-        repository?: string;
-        targetContextRef?: string;
-      } = {},
-    ) =>
-      evaluateWorkflowExpression(runsOn, {
-        eventName: "workflow_dispatch",
-        matrix: lintMatrix,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend,
-        ...overrides,
-      });
+  it.each(["", "release/2026.9.1"])(
+    "honors trusted dispatch runner selection for check shards with context %j",
+    (targetContextRef) => {
+      const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
+      const lintMatrix = {
+        runner: "blacksmith-32vcpu-ubuntu-2404",
+        task: "lint",
+      };
+      const evaluateDispatch = (
+        runnerBackend: "blacksmith" | "github" | "hybrid",
+        overrides: {
+          dispatchId?: string;
+          frozenTarget?: boolean;
+          matrix?: Record<string, unknown>;
+          releaseGate?: boolean;
+          repository?: string;
+          targetContextRef?: string;
+        } = {},
+      ) =>
+        evaluateWorkflowExpression(runsOn, {
+          eventName: "workflow_dispatch",
+          matrix: lintMatrix,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend,
+          ...overrides,
+        });
 
-    expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
 
-    const frozenFrv = {
-      dispatchId: "full-release-validation-33128772779-ci",
-      frozenTarget: true,
-      targetContextRef: "release/2026.9.1",
-    };
-    expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
-    expect(
-      evaluateDispatch("hybrid", {
-        ...frozenFrv,
-        matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
-      }),
-    ).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(
-      evaluateWorkflowExpression(runsOn, {
-        authorAssociation: "NONE",
-        eventName: "pull_request",
-        headRepository: "openclaw/openclaw",
-        matrix: lintMatrix,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend: "blacksmith",
-      }),
-    ).toBe("ubuntu-24.04");
-  });
+      const frozenFrv = {
+        dispatchId: "full-release-validation-33128772779-ci",
+        frozenTarget: true,
+        targetContextRef,
+      };
+      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("github", frozenFrv)).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, frozenTarget: false })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
+      expect(
+        evaluateDispatch("hybrid", {
+          ...frozenFrv,
+          matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
+        }),
+      ).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(
+        evaluateWorkflowExpression(runsOn, {
+          authorAssociation: "NONE",
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          matrix: lintMatrix,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: "blacksmith",
+        }),
+      ).toBe("ubuntu-24.04");
+    },
+  );
 
   it("encodes GitHub, Blacksmith, and hybrid runner-backend shapes", () => {
     const workflow = readCiWorkflow();
@@ -4798,18 +4556,41 @@ server.listen(0, "127.0.0.1", () => {
     const releaseChecks = parse(
       readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
     );
-    expect(releaseChecks.jobs.validate_repo_e2e.env).toMatchObject({
+    const repoE2e = releaseChecks.jobs.validate_repo_e2e;
+    expect(repoE2e.env).toMatchObject({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
-    expect(releaseChecks.jobs.validate_repo_e2e["timeout-minutes"]).toBe(90);
-    const repoE2eSteps = releaseChecks.jobs.validate_repo_e2e.steps as WorkflowStep[];
+    expect(repoE2e["timeout-minutes"]).toBe(90);
+    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 6 });
+    const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
+      name: string;
+      command: string;
+    }>;
+    expect(repoE2eRows.map((row) => row.command)).toEqual([
+      ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
+      ...Array.from({ length: 4 }, (_, index) => `pnpm test:ui:e2e --shard=${index + 1}/4`),
+      "pnpm test:e2e:agent-plugin-gateway",
+    ]);
+    expect(new Set(repoE2eRows.map((row) => row.name)).size).toBe(9);
+    expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
+    expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+    expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    const repoE2eSteps = repoE2e.steps as WorkflowStep[];
+    expect(repoE2eSteps.find((step) => step.name === "Checkout selected ref")?.with?.ref).toBe(
+      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+    );
     const sandboxSetupIndex = repoE2eSteps.findIndex(
       (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
     );
     const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
     expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
+    expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
+      run: "${{ matrix.command }}",
+      env: { OPENCLAW_E2E_WORKERS: "2", OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+    });
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );
@@ -5993,34 +5774,297 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
-  it("bounds docs publish-repository Git transports", () => {
-    const source = readFileSync(".github/workflows/docs-sync-publish.yml", "utf8");
-    const transports = source
-      .split("\n")
-      .filter((line) => line.includes("git clone") || line.includes("git fetch origin main:"));
-
-    expect(transports).toHaveLength(3);
-    expect(
-      transports.every((line) =>
-        line.trimStart().startsWith("if timeout --signal=TERM --kill-after=10s 120s git"),
-      ),
-    ).toBe(true);
+  it("owns Docs Agent Git without changing cadence, deadlines, or action authority", () => {
+    const source = readFileSync(".github/workflows/docs-agent.yml", "utf8");
+    const workflow = parse(source);
+    const job = workflow.jobs["update-docs"];
+    const steps = job.steps as WorkflowStep[];
+    expect(steps.map(({ name }) => name)).toEqual([
+      "Checkout",
+      "Prepare Git owner",
+      "Gate trusted main activity and hourly cadence",
+      "Setup Node environment",
+      "Ensure docs agent key exists",
+      "Run Codex docs agent",
+      "Enforce existing-docs-only patch",
+      "Restore Node 24 path",
+      "Check docs",
+      "Commit docs updates",
+    ]);
+    expect(steps[1]).toEqual({
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    });
+    expect(steps[0]).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "main",
+        "fetch-depth": 0,
+        "persist-credentials": false,
+        submodules: false,
+      },
+    });
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "write" });
+    expect(workflow.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
+    expect(steps[5]).toEqual({
+      name: "Run Codex docs agent",
+      if: "steps.gate.outputs.run_agent == 'true'",
+      uses: "openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56",
+      env: {
+        DOCS_AGENT_BASE_SHA: "${{ steps.gate.outputs.review_base_sha }}",
+        DOCS_AGENT_HEAD_SHA: "${{ steps.gate.outputs.review_head_sha }}",
+      },
+      with: {
+        "openai-api-key":
+          "${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}",
+        "prompt-file": ".github/codex/prompts/docs-agent.md",
+        model: "${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}",
+        effort: "medium",
+        sandbox: "workspace-write",
+        "safety-strategy": "drop-sudo",
+        "codex-args": '["--full-auto"]',
+      },
+    });
+    const gate = expectDefined(steps[2]?.run, "gate policy");
+    const commit = expectDefined(steps[9]?.run, "commit policy");
+    const enforce = expectDefined(steps[6]?.run, "enforcement producers");
+    expect(gate.match(/python3 -I -S "\$CI_GIT_OWNER" --policy -/gu)).toHaveLength(2);
+    expect(gate.indexOf("--policy -")).toBeLessThan(gate.indexOf("gh api"));
+    expect(gate.lastIndexOf("--policy -")).toBeGreaterThan(gate.indexOf("gh api"));
+    expect(commit).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+    for (const policy of [gate, commit]) {
+      expect(policy.match(/for attempt in range\(1, 6\):/gu)).toHaveLength(1);
+      expect(policy).toContain("except (GitFailure, FetchTimeout):");
+      expect(policy).not.toMatch(
+        /except (?:Exception|BaseException)|except:|error\.code|\$\?|\|\| true/u,
+      );
+    }
+    expect(gate).toContain(
+      'if attempt == 5:\n            print("Failed to fetch main after retries.", file=sys.stderr)\n            raise SystemExit(1)',
+    );
+    expect(gate.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
+    expect(commit.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(2);
+    const calls = [
+      ...`${gate}\n${commit}`.matchAll(/(?:run_git|git_output)\(([\s\S]*?)\)(?=\.rstrip|\n|$)/gu),
+    ].map((match) => match[1]!);
+    const fetches = calls.filter((call) => /^workspace, "fetch"/u.test(call));
+    expect(fetches).toEqual([
+      'workspace, "fetch", "--no-tags", "origin", "main", timeout=120, reclaim_locks=True',
+      'workspace, "fetch", "--no-tags", "origin", target, timeout=120, reclaim_locks=True',
+    ]);
+    expect(calls.filter((call) => call.includes("timeout="))).toEqual(fetches);
+    expect(enforce.match(/--checkout-git 0 (?:ls-files|diff)/gu)).toHaveLength(3);
+    expect(`${gate}\n${commit}\n${enforce}`).not.toMatch(
+      /\btimeout --|\bgit (?:fetch|rev-parse|cat-file|diff|ls-files|config|add|commit|push)\b/u,
+    );
+    // The corrected REST cadence contract is deliberately byte-stable across Git migration.
+    const cadence = source.slice(
+      source.indexOf("          runs_json="),
+      source.indexOf('          python3 -I -S "$CI_GIT_OWNER" --policy - "$remote_main"'),
+    );
+    expect(createHash("sha256").update(cadence).digest("hex")).toBe(
+      "f130607e377acff6983fc2efaa015025ae2865d340dfad1fb865ee61e081f83e",
+    );
   });
 
-  it.each([
-    [".github/workflows/mantis-discord-smoke.yml", 2],
-    [".github/workflows/plugin-clawhub-release.yml", 3],
-  ])("bounds %s git fetches", (workflowPath, expectedFetchCount) => {
-    const source = readFileSync(workflowPath, "utf8");
-    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
-
-    expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
-    expect(
-      gitFetchLines.every((line) =>
-        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+  it("owns docs mirror Git lifecycle without changing transport or stale-source policy", () => {
+    const source = readFileSync(".github/workflows/docs-sync-publish.yml", "utf8");
+    const workflow = parse(source);
+    const steps = workflow.jobs["sync-publish-repo"].steps as WorkflowStep[];
+    expect(steps.map(({ name }) => name)).toEqual([
+      "Skip publish sync without token",
+      "Checkout source repo",
+      "Checkout ClawHub docs source",
+      "Prepare Git owner",
+      "Setup Node",
+      "Clone publish repo",
+      "Sync docs into publish repo",
+      "Install docs MDX checker dependency",
+      "Check publish docs MDX",
+      "Commit publish repo sync",
+    ]);
+    expect(steps[3]).toEqual({
+      name: "Prepare Git owner",
+      if: "env.OPENCLAW_DOCS_SYNC_TOKEN != ''",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    });
+    expect(steps[1]).toMatchObject({ with: { "fetch-depth": 0 } });
+    expect(steps[2]).toMatchObject({
+      with: {
+        repository: "openclaw/clawhub",
+        ref: "main",
+        path: "clawhub-source",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+      },
+    });
+    expect(steps.slice(1).every((step) => step.if === "env.OPENCLAW_DOCS_SYNC_TOKEN != ''")).toBe(
+      true,
+    );
+    expect(source).not.toContain("setup-python");
+    expect(workflow.concurrency).toEqual({
+      group:
+        "docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}",
+      "cancel-in-progress": false,
+    });
+    const clone = expectDefined(steps[5]?.run, "clone policy");
+    const sync = expectDefined(steps[6]?.run, "sync body");
+    const publish = expectDefined(steps[9]?.run, "publication policy");
+    expect(steps[9]?.["working-directory"]).toBe("publish");
+    for (const policy of [clone, publish]) {
+      expect(
+        policy.startsWith(
+          "set -euo pipefail\nexec python3 -I -S \"$CI_GIT_OWNER\" --policy - <<'PYTHON'\n",
+        ),
+      ).toBe(true);
+      expect(policy.match(/for attempt in range\(1, 6\):/gu)).toHaveLength(1);
+      expect(policy.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
+      expect(policy).toContain("except (GitFailure, FetchTimeout):");
+      expect(policy).not.toMatch(
+        /except (?:Exception|BaseException)|except:|error\.code|\$\?|\|\| true/u,
+      );
+    }
+    expect(clone).toContain('publish = os.path.join(workspace, "publish")');
+    expect(clone).toContain('subprocess.run(["rm", "-rf", publish], check=True)');
+    expect(clone).toContain(
+      "https://x-access-token:{os.environ['OPENCLAW_DOCS_SYNC_TOKEN']}@github.com/openclaw/docs.git",
+    );
+    const calls = [...`${clone}\n${publish}`.matchAll(/run_git\(([\s\S]*?)\)(?=\n|$)/gu)].map(
+      (match) => match[1]!,
+    );
+    const transports = calls.filter((call) => /^\w+, "(?:clone|fetch)"/u.test(call));
+    expect(transports).toHaveLength(3);
+    expect(transports.every((call) => call.includes("timeout=120"))).toBe(true);
+    expect(transports.slice(1)).toEqual(
+      Array(2).fill(
+        'publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True',
       ),
-      workflowPath,
+    );
+    expect(calls.filter((call) => call.includes("timeout="))).toEqual(transports);
+    expect(calls.filter((call) => /^publish, "(?:rebase|push)"/u.test(call))).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => /^publish, "(?:config|add|commit|rebase|push)"/u.test(call))
+        .every((call) => call.includes("reclaim_locks=True")),
     ).toBe(true);
+    expect(publish).toContain("if not current_source_sha or current_source_sha == source_sha:");
+    expect(publish).toContain(
+      'run_git(workspace, "merge-base", "--is-ancestor", source_sha, current_source_sha)',
+    );
+    expect(publish).toContain("except (GitFailure, json.JSONDecodeError):");
+    expect(sync.startsWith("set -euo pipefail\n")).toBe(true);
+    expect(sync).toContain(
+      'clawhub_sha="$(cd "$GITHUB_WORKSPACE/clawhub-source" && python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 rev-parse HEAD)"\nnode scripts/docs-sync-publish.mjs',
+    );
+    expect([clone, sync, publish].join("\n")).not.toMatch(
+      /\btimeout --|\bgit (?:clone|fetch|show|merge-base|diff|config|add|commit|rebase|push|rev-parse)\b|--depth|--no-tags/u,
+    );
+  });
+
+  it.each([[".github/workflows/plugin-clawhub-release.yml", 3]])(
+    "bounds %s git fetches",
+    (workflowPath, expectedFetchCount) => {
+      const source = readFileSync(workflowPath, "utf8");
+      const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+
+      expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
+      expect(
+        gitFetchLines.every((line) =>
+          line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+        ),
+        workflowPath,
+      ).toBe(true);
+    },
+  );
+
+  it("pins the Mantis Git owner and preserves distinct terminal ref-validation contracts", () => {
+    const action = parse(
+      readFileSync(".github/actions/mantis-validate-trusted-ref/action.yml", "utf8"),
+    );
+    const workflow = parse(readFileSync(".github/workflows/mantis-discord-smoke.yml", "utf8"));
+    const owner = {
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    };
+    const actionSteps = action.runs.steps as WorkflowStep[];
+    const discordSteps = workflow.jobs.validate_selected_ref.steps as WorkflowStep[];
+    expect(actionSteps.map(({ name }) => name)).toEqual([
+      "Prepare Git owner",
+      "Validate refs are trusted",
+    ]);
+    expect(actionSteps[0]).toEqual(owner);
+    expect(discordSteps.map(({ name }) => name)).toEqual([
+      "Prepare Git owner",
+      "Checkout selected ref",
+      "Validate selected ref",
+    ]);
+    expect(discordSteps[0]).toEqual(owner);
+    expect(discordSteps[1]).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: { "persist-credentials": false, ref: "${{ inputs.ref }}", "fetch-depth": 0 },
+    });
+    expect(Object.keys(action.inputs)).toEqual(["candidate-ref", "baseline-ref"]);
+    expect(Object.keys(action.outputs)).toEqual(["candidate-revision", "baseline-revision"]);
+    for (const [steps, shared] of [
+      [actionSteps, true],
+      [discordSteps, false],
+    ] as const) {
+      const run = expectDefined(steps.at(-1)?.run, "Mantis validation body");
+      const revision = shared ? "revision" : "selected_revision";
+      const prefix = `python3 -I -S "$CI_GIT_OWNER" --checkout-git ${shared ? 0 : 120} fetch --no-tags origin `;
+      expect(run.startsWith("set -euo pipefail\n")).toBe(true);
+      expect(
+        run
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => /\bfetch\b/u.test(line)),
+      ).toEqual([
+        `${prefix}+refs/heads/main:refs/remotes/origin/main`,
+        ...(shared
+          ? []
+          : [`${prefix}"+refs/heads/\${INPUT_REF}:refs/remotes/origin/\${INPUT_REF}"`]),
+      ]);
+      expect(run).not.toMatch(/\bgit fetch\b|^\s*(?:timeout|for|while|until)\b|\$\?/mu);
+      expect(
+        run.match(
+          /(?:reason|trusted_reason)="(?:main-ancestor|release-tag|release-branch-head|open-pr-head)"/gu,
+        ),
+      ).toEqual(
+        [
+          "main-ancestor",
+          "release-tag",
+          ...(shared ? [] : ["release-branch-head"]),
+          "open-pr-head",
+        ].map((reason) => `${shared ? "reason" : "trusted_reason"}="${reason}"`),
+      );
+      expect(run).toContain(`git tag --points-at "$${revision}" | grep -Eq '^v'`);
+      expect(run).toContain("gh api \\\n");
+      expect(run).toContain('-H "Accept: application/vnd.github+json"');
+      expect(run).toContain(`"repos/\${GITHUB_REPOSITORY}/commits/\${${revision}}/pulls"`);
+      expect(run).toContain(
+        `select(.state == "open" and .head.repo.full_name == "'"\${GITHUB_REPOSITORY}"'" and .head.sha == "'"\${${revision}}"'")] | length`,
+      );
+      if (shared) {
+        expect(run).toContain('echo "${label}_revision=${revision}" >> "$GITHUB_OUTPUT"');
+        expect(run).toContain(
+          'validate_ref baseline "$BASELINE_REF"\nfi\nvalidate_ref candidate "$CANDIDATE_REF"',
+        );
+      } else {
+        expect(run).toContain(
+          'elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\\.[0-9]+\\.[0-9]+$ ]]; then',
+        );
+        expect(run).toContain(
+          'release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"',
+        );
+        expect(run).toContain(
+          'if [[ "$selected_revision" == "$release_branch_sha" ]]; then\n    trusted_reason="release-branch-head"\n  fi\nelse\n  pr_head_count=',
+        );
+        expect(run).toContain(
+          'echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"\necho "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"',
+        );
+      }
+    }
   });
 
   it("keeps shared Mantis reaction ownership stable", () => {
@@ -7733,6 +7777,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       changedPath: ".github/actions/git-owner/owner.py",
       selectedJobs: ["macos-node", "checks-windows"],
     },
+    {
+      label: "Docs Agent",
+      changedPath: ".github/workflows/docs-agent.yml",
+      selectedJobs: ["macos-node", "checks-windows"],
+    },
+    ...[
+      ".github/workflows/openclaw-performance.yml",
+      "test/scripts/openclaw-performance-workflow.test-support.ts",
+      "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+      "test/scripts/openclaw-performance-workflow.test.ts",
+    ].map((changedPath) => ({
+      label: `Performance owner ${changedPath}`,
+      changedPath,
+      selectedJobs: ["macos-node", "checks-windows"],
+    })),
     {
       label: "Git-owner fixture",
       changedPath: "test/scripts/fixtures/ci-platform-checkout.mjs",
@@ -9708,7 +9767,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             cwd: checkout,
             env: {
               ...process.env,
-              PATH: `${topology.fakeBin}:${process.env.PATH ?? ""}`,
+              CI_GIT_OWNER: topology.gitOwner,
               PROTOCOL_SINCE_BASE_SHA: baseSha,
               QA_SENTINEL: sentinel,
             },
@@ -9729,24 +9788,93 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
-  it("bounds QA profile selected-ref fetches", () => {
+  it("pins the QA Git owner before checkouts and preserves all ten terminal fetch contracts", () => {
+    const workflow = readQaProfileEvidenceWorkflow();
+    const gitJobs = [
+      "validate_selected_ref",
+      "plan_qa_profile",
+      "run_qa_profile_shard",
+      "aggregate_qa_profile",
+    ];
+    const calls: string[] = [];
+    for (const job of gitJobs) {
+      const steps = workflow.jobs[job].steps as WorkflowStep[];
+      const ownerIndex = steps.findIndex((step) => step.name === "Prepare Git owner");
+      expect(steps.filter((step) => step.name === "Prepare Git owner")).toHaveLength(1);
+      expect(steps[ownerIndex]).toEqual({
+        name: "Prepare Git owner",
+        uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+      });
+      expect(steps[ownerIndex - 1]?.name).toBe(
+        job === "validate_selected_ref"
+          ? "Resolve job workflow identity"
+          : "Require authorized workflow actor",
+      );
+      expect(steps[ownerIndex + 1]?.name).toBe(
+        job === "validate_selected_ref" ? "Checkout selected ref" : "Checkout trusted QA harness",
+      );
+      expect(steps.some((step) => step.uses?.startsWith("actions/setup-python@"))).toBe(false);
+      for (const step of steps) {
+        const run = (step.run ?? "").replace(/[ \t]*\\\n[ \t]*/gu, " ");
+        const fetches = run
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => /\bfetch\b/u.test(line));
+        if (fetches.length === 0) {
+          continue;
+        }
+        expect(run.startsWith("set -euo pipefail\n")).toBe(true);
+        for (const fetch of fetches) {
+          expect(fetch).toMatch(/^python3 -I -S "\$CI_GIT_OWNER" --checkout-git (?:0|120) fetch /u);
+          expect(fetch).not.toMatch(/\|\||&&|;|\$\?/u);
+        }
+        expect(run).not.toMatch(/^\s*(?:timeout|for|while|until)\b|\$\?/mu);
+        calls.push(...fetches);
+      }
+    }
+    expect(calls).toHaveLength(10);
+    expect(calls.filter((call) => call.includes("--checkout-git 120 fetch"))).toHaveLength(4);
+    expect(calls.filter((call) => call.includes("--checkout-git 0 fetch"))).toHaveLength(6);
     const validateSelectedRef = expectDefined(
-      readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
+      workflow.jobs.validate_selected_ref.steps.find(
         (step: WorkflowStep) => step.name === "Validate selected ref",
       ),
       "QA profile selected-ref validation step",
     );
-    const gitFetchLines = validateSelectedRef.run
-      .split("\n")
-      .filter((line: string) => line.includes("git fetch"));
-
-    expect(gitFetchLines).toHaveLength(3);
-    expect(
-      gitFetchLines.every((line: string) =>
-        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
-      ),
-    ).toBe(true);
-    expect(gitFetchLines.some((line: string) => line.includes("+refs/tags/"))).toBe(true);
+    expect(validateSelectedRef["working-directory"]).toBeUndefined();
+    expect(calls.slice(0, 3)).toEqual([
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main',
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/tags/${tag_candidate}:refs/tags/${tag_candidate}"',
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/heads/${branch_candidate}:refs/remotes/origin/${branch_candidate}"',
+    ]);
+    expect(validateSelectedRef.run).toContain(
+      'release_tag_sha="$(git rev-parse "refs/tags/${tag_candidate}^{commit}")"',
+    );
+    expect(validateSelectedRef.run).toContain(
+      'release_branch_sha="$(git rev-parse "refs/remotes/origin/${branch_candidate}")"',
+    );
+    for (const name of ["Restore trusted QA harness revision", "Checkout selected ref"]) {
+      const bodies = gitJobs
+        .slice(1)
+        .map(
+          (job) => workflow.jobs[job].steps.find((step: WorkflowStep) => step.name === name)?.run,
+        );
+      expect(bodies[0]).toBeTypeOf("string");
+      expect(new Set(bodies).size).toBe(1);
+    }
+    const protocolFetch = workflow.jobs.run_qa_profile_shard.steps.find(
+      (step: WorkflowStep) => step.name === "Fetch protocol comparison base",
+    );
+    expect(protocolFetch["working-directory"]).toBe("selected");
+    expect(calls[7]).toBe(
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags --no-recurse-submodules --depth=1 origin "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/qa-protocol-base"',
+    );
+    expect(protocolFetch.run).toContain(
+      'test "$(git rev-parse refs/remotes/origin/qa-protocol-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"',
+    );
+    expect(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8")).not.toMatch(
+      /\bgit(?: -C selected)? fetch\b/u,
+    );
   });
 
   it.skipIf(process.platform !== "linux")(
@@ -10053,9 +10181,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         },
         shell: "bash",
       });
+      expect(restoreTrusted["working-directory"]).toBeUndefined();
       expect(restoreTrusted.run).toContain("^[0-9a-f]{40}$");
       expect(restoreTrusted.run).toContain(
-        'git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"',
+        'python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"',
       );
       expect(restoreTrusted.run).toContain('git checkout --detach "$EXPECTED_WORKFLOW_SHA"');
       expect(restoreTrusted.run).toContain(
@@ -10073,6 +10202,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         shell: "bash",
       });
       expect(selectedCheckout).not.toHaveProperty("uses");
+      expect(selectedCheckout["working-directory"]).toBeUndefined();
       expect(selectedCheckout.run).toContain("^[0-9a-f]{40}$");
       expect(selectedCheckout.run).toContain("[[ ! -e selected ]]");
       expect(selectedCheckout.run).toContain("git init selected");
@@ -10080,12 +10210,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         'git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"',
       );
       expect(selectedCheckout.run).toContain(
-        'git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"',
+        'cd selected\npython3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"',
       );
-      expect(selectedCheckout.run).toContain("git -C selected checkout --detach FETCH_HEAD");
-      expect(selectedCheckout.run).toContain(
-        'test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"',
-      );
+      expect(selectedCheckout.run).toContain("git checkout --detach FETCH_HEAD");
+      expect(selectedCheckout.run).toContain('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"');
       expect(
         job.steps.some((step: WorkflowStep) => step.name === "Verify selected checkout SHA"),
       ).toBe(false);
@@ -10104,6 +10232,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }
       const securitySequence = [
         "Require authorized workflow actor",
+        "Prepare Git owner",
         "Checkout trusted QA harness",
         "Restore trusted QA harness revision",
         "Setup Node environment",
@@ -10345,23 +10474,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     for (const fragment of [
       "expected_sha must be a full 40-character SHA",
-      'branch_candidate="${INPUT_REF#refs/heads/}"',
-      "floating_default_branch=false",
-      '[[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]',
-      'selected_revision="$(git rev-parse refs/remotes/origin/main)"',
-      '[[ "$floating_default_branch" == "true" && "$publication_base" == "$DEFAULT_BRANCH" ]]',
-      'branch_lookup_status="$?"',
-      "2) ;;",
-      "Unable to determine whether '${INPUT_REF}' is a remote branch",
-      'git merge-base --is-ancestor "$selected_revision"',
-      "':(exclude)qa/maturity-scores.yaml'",
-      "':(exclude)docs/maturity/scorecard.md'",
-      "':(exclude)docs/maturity/taxonomy.md'",
+      'input_ref.removeprefix("refs/heads/")',
+      "floating_default_branch = False",
+      'not expected_sha.replace(" ", "") and branch_candidate == default_branch',
+      'selected_revision = revision("refs/remotes/origin/main")',
+      "floating_default_branch and publication_base == default_branch",
+      "if code != 2:",
+      "Unable to determine whether '{input_ref}' is a remote branch",
+      'probe("merge-base", "--is-ancestor", selected_revision',
+      '":(exclude)qa/maturity-scores.yaml"',
+      '":(exclude)docs/maturity/scorecard.md"',
+      '":(exclude)docs/maturity/taxonomy.md"',
       "qa_evidence_run_id must be a numeric GitHub Actions run id",
-      'publication_head="automation/maturity-scorecard-',
-    ]) {
+      'publication_head = f"automation/maturity-scorecard-',
+    ])
       expect(validateRefStep.run).toContain(fragment);
-    }
     expect(maturityWorkflow.jobs.validate_selected_ref.outputs).toMatchObject({
       publication_base: "${{ steps.validate.outputs.publication_base }}",
       publication_head: "${{ steps.validate.outputs.publication_head }}",
@@ -11350,5 +11477,193 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "head_sha",
       "pr_number",
     ]);
+  });
+});
+
+it("pins generated publisher and maturity owners before credentials and selected checkout", () => {
+  const pinned = {
+    name: "Prepare Git owner",
+    uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+  };
+  const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+  expect(action.runs.steps.map(({ name }: WorkflowStep) => name)).toEqual([
+    "Prepare Git owner",
+    "Create generated PR tokens",
+    "Publish generated pull request",
+  ]);
+  expect(action.runs.steps[0]).toEqual(pinned);
+  const steps: WorkflowStep[] = readMaturityScorecardWorkflow().jobs.validate_selected_ref.steps;
+  const checkout = steps.findIndex(({ name }) => name === "Checkout selected ref");
+  expect(steps[checkout - 1]).toEqual(pinned);
+  expect(steps[checkout + 1]?.name).toBe("Validate selected ref");
+  const policy = expectDefined(steps[checkout + 1]?.run, "validation body");
+  expect(policy).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+  expect(policy.match(/timeout=\d+/gu)).toEqual(["timeout=60"]);
+  expect(policy).not.toMatch(
+    /timeout --|(?:^|\s)git (?:fetch|ls-remote|rev-parse|diff|tag|merge-base|check-ref-format)\b|except (?:Exception|BaseException|RuntimeError|SystemExit)|backoff\(/mu,
+  );
+  for (const file of [
+    CONTROL_UI_LOCALE_REFRESH_WORKFLOW,
+    NATIVE_APP_LOCALE_REFRESH_WORKFLOW,
+    ".github/workflows/ci-test-timings-refit.yml",
+    MATURITY_SCORECARD_WORKFLOW,
+  ]) {
+    const workflow = parse(readFileSync(file, "utf8"));
+    const publishers = Object.values(workflow.jobs).flatMap((job) => {
+      const steps = (job as { steps?: WorkflowStep[] }).steps ?? [];
+      return steps.flatMap((step, index) =>
+        step.uses === "./.github/actions/publish-generated-pr"
+          ? [{ index, length: steps.length }]
+          : [],
+      );
+    });
+    expect(publishers, file).toHaveLength(1);
+    expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
+  }
+});
+
+it("pins simple release admission owners before selected checkout and preserves Git contracts", () => {
+  const pinned = {
+    name: "Prepare Git owner",
+    uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+  };
+  const workflows = [
+    {
+      file: ".github/workflows/linux-app-release.yml",
+      job: "validate_release",
+      checkout: "Checkout selected tag",
+      validation: "Ensure tag commit is reachable from main",
+    },
+    {
+      file: ".github/workflows/macos-release.yml",
+      job: "validate_macos_release_request",
+      checkout: "Checkout selected tag",
+      validation: "Validate release tag and package metadata",
+    },
+    {
+      file: ".github/workflows/npm-placeholder-bootstrap.yml",
+      job: "plan",
+      checkout: "Checkout selected source",
+      validation: "Validate trusted workflow and target",
+    },
+  ] as const;
+  for (const entry of workflows) {
+    const workflow = parse(readFileSync(entry.file, "utf8"));
+    const steps = workflow.jobs[entry.job].steps as WorkflowStep[];
+    const checkout = steps.findIndex(({ name }) => name === entry.checkout);
+    expect(steps[checkout - 1]).toEqual(pinned);
+    const validation = steps.find(({ name }) => name === entry.validation);
+    const body = expectDefined(validation?.run, `${entry.file} admission body`);
+    expect(body).not.toMatch(/timeout --|(?:^|\s)git (?:fetch|rev-parse|merge-base)\b/mu);
+    expect(body).not.toMatch(/backoff\(|for attempt in range/u);
+  }
+
+  const linux = parse(readFileSync(workflows[0].file, "utf8"));
+  const linuxBody = expectDefined(
+    (linux.jobs.validate_release.steps as WorkflowStep[]).find(
+      ({ name }) => name === workflows[0].validation,
+    )?.run,
+    "Linux release admission body",
+  );
+  expect(linuxBody).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+  expect(linuxBody.match(/timeout=120/gu)).toHaveLength(1);
+  expect(linuxBody).toMatch(/"fetch",\s+"--quiet",\s+"origin",\s+"main",/u);
+  expect(linuxBody).toContain(
+    'run_git(workspace, "merge-base", "--is-ancestor", tag_sha, "origin/main")',
+  );
+
+  const macos = parse(readFileSync(workflows[1].file, "utf8"));
+  const macosBody = expectDefined(
+    (macos.jobs.validate_macos_release_request.steps as WorkflowStep[]).find(
+      ({ name }) => name === workflows[1].validation,
+    )?.run,
+    "macOS release admission body",
+  );
+  expect(macosBody.match(/--git 0/gu)).toHaveLength(1);
+  expect(macosBody.match(/--checkout-git 120/gu)).toHaveLength(1);
+  expect(macosBody).toContain(
+    '"+refs/heads/${PUBLIC_RELEASE_BRANCH}:refs/remotes/origin/${PUBLIC_RELEASE_BRANCH}"',
+  );
+  expect(macosBody.indexOf("--checkout-git 120")).toBeLessThan(
+    macosBody.indexOf("pnpm release:openclaw:npm:check"),
+  );
+
+  const placeholder = parse(readFileSync(workflows[2].file, "utf8"));
+  const placeholderBody = expectDefined(
+    (placeholder.jobs.plan.steps as WorkflowStep[]).find(
+      ({ name }) => name === workflows[2].validation,
+    )?.run,
+    "placeholder admission body",
+  );
+  expect(placeholderBody).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+  expect(placeholderBody.match(/timeout=120/gu)).toHaveLength(1);
+  expect(placeholderBody.match(/run_git\(workspace, "merge-base"/gu)).toHaveLength(2);
+  expect(placeholderBody).toContain('output.write(f"sha={source_ref}\\n")');
+});
+
+it("pins every Performance Git owner before checkout and preserves Git deadlines", () => {
+  const source = readFileSync(".github/workflows/openclaw-performance.yml", "utf8");
+  const workflow = parse(source);
+  const targets = [
+    ["resolve_target", "Checkout target metadata", undefined, 10],
+    ["kova", "Checkout OpenClaw", "Decide lane", 240],
+    ["source_performance", "Checkout OpenClaw source target", undefined, 120],
+    ["publish", "Checkout performance publisher helper", "Decide report publication lane", 30],
+  ] as const;
+  for (const [jobId, checkout, decision, timeout] of targets) {
+    const job = workflow.jobs[jobId];
+    const steps = job.steps as WorkflowStep[];
+    const index = steps.findIndex(({ name }) => name === "Prepare Git owner");
+    expect(index).toBe(decision ? 1 : 0);
+    expect(steps[index + 1]?.name).toBe(checkout);
+    if (decision) expect(steps[index - 1]?.name).toBe(decision);
+    expect(steps[index]).toEqual({
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+      ...(decision ? { if: "steps.lane.outputs.run == 'true'" } : {}),
+    });
+    expect(job["timeout-minutes"]).toBe(timeout);
+    const bodies = steps.map(({ run }) => run ?? "").join("\n");
+    expect(bodies).not.toMatch(/(?:^|[\s(])git\s/mu);
+    expect(bodies).not.toMatch(/timeout[^\n]*git/u);
+    const ownerDeadlines = [...bodies.matchAll(/--(?:checkout-)?git (\d+)/gu)].map((match) =>
+      Number(match[1]),
+    );
+    expect(ownerDeadlines.every((deadline) => deadline === 0)).toBe(true);
+    if (jobId !== "publish") expect(bodies).not.toMatch(/timeout=\d+/u);
+    else {
+      expect(bodies.match(/timeout=120/g)).toHaveLength(3);
+      expect(bodies).not.toMatch(/timeout=(?!120)\d+/u);
+      expect(bodies.match(/for attempt in range\(1, 6\)/gu)).toHaveLength(1);
+      expect(bodies.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
+      expect(bodies).toContain('"push", "origin", "HEAD:main", timeout=120, reclaim_locks=True');
+      expect(
+        bodies.match(/"fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True/gu),
+      ).toHaveLength(2);
+      expect(bodies).toContain("if error.code != 1:");
+      expect(bodies).toContain(
+        '"ls-tree", "--name-only", "FETCH_HEAD", "--", f"{dest}/report.json"',
+      );
+    }
+  }
+  expect(workflow.on.schedule).toEqual([{ cron: "11 5 * * *" }]);
+  expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual([
+    "target_ref",
+    "profile",
+    "repeat",
+    "deep_profile",
+    "live_openai_candidate",
+    "fail_on_regression",
+    "publish_reports",
+    "kova_ref",
+    "kova_config_contract",
+    "dispatch_id",
+  ]);
+  expect(workflow.permissions).toEqual({ contents: "read" });
+  expect(workflow.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });
+  expect(workflow.concurrency).toEqual({
+    group:
+      "${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}",
+    "cancel-in-progress": false,
   });
 });

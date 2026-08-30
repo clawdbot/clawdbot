@@ -26,6 +26,7 @@ import {
 } from "../agent-run-terminal-outcome.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
@@ -148,16 +149,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     }
     params.onTerminalDeliveryEvidenceChanged(buildRestartRecoveryTerminalDeliveryEvidence(result));
 
-    const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
-    const effectiveSessionId = rotatedSessionFile
-      ? (result.meta.agentMeta?.sessionId ?? internalSessionTarget?.sessionId ?? sessionId)
-      : (internalSessionTarget?.sessionId ?? sessionId);
-    if (internalSessionTarget && effectiveSessionId !== internalSessionTarget.sessionId) {
-      params.trackInternalModelRunTarget({
-        ...internalSessionTarget,
-        sessionId: effectiveSessionId,
-      });
-    }
+    const compactionFact = params.attempt.compactionAccounting;
+    const effectiveSessionId =
+      compactionFact?.target.sessionId ?? internalSessionTarget?.sessionId ?? sessionId;
     if (sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
@@ -172,6 +166,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         fallbackProvider,
         fallbackModel,
         result,
+        compactionAccounting: compactionFact,
         touchInteraction:
           params.opts.bootstrapContextRunKind !== "cron" &&
           !isHeartbeatLifecycleRun &&
@@ -214,6 +209,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
           skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
+            // A supplied recorder owns input admission; the terminal mirror must
+            // not synthesize an unkeyed copy when that input never reached execution.
+            params.opts.userTurnTranscriptRecorder !== undefined ||
             userTurnTranscriptRecorder.hasPersisted() ||
             userTurnTranscriptRecorder.isBlocked(),
         });
@@ -362,8 +360,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       !pendingFinalDeliveryMarker.hasSendableFinalPayload ||
       pendingFinalDeliveryMarker.pendingFinalDeliveryMarkerPersisted;
     const agentMeta = result.meta.agentMeta;
-    // In-run compaction already owns this turn's reduction; its lastCallUsage can
-    // still describe the old prompt and must not trigger another housekeeping pass.
+    // A completed in-run compaction already owns this turn's reduction;
+    // do not add another housekeeping pass for the same turn.
     let embeddedCompactionRun =
       followupRun &&
       transcriptPersistenceRunner === "embedded" &&
@@ -374,7 +372,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       !resultErrorPayload &&
       !result.meta.yielded &&
       !result.meta.aborted &&
-      (agentMeta.compactionCount ?? 0) === 0 &&
+      (compactionFact?.count ?? 0) === 0 &&
       !isHeartbeatLifecycleRun &&
       cfg.agents?.defaults?.compaction?.enabled !== false &&
       !params.preserveUserFacingSessionModelState &&
@@ -402,6 +400,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
           return params.opts.abortSignal?.aborted !== true && !sessionReboundDuringRun;
         };
+        const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
+          sessionEntry = accepted.entry;
+          runOwnedSessionId = accepted.sessionId;
+          publishSessionOwnership();
+        };
         const compactedSessionEntry = embeddedCompactionRun
           ? await (
               await loadAgentRunnerMemoryRuntime()
@@ -420,30 +423,42 @@ export async function finalizeEmbeddedAgentCommand(params: {
               abortSignal: params.opts.abortSignal,
               onSessionIdChanged: params.opts.onSessionIdChanged,
               authorize,
+              onCompactionCommitted: onCommitted,
             })
           : await (
               await loadCliCompactionRuntime()
-            ).runCliTurnCompactionLifecycle({
-              cfg,
-              sessionId: sessionEntry?.sessionId ?? effectiveSessionId,
-              sessionKey: sessionKey ?? effectiveSessionId,
-              sessionEntry,
-              sessionStore,
-              storePath,
-              sessionAgentId,
-              workspaceDir,
-              cwd: effectiveCwd,
-              agentDir,
-              provider: agentMeta?.provider ?? provider,
-              model: agentMeta?.model ?? model,
-              skillsSnapshot,
-              messageChannel,
-              agentAccountId: runContext.accountId,
-              senderIsOwner: params.opts.senderIsOwner,
-              thinkLevel: effectiveTurnThinkLevel,
-              extraSystemPrompt: params.opts.extraSystemPrompt,
-              pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
-            });
+            ).runCliTurnCompactionLifecycle(
+              {
+                cfg,
+                sessionId: sessionEntry?.sessionId ?? effectiveSessionId,
+                sessionKey: sessionKey ?? effectiveSessionId,
+                sessionEntry,
+                sessionStore,
+                storePath,
+                sessionAgentId,
+                workspaceDir,
+                cwd: effectiveCwd,
+                agentDir,
+                provider: agentMeta?.provider ?? provider,
+                model: agentMeta?.model ?? model,
+                skillsSnapshot,
+                messageChannel,
+                agentAccountId: runContext.accountId,
+                senderIsOwner: params.opts.senderIsOwner,
+                thinkLevel: effectiveTurnThinkLevel,
+                extraSystemPrompt: params.opts.extraSystemPrompt,
+                pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
+                abortSignal: params.opts.abortSignal,
+              },
+              {
+                assertActive: () => {
+                  if (!authorize()) {
+                    throw new Error("Command compaction is no longer active");
+                  }
+                },
+                onCommitted,
+              },
+            );
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         sessionEntry = compactedSessionEntry;

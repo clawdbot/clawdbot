@@ -68,7 +68,7 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
-import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
+import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -92,7 +92,6 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
   /Default heartbeat prompt:\r?\n`(?:Read HEARTBEAT\.md if it exists|Follow the heartbeat monitor scratch context when provided\.)[^`\r\n]*HEARTBEAT_OK\.`/gu;
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
@@ -174,10 +173,6 @@ function getContextFileBasename(pathValue: string): string {
   return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
 }
 
-function isDynamicContextFile(pathValue: string): boolean {
-  return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
-}
-
 function isBootstrapContextFile(pathValue: string): boolean {
   return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
 }
@@ -189,72 +184,52 @@ function sanitizeContextFileContentForPrompt(content: string): string {
 }
 
 function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
-  return contextFiles.toSorted((a, b) => {
-    const aPath = normalizeContextFilePath(a.path);
-    const bPath = normalizeContextFilePath(b.path);
-    const aBase = getContextFileBasename(a.path);
-    const bBase = getContextFileBasename(b.path);
-    const aOrder = CONTEXT_FILE_ORDER.get(aBase) ?? Number.MAX_SAFE_INTEGER;
-    const bOrder = CONTEXT_FILE_ORDER.get(bBase) ?? Number.MAX_SAFE_INTEGER;
-    if (aOrder !== bOrder) {
-      return aOrder - bOrder;
-    }
-    if (aBase !== bBase) {
-      return aBase.localeCompare(bBase);
-    }
-    return aPath.localeCompare(bPath);
-  });
+  return contextFiles
+    .map((file) => {
+      const basename = getContextFileBasename(file.path);
+      return {
+        file,
+        path: normalizeContextFilePath(file.path),
+        basename,
+        order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
+      };
+    })
+    .toSorted((a, b) => {
+      if (a.order !== b.order) {
+        return a.order - b.order;
+      }
+      if (a.basename !== b.basename) {
+        return a.basename.localeCompare(b.basename);
+      }
+      return a.path.localeCompare(b.path);
+    })
+    .map(({ file }) => file);
 }
 
-function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[] = []) {
-  const ordered = sortContextFilesForPrompt(
-    contextFiles.filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
-  );
-  return {
-    ordered,
-    stable: ordered.filter((file) => !isDynamicContextFile(file.path)),
-    dynamic: ordered.filter((file) => isDynamicContextFile(file.path)),
-  };
-}
-
-function buildProjectContextSection(params: {
-  files: EmbeddedContextFile[];
-  heading: string;
-  dynamic: boolean;
-}) {
-  if (params.files.length === 0) {
+function buildProjectContextSection(files: EmbeddedContextFile[]) {
+  if (files.length === 0) {
     return [];
   }
-  const lines = [params.heading, ""];
-  if (params.dynamic) {
-    lines.push("Frequently-changing files; below cache boundary when possible:", "");
-  } else {
-    const hasSoulFile = params.files.some(
-      (file) => getContextFileBasename(file.path) === "soul.md",
-    );
-    const hasMemoryFile = params.files.some(
-      (file) => getContextFileBasename(file.path) === "memory.md",
-    );
-    const hasUserFile = params.files.some(
-      (file) => getContextFileBasename(file.path) === "user.md",
-    );
-    lines.push("Loaded project context:");
-    if (hasSoulFile) {
-      lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-    }
-    if (hasMemoryFile) {
-      lines.push(
-        "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
-      );
-    }
-    if (hasUserFile) {
-      lines.push(
-        "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-      );
-    }
-    lines.push("");
+  const lines = ["# Project Context", ""];
+  const hasSoulFile = files.some((file) => getContextFileBasename(file.path) === "soul.md");
+  const hasMemoryFile = files.some((file) => getContextFileBasename(file.path) === "memory.md");
+  const hasUserFile = files.some((file) => getContextFileBasename(file.path) === "user.md");
+  lines.push("Loaded project context:");
+  if (hasSoulFile) {
+    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
   }
-  for (const file of params.files) {
+  if (hasMemoryFile) {
+    lines.push(
+      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+    );
+  }
+  if (hasUserFile) {
+    lines.push(
+      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
+    );
+  }
+  lines.push("");
+  for (const file of files) {
     lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
@@ -358,16 +333,12 @@ function buildAgentBootstrapSystemPromptSections(params: {
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
 }): string[] {
-  const bootstrapFiles =
-    params.bootstrapMode === "full"
-      ? sortContextFilesForPrompt(params.contextFiles ?? []).filter((file) =>
-          isBootstrapContextFile(file.path),
-        )
-      : [];
   const lines = [
     ...buildAgentBootstrapSystemContext({
       bootstrapMode: params.bootstrapMode,
-      hasBootstrapFileInProjectContext: bootstrapFiles.length > 0,
+      hasBootstrapFileInProjectContext:
+        params.bootstrapMode === "full" &&
+        (params.contextFiles?.some((file) => isBootstrapContextFile(file.path)) ?? false),
     }),
   ];
   const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
@@ -780,25 +751,29 @@ export function appendModelIdentitySystemPrompt(params: {
     return params.systemPrompt;
   }
 
-  let replaced = false;
-  const nextLines = params.systemPrompt
-    .split(/\r?\n/u)
-    .filter((candidate) => {
-      if (!candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX)) {
-        return true;
+  const source = params.systemPrompt;
+  const parts: string[] = [];
+  let cursor = 0;
+  for (let index = source.indexOf(MODEL_IDENTITY_PREFIX); index !== -1;) {
+    const nextLine = source.indexOf("\n", index);
+    const lineStart = source.lastIndexOf("\n", index) + 1;
+    if (!source.slice(lineStart, index).trimStart()) {
+      // Normalize only original bytes; replacement model text can itself contain CRLFs.
+      const preceding = source.slice(cursor, lineStart).replace(/\r\n/gu, "\n");
+      if (parts.length === 0) {
+        parts.push(preceding, line);
+      } else {
+        // Dropping a duplicate line also drops its preceding normalized LF.
+        parts.push(preceding.slice(0, -1));
       }
-      if (replaced) {
-        return false;
-      }
-      replaced = true;
-      return true;
-    })
-    .map((candidate) =>
-      candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX) ? line : candidate,
-    );
-
-  if (replaced) {
-    return nextLines.join("\n");
+      cursor = nextLine === -1 ? source.length : nextLine;
+    }
+    // A later occurrence on the same line cannot have a whitespace-only prefix.
+    index = nextLine === -1 ? -1 : source.indexOf(MODEL_IDENTITY_PREFIX, nextLine + 1);
+  }
+  if (parts.length > 0) {
+    parts.push(source.slice(cursor).replace(/\r\n/gu, "\n"));
+    return parts.join("");
   }
 
   const base = params.systemPrompt.trimEnd();
@@ -871,6 +846,15 @@ export function buildAgentSystemPrompt(params: {
   activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }) {
+  const promptMode = params.promptMode ?? "full";
+  const runtimeInfo = params.runtimeInfo;
+  const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
+  if (promptMode === "none") {
+    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
+      .filter(Boolean)
+      .join("\n");
+  }
+
   const acpEnabled = params.acpEnabled === true;
   const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -1047,8 +1031,7 @@ export function buildAgentSystemPrompt(params: {
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
-  const promptMode = params.promptMode ?? "full";
-  const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const isMinimal = promptMode === "minimal";
   const includeToolGuidance =
     !isMinimal || availableTools.size > 0 || promptSurface === "cli_backend";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
@@ -1069,8 +1052,6 @@ export function buildAgentSystemPrompt(params: {
   const userTimezone = params.userTimezone?.trim();
   const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
-  const runtimeInfo = params.runtimeInfo;
-  const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeChatType = normalizeChatType(runtimeInfo?.chatType);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
@@ -1127,7 +1108,9 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    buildCredentialSafetyPrompt(
+      availableTools.has("secrets") ? resolveToolName("secrets") : undefined,
+    ),
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.
@@ -1168,23 +1151,16 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
-  // For "none" mode, return just the basic identity line
-  if (promptMode === "none") {
-    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  const contextFiles = prepareContextFilesForPrompt(
+  const contextFiles = sortContextFilesForPrompt(
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
-    }),
+    }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
   );
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
-    contextFiles: contextFiles.ordered,
+    contextFiles,
   });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
@@ -1226,7 +1202,7 @@ export function buildAgentSystemPrompt(params: {
     memoryCitationsMode: params.memoryCitationsMode,
     memorySection,
     acpEnabled,
-    stableContextFiles: contextFiles.stable,
+    stableContextFiles: contextFiles,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
@@ -1450,13 +1426,7 @@ export function buildAgentSystemPrompt(params: {
       lines.push("## Reasoning Format", reasoningHint, "");
     }
 
-    lines.push(
-      ...buildProjectContextSection({
-        files: contextFiles.stable,
-        heading: "# Project Context",
-        dynamic: false,
-      }),
-    );
+    lines.push(...buildProjectContextSection(contextFiles));
 
     if (!isMinimal && silentReplyPromptMode !== "none") {
       lines.push(
@@ -1480,14 +1450,6 @@ export function buildAgentSystemPrompt(params: {
       userDate,
       userTimezone,
       sessionStatusAvailable: availableTools.has("session_status"),
-    }),
-  );
-
-  lines.push(
-    ...buildProjectContextSection({
-      files: contextFiles.dynamic,
-      heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
-      dynamic: true,
     }),
   );
 

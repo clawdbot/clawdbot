@@ -71,6 +71,7 @@ describe("chat pane composer controls", () => {
         state,
         selectedSession: undefined,
         agentDefaultModel: undefined,
+        agentDefaultPermissionMode: "guarded",
         modelAccess: { allowed: true, requiredScope: "operator.write" },
         effortAccess: { allowed: true, requiredScope: "operator.write" },
         permissionAccess: { allowed: true, requiredScope: "operator.write" },
@@ -100,6 +101,9 @@ describe("chat pane composer controls", () => {
       expect(
         permissionContainer.querySelector('[data-chat-permission-select="true"]'),
       ).not.toBeNull();
+      expect(
+        permissionContainer.querySelector('[data-chat-permission-select="true"]')?.textContent,
+      ).toContain("Default (Guarded)");
       container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
       expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
     },
@@ -123,6 +127,35 @@ describe("chat pane composer controls", () => {
     }
     expect(activeIcons.size).toBe(5);
   });
+
+  it.each([
+    [undefined, "Default"],
+    ["read-only", "Default (Read only)"],
+    ["guarded", "Default (Guarded)"],
+    ["workspace", "Default (Workspace)"],
+    ["full", "Default (Full access)"],
+  ] as const)(
+    "labels inherited permissions for %s without selecting a mode",
+    (defaultMode, label) => {
+      const container = document.createElement("div");
+      const onSelect = vi.fn();
+      render(
+        renderChatPermissionPicker({ canSelectFull: false, defaultMode, onSelect }),
+        container,
+      );
+      const trigger = container.querySelector('[data-chat-permission-select="true"]');
+      const option = container.querySelector('[data-chat-permission-option="default"]');
+      expect(trigger?.textContent?.trim()).toBe(label);
+      expect(trigger?.getAttribute("aria-label")).toBe(`Permissions: ${label}`);
+      expect(trigger?.getAttribute("data-chat-select-value")).toBe("");
+      expect(
+        option?.querySelector(".chat-controls__permission-option-title")?.textContent?.trim(),
+      ).toBe(label);
+      expect(option?.getAttribute("aria-checked")).toBe("true");
+      expect(option?.textContent).toContain("Follow the agent's configured policy.");
+      expect(onSelect).not.toHaveBeenCalled();
+    },
+  );
 
   it("links the permission picker to the permission modes guide", () => {
     const container = document.createElement("div");
@@ -170,6 +203,7 @@ describe("chat pane composer controls", () => {
         permissionMode: "full",
       },
       agentDefaultModel: undefined,
+      agentDefaultPermissionMode: "guarded",
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
@@ -201,6 +235,10 @@ describe("chat pane composer controls", () => {
       expect(renderedIcon?.getAttribute("stroke-width")).toBe("2");
     }
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
+    expect(defaultOption?.textContent).toContain("Default (Guarded)");
+    expect(
+      container.querySelector('[data-chat-permission-select="true"]')?.textContent?.trim(),
+    ).toBe("Full access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();

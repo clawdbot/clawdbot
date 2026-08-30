@@ -1,6 +1,7 @@
 // Shared compact-command mocks and fixtures for focused behavior suites.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
@@ -14,7 +15,12 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
-  isCurrentSessionEntry: vi.fn(() => true),
+  resolveCurrentSessionEntry: vi.fn(
+    ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
+      updatedAt: 1,
+      ...expected,
+    }),
+  ),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
@@ -23,9 +29,10 @@ vi.mock("./commands-compact.runtime.js", () => ({
 export const {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
+  enqueueSystemEvent,
   formatContextUsageShort,
   incrementCompactionCount,
-  isCurrentSessionEntry,
+  resolveCurrentSessionEntry,
   isEmbeddedAgentRunAbortableForCompaction,
   waitForEmbeddedAgentRunEnd,
 } = await import("./commands-compact.runtime.js");
@@ -61,7 +68,10 @@ export function buildCompactParams(
 export function resetCompactCommandMocks() {
   vi.clearAllMocks();
   vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-  vi.mocked(isCurrentSessionEntry).mockReturnValue(true);
+  vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) => ({
+    updatedAt: 1,
+    ...expected,
+  }));
   resolveAgentDirMock.mockImplementation(
     (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
   );

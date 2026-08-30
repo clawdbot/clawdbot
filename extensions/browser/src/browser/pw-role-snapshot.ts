@@ -332,10 +332,11 @@ function compactTree(tree: string) {
     finishEntry();
   }
 
-  return entries
+  const compacted = entries
     .filter((entry) => entry.keep)
     .map((entry) => entry.line)
     .join("\n");
+  return compacted || "(empty)";
 }
 
 function processLine(

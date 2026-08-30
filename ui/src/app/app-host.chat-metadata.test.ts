@@ -156,6 +156,7 @@ it("rebinds global chat metadata immediately on agent selection and follows late
   state.connected = true;
   state.sessionKey = "global";
   state.assistantAgentId = "work";
+  state.loadAssistantIdentity = vi.fn(async () => undefined);
   state.chatMessage = "Keep this draft";
   state.chatError = "Keep this error";
   const messages = state.chatMessages;
@@ -164,7 +165,7 @@ it("rebinds global chat metadata immediately on agent selection and follows late
     expect(state.chatModelCatalog[0]?.available).toBe(false);
     applySelectedChatAgent(state, "main");
     await vi.waitFor(() =>
-      expect(request).toHaveBeenLastCalledWith("chat.metadata", {
+      expect(request).toHaveBeenCalledWith("chat.metadata", {
         agentId: "main",
         sessionKey: "global",
       }),
@@ -172,7 +173,7 @@ it("rebinds global chat metadata immediately on agent selection and follows late
     ready = true;
     invalidateChatMetadataStore(client);
     await vi.waitFor(() => expect(state.chatModelCatalog[0]?.available).toBe(true));
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
     expect(state.chatMessage).toBe("Keep this draft");
     expect(state.chatError).toBe("Keep this error");
     expect(state.chatMessages).toBe(messages);

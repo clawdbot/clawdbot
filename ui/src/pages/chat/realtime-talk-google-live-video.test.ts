@@ -125,7 +125,9 @@ describe("Google Live Video Talk", () => {
   it("streams bounded camera frames directly and answers describe_view calls", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -261,7 +263,9 @@ describe("Google Live Video Talk", () => {
   });
 
   it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const firstVideoTrack = Object.assign(new EventTarget(), {
       stop: vi.fn(),
       readyState: "live",
@@ -311,9 +315,10 @@ describe("Google Live Video Talk", () => {
   it("releases acquired media when stopped during the camera prompt", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
+    const audioTrack = Object.assign(new EventTarget(), { stop: audioStop });
     const audio = {
-      getAudioTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [{ stop: audioStop }],
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
     } as unknown as MediaStream;
     const camera = {
       getVideoTracks: () => [{} as MediaStreamTrack],
@@ -342,7 +347,9 @@ describe("Google Live Video Talk", () => {
   it("finishes active camera cleanup when the stream callback throws", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -379,7 +386,9 @@ describe("Google Live Video Talk", () => {
   });
 
   it("switches an active camera and keeps video frame capture running", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const frontStop = vi.fn();
     const frontTrack = Object.assign(new EventTarget(), {
       stop: frontStop,
@@ -436,7 +445,9 @@ describe("Google Live Video Talk", () => {
   it("releases camera media when Google setup times out", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",

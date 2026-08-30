@@ -139,6 +139,12 @@ describe("persistent upstream fork continuation", () => {
           nativeThreads.set(response.thread.id, response);
           return response;
         }
+        if (method === "thread/unsubscribe") {
+          if (home !== "secondary" || !nativeThreads.has(threadId)) {
+            throw new Error(`Unknown subscription target: ${threadId}`);
+          }
+          return { status: "unsubscribed" };
+        }
         if (method === "thread/archive") {
           if (home !== "secondary" || !nativeThreads.has(threadId)) {
             throw new Error(`Unknown archive target: ${threadId}`);
@@ -296,6 +302,13 @@ describe("persistent upstream fork continuation", () => {
         modelProvider: "openai",
         preserveNativeModel: true,
       });
+      expect(native.request).toHaveBeenCalledWith(
+        "thread/unsubscribe",
+        { threadId: "thread-secondary-0" },
+        expect.anything(),
+      );
+      // Native unsubscribe detaches the client; idle retention still owns the thread.
+      expect(nativeThreads.has("thread-secondary-0")).toBe(true);
       // Configuration must reach thread/start; persisted fingerprints alone cannot install tools.
       expect(native.request).toHaveBeenCalledWith(
         "thread/start",

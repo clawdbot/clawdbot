@@ -123,7 +123,7 @@ function preserveCurrentSessionRow(
     return result;
   }
   const matchesCurrent = (row: GatewaySessionRow) =>
-    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey);
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
   const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
   if (
     previousCurrentRow &&
@@ -156,8 +156,15 @@ function retainSessionPaginationWindow(
   };
 }
 
+function isForegroundReplacement(options: SessionRefreshOptions): boolean {
+  return options.append !== true && options.backgroundHydrate !== true;
+}
+
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let requestRevision = 0;
+  // A queued foreground replacement owns the next visible roster immediately.
+  // Older loads may finish for their callers, but must not publish across that boundary.
+  let foregroundPublicationGeneration = 0;
   let inFlight: Promise<void> | null = null;
   let queuedExplicitRefresh: {
     options: SessionRefreshOptions;
@@ -317,6 +324,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!scope) {
       return null;
     }
+    const publicationGeneration = foregroundPublicationGeneration;
+    const isCurrent = () =>
+      host.connection.isCurrent(scope) && publicationGeneration === foregroundPublicationGeneration;
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
     // Every canonical roster replaces visible session names, so omitted title
     // enrichment must inherit the UI default instead of publishing fallback ids.
@@ -342,7 +352,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const listParams = buildSessionListParams(requestOptions);
       let issuedRevision = ++requestRevision;
       let result = bootstrap ? await host.bootstrap(scope, listParams) : null;
-      if (bootstrap && !host.connection.isCurrent(scope)) {
+      if (bootstrap && !isCurrent()) {
         return null;
       }
       if (!result) {
@@ -352,7 +362,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
         result = await requestSessionListParams(scope.client, listParams);
       }
-      if (!host.connection.isCurrent(scope)) {
+      if (!isCurrent()) {
         return null;
       }
       result = host.reconcileList(result, issuedRevision, requestOptions.agentId);
@@ -410,7 +420,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
       return result;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
+      if (isCurrent()) {
         const state = host.readState();
         host.publish(
           {
@@ -480,10 +490,17 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!host.connection.capture()) {
       return Promise.resolve();
     }
+    const foregroundReplacement = isForegroundReplacement(options);
     if (inFlight) {
+      if (foregroundReplacement) {
+        foregroundPublicationGeneration += 1;
+      }
       return new Promise<void>((complete) => {
         if (queuedExplicitRefresh) {
-          queuedExplicitRefresh.options = options;
+          // Once queued, a foreground owner stays authoritative over weaker refreshes.
+          if (foregroundReplacement || !isForegroundReplacement(queuedExplicitRefresh.options)) {
+            queuedExplicitRefresh.options = options;
+          }
           queuedExplicitRefresh.completions.push(complete);
         } else {
           queuedExplicitRefresh = { options, completions: [complete] };
@@ -495,6 +512,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     );
     if (host.readState().result && !options.force && !hasListOverrides) {
       return Promise.resolve();
+    }
+    if (foregroundReplacement) {
+      foregroundPublicationGeneration += 1;
     }
     if (options.append !== true) {
       absorbPendingEventRefresh();
@@ -673,6 +693,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     },
     reset() {
+      foregroundPublicationGeneration += 1;
       primaryList = { scope: primaryList.scope };
       eventRefreshCoordinator.reset();
       inFlight = null;
@@ -693,6 +714,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     },
     dispose() {
+      foregroundPublicationGeneration += 1;
       eventRefreshCoordinator.dispose();
       if (observesPageLifecycle) {
         updatePageLifecycleListeners(false);

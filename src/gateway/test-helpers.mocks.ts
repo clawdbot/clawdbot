@@ -53,15 +53,11 @@ function createEmbeddedRunMockExports() {
 
 async function importEmbeddedRunMockModule<TModule extends object>(
   actualPath: string,
-  opts?: { includeActiveCount?: boolean },
 ): Promise<TModule> {
   const actual = await vi.importActual<TModule>(actualPath);
   return {
     ...actual,
     ...createEmbeddedRunMockExports(),
-    ...(opts?.includeActiveCount
-      ? { getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size }
-      : {}),
   };
 }
 
@@ -242,14 +238,28 @@ vi.mock("/src/agents/embedded-agent.js", async () => {
 vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
   return await importEmbeddedRunMockModule<
     typeof import("../agents/embedded-agent-runner/runs.js")
-  >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
+  >("../agents/embedded-agent-runner/runs.js");
 });
 
 vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
   return await importEmbeddedRunMockModule<
     typeof import("../agents/embedded-agent-runner/runs.js")
-  >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
+  >("../agents/embedded-agent-runner/runs.js");
 });
+
+vi.mock("../agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/embedded-agent-runner/active-run-projections.js")
+  >()),
+  getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+}));
+
+vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/embedded-agent-runner/active-run-projections.js")
+  >()),
+  getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+}));
 
 vi.mock("./health/collector.js", () => ({
   collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),

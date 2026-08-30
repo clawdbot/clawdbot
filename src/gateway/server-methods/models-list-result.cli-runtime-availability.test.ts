@@ -24,6 +24,7 @@ const config = {
 async function listClaudeCliModel(
   params: {
     authenticated?: boolean;
+    providerApiKey?: boolean;
     pluginDisabled?: boolean;
     cfg?: OpenClawConfig;
   } = {},
@@ -36,8 +37,7 @@ async function listClaudeCliModel(
       (params.pluginDisabled
         ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
         : config),
-    preparedAuthModes:
-      params.authenticated && !params.pluginDisabled ? { "claude-cli": "api_key" } : {},
+    preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
     view: "configured",
   });
 }
@@ -64,12 +64,38 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it.each([
-    { authenticated: true, pluginDisabled: false, available: true, reason: undefined },
-    { authenticated: false, pluginDisabled: false, available: false, reason: undefined },
-    { authenticated: true, pluginDisabled: true, available: false, reason: "missing-auth" },
+    {
+      authenticated: true,
+      providerApiKey: false,
+      pluginDisabled: false,
+      available: true,
+      reason: undefined,
+    },
+    {
+      authenticated: false,
+      providerApiKey: false,
+      pluginDisabled: false,
+      available: false,
+      reason: undefined,
+    },
+    {
+      authenticated: false,
+      providerApiKey: true,
+      pluginDisabled: false,
+      available: false,
+      reason: undefined,
+    },
+    {
+      authenticated: true,
+      providerApiKey: false,
+      pluginDisabled: true,
+      available: false,
+      reason: "missing-auth",
+    },
   ])(
-    "reports native login=$authenticated and plugin disabled=$pluginDisabled",
+    "reports native login=$authenticated, provider key=$providerApiKey, and plugin disabled=$pluginDisabled",
     async (scenario) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", scenario.providerApiKey ? "test-key" : "");
       const result = await listClaudeCliModel(scenario);
       expect(result).toEqual({
         models: [expect.objectContaining({ id: "claude-opus-5", available: scenario.available })],
@@ -81,6 +107,7 @@ describe("models.list CLI runtime availability", () => {
   it("does not use synthetic auth when plugins are globally disabled", async () => {
     await expect(
       listClaudeCliModel({
+        authenticated: true,
         cfg: {
           ...config,
           plugins: { enabled: false },
@@ -89,5 +116,13 @@ describe("models.list CLI runtime availability", () => {
     ).resolves.toEqual({
       models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
     });
+  });
+
+  it("does not use provider auth when the native runtime plugin is disabled", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+
+    const result = await listClaudeCliModel({ authenticated: true, pluginDisabled: true });
+
+    expect(result.models[0]).toMatchObject({ available: false, unavailableReason: "missing-auth" });
   });
 });

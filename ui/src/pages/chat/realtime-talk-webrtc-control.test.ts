@@ -127,7 +127,9 @@ function sentRealtimeEvents(peer: FakePeerConnection | undefined): Array<Record<
 describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   beforeEach(() => {
     FakePeerConnection.instances = [];
-    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const track = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const stream = {
       getAudioTracks: () => [track],
       getTracks: () => [track],

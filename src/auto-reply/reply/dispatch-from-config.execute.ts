@@ -575,6 +575,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                               }
                             },
                           ),
+                          "delivery",
                         );
                       }
                     }

@@ -43,7 +43,7 @@ function observeStages() {
     );
 }
 
-it.each(["prepare", "commit"])(
+it.each(["prepare", "append", "commit"])(
   "leaves canonical rows unchanged and removes private staging after %s failure",
   async (phase) => {
     await withOpenClawTestState({ label: "import-rollback" }, async (state) => {
@@ -60,6 +60,13 @@ it.each(["prepare", "commit"])(
       const entriesBefore = database.db.prepare("SELECT * FROM session_nodes").all();
       const stages = observeStages();
       const exec = database.db.exec.bind(database.db);
+      if (phase === "append") {
+        database.db.exec(`
+          CREATE TRIGGER fail_second_import BEFORE INSERT ON transcript_events
+          WHEN NEW.session_id = 'second'
+          BEGIN SELECT RAISE(ABORT, 'injected append failure'); END;
+        `);
+      }
       if (phase === "commit") {
         vi.spyOn(database.db, "exec").mockImplementation((sql) => {
           if (sql === "COMMIT") {
@@ -135,19 +142,26 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
       sessionKey: "agent:main:ALIAS",
       preserveExactStoredKey: true,
     };
-    const opaque = { custom: "no identity" };
+    const first = { ...message, timestamp: 10 };
+    const second = { ...message, id: "two", parentId: "one", timestamp: 30 };
+    const opaque = { custom: "no identity", timestamp: 25 };
     const readTranscriptEvents = (append: (event: unknown) => void) => {
       for (const event of [
-        message,
-        message,
-        { ...message, message: { role: "user", content: "same id loses" } },
+        first,
+        first,
+        { ...first, timestamp: 20, message: { role: "user", content: "same id loses" } },
         opaque,
         opaque,
+        second,
+        { ...second, timestamp: 99 },
       ]) {
         append(event);
       }
     };
     const stages = observeStages();
+    await importSqliteSessionRows({ ...params, readTranscriptEvents: (append) => append(first) });
+    const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
+    const generation = db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get();
     expect(await importSqliteSessionRows({ ...params, readTranscriptEvents })).toMatchObject({
       transcriptEvents: 2,
       sessionKey: params.sessionKey,
@@ -155,17 +169,26 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     expect(await importSqliteSessionRows({ ...params, readTranscriptEvents })).toMatchObject({
       transcriptEvents: 0,
     });
-    const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
     expect(db.prepare("SELECT session_key FROM session_nodes").all()).toEqual([
       { session_key: params.sessionKey },
     ]);
-    expect(db.prepare("SELECT event_json FROM transcript_events ORDER BY seq").all()).toEqual(
-      [message, opaque].map((event) => ({ event_json: JSON.stringify(event) })),
+    expect(
+      db.prepare("SELECT seq, created_at, event_json FROM transcript_events ORDER BY seq").all(),
+    ).toEqual(
+      [first, opaque, second].map((event, seq) => ({
+        seq,
+        created_at: event.timestamp,
+        event_json: JSON.stringify(event),
+      })),
     );
-    expect(db.prepare("SELECT event_id FROM transcript_event_identities").all()).toEqual([
-      { event_id: "one" },
-    ]);
-    expect(stages()).toHaveLength(2);
+    expect(
+      db.prepare("SELECT event_id FROM transcript_event_identities ORDER BY seq").all(),
+    ).toEqual([{ event_id: "one" }, { event_id: "two" }]);
+    expect(db.prepare("SELECT updated_at FROM session_windows").get()).toEqual({ updated_at: 99 });
+    expect(db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get()).toEqual(
+      generation,
+    );
+    expect(stages()).toHaveLength(3);
     expect(stages().every((dir) => !fs.existsSync(dir))).toBe(true);
   });
 });

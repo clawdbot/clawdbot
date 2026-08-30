@@ -312,6 +312,7 @@ export async function prepareWorkspaceBuildGroup(
     const ambientCredentials = resolveAmbientAgentCredentialsForDiscovery({
       config: input.config,
       env,
+      authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
       syntheticAuthProviderRefs:
         catalogMode === "static"
           ? listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders)

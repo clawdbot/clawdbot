@@ -1,9 +1,9 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
@@ -32,13 +32,9 @@ import {
   pullRequestLinksIn,
   refreshPullRequestsForStreamedLinks,
 } from "./chat-pull-request-refresh.ts";
-import {
-  clearPendingQueueItemsForRun,
-  readDeliveredQueuedChatSendForRun,
-  removeDeliveredQueuedChatSendForRun,
-} from "./chat-queue.ts";
+import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { preserveQueuedUserTurn } from "./chat-send-support.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -49,16 +45,13 @@ import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
-import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-  type StoredChatOutboxScope,
-} from "./composer-persistence.ts";
+import { resolveStoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
+import { captureOutboxPayloadOwner } from "./outbox-payloads.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -72,6 +65,7 @@ import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
 const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
@@ -154,6 +148,8 @@ function handleSessionMessageEvent(
     return;
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
+  const isUserMessage =
+    readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
@@ -173,6 +169,13 @@ function handleSessionMessageEvent(
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
     state.pendingSessionMessageReloadSessionKey = event.key;
     if (event.hasActiveRun === true) {
+      if (isUserMessage) {
+        // Promotion changes pending custody even while the next turn is active.
+        void loadChatHistory(state, {
+          deferBranches: !presentation(),
+          supersedeInFlight: true,
+        }).finally(() => state.requestUpdate?.());
+      }
       return;
     }
     if (finishSessionMessageRunReconcile(state, event.key, runId, result.row, presentation)) {
@@ -199,9 +202,10 @@ function handleSessionMessageEvent(
   }
   if (matchesChat) {
     state.pendingSessionMessageReloadSessionKey = null;
-    void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    void loadChatHistory(state, {
+      deferBranches: !presentation(),
+      supersedeInFlight: isUserMessage && event.hasActiveRun === true,
+    }).finally(() => state.requestUpdate?.());
   }
 }
 
@@ -417,6 +421,18 @@ function handleSessionsChangedEvent(
     return;
   }
   if (
+    matchesChat &&
+    typeof source?.reason === "string" &&
+    PENDING_INPUT_REASONS.has(source.reason)
+  ) {
+    // Custody can change without a transcript append. A read begun before this
+    // event must not hide accepted input until the active run ends.
+    void loadChatHistory(state, {
+      deferBranches: !presented,
+      supersedeInFlight: true,
+    }).finally(() => state.requestUpdate?.());
+  }
+  if (
     result.applied &&
     event &&
     runIdBeforeApply &&
@@ -508,7 +524,7 @@ export function handlePageGatewayEvent(
   state: ChatPageHost,
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
-) {
+): void {
   if (event.event === "session.approval") {
     const payload = asNullableRecord(event.payload);
     if (!payload || typeof payload.sessionKey !== "string") {
@@ -528,109 +544,115 @@ export function handlePageGatewayEvent(
   }
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
-    const sessionMatches = Boolean(
-      payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
-    );
-    const recoveryRunId =
-      payload?.state === "final" &&
-      (payload.message === undefined || payload.message === null) &&
-      sessionMatches &&
-      typeof payload.runId === "string" &&
-      (!state.chatRunId || state.chatRunId === payload.runId)
-        ? payload.runId
-        : null;
-    const recoveryScope = recoveryRunId ? readChatSessionProjectionScope(state) : null;
-    if (
-      payload?.state === "delta" &&
-      typeof payload.runId === "string" &&
-      sessionMatches &&
-      // Same-session background streams cannot clear the foreground run's status.
-      (!state.chatRunId || state.chatRunId === payload.runId) &&
-      state.observerDigest &&
-      state.observerDigest.runId !== payload.runId
-    ) {
-      state.observerDigest = null;
-    }
-    if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
-      refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
-    }
-    const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
-    const shouldRefreshPullRequests =
-      shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
     const terminalPayload =
       payload &&
       (payload.state === "final" || payload.state === "aborted" || payload.state === "error")
         ? payload
         : undefined;
-    // Missing ownership must not fall back to correlation-only run IDs, which
-    // can collide across sessions.
-    const outboxScope =
-      terminalPayload &&
-      resolveStoredChatOutboxScope(
-        state,
-        terminalPayload.sessionKey,
-        isUiGlobalSessionKey(terminalPayload.sessionKey)
-          ? selectedGlobalEventAgentId(state, terminalPayload.agentId ?? null)
-          : terminalPayload.agentId,
+    const apply = () => {
+      const sessionMatches = Boolean(
+        payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
       );
-    const delivered = outboxScope
-      ? rememberDeliveredQueuedUserTurn(state, terminalPayload.runId, outboxScope)
-      : null;
-    if (delivered) {
-      // The queued projection is the only local copy until history catches up.
-      // Materialize it before the terminal assistant to preserve transcript order.
-      preserveQueuedUserTurn(state, delivered);
-    }
-    const result = handleChatGatewayEvent(state, payload);
-    if (terminalPayload && sessionMatches) {
-      clearPendingQueueItemsForRun(state, terminalPayload.runId);
-    }
-    if (shouldCelebrateFirstReply && result === "final") {
-      fireFirstReplyConfetti();
-    }
-    if (shouldRefreshPullRequests) {
-      void state.refreshSessionPullRequests?.({ refresh: true });
-    }
-    const shouldRecoverMissingTerminal = Boolean(
-      recoveryRunId &&
-      recoveryScope &&
-      getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
-        ?.status === "completed",
-    );
-    const recoveryOwnership =
-      shouldRecoverMissingTerminal && payload
-        ? createTerminalRecoveryOwnership(state, payload)
-        : null;
-    const recoveryClaimed = recoveryOwnership
-      ? claimTerminalRecovery(state, recoveryOwnership)
-      : false;
-    if (recoveryOwnership && recoveryClaimed) {
-      state.pendingSessionMessageReloadSessionKey = null;
-      // The first owned message-less terminal recovers history even when an
-      // earlier snapshot already marked the run complete. Replays, yielded, or
-      // background-run terminals must not repeat I/O or disturb the foreground pane.
-      // Persistence can trail the terminal event, so retry bounded authoritative
-      // snapshots until the completed run's reply becomes visible.
-      void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
-        () => undefined,
-      );
-    } else {
-      replayPendingSessionMessageReload(state, payload, isPresented);
-    }
-    if (terminalPayload) {
-      if (outboxScope) {
-        removeDeliveredQueuedChatSendForRun(state, terminalPayload.runId, outboxScope);
+      const recoveryRunId =
+        payload?.state === "final" &&
+        (payload.message === undefined || payload.message === null) &&
+        sessionMatches &&
+        typeof payload.runId === "string" &&
+        (!state.chatRunId || state.chatRunId === payload.runId)
+          ? payload.runId
+          : null;
+      const recoveryScope = recoveryRunId ? readChatSessionProjectionScope(state) : null;
+      if (
+        payload?.state === "delta" &&
+        typeof payload.runId === "string" &&
+        sessionMatches &&
+        // Same-session background streams cannot clear the foreground run's status.
+        (!state.chatRunId || state.chatRunId === payload.runId) &&
+        state.observerDigest &&
+        state.observerDigest.runId !== payload.runId
+      ) {
+        state.observerDigest = null;
       }
-      void resumeStoredChatOutboxes(state);
-      if (sessionMatches) {
-        if (isPresented()) {
-          refreshSessionWorkspace(state, isSidebarSlotVisible(state.sidebarLayout, "workspace"));
-        } else {
-          retireSessionWorkspaceCheckout(state);
+      if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
+        refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
+      }
+      const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
+      const shouldRefreshPullRequests =
+        shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
+      const result = handleChatGatewayEvent(state, payload);
+      if (terminalPayload && sessionMatches) {
+        clearPendingQueueItemsForRun(state, terminalPayload.runId);
+      }
+      if (shouldCelebrateFirstReply && result === "final") {
+        fireFirstReplyConfetti();
+      }
+      if (shouldRefreshPullRequests) {
+        void state.refreshSessionPullRequests?.({ refresh: true });
+      }
+      const shouldRecoverMissingTerminal = Boolean(
+        recoveryRunId &&
+        recoveryScope &&
+        getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
+          ?.status === "completed",
+      );
+      const recoveryOwnership =
+        shouldRecoverMissingTerminal && payload
+          ? createTerminalRecoveryOwnership(state, payload)
+          : null;
+      const recoveryClaimed = recoveryOwnership
+        ? claimTerminalRecovery(state, recoveryOwnership)
+        : false;
+      if (recoveryOwnership && recoveryClaimed) {
+        state.pendingSessionMessageReloadSessionKey = null;
+        // The first owned message-less terminal recovers history even when an
+        // earlier snapshot already marked the run complete. Replays, yielded, or
+        // background-run terminals must not repeat I/O or disturb the foreground pane.
+        // Persistence can trail the terminal event, so retry bounded authoritative
+        // snapshots until the completed run's reply becomes visible.
+        void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
+          () => undefined,
+        );
+      } else {
+        replayPendingSessionMessageReload(state, payload, isPresented);
+      }
+      if (terminalPayload) {
+        void resumeStoredChatOutboxes(state);
+        if (sessionMatches) {
+          if (isPresented()) {
+            refreshSessionWorkspace(state, isSidebarSlotVisible(state.sidebarLayout, "workspace"));
+          } else {
+            retireSessionWorkspaceCheckout(state);
+          }
         }
       }
+      requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
+    };
+    if (!terminalPayload) {
+      apply();
+      return;
     }
-    requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
+    // A cold Blob read may finish after another connection or retry takes over.
+    // Apply the terminal only after its complete user turn owns independent bytes.
+    const scope = resolveStoredChatOutboxScope(
+      state,
+      terminalPayload.sessionKey,
+      isUiGlobalSessionKey(terminalPayload.sessionKey)
+        ? selectedGlobalEventAgentId(state, terminalPayload.agentId ?? null)
+        : terminalPayload.agentId,
+    );
+    const connectionEpoch = state.connectionEpoch;
+    const ownerIsCurrent = captureOutboxPayloadOwner(state);
+    const retirement = retireDeliveredQueuedUserTurn(state, terminalPayload.runId, scope);
+    const finish = (outcome: Awaited<typeof retirement>) => {
+      if (outcome !== "stale" && state.connectionEpoch === connectionEpoch && ownerIsCurrent()) {
+        apply();
+      }
+    };
+    if (retirement instanceof Promise) {
+      void retirement.then(finish);
+      return;
+    }
+    finish(retirement);
     return;
   }
   if (event.event === "session.observer") {
@@ -683,40 +705,4 @@ export function handlePageGatewayEvent(
   if (event.event === "task") {
     handleBackgroundTasksEvent(state, event.payload, isPresented());
   }
-}
-
-const MAX_REMEMBERED_DELIVERED_QUEUE_TURNS = 64;
-const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueItem>>();
-
-function rememberDeliveredQueuedUserTurn(
-  state: ChatPageHost,
-  runId: string | undefined,
-  scope: StoredChatOutboxScope,
-): ChatQueueItem | null {
-  if (!runId) {
-    return null;
-  }
-  // Every split pane receives the same Gateway event. Keep a bounded delivery
-  // handoff so an inactive pane cannot retire the durable row before its owner
-  // converts the queued projection into a transcript message.
-  const owner = state.client ?? state;
-  let turns = deliveredQueueTurnsByClient.get(owner);
-  if (!turns) {
-    turns = new Map();
-    deliveredQueueTurnsByClient.set(owner, turns);
-  }
-  const deliveryKey = `${storedChatOutboxScopeKey(scope)}|${runId}`;
-  const stored = readDeliveredQueuedChatSendForRun(state, runId, scope)?.item;
-  if (stored) {
-    turns.delete(deliveryKey);
-    turns.set(deliveryKey, stored);
-    while (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
-      const oldestRunId = turns.keys().next().value;
-      if (typeof oldestRunId !== "string") {
-        break;
-      }
-      turns.delete(oldestRunId);
-    }
-  }
-  return stored ?? turns.get(deliveryKey) ?? null;
 }

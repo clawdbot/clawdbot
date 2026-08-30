@@ -180,6 +180,7 @@ self.addEventListener("push", (event) => {
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
+    renotify: data.renotify === true,
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),

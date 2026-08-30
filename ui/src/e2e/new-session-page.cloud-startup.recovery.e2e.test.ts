@@ -75,7 +75,6 @@ suite.define(() => {
         "sessions.dispatch": {
           placement: { state: "active", environmentId: "worker-create-recovery" },
         },
-        "sessions.describe": { session: { sessionId: "session-create-recovery" } },
         "sessions.send": { runId: "run-create-recovery", status: "started" },
       },
     });
@@ -184,9 +183,6 @@ suite.define(() => {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
         },
-        "sessions.describe": {
-          session: { sessionId: "session-late-cloud-create" },
-        },
         "sessions.patch": { ok: true },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
@@ -222,7 +218,10 @@ suite.define(() => {
         history.pushState(null, "", "new?agent=cloud");
         dispatchEvent(new PopStateEvent("popstate"));
       });
-      await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+      await gateway.resolveDeferred("sessions.create", {
+        key: sessionKey,
+        sessionId: "session-late-cloud-create",
+      });
       const archive = await gateway.waitForRequest("sessions.patch");
       expect(archive.params).toMatchObject({
         key: sessionKey,
@@ -306,7 +305,6 @@ suite.define(() => {
             defaultBranch: "main",
             repositoryStatus: "git",
           },
-          "sessions.describe": { session: { sessionId: "session-abandoned-create" } },
           "sessions.patch": { ok: true },
           "sessions.delete": { deleted: true },
           "sessions.dispatch": {
@@ -391,7 +389,10 @@ suite.define(() => {
         });
 
         await gateway.deferNext("sessions.delete");
-        await gateway.resolveDeferred("sessions.create", { key: abandonedKey });
+        await gateway.resolveDeferred("sessions.create", {
+          key: abandonedKey,
+          sessionId: "session-abandoned-create",
+        });
         const deleted = await gateway.waitForRequest("sessions.delete");
         expect(deleted.params).toMatchObject({
           key: abandonedKey,
@@ -468,7 +469,7 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.create": { key: sessionKey },
+        "sessions.create": { key: sessionKey, sessionId: "session-storage-recovery" },
         "sessions.dispatch": {
           ok: true,
           key: sessionKey,
@@ -490,7 +491,14 @@ suite.define(() => {
           count: 1,
           defaults: SESSION_LIST_DEFAULTS,
           path: "",
-          sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
+          sessions: [
+            {
+              key: sessionKey,
+              sessionId: "session-storage-recovery",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+          ],
           ts: Date.now(),
         },
         "chat.history": {

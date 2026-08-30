@@ -514,6 +514,8 @@ the source and permits replacement of an existing install; it does not bypass
 are printed informationally; blocked releases remain non-installable.
 Marketplace, linked, and pinned installs remain shell-only.
 
+`/plugins inspect <child>` (also `show` or `get`) and `/plugins inspect all` include the shared package install metadata for multi-entry plugins. Inspection returns `install: null` when package ownership is missing or ambiguous, and preserves its runtime capability report.
+
 When `/plugins install` or `/plugins enable` requires capability consent, it
 returns the plugin's declared capabilities and an exact retry command. Review
 that reply, then rerun with `--accept-capabilities`:

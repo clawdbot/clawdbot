@@ -71,6 +71,21 @@ column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database
 safely.
 
+Web Push subscription ownership uses the same rule for nullable bare
+`web_push_subscriptions.device_id TEXT`, `user_profile_id TEXT`, and
+`preferences_json TEXT` columns. Web Push lazily ensures all three columns on
+first use. Existing rows remain unbound and test-only until the browser
+reconnects; older readers ignore the columns and continue reading or updating
+the endpoint and key fields safely.
+
+Approval-notification cleanup uses the same-version additive
+`web_push_approval_deliveries` table. It records the approval/subscription
+identifiers plus the request-time device/profile binding for notifications that
+may have reached a browser. A terminal or restarted Gateway sends only when the
+current subscription still has that binding. The table is lazily created on
+first use, rows cascade away with their approval or subscription, and older
+readers ignore it safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 Structured [Goal controls](/tools/goal#gateway-requests-and-retries) use a lazy
@@ -245,7 +260,7 @@ A newer OpenClaw build wrote your databases, and the running build is older. The
 
 Act on the install root, not the version. One release version string spans many `main` commits, schema levels, and same-version schema shapes, so two installs can both call themselves `2026.7.2` and still disagree about a database. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
 
-A linked source checkout is the case where the commit misleads: `openclaw --version` reports the checkout's git HEAD, but the code actually executing is whatever `dist/` was last built. If the install root is a checkout, rebuild it (`pnpm build`) before concluding the version is wrong.
+When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
 

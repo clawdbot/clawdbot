@@ -159,7 +159,7 @@ const SessionsToolSchema = Type.Object(
     names: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "group_set: full replacement of the ordered group catalog. Array order becomes sidebar order; new names are created; existing groups left out are deleted. Never moves sessions. To reorder, pass the complete current list in the new order; to remove one group, prefer group_delete.",
+          "group_set: full replacement of the ordered group catalog. Array order becomes sidebar order; new names are created; empty groups left out are deleted. Dropping a group that still has member sessions is rejected — remove it with group_delete first. Never moves sessions. To reorder, pass the complete current list in the new order.",
       }),
     ),
     name: Type.Optional(

@@ -13,6 +13,7 @@ import type {
   SessionTranscriptStats,
   recordSessionParticipant,
   listSessionParticipantsReadOnly,
+  stageSessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -44,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
+  stageSessionPendingInput: vi.fn<typeof stageSessionPendingInput>(),
   recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(() => "inserted"),
   listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
   readTranscriptStatsSync: vi.fn<() => SessionTranscriptStats>(() => ({
@@ -152,6 +154,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
+    stageSessionPendingInput: mocks.stageSessionPendingInput,
     // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
@@ -601,6 +604,22 @@ function selectFreshestTargetFixtureEntry(
 }
 
 function resetSessionAccessorMocks() {
+  // These handler fixtures own an in-memory store. Real admission durability
+  // and execution-time promotion are covered by the gateway-server suites.
+  mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {
+    options.assertCurrent();
+    const message = options.prepareMessageAfterIdempotencyCheck
+      ? options.prepareMessageAfterIdempotencyCheck(options.message)
+      : options.message;
+    return message
+      ? {
+          inputId: "test-user-turn",
+          message,
+          run: (operation) => operation(),
+          finish: vi.fn(),
+        }
+      : undefined;
+  });
   mocks.recordSessionParticipant.mockReset().mockReturnValue("inserted");
   mocks.listSessionParticipantsReadOnly.mockReset().mockReturnValue(new Map());
   mocks.readTranscriptStatsSync.mockReset().mockReturnValue({

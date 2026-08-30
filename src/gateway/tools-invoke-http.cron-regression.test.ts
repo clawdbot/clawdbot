@@ -14,7 +14,6 @@ const runBeforeToolCallHook = async (args: { params: unknown }) => ({
 let cfg: Record<string, unknown> = {};
 const alwaysAuthorized = async () => ({ ok: true as const });
 const disableDefaultMemorySlot = () => false;
-const noPluginToolMeta = () => undefined;
 const noWarnLog = () => {};
 
 vi.mock("../config/config.js", () => ({
@@ -56,10 +55,6 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
     isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
   };
 });
-
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: noPluginToolMeta,
-}));
 
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [

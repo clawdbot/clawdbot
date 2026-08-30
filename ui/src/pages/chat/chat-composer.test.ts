@@ -16,7 +16,7 @@ import { renderChatComposer } from "./components/chat-composer.ts";
 import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
-const openRealtimeTalkInputMock = vi.fn();
+const openMicrophoneMock = vi.fn();
 
 describe("suggestion composer", () => {
   it("labels the send action as Suggest and emits ephemeral typing state", () => {
@@ -114,15 +114,15 @@ beforeEach(() => {
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput, "openRealtimeTalkInput").mockImplementation(
-    openRealtimeTalkInputMock,
+  vi.spyOn(realtimeTalkInput.RealtimeTalkInputController.prototype, "open").mockImplementation(
+    openMicrophoneMock,
   );
 });
 
 afterEach(async () => {
   await resetComposerFixture(() => {
     discoverRealtimeTalkInputsMock.mockReset();
-    openRealtimeTalkInputMock.mockReset();
+    openMicrophoneMock.mockReset();
   });
 });
 
@@ -152,28 +152,37 @@ describe("renderChatComposer controls", () => {
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
-  it("keeps an unsaved queued-row edit open when normal composer text is double-clicked", () => {
-    const onCancel = vi.fn();
-    const { container } = renderComposer({
-      draft: "select this composer text",
-      queue: [{ id: "queued", text: "original queued text", createdAt: 1 }],
-      queuedEdit: {
-        editingId: "queued",
-        editingText: "unsaved queued edit",
-        onCancel,
-      },
-    });
-    const composer = container.querySelector<HTMLTextAreaElement>(
-      ".agent-chat__composer-combobox textarea",
-    );
+  it.each([true, false])(
+    "keeps the unsaved row edit visible and cancellable (source retained: %s)",
+    (retained) => {
+      const onCancel = vi.fn();
+      const source = { id: "queued", text: "original queued text", createdAt: 1 };
+      const { container } = renderComposer({
+        draft: "select this composer text",
+        queue: retained ? [source] : [],
+        queuedEdit: {
+          editingId: "queued",
+          editingText: "unsaved queued edit",
+          source,
+          onCancel,
+        },
+      });
+      const composer = container.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox textarea",
+      );
 
-    composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
 
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
-      "unsaved queued edit",
-    );
-  });
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
+        "unsaved queued edit",
+      );
+      container
+        .querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(onCancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps composing enabled and explains queued delivery while offline", () => {
     const { container } = renderComposer({
@@ -663,7 +672,7 @@ describe("renderChatComposer controls", () => {
 
   it("keeps the dictation button stable through hold progress and latch", async () => {
     vi.useFakeTimers();
-    openRealtimeTalkInputMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     vi.stubGlobal("AudioContext", DictationAudioContext);
     const request = vi.fn(async (method: string) => {
       if (method === "talk.catalog") {
@@ -777,7 +786,7 @@ describe("renderChatComposer controls", () => {
 
   it("shows an actionable error underlap and returns the microphone to idle on startup failure", async () => {
     vi.useFakeTimers();
-    openRealtimeTalkInputMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+    openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
     const request = vi.fn(async (method: string) => {
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: true } };

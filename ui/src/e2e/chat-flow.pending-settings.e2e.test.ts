@@ -4,6 +4,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   waitForRequests,
@@ -54,7 +55,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
@@ -115,7 +116,7 @@ suite.define(() => {
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
       const listsBefore = (await gateway.getRequests("sessions.list")).length;

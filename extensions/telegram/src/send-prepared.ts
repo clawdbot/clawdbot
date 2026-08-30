@@ -18,7 +18,6 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
-  getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "./rich-message.js";
@@ -227,7 +226,7 @@ export function createTelegramPreparedSender(config: {
               "sendRichMessage",
               toTelegramRichMessageContextParams(rawParams),
               (effective) =>
-                getTelegramRichRawApi(config.api).sendRichMessage({
+                config.api.raw.sendRichMessage({
                   chat_id: config.chatId,
                   rich_message: richMessage,
                   ...effective,

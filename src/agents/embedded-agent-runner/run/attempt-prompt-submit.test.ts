@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   beginPromptCacheObservation,
@@ -14,6 +15,8 @@ import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
+type PromptActiveSession = Parameters<typeof submitEmbeddedAttemptPrompt>[0]["promptActiveSession"];
+type PromptOptions = Parameters<PromptActiveSession>[1];
 
 function createSession() {
   const state = {
@@ -65,6 +68,49 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it.each([
+    { skipPreparedUserTurnMessage: false, expectedKey: "persisted-current-user" },
+    { skipPreparedUserTurnMessage: true, expectedKey: undefined },
+  ])(
+    "passes persisted user identity when prepared-user skipping is $skipPreparedUserTurnMessage",
+    async ({ skipPreparedUserTurnMessage, expectedKey }) => {
+      const { activeSession } = createSession();
+      const input = createBaseInput();
+      const persistedUser = {
+        role: "user" as const,
+        content: "transcript prompt",
+        idempotencyKey: "persisted-current-user",
+        timestamp: 1,
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: persistedUser,
+        target: async () => undefined,
+      });
+      recorder.markRuntimePersisted(persistedUser);
+      const promptActiveSession = vi.fn(
+        async (_prompt: string, _options?: PromptOptions) => undefined,
+      );
+
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: {
+          sessionId,
+          skipPreparedUserTurnMessage,
+          userTurnTranscriptRecorder: recorder,
+        },
+        activeSession,
+        promptActiveSession,
+      });
+
+      const promptOptions = promptActiveSession.mock.calls[0]?.[1];
+      if (expectedKey) {
+        expect(promptOptions).toMatchObject({ persistedUserIdempotencyKey: expectedKey });
+      } else {
+        expect(promptOptions).not.toHaveProperty("persistedUserIdempotencyKey");
+      }
+    },
+  );
+
   it("submits runtime-only prompts without images and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();

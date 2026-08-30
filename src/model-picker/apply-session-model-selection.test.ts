@@ -574,6 +574,7 @@ describe("applySessionModelSelection", () => {
       runtime: { kind: "set", runtime: "openclaw" } as const,
       expected: "openclaw",
       runtimeChange: { kind: "set", runtime: "openclaw" },
+      agentRuntime: "openclaw",
     },
     {
       name: "set idempotently",
@@ -581,6 +582,7 @@ describe("applySessionModelSelection", () => {
       runtime: { kind: "set", runtime: "openclaw" } as const,
       expected: "openclaw",
       runtimeChange: { kind: "set", runtime: "openclaw" },
+      agentRuntime: "openclaw",
     },
     {
       name: "clear",
@@ -588,6 +590,7 @@ describe("applySessionModelSelection", () => {
       runtime: { kind: "clear" } as const,
       expected: undefined,
       runtimeChange: { kind: "clear" },
+      agentRuntime: "codex",
     },
     {
       name: "clear idempotently",
@@ -595,6 +598,7 @@ describe("applySessionModelSelection", () => {
       runtime: { kind: "clear" } as const,
       expected: undefined,
       runtimeChange: { kind: "clear" },
+      agentRuntime: "codex",
     },
     {
       name: "unchanged",
@@ -602,22 +606,27 @@ describe("applySessionModelSelection", () => {
       runtime: { kind: "unchanged" } as const,
       expected: "openclaw",
       runtimeChange: undefined,
+      agentRuntime: "openclaw",
     },
-  ])("supports runtime $name", async ({ initial, runtime, expected, runtimeChange }) => {
-    const sessionEntry = createEntry({ agentRuntimeOverride: initial });
-    const result = await applySessionModelSelection(
-      createParams({
-        sessionEntry,
-        request: { provider: "openai", model: "gpt-4o", isDefault: false, runtime },
-      }),
-    );
+  ])(
+    "supports runtime $name",
+    async ({ initial, runtime, expected, runtimeChange, agentRuntime }) => {
+      const sessionEntry = createEntry({ agentRuntimeOverride: initial });
+      const result = await applySessionModelSelection(
+        createParams({
+          sessionEntry,
+          request: { provider: "openai", model: "gpt-4o", isDefault: false, runtime },
+        }),
+      );
 
-    expect(result.status).toBe("applied");
-    if (result.status === "applied") {
-      expect(result.runtimeChange).toEqual(runtimeChange);
-    }
-    expect(sessionEntry.agentRuntimeOverride).toBe(expected);
-  });
+      expect(result.status).toBe("applied");
+      if (result.status === "applied") {
+        expect(result.runtimeChange).toEqual(runtimeChange);
+        expect(result.agentRuntime).toBe(agentRuntime);
+      }
+      expect(sessionEntry.agentRuntimeOverride).toBe(expected);
+    },
+  );
 
   it("rejects an incompatible runtime without mutation or side effects", async () => {
     const sessionEntry = createEntry();

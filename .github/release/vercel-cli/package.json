@@ -3,6 +3,18 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
+    "sandbox": "4.0.0",
     "vercel": "59.3.0"
+  },
+  "overrides": {
+    "@tootallnate/once@2.0.0": "2.0.1",
+    "ajv@8.6.3": "8.18.0",
+    "js-yaml@4.1.1": "4.3.1",
+    "minimatch@10.1.1": "10.2.6",
+    "path-to-regexp@6.1.0": "6.3.0",
+    "path-to-regexp@8.2.0 || 8.3.0": "8.4.0",
+    "smol-toml@1.5.2": "1.6.1",
+    "tar@7.5.7": "7.5.22",
+    "undici@5.28.4 || 5.29.0": "6.28.0"
   }
 }

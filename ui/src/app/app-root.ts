@@ -598,7 +598,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (runtime.documentMode?.kind === "approval") {
       return html`
         <openclaw-tooltip-provider>
-          ${gatewayUrlConfirmation} ${this.renderApprovalDocument(runtime)}
+          ${this.pendingGatewayUrl ? gatewayUrlConfirmation : this.renderApprovalDocument(runtime)}
         </openclaw-tooltip-provider>
       `;
     }

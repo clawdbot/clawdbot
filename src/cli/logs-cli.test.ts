@@ -214,6 +214,30 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
+  it.each(["plain", "json"])(
+    "reports a byte-budget re-anchor without claiming rotation in %s output",
+    async (mode) => {
+      callGatewayFromCli.mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        cursor: 8192,
+        size: 8192,
+        lines: ["line after skipped burst"],
+        truncated: true,
+        reset: true,
+        skippedBytes: 4096,
+      });
+
+      const stdoutWrites = captureStdoutWrites();
+      const stderrWrites = captureStderrWrites();
+
+      await runLogsCli(["logs", mode === "json" ? "--json" : "--plain"]);
+
+      const output = `${stdoutWrites.join("")}\n${stderrWrites.join("")}`;
+      expect(output).toContain("re-anchored (skipped 4096 bytes)");
+      expect(output).not.toContain("file rotated");
+    },
+  );
+
   it("uses the passive local Gateway client for implicit loopback log reads", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",

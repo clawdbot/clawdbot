@@ -299,7 +299,7 @@ openclaw tasks notify <lookup> state_changes
     - ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
     - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
     - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
-    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows.
+    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
 
     Completion cleanup is also runtime-aware:
 

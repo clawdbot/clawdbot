@@ -13,6 +13,7 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../agents/tools/cron-tool.types.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
@@ -30,6 +31,7 @@ export function resolveCodexScheduledToolProjectionFactory(
 export {
   buildCodexUserMcpServersThreadConfigPatch,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
+  buildCodexUserMcpServersThreadConfigPatchForRun,
   resolveCodexMcpToolOverridesForAgent,
 } from "../agents/cli-runner/bundle-mcp-codex.js";
 export {
@@ -54,7 +56,7 @@ export async function captureFinalCodexCronCreatorToolAllowlist(
   captureRef: CronToolsAllowCaptureRef,
   tools: readonly AnyAgentTool[],
 ) {
-  const [{ captureFinalEffectiveCronCreatorToolAllowlist: capture }, { getPluginToolMeta }] =
-    await Promise.all([import("../agents/tools/cron-tool.js"), import("../plugins/tools.js")]);
+  const { captureFinalEffectiveCronCreatorToolAllowlist: capture } =
+    await import("../agents/tools/cron-tool.js");
   return capture(target, captureRef, tools, (tool) => getPluginToolMeta(tool));
 }
