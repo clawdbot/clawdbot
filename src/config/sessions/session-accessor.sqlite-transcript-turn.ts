@@ -73,6 +73,7 @@ export async function appendExpectedSessionTranscriptTurn(
     sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
     touchSessionEntry?: boolean;
+    touchLastInteractionAt?: boolean;
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const initialEntry = options.initialSessionEntry
@@ -260,6 +261,7 @@ export async function appendExpectedSessionTranscriptTurn(
         sessionFile: options.sessionFile,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
         touchSessionEntry: options.touchSessionEntry,
+        touchLastInteractionAt: options.touchLastInteractionAt,
       });
       if (mutation) {
         sessionPatch.goal = goal;

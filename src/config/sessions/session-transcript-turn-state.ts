@@ -68,6 +68,7 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   sessionFile: string;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   touchSessionEntry?: boolean;
+  touchLastInteractionAt?: boolean;
 }): Partial<SessionEntry> {
   const appendedCount = params.appendedMessages.filter((message) => message.appended).length;
   const acceptedMessage =
@@ -91,6 +92,14 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
             params.sessionLifecyclePatch?.updatedAt ?? 0,
             touchUpdatedAt,
           ),
+          ...(params.touchLastInteractionAt === true
+            ? {
+                lastInteractionAt: Math.max(
+                  params.currentEntry.lastInteractionAt ?? 0,
+                  touchUpdatedAt,
+                ),
+              }
+            : {}),
         }
       : {}),
   };

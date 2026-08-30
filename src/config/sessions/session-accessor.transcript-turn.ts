@@ -363,6 +363,7 @@ async function persistExpectedSessionTranscriptTurn(
           sessionTurnMutation: options.sessionTurnMutation,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
+          touchLastInteractionAt: options.touchLastInteractionAt,
         },
       ),
   );

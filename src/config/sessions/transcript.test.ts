@@ -16,6 +16,7 @@ import {
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset-policy.js";
 import {
   loadTranscriptEvents,
   appendTranscriptEvent,
@@ -375,6 +376,86 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
       expect(saved?.updatedAt).toBe(appendedAt);
       expect(saved?.status).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews lastInteractionAt when mirroring a cron delivery", async () => {
+    const lastHumanAt = Date.parse("2026-05-18T06:00:00.000Z");
+    const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
+    const sessionFile = "cron-mirror-idle.jsonl";
+    await writeTranscriptStore({
+      sessionFile,
+      updatedAt: lastHumanAt,
+      lastInteractionAt: lastHumanAt,
+      sessionStartedAt: lastHumanAt,
+      status: "done",
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(appendedAt);
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "1 transaction awaits review.",
+        storePath: fixture.storePath(),
+        touchLastInteractionAt: true,
+      });
+
+      expect(result.ok).toBe(true);
+      const saved = loadSessionEntry({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      });
+      expect(saved?.updatedAt).toBe(appendedAt);
+      expect(saved?.lastInteractionAt).toBe(appendedAt);
+
+      const policy = resolveSessionResetPolicy({
+        sessionCfg: { reset: { mode: "idle", idleMinutes: 180 } },
+        resetType: "direct",
+      });
+      const freshness = evaluateSessionFreshness({
+        updatedAt: saved?.updatedAt ?? 0,
+        lastInteractionAt: saved?.lastInteractionAt,
+        sessionStartedAt: saved?.sessionStartedAt,
+        now: appendedAt + 19 * 60_000,
+        policy,
+      });
+      expect(freshness.fresh).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not renew lastInteractionAt for generic assistant transcript append", async () => {
+    const lastHumanAt = Date.parse("2026-05-18T06:00:00.000Z");
+    const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
+    const sessionFile = "generic-append-idle.jsonl";
+    await writeTranscriptStore({
+      sessionFile,
+      updatedAt: lastHumanAt,
+      lastInteractionAt: lastHumanAt,
+      sessionStartedAt: lastHumanAt,
+      status: "done",
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(appendedAt);
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Background bookkeeping only.",
+        storePath: fixture.storePath(),
+      });
+
+      expect(result.ok).toBe(true);
+      const saved = loadSessionEntry({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      });
+      expect(saved?.updatedAt).toBe(appendedAt);
+      expect(saved?.lastInteractionAt).toBe(lastHumanAt);
     } finally {
       vi.useRealTimers();
     }

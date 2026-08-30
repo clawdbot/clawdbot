@@ -413,6 +413,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  touchLastInteractionAt?: boolean;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -450,6 +451,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
+    ...(params.touchLastInteractionAt === true ? { touchLastInteractionAt: true } : {}),
     message: {
       role: "assistant" as const,
       content,
@@ -493,6 +495,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  touchLastInteractionAt?: boolean;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -612,6 +615,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
         touchSessionEntry: true,
+        ...(params.touchLastInteractionAt === true ? { touchLastInteractionAt: true } : {}),
         messages: [
           {
             message: preparedUnkeyedMessage,

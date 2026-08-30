@@ -3787,6 +3787,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       storePath: expect.stringContaining("cron-mirror-sessions.json"),
       idempotencyKey: expect.stringContaining("test-job"),
       config: params.cfgWithAgentDefaults,
+      touchLastInteractionAt: true,
     });
   });
 
@@ -3914,6 +3915,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       storePath: expect.stringContaining("cron-custom-session-mirror.json"),
       idempotencyKey: expect.stringContaining("test-job"),
       config: params.cfgWithAgentDefaults,
+      touchLastInteractionAt: true,
     });
   });
 

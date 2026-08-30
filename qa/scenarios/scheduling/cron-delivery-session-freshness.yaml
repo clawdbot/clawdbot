@@ -1,0 +1,255 @@
+title: Cron delivery preserves channel session freshness
+
+scenario:
+  id: cron-delivery-session-freshness
+  surface: cron
+  category: automation.chat-announce-delivery
+  objective: Verify a successful direct cron delivery refreshes the destination channel session before the operator replies.
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+      - channels.qa-channel-final-reply
+  successCriteria:
+    - An isolated cron job delivers a question to the QA channel.
+    - The question is mirrored into the destination channel session.
+    - The destination session lastInteractionAt advances when the mirror is committed.
+    - The operator reply is processed without a session reset.
+    - The reply retains the same durable session id and lifecycle revision.
+    - The mock provider receives both the mirrored cron question and the operator reply.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/reference/session-management-compaction.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/cron/isolated-agent/delivery-dispatch-awareness.ts
+    - src/config/sessions/transcript.ts
+    - src/config/sessions/session-transcript-turn-state.ts
+    - src/config/sessions/reset-policy.ts
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    providerMode: mock-openai
+    suiteIsolation: isolated
+    retryCount: 0
+    timeoutMs: 180000
+    summary: Deliver a cron question to the QA channel, wait past the idle threshold, reply, and verify the same session retains context.
+    config:
+      requiredProviderMode: mock-openai
+      channelId: qa-room
+      channelTitle: QA Room
+      senderId: qa-operator
+      idleMinutes: 1
+      cronDelayMs: 12000
+      questionMarker: QA-CRON-FRESHNESS-QUESTION
+      replyMarker: QA-CRON-FRESHNESS-REPLY
+  gatewayConfigPatch:
+    session:
+      reset:
+        mode: idle
+        idleMinutes: 1
+
+flow:
+  steps:
+    - name: delivers cron question and preserves destination session freshness
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: This scenario requires the deterministic mock-openai provider.
+
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+
+        - call: reset
+
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'channel', id: `channel:${config.channelId}` } })"
+
+        - set: initialOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.channelId
+              kind: channel
+              title:
+                ref: config.channelTitle
+            senderId:
+              ref: config.senderId
+            senderName: QA Operator
+            text: "Create the QA channel session. Reply exactly: QA-CRON-FRESHNESS-SEEDED"
+
+        - call: waitForOutboundMessage
+          saveAs: seededReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.channelId && String(candidate.text ?? '').includes('QA-CRON-FRESHNESS-SEEDED')"
+            - expr: liveTurnTimeoutMs(env, 60000)
+
+        - call: sleep
+          args:
+            - expr: "config.idleMinutes * 60000 + 5000"
+
+        - call: readRawQaSessionStore
+          saveAs: storeBeforeCron
+          args:
+            - ref: env
+
+        - set: sessionBeforeCron
+          value:
+            expr: "storeBeforeCron[sessionKey]"
+
+        - set: requestCursorBeforeCron
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+
+        - set: runStartedAt
+          value:
+            expr: "Date.now()"
+
+        - set: scheduledFor
+          value:
+            expr: "new Date(Date.now() + config.cronDelayMs).toISOString()"
+
+        - call: env.gateway.call
+          saveAs: addedJob
+          args:
+            - cron.add
+            - agentId: qa
+              name:
+                expr: "`qa-cron-freshness-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: true
+              schedule:
+                kind: at
+                at:
+                  ref: scheduledFor
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  expr: "`Remember this fact for the operator: ${config.questionMarker}. Reply exactly: ${config.questionMarker}`"
+              delivery:
+                mode: announce
+                channel: qa-channel
+                to:
+                  expr: "`channel:${config.channelId}`"
+            - timeoutMs: 30000
+
+        - set: jobId
+          value:
+            expr: "addedJob.id"
+
+        - call: waitForCronRunCompletion
+          saveAs: completedRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: runStartedAt
+              timeoutMs:
+                expr: "liveTurnTimeoutMs(env, 120000)"
+
+        - assert:
+            expr: "completedRun.status === 'ok' && completedRun.delivered === true && completedRun.deliveryStatus === 'delivered'"
+            message:
+              expr: "`cron delivery did not complete successfully: ${JSON.stringify(completedRun)}`"
+
+        - set: outboundAfterCron
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId)"
+
+        - assert:
+            expr: "outboundAfterCron.some((message) => String(message.text ?? '').includes(config.questionMarker))"
+            message: The cron question was not observed in the QA channel.
+
+        - call: readRawQaSessionStore
+          saveAs: storeAfterCron
+          args:
+            - ref: env
+
+        - set: sessionAfterCron
+          value:
+            expr: "storeAfterCron[sessionKey]"
+
+        - assert:
+            expr: "Boolean(sessionAfterCron?.sessionId)"
+            message:
+              expr: "`destination session was not persisted: ${JSON.stringify({ sessionKey, storeKeys: Object.keys(storeAfterCron) })}`"
+
+        - assert:
+            expr: "Number.isSafeInteger(sessionBeforeCron?.lastInteractionAt) && Number.isSafeInteger(sessionAfterCron?.lastInteractionAt) && sessionAfterCron.lastInteractionAt > sessionBeforeCron.lastInteractionAt"
+            message:
+              expr: "`lastInteractionAt did not advance with the cron mirror: ${JSON.stringify({ before: sessionBeforeCron?.lastInteractionAt, after: sessionAfterCron?.lastInteractionAt })}`"
+
+        - set: requestCursorBeforeReply
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.channelId
+              kind: channel
+              title:
+                ref: config.channelTitle
+            senderId:
+              ref: config.senderId
+            senderName: QA Operator
+            text:
+              expr: "`I acknowledge ${config.questionMarker}. Reply exactly: ${config.replyMarker}`"
+
+        - call: waitForOutboundMessage
+          saveAs: operatorReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.channelId && String(candidate.text ?? '').includes(config.replyMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+
+        - set: replyRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeReply}`)).filter((request) => String(request.allInputText ?? '').includes(config.questionMarker) && String(request.allInputText ?? '').includes(config.replyMarker))"
+
+        - assert:
+            expr: "replyRequests.length >= 1"
+            message:
+              expr: "`reply provider request did not retain both cron question and operator reply: ${JSON.stringify(replyRequests)}`"
+
+        - call: readRawQaSessionStore
+          saveAs: storeAfterReply
+          args:
+            - ref: env
+
+        - set: sessionAfterReply
+          value:
+            expr: "storeAfterReply[sessionKey]"
+
+        - assert:
+            expr: "sessionAfterReply?.sessionId === sessionAfterCron.sessionId"
+            message:
+              expr: "`durable session id changed: ${JSON.stringify({ before: sessionAfterCron?.sessionId, after: sessionAfterReply?.sessionId })}`"
+
+        - assert:
+            expr: "sessionAfterReply?.lifecycleRevision === sessionAfterCron.lifecycleRevision"
+            message:
+              expr: "`session reset occurred between cron delivery and reply: ${JSON.stringify({ before: sessionAfterCron?.lifecycleRevision, after: sessionAfterReply?.lifecycleRevision })}`"
+
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'cron-delivery-session-freshness', cronQuestion: config.questionMarker, operatorReply: config.replyMarker, lastInteractionAtAdvanced: sessionAfterCron.lastInteractionAt > sessionBeforeCron.lastInteractionAt, sameSessionId: sessionAfterReply.sessionId === sessionAfterCron.sessionId, sameLifecycleRevision: sessionAfterReply.lifecycleRevision === sessionAfterCron.lifecycleRevision, cronQuestionRetainedInContext: replyRequests.length >= 1, resetBetweenDeliveryAndReply: sessionAfterReply.lifecycleRevision !== sessionAfterCron.lifecycleRevision })"
