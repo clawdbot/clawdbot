@@ -178,23 +178,20 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
 ### Containers and package managers
 
 <CardGroup cols={2}>
+  <Card title="Docker" href="/install/docker" icon="container">
+    Containerized or headless deployments.
+  </Card>
+  <Card title="Podman" href="/install/podman" icon="container">
+    Rootless container alternative to Docker.
+  </Card>
+  <Card title="Nix" href="/install/nix" icon="snowflake">
+    Declarative install via Nix flake.
+  </Card>
   <Card title="Ansible" href="/install/ansible" icon="server">
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
-  </Card>
-  <Card title="ClawDock" href="/install/clawdock" icon="container">
-    Community Docker Compose setup and shell helpers.
-  </Card>
-  <Card title="Docker" href="/install/docker" icon="container">
-    Containerized or headless deployments.
-  </Card>
-  <Card title="Nix" href="/install/nix" icon="snowflake">
-    Declarative install via Nix flake.
-  </Card>
-  <Card title="Podman" href="/install/podman" icon="container">
-    Rootless container alternative to Docker.
   </Card>
 </CardGroup>
 
@@ -216,13 +213,12 @@ If you want managed startup after install:
 
 Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
 provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
-Northflank, Oracle Cloud, Raspberry Pi, and more), deploy declaratively on
-[Render](/install/render), or try the experimental [Cloudflare Containers](/install/cloudflare)
-template.
+Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
+[Render](/install/render).
 
 <CardGroup cols={3}>
-  <Card title="Cloudflare" href="/install/cloudflare">
-    Experimental Worker + Container deployment.
+  <Card title="VPS" href="/vps">
+    Pick a provider.
   </Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">
     Shared Docker steps.
@@ -230,23 +226,11 @@ template.
   <Card title="Kubernetes" href="/install/kubernetes">
     K8s deployment.
   </Card>
-  <Card title="macOS VM" href="/install/macos-vm">
-    Isolated local or hosted macOS deployment.
-  </Card>
-  <Card title="Upstash Box" href="/install/upstash">
-    Managed Linux host with SSH-tunneled access.
-  </Card>
-  <Card title="VPS" href="/vps">
-    Pick a provider.
-  </Card>
 </CardGroup>
 
-## Back up, update, migrate, or uninstall
+## Update, migrate, or uninstall
 
 <CardGroup cols={3}>
-  <Card title="Backups" href="/install/backups" icon="archive">
-    Create, verify, and restore state archives.
-  </Card>
   <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Keep OpenClaw up to date.
   </Card>
