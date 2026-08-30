@@ -4199,9 +4199,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Prerequisites
   - H2: Containerized gateway
+  - H3: Headless bootstrap
   - H3: Manual flow
   - H3: Upgrading container images
   - H3: Environment variables
+  - H3: Source-built images with selected plugins
   - H3: Observability
   - H3: Health checks
   - H3: LAN vs loopback
@@ -4210,6 +4212,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Bonjour / mDNS
   - H3: Storage and persistence
   - H3: Shell helpers (optional)
+  - H3: Image contents and security scanning
+  - H3: Weekly image refreshes
   - H3: Running on a VPS?
   - H2: Agent sandbox
   - H3: Quick enable
