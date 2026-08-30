@@ -754,48 +754,7 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["gemini", "openai", "xai"]);
   });
 
-  it("loads a provider doctor contract through its manifest alias", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-    mocks.createJiti.mockImplementation(() => () => ({
-      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
-        config: { ...cfg, repaired: true },
-        changes: ["repaired aliased provider model"],
-      }),
-    }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "xai",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: ["xai"],
-          providerAuthAliases: { "x-ai": "xai" },
-          doctorContract: { configRepair: true },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = {
-      tools: {
-        media: {
-          models: [{ provider: "x-ai", model: "grok-4-fast", capabilities: ["image"] }],
-        },
-      },
-    };
-    const pluginIds = collectRelevantDoctorPluginIds(config);
-
-    expect(pluginIds).toEqual(["x-ai"]);
-    expect(
-      applyPluginDoctorCompatibilityMigrations(config, { config, env: {}, pluginIds }),
-    ).toEqual({
-      config: { ...config, repaired: true },
-      changes: ["repaired aliased provider model"],
-    });
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads a plugin doctor contract when scoped by a contributed provider id", () => {
+  it("loads a plugin doctor contract when scoped by a contributed provider alias", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
@@ -826,7 +785,8 @@ describe("doctor-contract-registry module loader", () => {
           id: "ollama",
           rootDir: pluginRoot,
           channels: [],
-          providers: ["ollama", "ollama-cloud"],
+          providers: ["ollama"],
+          providerAuthAliases: { "ollama-cloud": "ollama" },
         },
       ],
       diagnostics: [],
