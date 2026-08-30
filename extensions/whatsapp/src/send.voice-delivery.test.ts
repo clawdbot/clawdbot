@@ -186,10 +186,22 @@ describe("WhatsApp gateway voice delivery", () => {
     expect(onDeliveryResult).toHaveBeenNthCalledWith(1, {
       messageId: "gateway-scoped-voice",
       toJid: "1555@s.whatsapp.net",
+      receipt: expect.objectContaining({
+        platformMessageIds: ["gateway-scoped-voice"],
+        parts: [
+          expect.objectContaining({ platformMessageId: "gateway-scoped-voice", kind: "media" }),
+        ],
+      }),
     });
     expect(onDeliveryResult).toHaveBeenNthCalledWith(2, {
       messageId: "gateway-scoped-caption",
       toJid: "1555@s.whatsapp.net",
+      receipt: expect.objectContaining({
+        platformMessageIds: ["gateway-scoped-caption"],
+        parts: [
+          expect.objectContaining({ platformMessageId: "gateway-scoped-caption", kind: "text" }),
+        ],
+      }),
     });
     expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",

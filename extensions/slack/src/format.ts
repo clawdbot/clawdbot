@@ -393,10 +393,11 @@ function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
     return text;
   }
   const tokenProjection = projectSlackMrkdwnVisibleText(text, "token");
-  const fallbackProjection = projectSlackMrkdwnVisibleText(text, "fallback");
+  // Only native date tokens have different modern-client and fallback text.
   if (
     !slackProjectionHasRoleHeader(tokenProjection) &&
-    !slackProjectionHasRoleHeader(fallbackProjection)
+    (!text.includes("<!date^") ||
+      !slackProjectionHasRoleHeader(projectSlackMrkdwnVisibleText(text, "fallback")))
   ) {
     return text;
   }

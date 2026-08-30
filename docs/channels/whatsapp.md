@@ -398,6 +398,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
+    - Markdown is converted before chunks are sent, preserving styles across message boundaries and counting WhatsApp formatting markers toward the limit
     - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>

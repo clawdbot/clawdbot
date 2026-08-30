@@ -440,10 +440,9 @@ export function markdownToWhatsAppChunks(
   }
   const { ir, escapedMarkers } = prepareWhatsAppMarkdown(text, tableMode);
   const render = (chunk: MarkdownIR) => renderWhatsAppMarkdownIR(chunk, escapedMarkers);
-  const rendered = render(ir);
   let chunks =
     ir.styles.length === 0 && ir.links.length === 0
-      ? chunkMarkdownTextWithMode(rendered, limit, chunkMode)
+      ? chunkMarkdownTextWithMode(render(ir), limit, chunkMode)
       : splitWhatsAppIRForChunkMode(ir, limit, chunkMode).flatMap((source) =>
           renderMarkdownIRChunksWithinLimit({
             ir: source,
