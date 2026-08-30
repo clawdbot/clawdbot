@@ -354,6 +354,36 @@ describe("resolveNpmSpecMetadata", () => {
     });
   });
 
+  it("reports exact-version drift from npm object metadata as the same hard selector error", async () => {
+    mockPackCommandResult({
+      stdout: JSON.stringify({ ...npmViewMetadata, version: "2026.6.10" }),
+    });
+
+    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@2026.6.11" })).resolves.toEqual({
+      ok: false,
+      error:
+        "npm metadata resolved @openclaw/codex@2026.6.10, but expected exact version 2026.6.11 for @openclaw/codex@2026.6.11",
+    });
+  });
+
+  it("accepts an exact-version match from npm 12 array metadata", async () => {
+    mockPackCommandResult({
+      stdout: JSON.stringify([
+        { ...npmViewMetadata, version: "2026.6.10" },
+        npmViewMetadata,
+        { ...npmViewMetadata, version: "2026.6.12" },
+      ]),
+    });
+
+    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@2026.6.11" })).resolves.toEqual({
+      ok: true,
+      metadata: expect.objectContaining({
+        version: "2026.6.11",
+        resolvedSpec: "@openclaw/codex@2026.6.11",
+      }),
+    });
+  });
+
   it("normalizes nested dist metadata", async () => {
     mockPackCommandResult({
       stdout: JSON.stringify({
