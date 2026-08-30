@@ -3,22 +3,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
+import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
+  cleanupSubagentRegistryPersistenceTest,
+  expectDeferredSubagentAnnouncement,
+  gateSubagentRequesterSettlement,
+  settleSubagentRegistryPersistenceWork,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -134,14 +139,6 @@ describe("subagent registry persistence", () => {
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
-    return path.join(tempStateDir, "state", "openclaw.sqlite");
-  };
-
-  const readPersistedRun = async <T>(
-    _registryPath: string,
-    runId: string,
-  ): Promise<T | undefined> => {
-    return loadSubagentRegistryFromSqlite().get(runId) as T | undefined;
   };
 
   const readPersistedRegistry = () => ({
@@ -224,12 +221,12 @@ describe("subagent registry persistence", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    testing.setDepsForTest();
-    resetSubagentRegistryForTests({ persist: false });
-    await cleanupSessionStateForTest();
     if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await cleanupSubagentRegistryPersistenceTest({
+        stateDir: tempStateDir,
+        resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
+        resetDeps: () => testing.setDepsForTest(),
+      });
       tempStateDir = null;
     }
     envSnapshot.restore();
@@ -610,140 +607,121 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("retries cleanup announce after a failed announce", async () => {
-    const persisted = createPersistedEndedRun({
+  it.each([
+    {
+      name: "retries cleanup announce after a failed announce",
       runId: "run-3",
-      childSessionKey: "agent:main:subagent:three",
-      task: "retry announce",
       cleanup: "keep",
-    });
-    const registryPath = await writePersistedRegistry(persisted);
-
-    announceSpy.mockResolvedValueOnce("retryable");
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      const afterFirst = await readPersistedRun<{
-        cleanupHandled?: boolean;
-        cleanupCompletedAt?: number;
-      }>(registryPath, "run-3");
-      return (
-        announceSpy.mock.calls.length === 1 &&
-        afterFirst?.cleanupHandled === false &&
-        afterFirst.cleanupCompletedAt === undefined
-      );
-    });
-
-    expect(announceSpy).toHaveBeenCalledTimes(1);
-    const afterFirst = await readPersistedRun<{
-      cleanupHandled?: boolean;
-      cleanupCompletedAt?: number;
-    }>(registryPath, "run-3");
-    expect(afterFirst?.cleanupHandled).toBe(false);
-    expect(afterFirst?.cleanupCompletedAt).toBeUndefined();
-
-    announceSpy.mockResolvedValueOnce("delivered");
-    const beforeRetry = Date.now();
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      const afterSecond = await readPersistedRun<{
-        cleanupCompletedAt?: number;
-      }>(registryPath, "run-3");
-      return announceSpy.mock.calls.length === 2 && afterSecond?.cleanupCompletedAt != null;
-    });
-
-    expect(announceSpy).toHaveBeenCalledTimes(2);
-    const afterSecond = readPersistedRegistry();
-    expect(
-      expectDefined(afterSecond.runs["run-3"], 'afterSecond.runs["run-3"] test invariant')
-        .cleanupCompletedAt,
-    ).toBeGreaterThanOrEqual(beforeRetry);
-  });
-
-  it("retries cleanup announce after announce flow rejects", async () => {
-    const persisted = createPersistedEndedRun({
+      reject: false,
+    },
+    {
+      name: "retries cleanup announce after announce flow rejects",
       runId: "run-reject",
-      childSessionKey: "agent:main:subagent:reject",
-      task: "reject announce",
       cleanup: "keep",
-    });
-    const registryPath = await writePersistedRegistry(persisted);
-
-    announceSpy.mockRejectedValueOnce(new Error("announce boom"));
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      const afterFirst = await readPersistedRun<{
-        cleanupHandled?: boolean;
-        cleanupCompletedAt?: number;
-      }>(registryPath, "run-reject");
-      return (
-        announceSpy.mock.calls.length === 1 &&
-        afterFirst?.cleanupHandled === false &&
-        afterFirst.cleanupCompletedAt === undefined
-      );
-    });
-
-    expect(announceSpy).toHaveBeenCalledTimes(1);
-    const afterFirst = readPersistedRegistry();
-    expect(
-      expectDefined(afterFirst.runs["run-reject"], 'afterFirst.runs["run-reject"] test invariant')
-        .cleanupHandled,
-    ).toBe(false);
-    expect(
-      expectDefined(afterFirst.runs["run-reject"], 'afterFirst.runs["run-reject"] test invariant')
-        .cleanupCompletedAt,
-    ).toBeUndefined();
-
-    announceSpy.mockResolvedValueOnce("delivered");
-    const beforeRetry = Date.now();
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      const afterSecond = await readPersistedRun<{
-        cleanupCompletedAt?: number;
-      }>(registryPath, "run-reject");
-      return announceSpy.mock.calls.length === 2 && afterSecond?.cleanupCompletedAt != null;
-    });
-
-    expect(announceSpy).toHaveBeenCalledTimes(2);
-    const afterSecond = readPersistedRegistry();
-    expect(
-      expectDefined(afterSecond.runs["run-reject"], 'afterSecond.runs["run-reject"] test invariant')
-        .cleanupCompletedAt,
-    ).toBeGreaterThanOrEqual(beforeRetry);
-  });
-
-  it("keeps delete-mode runs retryable when announce is deferred", async () => {
-    const persisted = createPersistedEndedRun({
+      reject: true,
+    },
+    {
+      name: "keeps delete-mode runs retryable when announce is deferred",
       runId: "run-4",
-      childSessionKey: "agent:main:subagent:four",
-      task: "deferred announce",
       cleanup: "delete",
+      reject: false,
+    },
+  ] as const)("$name", async ({ runId, cleanup, reject }) => {
+    const childSessionKey = `agent:main:subagent:${runId}`;
+    await writePersistedRegistry(
+      createPersistedEndedRun({ runId, childSessionKey, task: "retry announce", cleanup }),
+    );
+    const announcement = createDeferred<"retryable">();
+    const releaseAnnouncement = () =>
+      reject ? announcement.reject(new Error("announce boom")) : announcement.resolve("retryable");
+    const settlement = gateSubagentRequesterSettlement(
+      subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled,
+    );
+    testing.setDepsForTest({
+      ...subagentRegistryDeps,
+      maybeWakeRequesterAfterAllChildrenSettled: settlement.run,
     });
-    const registryPath = await writePersistedRegistry(persisted);
-
-    announceSpy.mockResolvedValueOnce("retryable");
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      const afterFirst = await readPersistedRun<{ cleanupHandled?: boolean }>(
-        registryPath,
-        "run-4",
+    announceSpy.mockImplementationOnce(() => announcement.promise);
+    let retryReady = false;
+    let readiness: Promise<void> | undefined;
+    try {
+      restartRegistry();
+      await vi.waitFor(
+        () => expect(announceSpy, "first announcement admitted").toHaveBeenCalledOnce(),
+        {
+          timeout: 5_000,
+          interval: 1,
+        },
       );
-      return announceSpy.mock.calls.length === 1 && afterFirst?.cleanupHandled === false;
-    });
+      readiness = vi
+        .waitFor(
+          () => {
+            expectDeferredSubagentAnnouncement(loadSubagentRegistryFromSqlite().get(runId), runId);
+          },
+          { timeout: 5_000, interval: 1 },
+        )
+        .then(() => {
+          retryReady = true;
+        });
+      await vi.dynamicImportSettled();
+      const held = loadSubagentRegistryFromSqlite().get(runId);
+      expect(held?.cleanupHandled, "serialized lock is not retry readiness").toBe(false);
+      expect(
+        getSubagentRunByChildSessionKey(childSessionKey)?.cleanupHandled,
+        "announcement still owns cleanup",
+      ).toBe(true);
+      expect(
+        held?.delivery?.attemptCount,
+        "no deferral before announcement settles",
+      ).toBeUndefined();
+      expect(held?.delivery?.payload).toBeUndefined();
+      expect(held?.delivery?.nextAttemptAt).toBeUndefined();
+      expect(retryReady, "retry readiness must remain pending while announcement is held").toBe(
+        false,
+      );
+      releaseAnnouncement();
+      await readiness;
+      expect(announceSpy, "first attempt deferred").toHaveBeenCalledOnce();
+      await settleSubagentRegistryPersistenceWork();
 
-    expect(announceSpy).toHaveBeenCalledTimes(1);
-    const afterFirst = await readPersistedRun<{ cleanupHandled?: boolean }>(registryPath, "run-4");
-    expect(afterFirst?.cleanupHandled).toBe(false);
-
-    announceSpy.mockResolvedValueOnce("delivered");
-    restartRegistry();
-    await waitForRegistryWork(async () => {
+      announceSpy.mockResolvedValueOnce("delivered");
+      const beforeRetry = Date.now();
+      restartRegistry();
+      await vi.waitFor(
+        () => expect(settlement.run, "retry reached requester settlement").toHaveBeenCalledOnce(),
+        {
+          timeout: 5_000,
+          interval: 1,
+        },
+      );
+      expect(announceSpy, "explicit retry delivered").toHaveBeenCalledTimes(2);
+      const delivered = loadSubagentRegistryFromSqlite().get(runId);
+      expect(delivered, "delivery precedes requester settlement").toMatchObject({
+        delivery: { status: "delivered" },
+      });
+      expect(delivered?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
+      expect(
+        getActiveGatewayRootWorkCount(),
+        "held settlement still owns root work",
+      ).toBeGreaterThan(0);
+      if (cleanup === "delete") {
+        expect(
+          delivered?.requesterSettleWake?.retireAfterSettle,
+          "delete waits for real settlement",
+        ).toBe(true);
+      }
+      await settlement.release();
+      expect(settlement.run).toHaveBeenCalledOnce();
       const afterSecond = readPersistedRegistry();
-      return announceSpy.mock.calls.length === 2 && afterSecond.runs?.["run-4"] === undefined;
-    });
-
-    expect(announceSpy).toHaveBeenCalledTimes(2);
-    const afterSecond = readPersistedRegistry();
-    expect(afterSecond.runs?.["run-4"]).toBeUndefined();
+      if (cleanup === "delete") {
+        expect(afterSecond.runs[runId], "settled delete retires its durable row").toBeUndefined();
+      } else {
+        expect(afterSecond.runs[runId]?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
+      }
+    } finally {
+      releaseAnnouncement();
+      await Promise.all([announcement.promise.catch(() => {}), readiness, settlement.release()]);
+    }
   });
 
   it("reconciles orphaned restored runs by pruning them from registry", async () => {

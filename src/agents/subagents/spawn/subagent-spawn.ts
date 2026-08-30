@@ -95,6 +95,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const assertActive = ctx.assertActive;
   const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
@@ -447,6 +448,9 @@ export async function spawnSubagentDirect(
         return { contextEnginePreparation: result.preparation };
       },
       async dispatchTurn() {
+        // Initialize returned its rollback handle. Refusal here follows dispatch
+        // cleanup instead of losing that handle through initialize failure.
+        assertActive?.();
         if (params.collect) {
           return { runId: childIdem };
         }
@@ -524,6 +528,7 @@ export async function spawnSubagentDirect(
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
+        assertActive?.();
         if (params.collect) {
           const latestAdmission = resolveAdmission();
           if (!latestAdmission.ok) {

@@ -3335,6 +3335,7 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("deletes collector session resources while retaining the waitable record", async () => {
     const entry = createRunEntry({
+      requesterTurnRunId: "run-requester",
       cleanup: "delete",
       expectsCompletionMessage: false,
       collect: true,
@@ -3379,6 +3380,9 @@ describe("subagent registry lifecycle hardening", () => {
     expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry);
     expect(runs.get(entry.runId)).toBe(entry);
     expect(entry.collectorCompletion).toEqual({ status: "done" });
+    expect(entry.completion?.required).toBe(false);
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(entry.retireAfterRequesterTurn).toBeUndefined();
   });
 
   it("treats accepted structured output as success for a tool-only collector turn", async () => {
@@ -4942,49 +4946,57 @@ describe("requester settle wake trigger", () => {
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
   });
 
-  it("retains a delete-mode child after no-wake until its requester turn settles", async () => {
-    const entry = createRunEntry({
-      requesterTurnRunId: "run-requester",
-      cleanup: "delete",
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "delete-mode findings" },
-    });
-    const runs = new Map([[entry.runId, entry]]);
-    const settleWake = vi.fn(
-      async (
-        params: Parameters<
-          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
-        >[0],
-      ) => {
-        params.completeBatch([entry.runId]);
-        return false;
-      },
-    );
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const controller = createLifecycleController({
-      entry,
-      runs,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      runSubagentAnnounceFlow,
-    });
+  it.each([true, false, undefined])(
+    "holds delete cleanup for requester settlement only with completion messages: %s",
+    async (expectsCompletionMessage) => {
+      const entry = createRunEntry({
+        requesterTurnRunId: "run-requester",
+        cleanup: "delete",
+        expectsCompletionMessage,
+        completion: {
+          required: expectsCompletionMessage === true,
+          resultText: "delete-mode findings",
+        },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const settleWake = vi.fn(
+        async (
+          params: Parameters<
+            LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+          >[0],
+        ) => {
+          params.completeBatch([entry.runId]);
+          return false;
+        },
+      );
+      const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+        runSubagentAnnounceFlow,
+      });
 
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
+      await completeRun(controller, entry, { triggerCleanup: true });
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
 
-    // The no-wake decision completed, but the spawning turn can still yield.
-    expect(entry.completion?.resultText).toBe("delete-mode findings");
-    expect(runs.has(entry.runId)).toBe(true);
-    expect(entry.requesterSettleWake).toBeUndefined();
-    expect(entry.retireAfterRequesterTurn).toBe(true);
-    expect(settleWake).toHaveBeenCalledWith(
-      expect.objectContaining({
-        settledEntry: expect.objectContaining({
-          runId: entry.runId,
-          completion: expect.objectContaining({ resultText: "delete-mode findings" }),
+      // Only announcing children need retention in case the spawning turn yields.
+      expect(entry.completion?.resultText).toBe("delete-mode findings");
+      expect(runs.has(entry.runId)).toBe(expectsCompletionMessage === true);
+      expect(runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+      expect(entry.retireAfterRequesterTurn).toBe(
+        expectsCompletionMessage === true ? true : undefined,
+      );
+      expect(settleWake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settledEntry: expect.objectContaining({
+            runId: entry.runId,
+            completion: expect.objectContaining({ resultText: "delete-mode findings" }),
+          }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it("retains a reconciled killed row until the settle wake resolves", () => {
     const entry = createRunEntry({

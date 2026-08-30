@@ -36,6 +36,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import { abortControlledSubagents, descendantAbortError } from "./chat-abort-runtime.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -310,12 +311,26 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const abortAgentId = requestedGlobalAgentId ?? activeRunAgentId;
     // Controller-backed runs must keep the requester checks and lifecycle cleanup below.
     if (embeddedRun && !activeRun) {
-      const aborted = embeddedRun.abort();
-      respond(true, {
-        ok: true,
-        abortedRunId: aborted ? embeddedRun.runId : null,
-        status: aborted ? "aborted" : "no-active-run",
+      let aborted = false;
+      const descendants = await abortControlledSubagents({
+        cfg,
+        sessionKey: embeddedRun.sessionKey ?? canonicalKey,
+        agentId: targetAgentId,
+        requesterTurnRunId: embeddedRun.runId,
+        // A captured handle may decline Stop. Hold its children before signaling,
+        // but authorize their cancellation only when this exact parent accepts.
+        beforeKill: () => (aborted = embeddedRun.abort()),
       });
+      const error = descendantAbortError(descendants, "Parent run");
+      if (error) {
+        respond(false, undefined, error);
+      } else {
+        respond(true, {
+          ok: true,
+          abortedRunId: aborted ? embeddedRun.runId : null,
+          status: aborted ? "aborted" : "no-active-run",
+        });
+      }
       if (aborted) {
         emitSessionsChanged(context, {
           sessionKey: canonicalKey,

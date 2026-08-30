@@ -143,12 +143,13 @@ export function projectInFlightRunSnapshot(params: {
 
 type RegisteredChatAbortController = {
   controller: AbortController;
-  registered: boolean;
-  entry?: ChatAbortControllerEntry;
   markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: () => void;
-};
+} & (
+  | { registered: true; entry: ChatAbortControllerEntry }
+  | { registered: false; entry?: undefined }
+);
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);

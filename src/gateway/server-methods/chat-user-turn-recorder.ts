@@ -26,7 +26,6 @@ type GatewayChatUserTurnController = {
   persistBestEffort: () => Promise<void>;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
-  setAcceptedSessionId: (sessionId: string) => void;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
@@ -81,7 +80,6 @@ export function createGatewayChatUserTurnController(params: {
         }),
       )
     : Promise.resolve(baseInput);
-  let acceptedSessionId = admission.admittedSessionId;
   const recorder = createUserTurnTranscriptRecorder({
     ...(request.goalOperation
       ? {
@@ -101,7 +99,7 @@ export function createGatewayChatUserTurnController(params: {
         session.sessionLoadOptions,
       );
       const targetEntry = entry ?? admission.initialSessionEntry;
-      if (!targetEntry?.sessionId || targetEntry.sessionId !== acceptedSessionId) {
+      if (!targetEntry?.sessionId || targetEntry.sessionId !== admission.sessionBinding.sessionId) {
         return undefined;
       }
       return {
@@ -146,9 +144,6 @@ export function createGatewayChatUserTurnController(params: {
     },
     recorder,
     replyContextFieldsPromise,
-    setAcceptedSessionId: (sessionId) => {
-      acceptedSessionId = sessionId;
-    },
     setInputPromise: (input) => {
       const previousInputPromise = inputPromise;
       inputPromise = Promise.all([previousInputPromise, input]).then(([previous, next]) => ({

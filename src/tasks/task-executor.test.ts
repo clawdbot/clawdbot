@@ -138,7 +138,11 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
-      killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
+      killSubagentRunAdmin: async (params) => {
+        const result = await hoisted.killSubagentRunAdminMock(params);
+        params.onResult?.(result);
+        return result;
+      },
     });
     try {
       await run(stateDir);
@@ -1156,6 +1160,7 @@ describe("task-executor", () => {
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
         expectedRunId: "run-subagent-cancel",
+        onResult: expect.any(Function),
       });
     });
   });

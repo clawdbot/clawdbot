@@ -21,6 +21,7 @@ import {
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -110,7 +111,7 @@ const completeRequesterSettleWakeBatch = (
       }
       settledDeliveries.push(entry);
     }
-    if (entry.requesterTurnRunId) {
+    if (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) {
       entry.retireAfterRequesterTurn =
         entry.retireAfterRequesterTurn === true ||
         entry.requesterSettleWake?.retireAfterSettle === true
@@ -135,6 +136,11 @@ const completeRequesterSettleWakeBatch = (
       entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
     });
     throw error;
+  }
+  for (const [runId, entry] of entries) {
+    if (!params.runs.has(runId)) {
+      subagentRuns.confirmRetirement(entry);
+    }
   }
   for (const entry of settledDeliveries) {
     if (outcome?.delivered) {
@@ -512,6 +518,7 @@ export function completeCleanupBookkeeping(
         params.runs.set(cleanupParams.runId, cleanupParams.entry);
         throw error;
       }
+      subagentRuns.confirmRetirement(cleanupParams.entry);
       clearGatewayContextResolver(cleanupParams.entry);
       scheduleCleanupTails({ allowRetiredRow: true, isDeleteCleanup });
       retryDeferredCompletedAnnounces(cleanupParams.runId);

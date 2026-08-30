@@ -157,7 +157,7 @@ export function createSubagentRegistryRestorer(config: {
       resolveSubagentRequesterAgentId(cfg, entry);
     for (const entry of runs.values()) {
       const requesterTurnRunId = entry.requesterTurnRunId?.trim();
-      if (!requesterTurnRunId) {
+      if (!requesterTurnRunId || entry.expectsCompletionMessage !== true) {
         continue;
       }
       const requesterIdentity = `${resolveRequesterAgentId(entry) ?? "unknown"}\0${entry.requesterSessionKey}`;

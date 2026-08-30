@@ -1,4 +1,5 @@
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 /**
  * Subagent registry state persistence bridge.
  *
@@ -226,6 +227,7 @@ export function restoreSubagentRunsFromDisk(params: {
       continue;
     }
     params.runs.set(runId, entry);
+    subagentRuns.commitOwnership(entry);
     added += 1;
   }
   return added;

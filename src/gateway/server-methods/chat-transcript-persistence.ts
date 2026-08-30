@@ -12,6 +12,7 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -257,6 +258,8 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
 }
 
 export async function appendAssistantTranscriptMessage(params: {
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   sessionKey: string;
   message: string;
   label?: string;
@@ -283,6 +286,8 @@ export async function appendAssistantTranscriptMessage(params: {
     return { ok: false, error: "transcript not found" };
   }
   const appended = await appendInjectedAssistantMessageToTranscript({
+    expectedSessionId: params.expectedSessionId,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     storePath: params.storePath,

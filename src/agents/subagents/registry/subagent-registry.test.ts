@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type {
   SessionAccessScope,
@@ -53,6 +54,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -1145,16 +1147,36 @@ describe("subagent registry seam flow", () => {
       completion: { required: false },
     });
 
-    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
-    expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
-    expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
-    expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
-
-    expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
-    expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
-      status: "killed",
+    const launch = createDeferred();
+    const started = createDeferred();
+    enqueueSwarmRun({
+      groupId: "delayed-acceptance",
+      runId,
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        started.resolve();
+        await launch.promise;
+      },
+      onStartFailure: () => true,
     });
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    try {
+      await started.promise;
+      expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
+      expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
+      expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
+
+      expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
+      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
+        status: "killed",
+      });
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    } finally {
+      launch.resolve();
+      await launch.promise;
+      releaseSwarmRun(runId);
+    }
   });
 
   it("records early structured output through the child session identity", () => {
