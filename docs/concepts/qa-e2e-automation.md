@@ -1135,10 +1135,14 @@ requires adapters to use the two cleanup phases; it does not change broker TTLs
 or provide a durable guarantee after the QA parent or host is lost.
 
 Temporary runtime and staged-plugin directories are removed independently, and
-removal failures are reported with redacted diagnostics. A cleanup error can
+cleanup failures are reported with redacted diagnostics. Before removing the
+runtime, the QA parent closes that root's auth readers and agent databases,
+releases their leases while shared state is still open, then closes the shared
+database. Other QA roots remain untouched. A close failure retains the runtime
+for retry while staged-plugin removal is still attempted. A cleanup error can
 therefore leave isolated runtime or auth state on disk even when process
-termination is confirmed. Correct the filesystem problem and retry `stop()` on
-the retained lifecycle owner; confirmed termination still permits after-stop
+termination is confirmed. Correct the reported problem and retry `stop()` on the
+retained lifecycle owner; confirmed termination still permits after-stop
 credential cleanup.
 
 Payload shapes the broker validates on `admin/add`:
