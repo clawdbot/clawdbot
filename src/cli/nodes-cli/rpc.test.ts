@@ -131,8 +131,8 @@ describe("node inventory resolution", () => {
     ).toEqual(["node.list"]);
   });
 
-  it("rejects an explicit empty --timeout instead of silently defaulting the transport", async () => {
-    await expect(resolveCliNode({ timeout: "" }, "some-node")).rejects.toThrow(/Invalid --timeout/);
+  it.each(["", " \t "])("rejects explicit blank --timeout %j before transport", async (timeout) => {
+    await expect(resolveCliNode({ timeout }, "some-node")).rejects.toThrow(/Invalid --timeout/);
     expect(gatewayMocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
   });
 });
