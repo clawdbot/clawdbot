@@ -34,6 +34,7 @@ import {
   ComputerUseCapabilityDescriptorSchema,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
@@ -99,13 +100,6 @@ export type WorkerLaunchDescriptor = WorkerLaunchPlan & {
   connectionEndpoint: WorkerConnectionEndpoint;
 };
 
-function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => key in value) && Object.keys(value).every((key) => allowed.has(key))
-  );
-}
-
 function isIdentifier(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -130,7 +124,7 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["allowedToolNames"]) ||
+    !hasExactOwnKeys(value, ["allowedToolNames"]) ||
     !Array.isArray(value.allowedToolNames) ||
     !value.allowedToolNames.every(isWorkerToolName) ||
     new Set(value.allowedToolNames).size !== value.allowedToolNames.length
@@ -143,7 +137,7 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
 function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescriptor | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["cdpUrl", "launcherPath"]) ||
+    !hasExactOwnKeys(value, ["cdpUrl", "launcherPath"]) ||
     typeof value.cdpUrl !== "string" ||
     typeof value.launcherPath !== "string" ||
     !isAbsoluteHostPath(value.launcherPath)
@@ -181,7 +175,7 @@ function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescri
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(
+    !hasExactOwnKeys(
       value,
       [
         "agentId",
@@ -257,7 +251,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     toolAuthority.allowedToolNames.includes("computer") !== (value.computer !== undefined) ||
     (value.computer !== undefined &&
       (!isRecord(value.computer) ||
-        !hasExactKeys(value.computer, ["nodeId", "computerUse"]) ||
+        !hasExactOwnKeys(value.computer, ["nodeId", "computerUse"]) ||
         !isIdentifier(value.computer.nodeId) ||
         !Value.Check(ComputerUseCapabilityDescriptorSchema, value.computer.computerUse)))
   ) {
@@ -271,7 +265,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   if (
     !isRecord(value.transcript) ||
-    !hasExactKeys(value.transcript, ["baseLeafId", "nextSeq"]) ||
+    !hasExactOwnKeys(value.transcript, ["baseLeafId", "nextSeq"]) ||
     (value.transcript.baseLeafId !== null && !isIdentifier(value.transcript.baseLeafId)) ||
     !isSafeSequence(value.transcript.nextSeq, 1)
   ) {
@@ -279,7 +273,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   if (
     !isRecord(value.liveEvents) ||
-    !hasExactKeys(value.liveEvents, ["ackedSeq", "nextSeq"]) ||
+    !hasExactOwnKeys(value.liveEvents, ["ackedSeq", "nextSeq"]) ||
     !isSafeSequence(value.liveEvents.ackedSeq, 0) ||
     !isSafeSequence(value.liveEvents.nextSeq, 1) ||
     value.liveEvents.nextSeq !== value.liveEvents.ackedSeq + 1
@@ -345,7 +339,7 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
 export function parseWorkerLaunchPlan(value: unknown): WorkerLaunchPlan {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["version", "admission", "assignment"]) ||
+    !hasExactOwnKeys(value, ["version", "admission", "assignment"]) ||
     value.version !== LAUNCH_VERSION
   ) {
     throw new Error("invalid worker launch descriptor");
@@ -376,7 +370,7 @@ export function completeWorkerLaunchDescriptor(
 export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescriptor {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["version", "connectionEndpoint", "admission", "assignment"])
+    !hasExactOwnKeys(value, ["version", "connectionEndpoint", "admission", "assignment"])
   ) {
     throw new Error("invalid worker launch descriptor");
   }

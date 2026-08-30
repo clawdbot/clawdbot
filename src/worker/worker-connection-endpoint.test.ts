@@ -72,6 +72,14 @@ describe("worker connection endpoint", () => {
     });
   });
 
+  it("rejects endpoint kinds inherited from the prototype", () => {
+    const endpoint = Object.assign(Object.create({ kind: "unix" }) as Record<string, unknown>, {
+      socketPath: "/tmp/openclaw-worker/gateway.sock",
+    });
+
+    expect(parseWorkerConnectionEndpoint(endpoint)).toBeUndefined();
+  });
+
   it.each([
     `sha256:${fingerprint.toUpperCase()}`,
     fingerprint.toUpperCase(),
