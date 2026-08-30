@@ -1,7 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -11,7 +10,6 @@ import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
   readWorkspaceTransferPaths,
-  runWorkspaceInventoryCommandToFile,
 } from "./workspace-sync-inventory.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
@@ -73,46 +71,4 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
     root,
   };
-}
-
-export async function prepareNodeWorkspaceTransferPack(params: {
-  root: string;
-  baseCommit: string;
-  temporaryRoot: string;
-  signal: AbortSignal;
-}): Promise<string> {
-  const { root, baseCommit, signal } = params;
-  const objectListPath = path.join(params.temporaryRoot, `${baseCommit}.objects`);
-  const packPath = path.join(params.temporaryRoot, `${baseCommit}.pack`);
-  try {
-    await runWorkspaceInventoryCommandToFile({
-      argv: [
-        "git",
-        "-C",
-        root,
-        "rev-list",
-        "--objects",
-        "--no-object-names",
-        `${baseCommit}^{tree}`,
-      ],
-      outputPath: objectListPath,
-      signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-    });
-    await fsp.appendFile(objectListPath, `${baseCommit}\n`);
-    await runWorkspaceInventoryCommandToFile({
-      argv: ["git", "-C", root, "pack-objects", "--stdout"],
-      inputPath: objectListPath,
-      outputPath: packPath,
-      signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-      maxOutputBytes: MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
-    });
-    return packPath;
-  } catch (error) {
-    // Exclusive output creation must be retryable after a failed download.
-    await fsp.rm(objectListPath, { force: true });
-    await fsp.rm(packPath, { force: true });
-    throw error;
-  }
 }

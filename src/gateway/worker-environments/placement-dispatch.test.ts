@@ -98,6 +98,7 @@ describe("worker placement dispatch", () => {
       expect.stringMatching(/^session-dispatch:/u),
       "beast",
       REQUEST.executionMode,
+      path.join(root, "workspace"),
     );
   });
 

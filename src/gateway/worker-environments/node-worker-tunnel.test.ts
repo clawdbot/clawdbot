@@ -22,6 +22,7 @@ import {
 } from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
@@ -48,7 +49,8 @@ describe("node worker tunnel manager", () => {
   it.each([
     ["gateway-push", true],
     ["published-origin", false],
-  ])("preserves the Gateway Git author through %s workspaces", async (_, dirty) => {
+    ["prepared-project", false],
+  ])("preserves the Gateway Git author through %s workspaces", async (syncPath, dirty) => {
     const localPath = tempDirs.make("node-worker-git-author-gateway-");
     const remoteWorkspaceDir = path.join(tempDirs.make("node-worker-git-author-remote-"), "worker");
     const gitEnv: NodeJS.ProcessEnv = {
@@ -142,8 +144,23 @@ describe("node worker tunnel manager", () => {
         sessionId: "session-1",
         generation: 1,
         gitAuthor: { name: "Configured Gateway Author" },
+        ...(syncPath === "prepared-project" ? { projectKey: "a".repeat(64) } : {}),
       }),
     ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
+
+    if (syncPath === "prepared-project") {
+      const commands = vi
+        .mocked(nodeTransport.invoke)
+        .mock.calls.map(([call]) => call.params as NodeWorkerWorkspaceExecInput);
+      expect(
+        commands.some(
+          (command) => command.argv.includes("clone") || command.argv.includes("fetch"),
+        ),
+      ).toBe(false);
+      expect(commands.find((command) => command.transfer)?.transfer).toMatchObject({
+        seedKey: workerProjectSeedKey({ key: "a".repeat(64), baseCommit }),
+      });
+    }
 
     const commitArgs = [
       "-c",

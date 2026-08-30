@@ -227,9 +227,16 @@ describe("Crabbox profile warm images", () => {
     const bundle = path.join(home, ".openclaw-worker", "bundle-hash", "index.js");
     const gitSeed = path.join(home, ".openclaw-worker", "git-seeds", "gateway", "seed", "file");
     const bin = path.join(home, "bin");
+    const workdir = path.join(home, "crabbox-workdir");
+    const envFile = path.join(workdir, ".crabbox", "env", "forwarded.env");
+    const scrubScript = path.join(workdir, ".crabbox", "scripts", "scrub.sh");
     fs.mkdirSync(workspace, { recursive: true });
     fs.mkdirSync(path.dirname(npmCache), { recursive: true });
     fs.mkdirSync(bin);
+    fs.mkdirSync(path.dirname(envFile), { recursive: true });
+    fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
+    fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
+    fs.writeFileSync(scrubScript, String(scrub?.options.input));
     fs.writeFileSync(path.join(workspace, "private.txt"), "session workspace bytes");
     fs.writeFileSync(npmCache, "reusable npm package");
     for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
@@ -274,7 +281,8 @@ describe("Crabbox profile warm images", () => {
       }
     };
     try {
-      execFileSync("/bin/sh", ["-c", String(scrub?.options.input)], {
+      execFileSync("/bin/bash", [scrubScript], {
+        cwd: workdir,
         env: {
           ...process.env,
           HOME: home,
@@ -290,9 +298,31 @@ describe("Crabbox profile warm images", () => {
     expect(fs.existsSync(runtime)).toBe(true);
     expect(fs.existsSync(path.join(home, ".openclaw", "cloud-workers"))).toBe(false);
     expect(fs.existsSync(sshWorkspace)).toBe(false);
+    expect(fs.existsSync(envFile)).toBe(false);
+    expect(fs.existsSync(scrubScript)).toBe(false);
     expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
     expect(fs.readFileSync(bundle, "utf8")).toBe(bundle);
     expect(fs.readFileSync(gitSeed, "utf8")).toBe(gitSeed);
+    fs.mkdirSync(path.dirname(envFile), { recursive: true });
+    fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
+    fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
+    fs.writeFileSync(scrubScript, String(scrub?.options.input));
+    fs.writeFileSync(
+      path.join(bin, "rm"),
+      '#!/bin/sh\ncase "$*" in *".crabbox/env"*) exit 7;; esac\nexec /bin/rm "$@"\n',
+      { mode: 0o700 },
+    );
+    expect(() =>
+      execFileSync("/bin/bash", [scrubScript], {
+        cwd: workdir,
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      }),
+    ).toThrow();
+    expect(fs.existsSync(envFile)).toBe(true);
     expect(calls[1]?.argv.slice(1)).toEqual([
       "checkpoint",
       "create",
@@ -585,20 +615,23 @@ describe("Crabbox profile warm images", () => {
       result: { code: 2, stderr: "unknown flag: --lease-id" },
     },
     { name: "the fork returns malformed JSON", result: { stdout: "{" } },
-  ])("falls back to cold warmup with the same fixed lease when $name", async ({ result }) => {
-    const { provider, calls, warn } = createWarmProvider(({ argv }) =>
+  ])("does not change a checkpoint-bound lease to cold when $name", async ({ result }) => {
+    const { provider, calls } = createWarmProvider(({ argv }) =>
       argv[2] === "fork" ? commandResult(result) : undefined,
     );
     await captureWarmImage(provider);
     calls.length = 0;
 
-    await expect(provisionWarmProfile(provider)).resolves.toMatchObject({ leaseId: LEASE_ID });
+    await expect(provisionWarmProfile(provider)).rejects.toThrow();
 
     const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
     const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
     expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
-    expect(warmup?.[warmup.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
-    expect(warn).toHaveBeenCalledOnce();
+    expect(warmup).toBeUndefined();
+    calls.length = 0;
+    await expect(provisionWarmProfile(provider)).rejects.toThrow();
+    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
   });
 
   it.each([

@@ -7,7 +7,6 @@ import { isPathInside } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
-  prepareNodeWorkspaceTransferPack,
   prepareNodeWorkspaceTransferSnapshot,
   type NodeWorkspaceTransferSnapshot,
 } from "./node-workspace-transfer-snapshot.js";
@@ -19,6 +18,7 @@ import {
   streamUploadFile,
 } from "./node-workspace-upload-reader.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
+import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
@@ -521,7 +521,7 @@ export function createNodeWorkspaceTransferService(options: {
       if (!context.pack) {
         // Origin/seed sync needs only the manifest. Materialize its immutable Git base
         // on first download; accepted manifests share this context-owned operation.
-        context.pack = prepareNodeWorkspaceTransferPack({
+        context.pack = prepareWorkerWorkspaceGitPack({
           root: context.localPath,
           baseCommit,
           temporaryRoot: context.temporaryRoot,

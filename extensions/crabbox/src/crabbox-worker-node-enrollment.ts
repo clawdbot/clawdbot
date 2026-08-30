@@ -15,8 +15,24 @@ export function createCrabboxNodeEnrollmentSetup(params: {
   desktop?: boolean;
   leaseId: string;
 }): { command: string; forwardedEnv: Record<string, string> } {
+  return createCrabboxNodeSetup({ ...params, nodeBootstrap: params.enrollment.nodeBootstrap });
+}
+
+export function createCrabboxNodeRuntimeSetup(params: {
+  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+  leaseId: string;
+}): { command: string; forwardedEnv: Record<string, string> } {
+  return createCrabboxNodeSetup(params);
+}
+
+function createCrabboxNodeSetup(params: {
+  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+  leaseId: string;
+  enrollment?: CrabboxWorkerNodeEnrollment;
+  desktop?: boolean;
+}): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, ...nodeBootstrap } = enrollment.nodeBootstrap;
+  const { token, ...nodeBootstrap } = params.nodeBootstrap;
   const desktopEnvironment = params.desktop
     ? [
         "set -eu",
@@ -39,8 +55,8 @@ const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const leaseId = ${JSON.stringify(leaseId)};
-const displayName = ${JSON.stringify(enrollment.displayName)};
-const mode = ${JSON.stringify(enrollment.mode)};
+const displayName = ${JSON.stringify(enrollment?.displayName)};
+const mode = ${JSON.stringify(enrollment?.mode)};
 const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const token = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
@@ -55,7 +71,7 @@ process.umask(0o077);
   const pidFile = path.join(stateDir, "node.pid");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
-  const nodeEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   if (desktopEnvironment) {
     // Inspect XFCE only after stripping forwarded credentials from every child environment.
     const desktop = spawnSync("bash", ["-c", desktopEnvironment, "bash", process.execPath], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
@@ -63,9 +79,11 @@ process.umask(0o077);
     delete nodeEnv.XDG_RUNTIME_DIR;
     Object.assign(nodeEnv, JSON.parse(desktop.stdout));
   }
-  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(stateDir, 0o700);
-  if (fs.existsSync(pidFile)) {
+  if (mode) {
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(stateDir, 0o700);
+  }
+  if (mode && fs.existsSync(pidFile)) {
     const pidText = fs.readFileSync(pidFile, "utf8").trim();
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
     const pid = Number(pidText);
@@ -98,7 +116,7 @@ process.umask(0o077);
   if (fs.existsSync(runtimeDir)) {
     verifyRuntime(runtimeDir);
   } else {
-    const stage = fs.mkdtempSync(path.join(stateDir, "node-bootstrap-"));
+    const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
     try {
       if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
       const url = new URL(bootstrap.url);
@@ -157,6 +175,8 @@ process.umask(0o077);
       fs.renameSync(installDir, runtimeDir);
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
+  // A project snapshot contains only verified runtime bytes, never enrollment state.
+  if (!mode) return;
   try {
     if (!fs.lstatSync(runtimeLink).isSymbolicLink()) throw new Error("Cloud worker runtime pointer is occupied");
     fs.unlinkSync(runtimeLink);
@@ -186,7 +206,7 @@ CRABBOX_NODE_ENROLLMENT_SCRIPT`;
     command,
     forwardedEnv: {
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: token,
-      ...(enrollment.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
+      ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
     },
   };
 }
