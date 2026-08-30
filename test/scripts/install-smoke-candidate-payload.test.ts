@@ -25,7 +25,10 @@ function sha256(filePath: string): string {
 }
 
 function createTarball(archivePath: string, sourceDir: string, entries: string[]): void {
-  execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, ...entries]);
+  execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, ...entries], {
+    // The candidate packer runs in Linux; prevent macOS tar from adding AppleDouble files.
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+  });
 }
 
 function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {

@@ -197,8 +197,10 @@ function readPackageTarballMetadata(tarballPath: string): {
   try {
     const value = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
     if (
+      typeof value.entryCount !== "number" ||
       !Number.isSafeInteger(value.entryCount) ||
       value.entryCount < 1 ||
+      typeof value.unpackedSize !== "number" ||
       !Number.isSafeInteger(value.unpackedSize) ||
       value.unpackedSize < 0
     ) {
