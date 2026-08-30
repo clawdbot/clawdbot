@@ -122,10 +122,10 @@ export function describeSessionsSpawnTool(options?: {
   spawnRestricted?: boolean;
 }): string {
   // Callers that resolve the effective visibility get it rendered as fact;
-  // without it the copy must keep the "default" hedge instead of asserting tree.
+  // without it the copy must keep the "default" hedge instead of asserting the effective scope.
   const visibilityLine = options?.sessionToolsVisibility
     ? `Session listing/addressing obeys \`tools.sessions.visibility\` (${options.sessionToolsVisibility}: ${describeSessionVisibilityScope(options.sessionToolsVisibility, { spawnRestricted: options.spawnRestricted })}).`
-    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
+    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`agent\` default: ${describeSessionVisibilityScope("agent")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
       ? 'Spawn child session; default `runtime="subagent"`.'

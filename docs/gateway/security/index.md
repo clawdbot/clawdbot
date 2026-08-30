@@ -446,9 +446,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 ```json5
 {
-  // Session tools can reveal transcript data. Default scope is current + spawned;
-  // reads also include same-agent groups watched through ambient group awareness.
-  // Use visibility: "self" to exclude those watched sessions.
+  // Session tools default to all same-agent sessions and can reveal other users' transcripts.
+  // Explicit tree scope limits non-main callers to current + spawned sessions.
+  // Use visibility: "self" for strict current-session access, including main.
   tools: { sessions: { visibility: "tree" } }, // self | tree | agent | all
   agents: {
     entries: {
