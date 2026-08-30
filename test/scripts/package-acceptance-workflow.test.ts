@@ -4322,9 +4322,17 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("command: pnpm test:live\n");
     expect(workflow).toContain("suite_id: native-live-src-agents");
     expect(workflow).toContain("Checkout trusted live shard harness");
-    expect(workflow).toContain(
-      "command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
-    );
+    expect(
+      workflowMatrixEntry(
+        LIVE_E2E_WORKFLOW,
+        "validate_live_provider_suites",
+        "native-live-src-agents",
+      ),
+    ).toMatchObject({
+      command:
+        "OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+      profiles: "stable full",
+    });
     expect(workflow).toContain("suite_id: native-live-src-agents-zai-coding");
     expect(workflow).toContain(
       "command: ZAI_CODING_LIVE_TEST=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents-zai-coding",
