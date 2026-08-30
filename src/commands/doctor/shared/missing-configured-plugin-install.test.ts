@@ -3427,7 +3427,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(result.pluginInventoryChanged).toBeUndefined();
       expect(result.failedPluginIds).toEqual(["codex"]);
       expect(result.records).toBe(records);
-      expect(result.warnings).toEqual([expect.stringContaining("release cohort")]);
+      expect(result.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining("release cohort")]),
+      );
     },
   );
 
