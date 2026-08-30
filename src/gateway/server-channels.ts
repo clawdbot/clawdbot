@@ -33,6 +33,10 @@ import {
   runtimeForLogger,
   type SubsystemLogger,
 } from "../logging/subsystem.js";
+import {
+  createPluginRuntimeCapabilityLease,
+  type PluginRuntimeCapabilityLease,
+} from "../plugins/capability-lease.js";
 import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { withPluginCommandAccountStartScope } from "../plugins/plugin-command-account-start-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -79,6 +83,7 @@ function waitForChannelStartupHandoff(): Promise<void> {
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
+  capabilityLeases: Map<string, PluginRuntimeCapabilityLease>;
   // The account task's controller is the ownership token: late predecessor cleanup
   // must not clear a catalog retained by its replacement.
   pluginCommandCatalogOwners: Map<string, AbortController>;
@@ -142,6 +147,7 @@ type GatewayStartupTrace = {
 function createRuntimeStore(): ChannelRuntimeStore {
   return {
     aborts: new Map(),
+    capabilityLeases: new Map(),
     pluginCommandCatalogOwners: new Map(),
     starting: new Map(),
     stops: new Map(),
@@ -619,6 +625,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               recoveryStopTimedOut.delete(rKey);
               recoveryStartRequested.delete(rKey);
               restarts.delete(rKey);
+              store.capabilityLeases.get(id)?.revoke();
+              store.capabilityLeases.delete(id);
               store.aborts.delete(id);
               store.tasks.delete(id);
               clearedTimedOutRecoveryTask = true;
@@ -655,7 +663,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         // Reserve the account before the first await so overlapping start calls
         // cannot race into duplicate provider boots for the same account.
         const abort = new AbortController();
+        const capabilityLease = createPluginRuntimeCapabilityLease("channel account");
         store.aborts.set(id, abort);
+        store.capabilityLeases.set(id, capabilityLease);
         clearPluginCommandCatalogOwner(store, id);
         let handedOffTask = false;
         let startAccountLifetimeActive = false;
@@ -923,7 +933,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               };
               const routeRegistry = getPluginHttpRouteRegistry?.();
               startAccountTask = routeRegistry
-                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
+                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount, capabilityLease)
                 : runStartAccount();
             });
             if (!startAccountTask) {
@@ -931,9 +941,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             await startAccountTask;
           });
+          const taskWithCapabilityCleanup = task.finally(() => {
+            capabilityLease.revoke();
+            if (store.capabilityLeases.get(id) === capabilityLease) {
+              store.capabilityLeases.delete(id);
+            }
+          });
           // Recovery can replace a timed-out task before the old promise settles.
           // Only the task that still owns the store slot may write lifecycle state.
-          const trackedPromise = task
+          const trackedPromise = taskWithCapabilityCleanup
             .then(() => {
               if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
                 return;
@@ -1123,6 +1139,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.starting.delete(id);
           }
           if (!handedOffTask) {
+            capabilityLease.revoke();
+            if (store.capabilityLeases.get(id) === capabilityLease) {
+              store.capabilityLeases.delete(id);
+            }
             await cleanupTaskScopedApprovalRuntime("channel startup cleanup failed");
           }
           if (!handedOffTask && store.aborts.get(id) === abort) {

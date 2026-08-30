@@ -2,6 +2,7 @@
  * Server channel lifecycle tests.
  */
 import fs from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -25,6 +26,7 @@ import {
   runtimeForLogger,
 } from "../logging/subsystem.js";
 import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -46,6 +48,8 @@ import { evaluateChannelHealth } from "./channel-health-policy.js";
 import { channelReadyPatch, createTransportActivityStatusPatch } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
+import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
   const sleepWithAbort = vi.fn((ms: number, abortSignal?: AbortSignal) => {
@@ -258,6 +262,7 @@ function installTestRegistry(
     } as PluginRegistry["channels"][number]);
   }
   setActivePluginRegistry(registry);
+  return registry;
 }
 
 function createManager(options?: {
@@ -271,6 +276,7 @@ function createManager(options?: {
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
   tryRecoverAutostartSuppression?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
+  getPluginHttpRouteRegistry?: () => PluginRegistry;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -303,6 +309,9 @@ function createManager(options?: {
       : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
+      : {}),
+    ...(options?.getPluginHttpRouteRegistry
+      ? { getPluginHttpRouteRegistry: options.getPluginHttpRouteRegistry }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -1868,19 +1877,54 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
-  it("resumes startup on the second recovery pass while the stale task is still pending", async () => {
+  it("transfers an abandoned task's HTTP route to its recovery replacement", async () => {
+    const routeHandlers = ["abandoned", "replacement"].map((body) =>
+      vi.fn((_req: IncomingMessage, res: ServerResponse) => {
+        res.statusCode = 200;
+        res.end(body);
+        return true;
+      }),
+    );
+    let startCount = 0;
     const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
-      abortSignal.addEventListener("abort", () => {}, { once: true });
-      await new Promise<void>(() => {});
+      const handler = routeHandlers[startCount];
+      const settlesOnAbort = startCount > 0;
+      startCount += 1;
+      if (!handler) {
+        throw new Error("unexpected channel start");
+      }
+      registerPluginHttpRoute({
+        path: "/plugins/discord",
+        auth: "plugin",
+        pluginId: "discord",
+        source: "account-route",
+        handler,
+        throwOnFailure: true,
+      });
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener(
+          "abort",
+          () => {
+            if (settlesOnAbort) {
+              resolve();
+            }
+          },
+          { once: true },
+        );
+      });
     });
-    installTestRegistry(
+    const registry = installTestRegistry(
       createTestPlugin({
         startAccount,
       }),
     );
-    const manager = createManager();
+    const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
 
     await manager.startChannels();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "expected initial channel task to start",
+    );
     const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
       manual: false,
     });
@@ -1890,17 +1934,54 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(routeHandlers[0]);
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
 
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected replacement channel task to start",
+    );
 
     account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(routeHandlers[1]);
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.reconnectAttempts).toBe(0);
     expect(account?.lastError).toBeNull();
+
+    const server = createTestGatewayServer({
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        handlePluginRequest: createGatewayPluginRequestHandler({
+          registry,
+          log: createSubsystemLogger("gateway/server-channels-route-test"),
+        }),
+      },
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected Gateway HTTP server to listen on a TCP port");
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/plugins/discord`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("replacement");
+      expect(routeHandlers[0]).not.toHaveBeenCalled();
+      expect(routeHandlers[1]).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(registry.httpRoutes).toHaveLength(0);
   });
 
   it("keeps the second recovery task running when the stale task rejects", async () => {

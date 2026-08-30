@@ -265,35 +265,51 @@ describe("registerPluginHttpRoute", () => {
     });
   });
 
-  it("reuses an exact same-owner route without replacing its handler", () => {
+  it("keeps a reused same-owner route until its last lease releases", () => {
     const { registry, logs, register } = createLoggedRouteHarness();
+    const firstOwner = createTrackedRouteLease();
+    const secondOwner = createTrackedRouteLease();
     const firstHandler = vi.fn();
     const secondHandler = vi.fn();
-    const unregisterFirst = register({
-      path: "/plugins/shared",
-      auth: "plugin",
-      handler: firstHandler,
-      pluginId: "demo",
-      source: "shared-route",
-    });
+    const unregisterFirst = withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        register({
+          path: "/plugins/shared",
+          auth: "plugin",
+          handler: firstHandler,
+          pluginId: "demo",
+          source: "shared-route",
+        }),
+      firstOwner.lease,
+    );
 
-    const unregisterSecond = register({
-      path: "/PLUGINS//SHARED/",
-      auth: "plugin",
-      handler: secondHandler,
-      pluginId: "demo",
-      source: "shared-route",
-      reuseExistingSameOwner: true,
-      throwOnFailure: true,
-    });
+    const unregisterSecond = withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        register({
+          path: "/PLUGINS//SHARED/",
+          auth: "plugin",
+          handler: secondHandler,
+          pluginId: "demo",
+          source: "shared-route",
+          reuseExistingSameOwner: true,
+          throwOnFailure: true,
+        }),
+      secondOwner.lease,
+    );
 
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
     expect(logs.at(-1)).toContain("reusing existing webhook path");
-    unregisterSecond();
+
+    firstOwner.revoke();
     expect(registry.httpRoutes).toHaveLength(1);
-    unregisterFirst();
+    expect(secondOwner.cleanups).toHaveLength(1);
+
+    unregisterSecond();
     expect(registry.httpRoutes).toHaveLength(0);
+    unregisterFirst();
   });
 
   it.each([
@@ -770,7 +786,7 @@ describe("registerPluginHttpRoute", () => {
       releaseContinuation?.();
 
       await expect(lateRegistration).rejects.toThrow(
-        "plugin service HTTP route lease is no longer active",
+        "plugin runtime HTTP route lease is no longer active",
       );
       expect(registry.httpRoutes).toHaveLength(0);
       expect(cleanups).toHaveLength(0);
@@ -793,7 +809,7 @@ describe("registerPluginHttpRoute", () => {
       { isActive: () => false, retain: vi.fn() },
     );
 
-    expect(messages).toEqual(["plugin service HTTP route lease is no longer active"]);
+    expect(messages).toEqual(["plugin runtime HTTP route lease is no longer active"]);
     expect(registry.httpRoutes).toHaveLength(0);
     expect(() => unregister()).not.toThrow();
   });
@@ -826,7 +842,7 @@ describe("registerPluginHttpRoute", () => {
           ),
         parent.lease,
       ),
-    ).toThrow("plugin service HTTP route lease is no longer active");
+    ).toThrow("plugin runtime HTTP route lease is no longer active");
 
     expect(parentRegistry.httpRoutes).toHaveLength(0);
     expect(nestedRegistry.httpRoutes).toHaveLength(0);
