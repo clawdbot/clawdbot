@@ -67,6 +67,37 @@ function createStalledLookup() {
 }
 
 describe("Discord gateway metadata", () => {
+  it("uses an explicitly supplied Gateway metadata URL without deriving its path", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            url: "ws://127.0.0.1:43124/socket",
+            shards: 1,
+            session_start_limit: {
+              total: 1,
+              remaining: 1,
+              reset_after: 0,
+              max_concurrency: 1,
+            },
+          }),
+        ),
+    );
+
+    await fetchDiscordGatewayInfoWithTimeout({
+      token: "test",
+      gatewayBotUrl: "http://127.0.0.1:43123/arbitrary-metadata-route",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://127.0.0.1:43123/arbitrary-metadata-route",
+      expect.objectContaining({
+        headers: { Authorization: "Bot test" },
+      }),
+    );
+  });
+
   it("resolves gateway info timeouts from strict integer env values", () => {
     expect(
       resolveDiscordGatewayInfoTimeoutMs({

@@ -8,12 +8,13 @@ import {
 import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { mergeSsrFPolicies, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
+import { resolveDiscordProviderMediaDownloadGuard } from "../provider-endpoint.js";
 import { resolveDiscordCdnPolicy } from "./media-ssrf-policy.js";
 import {
   resolveDiscordMessageSnapshots,
@@ -268,6 +269,10 @@ async function fetchDiscordMedia(params: {
   fallbackContentType?: string;
   originalFilename?: string;
 }) {
+  const providerGuard = resolveDiscordProviderMediaDownloadGuard(params.url);
+  const ssrfPolicy = providerGuard
+    ? resolveDiscordCdnPolicy(mergeSsrFPolicies(params.ssrfPolicy, providerGuard.policy))
+    : params.ssrfPolicy;
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal =
     params.abortSignal && timeoutAbortController
@@ -279,8 +284,11 @@ async function fetchDiscordMedia(params: {
     url: params.url,
     filePathHint: params.filePathHint,
     maxBytes: params.maxBytes,
-    fetchImpl: params.fetchImpl,
-    ssrfPolicy: params.ssrfPolicy,
+    // Provider media must use the direct guarded path. The caller fetcher may be
+    // Discord's REST proxy and must not observe private-provider attachments.
+    fetchImpl: providerGuard ? undefined : params.fetchImpl,
+    ssrfPolicy,
+    ...(providerGuard ? { maxRedirects: providerGuard.maxRedirects } : {}),
     readIdleTimeoutMs: params.readIdleTimeoutMs,
     fallbackContentType: params.fallbackContentType,
     originalFilename: params.originalFilename,

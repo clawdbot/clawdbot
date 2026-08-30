@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordError, type RequestClient } from "./internal/discord.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
-import { hasDiscordMessageCreateAmbiguity, type DiscordRetryRunner } from "./retry.js";
+import { initializeDiscordProviderEndpointForTest } from "./provider-endpoint.test-support.js";
+import type { DiscordRetryRunner } from "./retry.js";
 
 type VoiceMessageMetadata = Awaited<
   ReturnType<typeof import("./voice-message.js").getVoiceMessageMetadata>
@@ -21,10 +22,17 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
       url: string;
       init?: RequestInit;
       timeoutMs?: number;
-      policy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
+      signal?: AbortSignal;
+      requireHttps?: boolean;
+      maxRedirects?: number;
+      policy?: {
+        allowRfc2544BenchmarkRange?: boolean;
+        allowIpv6UniqueLocalRange?: boolean;
+        allowedOrigins?: string[];
+      };
       auditContext?: string;
     }) => {
-      if (!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0) {
+      if ((!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0) && !params.signal) {
         throw new Error("guarded voice upload fetch requires a finite timeout");
       }
       return {
@@ -60,14 +68,16 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
 let ensureOggOpus: typeof import("./voice-message.js").ensureOggOpus;
 let sendDiscordVoiceMessage: typeof import("./voice-message.js").sendDiscordVoiceMessage;
+let hasDiscordMessageCreateAmbiguity: typeof import("./retry.js").hasDiscordMessageCreateAmbiguity;
 
 function cancelTrackedResponse(
   text: string,
@@ -240,14 +250,15 @@ describe("sendDiscordVoiceMessage", () => {
     waveform: "waveform",
   };
 
-  beforeAll(async () => {
-    ({ sendDiscordVoiceMessage } = await import("./voice-message.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.restoreAllMocks();
     fetchWithSsrFGuardMock.mockClear();
+    ({ sendDiscordVoiceMessage } = await import("./voice-message.js"));
+    ({ hasDiscordMessageCreateAmbiguity } = await import("./retry.js"));
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   function createRest(post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }))) {
     return {
@@ -295,6 +306,91 @@ describe("sendDiscordVoiceMessage", () => {
     }
     throw lastError;
   }
+
+  it("keeps the unversioned live attachment base when no provider endpoint is set", async () => {
+    const rest = {
+      options: {
+        baseUrl: "https://discord.test/api",
+        apiBaseUrl: "https://discord.test/api/v10",
+        timeout: 17,
+      },
+      post: vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" })),
+    } as unknown as RequestClient;
+    mockSuccessfulVoiceUpload();
+
+    await sendDiscordVoiceMessage(
+      rest,
+      "channel-1",
+      Buffer.from("ogg"),
+      metadata,
+      undefined,
+      async (fn) => await fn(),
+      false,
+      "bot-token",
+    );
+
+    const uploadUrlCall = fetchWithSsrFGuardMock.mock.calls.find(
+      ([params]) => params.auditContext === "discord.voice.upload-url",
+    );
+    expect(uploadUrlCall?.[0].url).toBe("https://discord.test/api/channels/channel-1/attachments");
+  });
+
+  it("allows provider voice uploads only on the configured REST origin", async () => {
+    await initializeDiscordProviderEndpointForTest({
+      restApiBaseUrl: "http://127.0.0.1:43123/api/v10",
+      gatewayBotUrl: "http://127.0.0.1:43123/gateway/bot",
+      gatewayOrigin: "ws://127.0.0.1:43124",
+    });
+    const rest = createRest();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
+        return new Response(
+          JSON.stringify({
+            attachments: [
+              {
+                id: 0,
+                upload_url: "http://127.0.0.1:43123/upload/voice.ogg?signature=test",
+                upload_filename: "uploaded.ogg",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === "PUT" && url.startsWith("http://127.0.0.1:43123/upload/voice.ogg")) {
+        return new Response(null, { status: 200 });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await expect(
+      sendDiscordVoiceMessage(
+        rest,
+        "channel-1",
+        Buffer.from("ogg"),
+        metadata,
+        undefined,
+        async (fn) => await fn(),
+        false,
+        "bot-token",
+      ),
+    ).resolves.toEqual({ id: "msg-1", channel_id: "channel-1" });
+
+    const uploadCall = fetchWithSsrFGuardMock.mock.calls.find(
+      ([params]) => params.auditContext === "discord.voice.attachment-upload",
+    );
+    expect(uploadCall?.[0]).toMatchObject({
+      maxRedirects: 0,
+      requireHttps: false,
+      policy: {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        allowedOrigins: ["http://127.0.0.1:43123"],
+      },
+    });
+  });
 
   it("requests a fresh upload URL when rate limited and cancels the successful body", async () => {
     const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));

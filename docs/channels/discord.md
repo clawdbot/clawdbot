@@ -1749,6 +1749,31 @@ Set `channels.discord.activities` to let the core `show_widget` tool post self-c
 - Grant least-privilege Discord permissions.
 - If command deploy/state is stale, restart the gateway and re-check with `openclaw channels status --probe`.
 
+### Private provider endpoints
+
+Trusted operators can route all Discord network traffic from one Gateway process through a
+private provider. Set this complete environment-variable group before starting OpenClaw:
+
+```bash
+export DISCORD_REST_API_BASE_URL="https://provider.example/discord/api/v10"
+export DISCORD_GATEWAY_BOT_URL="https://provider.example/discord/api/v10/gateway/bot"
+export DISCORD_GATEWAY_ORIGIN="wss://provider.example"
+openclaw gateway
+```
+
+This is a process-wide credential-routing contract, not an account setting. A complete group
+redirects REST, Gateway, provider-origin media, webhook, voice, OAuth, and Activity traffic for
+every Discord account in that Gateway. The provider therefore receives Discord credentials and
+message data; use only endpoints controlled by the operator. Non-loopback endpoints require
+HTTPS/WSS. Public Discord CDN assets are never fetched in provider mode: provider-origin
+attachments remain available, while Discord-generated avatar and sticker assets are skipped.
+
+The three values are all-or-none and are read once during Discord startup. Put them in the
+Gateway supervisor environment or trusted global runtime dotenv, not a workspace `.env`. A
+partial or invalid group stops Discord initialization before its runtime becomes available.
+After changing the group, restart the Gateway. To recover, either correct all three values or
+unset all three and restart; when all three are absent, OpenClaw uses Discord's public endpoints.
+
 ## Related
 
 <CardGroup cols={2}>

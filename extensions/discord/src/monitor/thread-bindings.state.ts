@@ -1,18 +1,24 @@
 // Discord plugin module implements thread bindings.state behavior.
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
+import {
+  normalizePersistedBinding,
+  normalizeThreadId,
+  THREAD_BINDINGS_MAX_ENTRIES,
+  THREAD_BINDINGS_NAMESPACE,
+  toBindingRecordKey,
+} from "./thread-bindings.persistence-primitives.js";
 import type {
   PersistedThreadBindingRecord,
   ThreadBindingManager,
   ThreadBindingRecord,
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
+
+export { normalizeTargetKind } from "./thread-bindings.persistence-primitives.js";
+export { normalizeThreadId };
 
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
@@ -72,9 +78,6 @@ export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
   THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
 export const PERSIST_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.persistByAccountId;
 export const THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS = 15_000;
-export const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
-export const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
-
 export function rememberThreadBindingToken(params: { accountId?: string; token?: string }) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const token = params.token?.trim();
@@ -103,24 +106,6 @@ function openThreadBindingsStore() {
   });
 }
 
-export function normalizeTargetKind(
-  raw: unknown,
-  targetSessionKey: string,
-): ThreadBindingTargetKind {
-  if (raw === "subagent" || raw === "acp") {
-    return raw;
-  }
-  return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";
-}
-
-export function normalizeThreadId(raw: unknown): string | undefined {
-  return normalizeOptionalStringifiedId(raw);
-}
-
-export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
-  return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
-}
-
 export function resolveBindingRecordKey(params: {
   accountId?: string;
   threadId: string;
@@ -133,79 +118,6 @@ export function resolveBindingRecordKey(params: {
     accountId: normalizeAccountId(params.accountId),
     threadId,
   });
-}
-
-export function normalizePersistedBinding(
-  threadIdKey: string,
-  raw: unknown,
-): ThreadBindingRecord | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const value = raw as Partial<PersistedThreadBindingRecord>;
-  const threadId = normalizeThreadId(value.threadId ?? threadIdKey);
-  const channelId = normalizeOptionalString(value.channelId) ?? "";
-  const targetSessionKey = normalizeOptionalString(value.targetSessionKey) ?? "";
-  if (!threadId || !channelId || !targetSessionKey) {
-    return null;
-  }
-  const accountId = normalizeAccountId(value.accountId);
-  const targetKind = normalizeTargetKind(value.targetKind, targetSessionKey);
-  const agentIdRaw = normalizeOptionalString(value.agentId) ?? "";
-  const agentId = agentIdRaw || resolveAgentIdFromSessionKey(targetSessionKey);
-  const label = normalizeOptionalString(value.label);
-  const webhookId = normalizeOptionalString(value.webhookId);
-  const webhookToken = normalizeOptionalString(value.webhookToken);
-  const boundBy = normalizeOptionalString(value.boundBy) ?? "system";
-  const boundAt =
-    typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
-      ? Math.floor(value.boundAt)
-      : Date.now();
-  const lastActivityAt =
-    typeof value.lastActivityAt === "number" && Number.isFinite(value.lastActivityAt)
-      ? Math.max(0, Math.floor(value.lastActivityAt))
-      : boundAt;
-  const idleTimeoutMs =
-    typeof value.idleTimeoutMs === "number" && Number.isFinite(value.idleTimeoutMs)
-      ? Math.max(0, Math.floor(value.idleTimeoutMs))
-      : undefined;
-  const maxAgeMs =
-    typeof value.maxAgeMs === "number" && Number.isFinite(value.maxAgeMs)
-      ? Math.max(0, Math.floor(value.maxAgeMs))
-      : undefined;
-  const metadata =
-    value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : undefined;
-
-  const record: ThreadBindingRecord = {
-    accountId,
-    channelId,
-    threadId,
-    targetKind,
-    targetSessionKey,
-    agentId,
-    boundBy,
-    boundAt,
-    lastActivityAt,
-  };
-  if (label !== undefined) {
-    record.label = label;
-  }
-  if (webhookId !== undefined) {
-    record.webhookId = webhookId;
-  }
-  if (webhookToken !== undefined) {
-    record.webhookToken = webhookToken;
-  }
-  if (idleTimeoutMs !== undefined) {
-    record.idleTimeoutMs = idleTimeoutMs;
-  }
-  if (maxAgeMs !== undefined) {
-    record.maxAgeMs = maxAgeMs;
-  }
-  if (metadata !== undefined) {
-    record.metadata = metadata;
-  }
-  return record;
 }
 
 export function normalizeThreadBindingDurationMs(raw: unknown, defaultsTo: number): number {

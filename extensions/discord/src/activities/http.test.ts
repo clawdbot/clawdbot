@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
+import { initializeDiscordProviderEndpointForTest } from "../provider-endpoint.test-support.js";
 import { createDiscordActivityHttpHandler } from "./http.js";
 import { DiscordActivitiesRuntime } from "./runtime.js";
 import {
@@ -797,5 +798,107 @@ describe("Discord Activity shell assets", () => {
     expect(second.status).toBe(200);
     await expect(second.text()).resolves.toContain("DiscordSDK");
     expect(readVendorAsset).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Discord Activity provider routing", () => {
+  it("routes the complete authorization round trip through the provider only", async () => {
+    const providerRequests: Array<{
+      url: string;
+      method: string;
+      authorization?: string;
+      contentType?: string;
+      body: string;
+    }> = [];
+    const providerServer = createServer((req, res) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const request = {
+          url: req.url ?? "",
+          method: req.method ?? "",
+          authorization: req.headers.authorization,
+          contentType: req.headers["content-type"],
+          body: Buffer.concat(chunks).toString("utf8"),
+        };
+        providerRequests.push(request);
+        const responseBody = request.url.endsWith("/oauth2/token")
+          ? { access_token: "atoken" }
+          : request.url.endsWith("/users/@me")
+            ? { id: "42", username: "alice", discriminator: "0" }
+            : request.url.includes("/activity-instances/")
+              ? { location: { channel_id: "777" }, users: ["42"] }
+              : undefined;
+        res.statusCode = responseBody ? 200 : 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(responseBody ?? { error: "unexpected route" }));
+      })();
+    });
+    servers.push(providerServer);
+    await new Promise<void>((resolve) => {
+      providerServer.listen(0, "127.0.0.1", resolve);
+    });
+    const providerPort = (providerServer.address() as AddressInfo).port;
+    await initializeDiscordProviderEndpointForTest({
+      restApiBaseUrl: `http://127.0.0.1:${providerPort}/custom/rest/v10`,
+      gatewayBotUrl: `http://127.0.0.1:${providerPort}/custom/gateway-metadata`,
+      gatewayOrigin: `ws://127.0.0.1:${providerPort}`,
+    });
+
+    const runtime = createActivityTestRuntime();
+    const widgetId = await createWidget(runtime);
+    const original = runtime.resolveHttpAccount();
+    if (!original) {
+      throw new Error("missing account");
+    }
+    const proxyFetch = vi.fn(async () => {
+      throw new Error("provider mode must not call the account proxy");
+    });
+    const account = { ...original, proxyFetch: proxyFetch as unknown as typeof fetch };
+    vi.spyOn(runtime, "resolveHttpAccount").mockReturnValue(account);
+    vi.spyOn(runtime, "resolveAccount").mockReturnValue(account);
+    const publicFetchGuard = vi.fn(async () => {
+      throw new Error("provider mode must not call the public Discord guard");
+    }) as unknown as typeof fetchWithSsrFGuard;
+    const base = await startServer(runtime, { fetchGuard: publicFetchGuard });
+
+    try {
+      const tokenResponse = await requestToken(base, { code: "oauth-code" });
+      expect(tokenResponse.status).toBe(200);
+      const token = (await tokenResponse.json()) as { session_token: string };
+      const widgetResponse = await requestWidget(
+        base,
+        `custom_id=${widgetId}&instance_id=instance-1`,
+        token.session_token,
+      );
+      expect(widgetResponse.status).toBe(200);
+
+      expect(providerRequests.map(({ method, url }) => ({ method, url }))).toEqual([
+        { method: "POST", url: "/custom/rest/v10/oauth2/token" },
+        { method: "GET", url: "/custom/rest/v10/users/@me" },
+        {
+          method: "GET",
+          url: "/custom/rest/v10/applications/123456789012345678/activity-instances/instance-1",
+        },
+      ]);
+      expect(providerRequests[0]).toMatchObject({
+        authorization: undefined,
+        contentType: "application/x-www-form-urlencoded",
+      });
+      expect(Array.from(new URLSearchParams(providerRequests[0]?.body).entries())).toEqual([
+        ["grant_type", "authorization_code"],
+        ["client_id", "123456789012345678"],
+        ["client_secret", "testsec"],
+        ["code", "oauth-code"],
+      ]);
+      expect(providerRequests[1]?.authorization).toBe("Bearer atoken");
+      expect(providerRequests[2]?.authorization).toBe("Bot testtok");
+      expect(publicFetchGuard).not.toHaveBeenCalled();
+      expect(proxyFetch).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+    }
   });
 });

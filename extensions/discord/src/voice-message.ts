@@ -36,6 +36,10 @@ import { DiscordError, RateLimitError, type RequestClient } from "./internal/dis
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import {
+  getDiscordProviderEndpointRuntime,
+  resolveDiscordProviderAttachmentUploadGuard,
+} from "./provider-endpoint.js";
+import {
   classifyDiscordDeliveryFailure,
   recordDiscordMessageCreateAmbiguity,
   type DiscordRetryRunner,
@@ -330,7 +334,8 @@ async function requestVoiceUploadUrl(params: {
   filename: string;
   fileSize: number;
 }): Promise<UploadUrlResponse> {
-  const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
+  const providerEndpoint = getDiscordProviderEndpointRuntime();
+  const url = `${providerEndpoint?.descriptor.restApiBaseUrl ?? params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
   const uploadUrlInit: RequestInit = {
     method: "POST",
     headers: {
@@ -341,6 +346,16 @@ async function requestVoiceUploadUrl(params: {
       files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
     }),
   };
+  if (providerEndpoint) {
+    const res = await providerEndpoint.fetch(url, {
+      ...uploadUrlInit,
+      signal: AbortSignal.timeout(params.rest.options.timeout),
+    });
+    if (!res.ok) {
+      throw await createVoiceRequestError(res, "Upload URL request failed");
+    }
+    return await readProviderJsonResponse<UploadUrlResponse>(res, "discord.voice.upload-url");
+  }
   const { response: res, release } = await fetchWithSsrFGuard({
     url,
     init: uploadUrlInit,
@@ -364,6 +379,7 @@ async function uploadVoiceAttachment(params: {
   uploadUrl: string;
   audioBuffer: Buffer;
 }): Promise<void> {
+  const providerGuard = resolveDiscordProviderAttachmentUploadGuard(params.uploadUrl);
   const { response: uploadResponse, release } = await fetchWithSsrFGuard({
     url: params.uploadUrl,
     init: {
@@ -374,7 +390,16 @@ async function uploadVoiceAttachment(params: {
       body: new Uint8Array(params.audioBuffer),
     },
     timeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    policy: {
+      ...DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+      ...providerGuard?.policy,
+    },
+    ...(providerGuard
+      ? {
+          maxRedirects: providerGuard.maxRedirects,
+          requireHttps: providerGuard.requireHttps,
+        }
+      : {}),
     auditContext: "discord.voice.attachment-upload",
   });
 

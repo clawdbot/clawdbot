@@ -4,6 +4,7 @@ import type { Client, User } from "../internal/discord.js";
 const mocks = vi.hoisted(() => ({
   saveRemoteMedia: vi.fn(),
   logDebug: vi.fn(),
+  resolveProviderGuard: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
@@ -12,6 +13,10 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   logDebug: mocks.logDebug,
+}));
+
+vi.mock("../provider-endpoint.js", () => ({
+  resolveDiscordProviderMediaDownloadGuard: mocks.resolveProviderGuard,
 }));
 
 const { createDiscordAvatarResolver } = await import("./message-avatar.js");
@@ -35,9 +40,27 @@ const emptyClient = { fetchGuild: vi.fn() } as unknown as Client;
 beforeEach(() => {
   mocks.saveRemoteMedia.mockReset();
   mocks.logDebug.mockReset();
+  mocks.resolveProviderGuard.mockReset();
 });
 
 describe("createDiscordAvatarResolver", () => {
+  it("skips public CDN avatars when provider routing is active", () => {
+    mocks.resolveProviderGuard.mockImplementation(() => {
+      throw new Error("Discord provider media URL is outside the configured REST origin");
+    });
+    const resolver = createDiscordAvatarResolver();
+
+    expect(
+      resolver.resolve({
+        client: emptyClient,
+        conversationId: "dm-provider",
+        author: discordUser("user-1", "hash-1"),
+      }),
+    ).toBeUndefined();
+    expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(mocks.logDebug).toHaveBeenCalledWith(expect.stringContaining("download skipped"));
+  });
+
   it("downloads a DM avatar in the background and reuses it until the hash changes", async () => {
     const firstDownload = deferred<{ path: string }>();
     mocks.saveRemoteMedia.mockReturnValueOnce(firstDownload.promise);

@@ -416,4 +416,38 @@ describe("workspace .env blocklist completeness", () => {
       });
     });
   });
+
+  it("blocks Discord provider endpoint vars from workspace .env and preserves inherited input", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        const endpointVars = {
+          DISCORD_REST_API_BASE_URL: "https://workspace.example/api/v10",
+          DISCORD_GATEWAY_BOT_URL: "https://workspace.example/gateway/bot",
+          DISCORD_GATEWAY_ORIGIN: "wss://workspace.example",
+        } as const;
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${Object.entries(endpointVars)
+            .map(([key, value]) => `${key}=${value}`)
+            .join("\n")}\n`,
+        );
+
+        for (const key of Object.keys(endpointVars)) {
+          deleteTestEnvValue(key);
+        }
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+        for (const key of Object.keys(endpointVars)) {
+          expect(process.env[key], `${key} should be blocked`).toBeUndefined();
+        }
+
+        for (const [key, value] of Object.entries(endpointVars)) {
+          setTestEnvValue(key, `inherited:${value}`);
+        }
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+        for (const [key, value] of Object.entries(endpointVars)) {
+          expect(process.env[key]).toBe(`inherited:${value}`);
+        }
+      });
+    });
+  });
 });

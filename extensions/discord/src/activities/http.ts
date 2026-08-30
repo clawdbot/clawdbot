@@ -8,8 +8,8 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import {
-  DISCORD_TOKEN_URL,
-  DISCORD_USER_URL,
+  DISCORD_ACTIVITY_TOKEN_ROUTE,
+  DISCORD_ACTIVITY_USER_ROUTE,
   fetchDiscordJson,
   fetchWithSsrFGuard,
   type FetchGuard,
@@ -184,7 +184,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         tokenResponse = await fetchDiscordJson({
           fetchGuard,
           fetchImpl: account.proxyFetch,
-          url: DISCORD_TOKEN_URL,
+          route: DISCORD_ACTIVITY_TOKEN_ROUTE,
           init: {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -195,7 +195,6 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
               code,
             }),
           },
-          auditContext: "discord.activities.oauth.token",
         });
       } catch {
         return respondJson(res, 503, { error: "Discord token exchange unavailable" });
@@ -212,9 +211,8 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         userResponse = await fetchDiscordJson({
           fetchGuard,
           fetchImpl: account.proxyFetch,
-          url: DISCORD_USER_URL,
+          route: DISCORD_ACTIVITY_USER_ROUTE,
           init: { headers: { Authorization: `Bearer ${granted}` } },
-          auditContext: "discord.activities.oauth.user",
         });
       } catch {
         return respondJson(res, 503, { error: "Discord user lookup unavailable" });

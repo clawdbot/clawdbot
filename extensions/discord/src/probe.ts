@@ -5,9 +5,10 @@ import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordApiError, fetchDiscord } from "./api.js";
+import { DISCORD_DEFAULT_REST_API_BASE_URL } from "./provider-endpoint.constants.js";
+import { getDiscordProviderEndpointRuntime } from "./provider-endpoint.js";
 import { normalizeDiscordToken } from "./token.js";
 
-const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_PROBE_GET_ME_LABEL = "discord.probe.getMe";
 const DISCORD_PROBE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const DISCORD_PROBE_COMPLETION_RESERVE_MAX_MS = 25;
@@ -151,7 +152,10 @@ export async function probeDiscord(
   return await runChannelProbe(
     undefined,
     async ({ startedAt }) => {
-      const fetcher = opts?.fetcher ?? fetch;
+      const providerEndpoint = getDiscordProviderEndpointRuntime();
+      const fetcher = providerEndpoint?.fetch ?? opts?.fetcher ?? fetch;
+      const restApiBaseUrl =
+        providerEndpoint?.descriptor.restApiBaseUrl ?? DISCORD_DEFAULT_REST_API_BASE_URL;
       const includeApplication = opts?.includeApplication === true;
       const normalized = normalizeDiscordToken(token, "channels.discord.token");
       const result: Omit<DiscordProbe, "elapsedMs"> = {
@@ -164,7 +168,7 @@ export async function probeDiscord(
       }
       let res: Response | undefined;
       try {
-        const getMeUrl = `${DISCORD_API_BASE}/users/@me`;
+        const getMeUrl = `${restApiBaseUrl}/users/@me`;
         const getMeDeadlineMs = Date.now() + timeoutMs;
         res = await fetchWithTimeout(
           getMeUrl,

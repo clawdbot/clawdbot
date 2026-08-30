@@ -18,7 +18,7 @@ import {
   THREAD_BINDINGS_MAX_ENTRIES,
   THREAD_BINDINGS_NAMESPACE,
   toBindingRecordKey,
-} from "./thread-bindings.state.js";
+} from "./thread-bindings.persistence-primitives.js";
 
 const PREFERENCE_MAX_ENTRIES = 2_000;
 const MAX_PLUGIN_STATE_KEY_BYTES = 512;

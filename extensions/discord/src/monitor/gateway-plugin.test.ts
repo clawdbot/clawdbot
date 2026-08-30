@@ -1,11 +1,17 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initializeDiscordProviderEndpointForTest } from "../provider-endpoint.test-support.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
   resolveDiscordGatewayInfoTimeoutMs,
 } from "./gateway-metadata.js";
+
+const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicyMock: vi.fn(),
+}));
 
 const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
   const GatewayIntentsLocal = {
@@ -82,11 +88,18 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+}));
+
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
   let resolveDiscordGatewayIntents: typeof import("./gateway-plugin.js").resolveDiscordGatewayIntents;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    resolvePinnedHostnameWithPolicyMock.mockReset();
     ({ createDiscordGatewayPlugin, resolveDiscordGatewayIntents } =
       await import("./gateway-plugin.js"));
   });
@@ -267,6 +280,146 @@ describe("createDiscordGatewayPlugin", () => {
         GatewayIntents.DirectMessageReactions,
       reconnect: { maxAttempts: 50 },
     });
+  });
+
+  it("uses loopback WS without an HTTPS agent and enforces the configured origin", async () => {
+    await initializeDiscordProviderEndpointForTest({
+      restApiBaseUrl: "http://127.0.0.1:43123/rest/v10",
+      gatewayBotUrl: "http://127.0.0.1:43123/gateway-metadata",
+      gatewayOrigin: "ws://127.0.0.1:43124",
+    });
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const constructorSpy = vi.fn();
+    const plugin = createPlugin({
+      webSocketCtor: function WebSocketCtor(url: unknown, options: unknown) {
+        constructorSpy(url, options);
+        return socket;
+      } as unknown as NonNullable<
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+      >["webSocketCtor"],
+    });
+
+    (plugin as unknown as { createWebSocket: (url: string) => typeof socket }).createWebSocket(
+      "ws://127.0.0.1:43124/socket?v=10&encoding=json",
+    );
+
+    expect(constructorSpy).toHaveBeenCalledWith(
+      "ws://127.0.0.1:43124/socket?v=10&encoding=json",
+      expect.not.objectContaining({ agent: expect.anything() }),
+    );
+    expect(() =>
+      (plugin as unknown as { createWebSocket: (url: string) => typeof socket }).createWebSocket(
+        "ws://127.0.0.1:43125/socket?v=10&encoding=json",
+      ),
+    ).toThrow(/outside the configured WebSocket origin/);
+  });
+
+  it("uses a pinned DNS lookup for a remote provider WSS origin", async () => {
+    await initializeDiscordProviderEndpointForTest({
+      restApiBaseUrl: "http://127.0.0.1:43123/rest/v10",
+      gatewayBotUrl: "http://127.0.0.1:43123/gateway-metadata",
+      gatewayOrigin: "wss://provider.example",
+    });
+    const pinnedLookup = vi.fn(
+      (_hostname: string, _options: unknown, callback: (error: null, value: string) => void) =>
+        callback(null, "10.0.0.8"),
+    );
+    resolvePinnedHostnameWithPolicyMock.mockResolvedValue({
+      hostname: "provider.example",
+      addresses: ["10.0.0.8"],
+      lookup: pinnedLookup,
+    });
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const constructorSpy = vi.fn();
+    const plugin = createPlugin({
+      webSocketCtor: function WebSocketCtor(url: unknown, options: unknown) {
+        constructorSpy(url, options);
+        return socket;
+      } as unknown as NonNullable<
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+      >["webSocketCtor"],
+    });
+
+    (plugin as unknown as { createWebSocket: (url: string) => typeof socket }).createWebSocket(
+      "wss://provider.example/socket?v=10&encoding=json",
+    );
+
+    const options = constructorSpy.mock.calls[0]?.[1] as
+      | { agent?: { options?: { lookup?: import("node:net").LookupFunction } } }
+      | undefined;
+    const lookup = options?.agent?.options?.lookup;
+    if (!lookup) {
+      throw new Error("expected provider Gateway HTTPS agent lookup");
+    }
+    const address = await new Promise<string>((resolve, reject) => {
+      lookup("provider.example", {}, (error, value) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (typeof value !== "string") {
+          reject(new Error("expected scalar provider Gateway lookup address"));
+          return;
+        }
+        resolve(value);
+      });
+    });
+
+    expect(address).toBe("10.0.0.8");
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("provider.example", {
+      policy: {
+        allowedHostnames: ["provider.example"],
+        hostnameAllowlist: ["provider.example"],
+      },
+    });
+    expect(pinnedLookup).toHaveBeenCalledWith("provider.example", {}, expect.any(Function));
+    expect(constructorSpy).toHaveBeenCalledWith(
+      "wss://provider.example/socket?v=10&encoding=json",
+      expect.objectContaining({ agent: expect.anything() }),
+    );
+  });
+
+  it("does not fall back to live Discord when custom Gateway metadata fails", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(503, { "content-type": "text/plain" });
+      response.end("provider unavailable");
+    });
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("expected loopback TCP address"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    await initializeDiscordProviderEndpointForTest({
+      restApiBaseUrl: `http://127.0.0.1:${port}/rest/v10`,
+      gatewayBotUrl: `http://127.0.0.1:${port}/metadata`,
+      gatewayOrigin: `ws://127.0.0.1:${port}`,
+    });
+    const registerClient = vi.fn(async () => undefined);
+    const plugin = createPlugin({ registerClient });
+
+    try {
+      await expect(
+        (
+          plugin as unknown as {
+            registerClient: (client: { options: { token: string } }) => Promise<void>;
+          }
+        ).registerClient({ options: { token: "test-token" } }),
+      ).rejects.toThrow(/Failed to get gateway information from Discord/);
+      expect(registerClient).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    }
   });
 
   it("emits transport activity for current gateway socket messages", () => {

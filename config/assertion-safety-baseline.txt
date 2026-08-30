@@ -406,7 +406,7 @@ extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
 extensions/discord/src/monitor/thread-bindings.discord-api.ts	3
-extensions/discord/src/monitor/thread-bindings.state.ts	3
+extensions/discord/src/monitor/thread-bindings.state.ts	2
 extensions/discord/src/monitor/thread-channel-context.ts	2
 extensions/discord/src/monitor/threading.auto-thread.ts	2
 extensions/discord/src/monitor/threading.starter.ts	5

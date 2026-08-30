@@ -9,9 +9,10 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { isDiscordRateLimitResponseBody, summarizeDiscordResponseBody } from "../error-body.js";
+import { DISCORD_DEFAULT_REST_API_BASE_URL } from "../provider-endpoint.constants.js";
 import { withAbortTimeout } from "./timeouts.js";
 
-const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
+const DISCORD_GATEWAY_BOT_URL = `${DISCORD_DEFAULT_REST_API_BASE_URL}/gateway/bot`;
 const DISCORD_API_HOST = "discord.com";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
@@ -170,12 +171,13 @@ function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
 
 async function fetchDiscordGatewayInfo(params: {
   token: string;
+  gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
   let response: DiscordGatewayMetadataResponse;
   try {
-    response = await params.fetchImpl(DISCORD_GATEWAY_BOT_URL, {
+    response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
       ...params.fetchInit,
       headers: {
         ...params.fetchInit?.headers,
@@ -223,6 +225,7 @@ async function fetchDiscordGatewayInfo(params: {
 
 export async function fetchDiscordGatewayInfoWithTimeout(params: {
   token: string;
+  gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   timeoutMs?: number;
@@ -239,6 +242,7 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
     run: async (signal) =>
       await fetchDiscordGatewayInfo({
         token: params.token,
+        gatewayBotUrl: params.gatewayBotUrl,
         fetchImpl: params.fetchImpl,
         fetchInit: {
           ...params.fetchInit,
