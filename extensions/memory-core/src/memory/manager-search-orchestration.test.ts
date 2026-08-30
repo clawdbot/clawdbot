@@ -565,6 +565,45 @@ describe("memory index", () => {
     await pendingSync;
   });
 
+  it("runs one bounded catch-up when the active session changes during reconciliation", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+    );
+    await manager.sync({ reason: "test" });
+
+    let releaseFirstSync = () => {};
+    const firstSync = new Promise<void>((resolve) => {
+      releaseFirstSync = resolve;
+    });
+    const backgroundSync = vi
+      .spyOn(
+        manager as unknown as {
+          syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+        },
+        "syncPublishedIndexInBackground",
+      )
+      .mockImplementation(async () => {
+        if (backgroundSync.mock.calls.length === 1) {
+          await firstSync;
+          Reflect.set(manager, "dirty", false);
+          Reflect.set(manager, "sessionsDirty", true);
+          return;
+        }
+        Reflect.set(manager, "sessionsDirty", false);
+      });
+
+    Reflect.set(manager, "dirty", false);
+    Reflect.set(manager, "sessionsDirty", true);
+
+    const results = await manager.search("zebra", { maxResults: 5, minScore: 0 });
+    expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    expect(backgroundSync).toHaveBeenCalledTimes(1);
+
+    releaseFirstSync();
+    await vi.waitFor(() => expect(backgroundSync).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(Reflect.get(manager, "sessionsDirty")).toBe(false));
+  });
+
   it("keeps the published index searchable while dirty maintenance builds", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(
